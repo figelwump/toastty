@@ -11,6 +11,9 @@ import {
   LocalDocumentPanelBootstrap
 } from "./bootstrap";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
+import {
+  MARKDOWN_LINE_START_SELECTOR,
+} from "./markdownSoftWrap.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
 if (!hljs.getLanguage("yaml")) {
@@ -426,6 +429,127 @@ function useDocumentHighlightHTML(
   return bootstrap.format === "markdown" ? markdownHighlight : syncHighlight;
 }
 
+function trimTrailingNewline(node: Node): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const value = node.textContent ?? "";
+    if (!value.endsWith("\n")) {
+      return false;
+    }
+
+    const trimmedValue = value.slice(0, -1);
+    if (trimmedValue.length > 0) {
+      node.textContent = trimmedValue;
+    } else {
+      node.parentNode?.removeChild(node);
+    }
+    return true;
+  }
+
+  let child = node.lastChild;
+  while (child) {
+    if (trimTrailingNewline(child)) {
+      if (child.nodeType === Node.ELEMENT_NODE && child.childNodes.length === 0) {
+        child.parentNode?.removeChild(child);
+      }
+      return true;
+    }
+
+    if (child.nodeType === Node.ELEMENT_NODE && child.childNodes.length === 0) {
+      const previousSibling = child.previousSibling;
+      child.parentNode?.removeChild(child);
+      child = previousSibling;
+      continue;
+    }
+
+    child = child.previousSibling;
+  }
+
+  return false;
+}
+
+function splitHighlightedMarkdownIntoLogicalLines(
+  highlightedHTML: string,
+  lineCount: number
+): string[] {
+  const parsedDocument = new DOMParser().parseFromString(
+    `<div>${highlightedHTML}</div>`,
+    "text/html"
+  );
+  const root = parsedDocument.body.firstElementChild;
+
+  if (!root) {
+    return Array.from({ length: lineCount }, () => "");
+  }
+
+  const markers = Array.from(root.querySelectorAll<HTMLElement>(MARKDOWN_LINE_START_SELECTOR));
+  const logicalLines = markers.map((marker, index) => {
+    const range = parsedDocument.createRange();
+    range.setStartAfter(marker);
+
+    if (index + 1 < markers.length) {
+      range.setEndBefore(markers[index + 1]);
+    } else if (root.lastChild) {
+      range.setEndAfter(root.lastChild);
+    } else {
+      range.setEndAfter(marker);
+    }
+
+    const container = parsedDocument.createElement("div");
+    container.append(range.cloneContents());
+    trimTrailingNewline(container);
+    return container.innerHTML;
+  });
+
+  while (logicalLines.length < lineCount) {
+    logicalLines.push("");
+  }
+
+  return logicalLines.slice(0, lineCount);
+}
+
+function MarkdownCodeDocumentView(props: {
+  content: string;
+  highlightedHTML: string | null;
+  lines: string[];
+}) {
+  const highlightedLines = React.useMemo(
+    () => (
+      props.highlightedHTML
+        ? splitHighlightedMarkdownIntoLogicalLines(props.highlightedHTML, props.lines.length)
+        : null
+    ),
+    [props.highlightedHTML, props.lines.length]
+  );
+
+  return (
+    <div className="local-document-code-frame local-document-code-frame-markdown">
+      <div className="local-document-code-scroll local-document-code-scroll-markdown">
+        <div className="local-document-code-markdown-grid">
+          {props.lines.map((line, index) => (
+            <React.Fragment key={index}>
+              <div className="local-document-code-gutter-cell" aria-hidden="true">
+                {index + 1}
+              </div>
+              <pre className="local-document-code-markdown-line">
+                {highlightedLines ? (
+                  <code
+                    className="starry-night local-document-code-markdown"
+                    dangerouslySetInnerHTML={{ __html: highlightedLines[index] ?? "" }}
+                  />
+                ) : (
+                  <code className="local-document-code-plain local-document-code-plain-markdown">
+                    {line}
+                  </code>
+                )}
+              </pre>
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; content: string }) {
   const lines = React.useMemo(() => contentLines(props.content), [props.content]);
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
@@ -440,6 +564,25 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
     : language
       ? `hljs language-${language}`
       : "hljs";
+
+  if (props.bootstrap.format === "markdown") {
+    return (
+      <section className="local-document-code-shell">
+        {statusMessage && (
+          <div className="local-document-code-status-strip">
+            <p className="local-document-code-status">
+              {statusMessage}
+            </p>
+          </div>
+        )}
+        <MarkdownCodeDocumentView
+          content={props.content}
+          highlightedHTML={highlightedHTML}
+          lines={lines}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="local-document-code-shell">

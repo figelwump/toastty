@@ -270,8 +270,61 @@ body {
   tab-size: 2;
 }
 
+.local-document-code-frame-markdown {
+  overflow: hidden;
+}
+
+.local-document-code-scroll-markdown {
+  padding: 20px 0 28px;
+}
+
+.local-document-code-markdown-grid {
+  min-width: 100%;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+}
+
+.local-document-code-gutter-cell {
+  padding: 0 14px 0 22px;
+  border-right: 1px solid rgba(255, 224, 191, 0.08);
+  background: rgba(255, 224, 191, 0.03);
+  color: #8a7566;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  font-size: calc(13px * var(--toastty-markdown-text-scale));
+  font-weight: 500;
+  line-height: var(--local-document-code-line-height);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+
+.local-document-code-markdown-line {
+  min-width: 0;
+  min-height: var(--local-document-code-line-height);
+  margin: 0;
+  padding: 0 28px;
+}
+
+.local-document-code-scroll-markdown .local-document-code-markdown,
+.local-document-code-scroll-markdown .local-document-code-plain-markdown {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 .local-document-code-plain {
   color: var(--pre-text);
+}
+
+.toastty-markdown-line-start {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  vertical-align: top;
+  pointer-events: none;
+  user-select: none;
 }
 
 .local-document-editor-shell {

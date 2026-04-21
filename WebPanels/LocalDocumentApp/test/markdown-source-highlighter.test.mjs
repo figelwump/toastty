@@ -13,14 +13,28 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 test("markdown source highlighting colors inline emphasis and code spans", async () => {
   const html = await highlightMarkdownSourceToHtml("**bold** *italic* `inline`");
 
+  assert.match(html, /class="toastty-markdown-line-start" aria-hidden="true" data-source-line="1"><\/span>/);
   assert.match(html, /class="pl-s">\*\*<\/span><span class="pl-mb">bold<\/span><span class="pl-s">\*\*<\/span>/);
   assert.match(html, /class="pl-s">\*<\/span><span class="pl-mi">italic<\/span><span class="pl-s">\*<\/span>/);
   assert.match(html, /class="pl-s">`<\/span><span class="pl-c1">inline<\/span><span class="pl-s">`<\/span>/);
 });
 
+test("markdown source highlighting adds line-start markers for blank lines", async () => {
+  const html = await highlightMarkdownSourceToHtml("alpha\n\nbeta");
+  const markers = html.match(/class="toastty-markdown-line-start"/g) ?? [];
+
+  assert.equal(markers.length, 3);
+  assert.match(html, /data-source-line="1"/);
+  assert.match(html, /data-source-line="2"/);
+  assert.match(html, /data-source-line="3"/);
+});
+
 test("markdown source highlighting colors fenced code using the declared language", async () => {
   const html = await highlightMarkdownSourceToHtml("```js\nconst answer = 42\n```");
 
+  const markers = html.match(/class="toastty-markdown-line-start"/g) ?? [];
+
+  assert.equal(markers.length, 3);
   assert.match(html, /class="pl-s">```<\/span><span class="pl-en">js<\/span>/);
   assert.match(html, /class="pl-k">const<\/span>/);
   assert.match(html, /class="pl-c1">42<\/span>/);
