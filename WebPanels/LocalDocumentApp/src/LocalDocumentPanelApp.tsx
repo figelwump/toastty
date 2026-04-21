@@ -136,26 +136,97 @@ type RevealLayout = {
   targetScrollTop: number;
 };
 
-// Compute the top of line 1's line-box relative to `frameElement`'s
-// border-box top, from CSS layout primitives alone. Range-based anchoring
-// produced too many engine-specific quirks (WebKit vs Chromium disagree on
-// where a post-newline caret sits, and `rects[0].top` from
-// `selectNodeContents` returns a glyph top rather than a line-box top — which
-// made the reveal band visually off-center even when it was on the right
-// line). The line-box top, on the other hand, is just:
+// Measure the rendered top of the first line of `element` relative to its viewport
+// position. Used as the fallback anchor when a direct Range over line N fails
+// (e.g. line N is empty and produces no rect). The gutter `<pre>` and the
+// content `<code>` distribute padding differently — the gutter pre has its own
+// top padding, while the content pre's padding lives on the surrounding frame
+// — so anchoring on rendered geometry is safer than anchoring on element rects.
+function measureFirstRenderedLineTop(element: HTMLElement): number | null {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const rects = range.getClientRects();
+  if (rects.length === 0) {
+    return null;
+  }
+  const top = rects[0].top;
+  return Number.isFinite(top) ? top : null;
+}
+
+// Directly measure the rendered top of line `lineNumber` by walking text nodes
+// to the matching character offset and reading back a Range over a character
+// on that line. Returns `null` on empty lines or when the element is not laid
+// out yet. Two WebKit quirks drive the precise slice we select:
 //
-//     element's border-box top + element's padding-top
-//
-// The gutter `<pre>` carries its own padding; the content `<code>`'s padding
-// lives on the surrounding frame (so the code element's border-box already
-// starts at the right y). Summing `elementRect.top - frameRect.top` with the
-// element's own `paddingTop` covers both layouts uniformly.
-function resolveLineOneBoxTopInFrame(element: HTMLElement, frameElement: HTMLElement): number {
-  const elementRect = element.getBoundingClientRect();
-  const frameRect = frameElement.getBoundingClientRect();
-  const paddingTop = Number.parseFloat(window.getComputedStyle(element).paddingTop);
-  const safePaddingTop = Number.isFinite(paddingTop) ? paddingTop : 0;
-  return (elementRect.top - frameRect.top) + safePaddingTop;
+//   1. When `localOffset` falls immediately after a `\n` (which always happens
+//      for the first char of every line), the range's start caret can be
+//      interpreted as "end of the previous visual line". Over an empty
+//      preceding line that makes the bounding rect span both lines, and
+//      `rect.top` lands on the previous line. Skipping one character forward
+//      so the range sits mid-line sidesteps the ambiguity.
+//   2. Even with the mid-line start, we prefer the last entry from
+//      `getClientRects()` over the bounding rect because `getBoundingClientRect`
+//      still unions any phantom zero-width start rect that WebKit emits.
+function measureDirectLineTop(element: HTMLElement, lineNumber: number): number | null {
+  const textContent = element.textContent;
+  if (textContent === null || textContent.length === 0) {
+    return null;
+  }
+  const lines = textContent.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length) {
+    return null;
+  }
+  const targetLineLength = lines[lineNumber - 1].length;
+  if (targetLineLength === 0) {
+    return null;
+  }
+
+  let charOffset = 0;
+  for (let i = 0; i < lineNumber - 1; i++) {
+    charOffset += lines[i].length + 1;
+  }
+
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let accumulated = 0;
+  let node = walker.nextNode();
+  while (node !== null) {
+    const nodeLength = node.textContent?.length ?? 0;
+    if (accumulated + nodeLength > charOffset) {
+      const localOffset = charOffset - accumulated;
+      // Default to the first char of the line.
+      let startOffset = localOffset;
+      let endOffset = Math.min(localOffset + 1, nodeLength);
+      // Prefer the second char when both it and its neighbor live in the same
+      // text node — that moves the start caret away from the post-newline
+      // boundary where WebKit is ambiguous.
+      if (targetLineLength >= 2 && localOffset + 2 <= nodeLength) {
+        startOffset = localOffset + 1;
+        endOffset = localOffset + 2;
+      }
+      if (endOffset <= startOffset) {
+        return null;
+      }
+
+      const range = document.createRange();
+      range.setStart(node, startOffset);
+      range.setEnd(node, endOffset);
+      const rects = range.getClientRects();
+      if (rects.length === 0) {
+        return null;
+      }
+      // Take the last rect: it's always on line N. `rects[0]` can belong to a
+      // zero-width phantom at the previous line-box boundary when the start
+      // caret is post-newline.
+      const rect = rects[rects.length - 1];
+      if (!Number.isFinite(rect.top) || rect.height <= 0) {
+        return null;
+      }
+      return rect.top;
+    }
+    accumulated += nodeLength;
+    node = walker.nextNode();
+  }
+  return null;
 }
 
 function resolveComputedLineHeight(element: HTMLElement): number | null {
@@ -164,6 +235,26 @@ function resolveComputedLineHeight(element: HTMLElement): number | null {
     return null;
   }
   return parsed;
+}
+
+function measureLineTopRelativeToFrame(args: {
+  element: HTMLElement;
+  frameElement: HTMLElement;
+  lineNumber: number;
+  lineHeight: number;
+}): number | null {
+  const frameTop = args.frameElement.getBoundingClientRect().top;
+  const direct = measureDirectLineTop(args.element, args.lineNumber);
+  if (direct !== null) {
+    return direct - frameTop;
+  }
+  // Empty-line fallback: anchor on the first rendered line and step forward
+  // with the computed line-height.
+  const firstLineTop = measureFirstRenderedLineTop(args.element);
+  if (firstLineTop === null) {
+    return null;
+  }
+  return (firstLineTop - frameTop) + (args.lineNumber - 1) * args.lineHeight;
 }
 
 function measureRevealLayout(args: {
@@ -181,11 +272,28 @@ function measureRevealLayout(args: {
     return null;
   }
 
-  const contentTopBase = resolveLineOneBoxTopInFrame(args.contentElement, args.contentFrameElement);
-  const gutterTopBase = resolveLineOneBoxTopInFrame(args.gutterElement, args.gutterFrameElement);
-
-  return computeRevealLayout({
+  const contentTopBase = measureLineTopRelativeToFrame({
+    element: args.contentElement,
+    frameElement: args.contentFrameElement,
     lineNumber: args.lineNumber,
+    lineHeight: contentLineHeight
+  });
+  const gutterTopBase = measureLineTopRelativeToFrame({
+    element: args.gutterElement,
+    frameElement: args.gutterFrameElement,
+    lineNumber: args.lineNumber,
+    lineHeight: gutterLineHeight
+  });
+  if (contentTopBase === null || gutterTopBase === null) {
+    return null;
+  }
+
+  // `computeRevealLayout` still takes a `contentTopBase`/`gutterTopBase` + a
+  // `(lineNumber - 1) * line-height` step, so to reuse it we pass the
+  // already-measured line-N top as the base and force `lineNumber: 1`. That
+  // keeps the pure helper and its test unchanged.
+  return computeRevealLayout({
+    lineNumber: 1,
     lineCount: args.lineCount,
     contentTopBase,
     gutterTopBase,
