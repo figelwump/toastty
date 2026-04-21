@@ -88,6 +88,20 @@ final class ProcessWatchCommandControllerTests: XCTestCase {
         )
         XCTAssertEqual(record.displayTitleOverride, "tmp/project")
     }
+
+    func testWatchFocusedProcessEnablesExpandedSessionSidebarWidthMode() throws {
+        let fixture = try makeFixture()
+
+        XCTAssertTrue(
+            fixture.controller.watchFocusedProcess(preferredWindowID: fixture.windowID)
+        )
+
+        XCTAssertTrue(fixture.store.hasEverLaunchedAgent)
+        XCTAssertEqual(
+            AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: fixture.store.hasEverLaunchedAgent),
+            280
+        )
+    }
 }
 
 private extension ProcessWatchCommandControllerTests {

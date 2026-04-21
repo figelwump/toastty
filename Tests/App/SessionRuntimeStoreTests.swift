@@ -640,6 +640,65 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func idleAtPromptFallbackCompletesBackgroundProcessWatchAndSendsNotification() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            },
+            isApplicationActive: { false }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_060)
+
+        sessionStore.startProcessWatch(
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            displayTitleOverride: "bundle exec rspec",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        #expect(
+            sessionStore.stopSessionForPanelIfOlderThan(
+                panelID: backgroundPanelID,
+                minimumRuntime: 1,
+                reason: .idleAtPrompt,
+                at: startedAt.addingTimeInterval(2)
+            )
+        )
+
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+
+        let record = try #require(sessionStore.sessionRegistry.activeSession(for: backgroundPanelID))
+        #expect(record.status?.kind == .ready)
+        #expect(record.status?.detail == "Completed")
+
+        let notification = try #require(await recorder.notifications().first)
+        #expect(notification.title == "Command finished")
+        #expect(notification.body == "bundle exec rspec")
+        #expect(notification.workspaceID == selection.workspaceID)
+        #expect(notification.panelID == backgroundPanelID)
+
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
+    }
+
+    @Test
     func updateStatusDoesNotSendNotificationForFocusedManagedPanel() async throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)

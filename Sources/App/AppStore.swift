@@ -161,6 +161,10 @@ final class AppStore: ObservableObject {
     static let nextUnreadOrWorkingFallbackStatusKinds: Set<SessionStatusKind> = [.working]
 
     @Published private(set) var state: AppState
+    /// Persisted compatibility flag that switches windows into the wider
+    /// sidebar layout once managed session-status UI has been used at least
+    /// once. It originally tracked agent launches, but process-watch rows
+    /// should opt into the same expanded session-status treatment.
     @Published private(set) var hasEverLaunchedAgent: Bool
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
@@ -895,11 +899,15 @@ final class AppStore: ObservableObject {
         actionAppliedObservers.removeValue(forKey: token)
     }
 
-    func recordSuccessfulAgentLaunch() {
+    func recordSessionStatusSidebarExpansionEligibility() {
         guard hasEverLaunchedAgent == false else { return }
         hasEverLaunchedAgent = true
         guard persistUserSettings else { return }
         ToasttySettingsStore.persistHasEverLaunchedAgent(true)
+    }
+
+    func recordSuccessfulAgentLaunch() {
+        recordSessionStatusSidebarExpansionEligibility()
     }
 
     func setAskBeforeQuitting(_ askBeforeQuitting: Bool) {

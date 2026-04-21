@@ -101,6 +101,7 @@ final class SessionRuntimeStore: ObservableObject {
         repoRoot: String?,
         at now: Date
     ) {
+        store?.recordSessionStatusSidebarExpansionEligibility()
         startSession(
             sessionID: sessionID,
             agent: .processWatch,
@@ -902,9 +903,20 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         }
 
         if record.agent == .processWatch,
-           let status = record.status,
-           status.kind == .ready || status.kind == .error {
-            return false
+           let status = record.status {
+            if status.kind == .ready || status.kind == .error {
+                return false
+            }
+
+            if reason == .idleAtPrompt,
+               status.kind == .working {
+                updateStatus(
+                    sessionID: record.sessionID,
+                    status: processWatchCompletionStatus(exitCode: nil),
+                    at: now
+                )
+                return true
+            }
         }
 
         stopSessionForPanel(panelID: panelID, reason: reason, at: now)
