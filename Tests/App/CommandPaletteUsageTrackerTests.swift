@@ -15,9 +15,11 @@ final class CommandPaletteUsageTrackerTests: XCTestCase {
             homeDirectoryPath: rootURL.path,
             environment: ["TOASTTY_RUNTIME_HOME": runtimeHomeURL.path]
         )
+        let recordedAt = Date(timeIntervalSinceReferenceDate: 123)
         let tracker = CommandPaletteUsageTracker(
             runtimePaths: runtimePaths,
-            fileManager: fileManager
+            fileManager: fileManager,
+            dateProvider: { recordedAt }
         )
 
         tracker.recordSuccessfulExecution(of: "workspace.create")
@@ -30,7 +32,7 @@ final class CommandPaletteUsageTrackerTests: XCTestCase {
         )
         XCTAssertEqual(
             persistedRecords["workspace.create"],
-            CommandPaletteUsageRecord(count: 1)
+            CommandPaletteUsageRecord(count: 1, lastUsedAt: recordedAt)
         )
     }
 
@@ -43,9 +45,11 @@ final class CommandPaletteUsageTrackerTests: XCTestCase {
             homeDirectoryPath: rootURL.path,
             environment: [:]
         )
+        let recordedAt = Date(timeIntervalSinceReferenceDate: 456)
         let tracker = CommandPaletteUsageTracker(
             runtimePaths: runtimePaths,
-            fileManager: fileManager
+            fileManager: fileManager,
+            dateProvider: { recordedAt }
         )
 
         tracker.recordSuccessfulExecution(of: "window.create")
@@ -76,17 +80,23 @@ final class CommandPaletteUsageTrackerTests: XCTestCase {
         )
         try writeRecords(
             [
-                "workspace.create": CommandPaletteUsageRecord(count: 2),
+                "workspace.create": CommandPaletteUsageRecord(
+                    count: 2,
+                    lastUsedAt: Date(timeIntervalSinceReferenceDate: 10)
+                ),
             ],
             to: usageFileURL
         )
 
+        let recordedAt = Date(timeIntervalSinceReferenceDate: 20)
         let tracker = CommandPaletteUsageTracker(
             runtimePaths: runtimePaths,
-            fileManager: fileManager
+            fileManager: fileManager,
+            dateProvider: { recordedAt }
         )
 
         XCTAssertEqual(tracker.useCount(for: "workspace.create"), 2)
+        XCTAssertEqual(tracker.lastUsedAt(for: "workspace.create"), Date(timeIntervalSinceReferenceDate: 10))
 
         tracker.recordSuccessfulExecution(of: "workspace.create")
 
@@ -94,8 +104,44 @@ final class CommandPaletteUsageTrackerTests: XCTestCase {
         let persistedRecords = try loadRecords(from: usageFileURL)
         XCTAssertEqual(
             persistedRecords["workspace.create"],
-            CommandPaletteUsageRecord(count: 3)
+            CommandPaletteUsageRecord(count: 3, lastUsedAt: recordedAt)
         )
+    }
+
+    func testTrackerLoadsLegacyUsageRecordsWithoutLastUsedAt() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeShortTemporaryDirectory(prefix: "cpum")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: rootURL.path,
+            environment: [:]
+        )
+        let usageFileURL = runtimePaths.configDirectoryURL.appending(
+            path: "command-palette-usage.json",
+            directoryHint: .notDirectory
+        )
+        try fileManager.createDirectory(
+            at: usageFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let legacyJSON = """
+        {
+          "workspace.create" : {
+            "count" : 2
+          }
+        }
+        """
+        let legacyData = try XCTUnwrap(legacyJSON.data(using: .utf8))
+        try legacyData.write(to: usageFileURL, options: [.atomic])
+
+        let tracker = CommandPaletteUsageTracker(
+            runtimePaths: runtimePaths,
+            fileManager: fileManager
+        )
+
+        XCTAssertEqual(tracker.useCount(for: "workspace.create"), 2)
+        XCTAssertNil(tracker.lastUsedAt(for: "workspace.create"))
     }
 
     private func loadRecords(from fileURL: URL) throws -> [String: CommandPaletteUsageRecord] {

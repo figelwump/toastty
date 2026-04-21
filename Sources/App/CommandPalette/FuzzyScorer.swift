@@ -6,9 +6,13 @@ struct FuzzyMatch: Equatable, Sendable {
 
 enum FuzzyScorer {
     static func match(query: String, candidate: String) -> FuzzyMatch? {
-        let normalizedQuery = query.normalizedPaletteQuery
-        let normalizedCandidate = candidate.normalizedPaletteQuery
+        matchNormalized(
+            query: query.normalizedPaletteQuery,
+            candidate: candidate.normalizedPaletteQuery
+        )
+    }
 
+    static func matchNormalized(query normalizedQuery: String, candidate normalizedCandidate: String) -> FuzzyMatch? {
         guard normalizedQuery.isEmpty == false,
               normalizedCandidate.isEmpty == false,
               normalizedQuery.count <= normalizedCandidate.count else {
@@ -78,5 +82,11 @@ enum FuzzyScorer {
 extension String {
     var normalizedPaletteQuery: String {
         trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var normalizedPaletteSearchTerms: [String] {
+        lowercased()
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
     }
 }
