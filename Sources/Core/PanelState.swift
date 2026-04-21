@@ -55,6 +55,17 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         return trimmedTitle.isEmpty ? "Terminal" : trimmedTitle
     }
 
+    public var processWatchDisplayTitle: String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedTitle.isEmpty == false,
+           Self.isDefaultTerminalTitle(trimmedTitle) == false,
+           Self.looksLikePathContextTitle(trimmedTitle) == false {
+            return trimmedTitle
+        }
+
+        return displayPanelLabel
+    }
+
     private var normalizedCustomTitle: String? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }

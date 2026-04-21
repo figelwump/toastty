@@ -30,6 +30,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case openLocalFileInSplit
     case toggleSidebar
     case toggleFocusedPanelMode
+    case watchRunningCommand
     case closePanel
     case renameWorkspace
     case closeWorkspace
@@ -99,6 +100,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "window.toggle-sidebar"
         case .toggleFocusedPanelMode:
             return "panel.focus-mode.toggle"
+        case .watchRunningCommand:
+            return "panel.process-watch.create"
         case .closePanel:
             return "panel.close"
         case .renameWorkspace:
@@ -172,6 +175,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return Self.showSidebarTitle
         case .toggleFocusedPanelMode:
             return Self.focusPanelTitle
+        case .watchRunningCommand:
+            return "Watch Running Command"
         case .closePanel:
             return "Close Panel"
         case .renameWorkspace:
@@ -245,6 +250,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ToasttyKeyboardShortcuts.toggleSidebar
         case .toggleFocusedPanelMode:
             return ToasttyKeyboardShortcuts.toggleFocusedPanel
+        case .watchRunningCommand:
+            return ToasttyKeyboardShortcuts.watchRunningCommand
         case .closePanel:
             return ToasttyKeyboardShortcuts.closePanel
         case .renameWorkspace:
@@ -325,6 +332,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["sidebar", "toggle", "show", "hide"]
         case .toggleFocusedPanelMode:
             return ["focus", "panel", "layout", "restore"]
+        case .watchRunningCommand:
+            return ["watch", "running", "command", "process", "monitor", "foreground", "terminal", "panel"]
         case .closePanel:
             return ["close", "panel", "remove"]
         case .renameWorkspace:

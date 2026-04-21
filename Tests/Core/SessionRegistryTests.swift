@@ -26,6 +26,37 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func sessionRecordDecodesLegacyPayloadWithoutDisplayTitleOverrideKey() throws {
+        let record = SessionRecord(
+            sessionID: "legacy-title",
+            agent: .processWatch,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Running"),
+            displayTitleOverride: "bundle exec rspec",
+            repoRoot: "/repo",
+            cwd: "/repo",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_001)
+        )
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let data = try encoder.encode(record)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "displayTitleOverride")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try decoder.decode(SessionRecord.self, from: legacyData)
+
+        #expect(decoded.displayTitleOverride == nil)
+        #expect(decoded.sessionID == record.sessionID)
+        #expect(decoded.agent == record.agent)
+        #expect(decoded.status == record.status)
+    }
+
+    @Test
     func sessionRecordDecodesLegacyPayloadWithoutManagedNotificationKey() throws {
         let record = SessionRecord(
             sessionID: "legacy",
@@ -104,6 +135,36 @@ struct SessionRegistryTests {
 
         let decoded = try decoder.decode(SessionRegistry.self, from: legacyData)
         #expect(decoded.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["earlier", "later"])
+    }
+
+    @Test
+    func workspaceStatusesCarryDisplayTitleOverride() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 1_000)
+
+        registry.startSession(
+            sessionID: "watcher",
+            agent: .processWatch,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            usesSessionStatusNotifications: true,
+            displayTitleOverride: "bundle exec rspec",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "watcher",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Running"),
+            at: now.addingTimeInterval(1)
+        )
+
+        let status = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(status.displayTitleOverride == "bundle exec rspec")
+        #expect(status.displayTitle == "bundle exec rspec")
     }
 
     @Test

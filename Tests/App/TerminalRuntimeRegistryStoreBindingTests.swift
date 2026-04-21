@@ -1255,6 +1255,17 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         return false
     }
 
+    func handleCommandFinished(panelID: UUID, exitCode: Int?, at now: Date) -> Bool {
+        _ = now
+        stopActiveCalls.append(
+            .init(
+                panelID: panelID,
+                reason: .ghosttyCommandFinished(exitCode: exitCode)
+            )
+        )
+        return true
+    }
+
     func stopSessionForPanelIfActive(
         panelID: UUID,
         reason: ManagedSessionStopReason,

@@ -121,6 +121,7 @@ struct ToasttyCommandMenus: Commands {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
+    let processWatchCommandController: ProcessWatchCommandController
     let agentLaunchService: AgentLaunchService
     let terminalProfilesMenuController: TerminalProfilesMenuController
     let canCheckForUpdates: Bool
@@ -503,6 +504,21 @@ struct ToasttyCommandMenus: Commands {
                 closeFocusedPanelFromCommandSelection()
             }
             .disabled(commandWorkspace?.focusedPanelID == nil)
+
+            Button(ToasttyBuiltInCommand.watchRunningCommand.title) {
+                processWatchCommandController.watchFocusedProcess(
+                    preferredWindowID: commandSelection?.windowID ?? preferredCommandWindowID
+                )
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.watchRunningCommand.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.watchRunningCommand.requiredShortcut.modifiers
+            )
+            .disabled(
+                processWatchCommandController.canWatchFocusedProcess(
+                    preferredWindowID: commandSelection?.windowID ?? preferredCommandWindowID
+                ) == false
+            )
 
             Button(commandWorkspace?.focusedPanelModeActive == true ? "Restore Layout" : "Focus Panel") {
                 toggleFocusedPanelFromCommandSelection()

@@ -25,6 +25,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         windowID: UUID,
         workspaceID: UUID,
         usesSessionStatusNotifications: Bool = false,
+        displayTitleOverride: String? = nil,
         cwd: String?,
         repoRoot: String?,
         at now: Date
@@ -49,6 +50,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             windowID: windowID,
             workspaceID: workspaceID,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
+            displayTitleOverride: displayTitleOverride,
             repoRoot: repoRoot,
             cwd: cwd,
             startedAt: now,
@@ -123,6 +125,14 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         if activeSessionIDByPanelID[record.panelID] == sessionID {
             activeSessionIDByPanelID.removeValue(forKey: record.panelID)
         }
+    }
+
+    public mutating func removeSession(sessionID: String) {
+        guard let record = sessionsByID.removeValue(forKey: sessionID) else { return }
+        if activeSessionIDByPanelID[record.panelID] == sessionID {
+            activeSessionIDByPanelID.removeValue(forKey: record.panelID)
+        }
+        sessionOrder.removeAll { $0 == sessionID }
     }
 
     public mutating func stopSessionForPanel(panelID: UUID, at now: Date) {
@@ -208,6 +218,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             panelID: record.panelID,
             agent: record.agent,
             status: status,
+            displayTitleOverride: record.displayTitleOverride,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
             isActive: record.isActive

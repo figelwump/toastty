@@ -1,6 +1,7 @@
 @testable import ToasttyApp
 import AppKit
 import CoreState
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -564,7 +565,8 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(store.send(.splitFocusedSlotInDirection(workspaceID: secondWorkspace.id, direction: .right)))
         let bridge = makeWorkspaceMenuBridge(
             store: store,
-            preferredWindowIDProvider: { secondWindowID }
+            preferredWindowIDProvider: { secondWindowID },
+            processWatchPromptStateResolver: { _ in .busy }
         )
 
         let mainMenu = NSMenu(title: "Main")
@@ -576,11 +578,14 @@ final class WindowCommandControllerTests: XCTestCase {
         renameWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
         let closePanelItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
         closePanelItem.keyEquivalentModifierMask = [.command]
+        let watchRunningCommandItem = NSMenuItem(title: "Watch Running Command", action: nil, keyEquivalent: "m")
+        watchRunningCommandItem.keyEquivalentModifierMask = [.command, .shift]
         let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
         renameTabItem.keyEquivalentModifierMask = [.option, .shift]
         let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "w")
         closeWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
         workspaceMenu.addItem(closePanelItem)
+        workspaceMenu.addItem(watchRunningCommandItem)
         workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(newWorkspaceItem)
         workspaceMenu.addItem(renameWorkspaceItem)
@@ -601,6 +606,8 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(renameWorkspaceItem.action, #selector(WorkspaceMenuBridge.renameWorkspace(_:)))
         XCTAssertTrue(closePanelItem.target === bridge)
         XCTAssertEqual(closePanelItem.action, #selector(WorkspaceMenuBridge.closePanel(_:)))
+        XCTAssertTrue(watchRunningCommandItem.target === bridge)
+        XCTAssertEqual(watchRunningCommandItem.action, #selector(WorkspaceMenuBridge.watchRunningCommand(_:)))
         XCTAssertTrue(renameTabItem.target === bridge)
         XCTAssertEqual(renameTabItem.action, #selector(WorkspaceMenuBridge.renameSelectedTab(_:)))
         XCTAssertTrue(closeWorkspaceItem.target === bridge)
@@ -608,6 +615,7 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(bridge.validateMenuItem(newWorkspaceItem))
         XCTAssertTrue(bridge.validateMenuItem(renameWorkspaceItem))
         XCTAssertTrue(bridge.validateMenuItem(closePanelItem))
+        XCTAssertTrue(bridge.validateMenuItem(watchRunningCommandItem))
         XCTAssertTrue(bridge.validateMenuItem(renameTabItem))
         XCTAssertTrue(bridge.validateMenuItem(closeWorkspaceItem))
 
@@ -642,6 +650,9 @@ final class WindowCommandControllerTests: XCTestCase {
         )
 
         store.pendingCloseWorkspaceRequest = nil
+        bridge.watchRunningCommand(nil)
+        XCTAssertFalse(bridge.validateMenuItem(watchRunningCommandItem))
+
         bridge.createWorkspace(nil)
 
         let updatedFirstWindow = try XCTUnwrap(store.state.window(id: firstWindowID))
@@ -740,6 +751,11 @@ final class WindowCommandControllerTests: XCTestCase {
             keyEquivalent: "e"
         )
         let closePanelItem = NSMenuItem(title: ToasttyBuiltInCommand.closePanel.title, action: nil, keyEquivalent: "w")
+        let watchRunningCommandItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.watchRunningCommand.title,
+            action: nil,
+            keyEquivalent: "m"
+        )
         let renameTabItem = NSMenuItem(title: ToasttyBuiltInCommand.renameTab.title, action: nil, keyEquivalent: "e")
         let closeWorkspaceItem = NSMenuItem(
             title: ToasttyBuiltInCommand.closeWorkspace.title,
@@ -760,6 +776,7 @@ final class WindowCommandControllerTests: XCTestCase {
         workspaceMenu.addItem(newWorkspaceItem)
         workspaceMenu.addItem(renameWorkspaceItem)
         workspaceMenu.addItem(closePanelItem)
+        workspaceMenu.addItem(watchRunningCommandItem)
         workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(closeWorkspaceItem)
         workspaceMenu.addItem(previousItem)
@@ -778,6 +795,7 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertFalse(bridge.validateMenuItem(newWorkspaceItem))
         XCTAssertFalse(bridge.validateMenuItem(renameWorkspaceItem))
         XCTAssertFalse(bridge.validateMenuItem(closePanelItem))
+        XCTAssertFalse(bridge.validateMenuItem(watchRunningCommandItem))
         XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
         XCTAssertFalse(bridge.validateMenuItem(closeWorkspaceItem))
         XCTAssertFalse(bridge.validateMenuItem(previousItem))
@@ -1760,7 +1778,8 @@ final class WindowCommandControllerTests: XCTestCase {
 
     private func makeWorkspaceMenuBridge(
         store: AppStore,
-        preferredWindowIDProvider: (() -> UUID?)? = nil
+        preferredWindowIDProvider: (() -> UUID?)? = nil,
+        processWatchPromptStateResolver: ((UUID) -> TerminalPromptState)? = nil
     ) -> WorkspaceMenuBridge {
         let resolvedWindowIDProvider = preferredWindowIDProvider ?? { store.state.selectedWindowID }
         return WorkspaceMenuBridge(
@@ -1785,6 +1804,11 @@ final class WindowCommandControllerTests: XCTestCase {
                 store: store,
                 sessionRuntimeStore: makeSessionRuntimeStore(store: store),
                 preferredWindowIDProvider: resolvedWindowIDProvider
+            ),
+            processWatchCommandController: makeProcessWatchCommandController(
+                store: store,
+                preferredWindowIDProvider: resolvedWindowIDProvider,
+                promptStateResolver: processWatchPromptStateResolver
             )
         )
     }
@@ -1816,6 +1840,24 @@ final class WindowCommandControllerTests: XCTestCase {
         return sessionRuntimeStore
     }
 
+    private func makeProcessWatchCommandController(
+        store: AppStore,
+        preferredWindowIDProvider: @escaping () -> UUID?,
+        promptStateResolver: ((UUID) -> TerminalPromptState)? = nil
+    ) -> ProcessWatchCommandController {
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        return ProcessWatchCommandController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            preferredWindowIDProvider: preferredWindowIDProvider,
+            promptStateResolver: promptStateResolver
+        )
+    }
+
     private func flushMainActorTasks() async {
         await MainActor.run {}
     }
@@ -1841,7 +1883,36 @@ final class WindowCommandControllerTests: XCTestCase {
         if modifiers.contains(.command) {
             label += "⌘"
         }
-        return label + item.keyEquivalent.uppercased()
+        return label + menuDisplaySymbol(for: item.keyEquivalent)
+    }
+
+    private func menuDisplaySymbol(for keyEquivalent: String) -> String {
+        guard let character = keyEquivalent.first else {
+            return ""
+        }
+
+        switch character {
+        case KeyEquivalent.leftArrow.character:
+            return "←"
+        case KeyEquivalent.rightArrow.character:
+            return "→"
+        case KeyEquivalent.upArrow.character:
+            return "↑"
+        case KeyEquivalent.downArrow.character:
+            return "↓"
+        case KeyEquivalent.escape.character:
+            return "⎋"
+        case KeyEquivalent.return.character:
+            return "↩"
+        case KeyEquivalent.tab.character:
+            return "⇥"
+        case KeyEquivalent.space.character:
+            return "␣"
+        case KeyEquivalent.delete.character:
+            return "⌫"
+        default:
+            return String(character).uppercased()
+        }
     }
 }
 

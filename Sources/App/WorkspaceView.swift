@@ -2303,7 +2303,7 @@ private struct PanelCardView: View {
         switch panelState {
         case .terminal(let terminal):
             if let panelSessionStatus, panelSessionStatus.isActive {
-                return panelSessionStatus.agent.displayName
+                return panelSessionStatus.displayTitle
             }
             return terminal.displayPanelLabel
         case .web(let webState):

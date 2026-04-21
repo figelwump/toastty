@@ -597,6 +597,7 @@ final class DisplayShortcutInterceptor {
     private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let processWatchCommandController: ProcessWatchCommandController
     private let isCommandPalettePresented: @MainActor () -> Bool
     private let toggleCommandPalette: @MainActor (UUID?) -> Bool
     nonisolated(unsafe) private var eventMonitor: Any?
@@ -611,6 +612,7 @@ final class DisplayShortcutInterceptor {
         case decreaseTextSize
         case resetTextSize
         case split(SlotSplitDirection)
+        case watchRunningCommand
         case enterLocalDocumentEdit
         case cancelLocalDocumentEdit
         case saveLocalDocument
@@ -636,6 +638,7 @@ final class DisplayShortcutInterceptor {
         webPanelRuntimeRegistry: WebPanelRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
+        processWatchCommandController: ProcessWatchCommandController? = nil,
         isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
         toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         installEventMonitor: Bool = true
@@ -645,6 +648,11 @@ final class DisplayShortcutInterceptor {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.processWatchCommandController = processWatchCommandController ?? ProcessWatchCommandController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
         self.isCommandPalettePresented = isCommandPalettePresented
         self.toggleCommandPalette = toggleCommandPalette
         if installEventMonitor {
@@ -716,6 +724,11 @@ final class DisplayShortcutInterceptor {
         if let direction = Self.splitDirection(for: event),
            appOwnedWindowID != nil {
             return .split(direction)
+        }
+
+        if Self.isWatchRunningCommandShortcut(event),
+           appOwnedWindowID != nil {
+            return .watchRunningCommand
         }
 
         if Self.isClosePanelShortcut(event),
@@ -821,6 +834,8 @@ final class DisplayShortcutInterceptor {
             adjustTextSize(direction: .reset, preferredWindowID: appOwnedWindowID)
         case .split(let direction):
             split(direction: direction, preferredWindowID: appOwnedWindowID)
+        case .watchRunningCommand:
+            watchRunningCommand()
         case .enterLocalDocumentEdit:
             handleEnterLocalDocumentEditShortcut(preferredWindowID: appOwnedWindowID)
         case .cancelLocalDocumentEdit:
@@ -1051,6 +1066,16 @@ final class DisplayShortcutInterceptor {
         return modifiers == [.command, .shift]
     }
 
+    static func isWatchRunningCommandShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "m" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
     static func isToggleFocusedPanelShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown,
               event.isARepeat == false,
@@ -1232,6 +1257,19 @@ final class DisplayShortcutInterceptor {
         )
         // Cmd+D / Cmd+Shift+D should remain app-owned for resolved Toastty
         // workspace windows so embedded web views cannot reject the shortcut.
+        return true
+    }
+
+    private func watchRunningCommand() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard store.commandSelection(preferredWindowID: preferredWindowID) != nil else {
+            return false
+        }
+
+        _ = processWatchCommandController.watchFocusedProcess(preferredWindowID: preferredWindowID)
+        // Keep the shortcut app-owned for resolved Toastty workspace windows so
+        // embedded terminals do not reinterpret it as raw input.
         return true
     }
 
@@ -1593,6 +1631,7 @@ struct ToasttyApp: App {
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let processWatchCommandController: ProcessWatchCommandController
     private let commandPaletteController: CommandPaletteController
     private let displayShortcutInterceptor: DisplayShortcutInterceptor
 
@@ -1790,6 +1829,15 @@ struct ToasttyApp: App {
             cliExecutablePathProvider: { cliExecutablePath },
             socketPathProvider: { socketPath }
         )
+        let preferredWorkspaceCommandWindowID: () -> UUID? = {
+            currentToasttyWorkspaceCommandWindowID(in: store)
+        }
+        let processWatchCommandController = ProcessWatchCommandController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
+        )
         let commandPaletteActionHandler = CommandPaletteActionHandler(
             store: store,
             splitLayoutCommandController: splitLayoutCommandController,
@@ -1817,7 +1865,8 @@ struct ToasttyApp: App {
                     preferredWindowID: preferredWindowID,
                     placement: placement
                 )
-            }
+            },
+            processWatchCommandController: processWatchCommandController
         )
         let commandPaletteUsageTracker = CommandPaletteUsageTracker(runtimePaths: runtimePaths)
         let commandPaletteController = CommandPaletteController(
@@ -1837,9 +1886,6 @@ struct ToasttyApp: App {
             usageTracker: commandPaletteUsageTracker
         )
         self.commandPaletteController = commandPaletteController
-        let preferredWorkspaceCommandWindowID: () -> UUID? = {
-            currentToasttyWorkspaceCommandWindowID(in: store)
-        }
         let createWorkspaceCommandController = CreateWorkspaceCommandController(
             store: store,
             preferredWindowIDProvider: preferredWorkspaceCommandWindowID
@@ -1857,6 +1903,7 @@ struct ToasttyApp: App {
             sessionRuntimeStore: sessionRuntimeStore,
             preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
+        self.processWatchCommandController = processWatchCommandController
         let workspaceClosePanelCommandController = WindowCommandController(
             store: store,
             focusedPanelCommandController: focusedPanelCommandController,
@@ -1882,7 +1929,8 @@ struct ToasttyApp: App {
             createWorkspaceCommandController: createWorkspaceCommandController,
             renameWorkspaceCommandController: renameWorkspaceCommandController,
             closeWorkspaceCommandController: closeWorkspaceCommandController,
-            workspaceTabCommandController: workspaceTabCommandController
+            workspaceTabCommandController: workspaceTabCommandController,
+            processWatchCommandController: processWatchCommandController
         )
         helpMenuBridge = HelpMenuBridge { [weak store] url in
             guard let store else { return }
@@ -1899,6 +1947,7 @@ struct ToasttyApp: App {
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
+            processWatchCommandController: processWatchCommandController,
             isCommandPalettePresented: { [weak commandPaletteController] in
                 commandPaletteController?.isPresented ?? false
             },
@@ -2165,6 +2214,7 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
+                processWatchCommandController: processWatchCommandController,
                 agentLaunchService: agentLaunchService,
                 terminalProfilesMenuController: terminalProfilesMenuController,
                 canCheckForUpdates: sparkleUpdaterBridge.canCheckForUpdates,

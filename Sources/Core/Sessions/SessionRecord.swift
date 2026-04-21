@@ -24,6 +24,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var workspaceID: UUID
     public var usesSessionStatusNotifications: Bool
     public var status: SessionStatus?
+    public var displayTitleOverride: String?
     public var repoRoot: String?
     public var cwd: String?
     public var touchedFiles: [String]
@@ -40,6 +41,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         workspaceID: UUID,
         usesSessionStatusNotifications: Bool = false,
         status: SessionStatus? = nil,
+        displayTitleOverride: String? = nil,
         repoRoot: String? = nil,
         cwd: String? = nil,
         touchedFiles: [String] = [],
@@ -55,6 +57,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.workspaceID = workspaceID
         self.usesSessionStatusNotifications = usesSessionStatusNotifications
         self.status = status
+        self.displayTitleOverride = Self.normalizedOptionalText(displayTitleOverride)
         self.repoRoot = repoRoot
         self.cwd = cwd
         self.touchedFiles = touchedFiles
@@ -80,6 +83,9 @@ public struct SessionRecord: Codable, Equatable, Sendable {
             forKey: .usesSessionStatusNotifications
         ) ?? false
         status = try container.decodeIfPresent(SessionStatus.self, forKey: .status)
+        displayTitleOverride = Self.normalizedOptionalText(
+            try container.decodeIfPresent(String.self, forKey: .displayTitleOverride)
+        )
         repoRoot = try container.decodeIfPresent(String.self, forKey: .repoRoot)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         touchedFiles = try container.decodeIfPresent([String].self, forKey: .touchedFiles) ?? []
@@ -98,6 +104,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         try container.encode(workspaceID, forKey: .workspaceID)
         try container.encode(usesSessionStatusNotifications, forKey: .usesSessionStatusNotifications)
         try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(displayTitleOverride, forKey: .displayTitleOverride)
         try container.encodeIfPresent(repoRoot, forKey: .repoRoot)
         try container.encodeIfPresent(cwd, forKey: .cwd)
         try container.encode(touchedFiles, forKey: .touchedFiles)
@@ -117,6 +124,7 @@ private extension SessionRecord {
         case workspaceID
         case usesSessionStatusNotifications
         case status
+        case displayTitleOverride
         case repoRoot
         case cwd
         case touchedFiles
@@ -124,5 +132,13 @@ private extension SessionRecord {
         case startedAt
         case updatedAt
         case stoppedAt
+    }
+
+    static func normalizedOptionalText(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
     }
 }

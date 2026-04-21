@@ -127,6 +127,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let watchRunningCommand = ToasttyKeyboardShortcut(
+        "m",
+        modifiers: [.command, .shift]
+    )
+
     static let find = ToasttyKeyboardShortcut(
         "f",
         modifiers: [.command]

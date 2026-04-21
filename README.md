@@ -33,6 +33,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`
 - **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu, top bar, or command palette, with live sidebar status and notifications
 - **Command palette** — Open a keyboard-first palette with `Cmd+Shift+P` to run built-in commands, switch workspaces, launch configured agents, and split with terminal profiles
+- **Watch running commands** — Mark a busy terminal with `Cmd+Shift+M` to surface a session-style row, unread badge, and completion notification when that foreground command exits
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
 - **Desktop notifications** — Notifications from coding agents and other supported processes
@@ -62,6 +63,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+[` | Focus previous pane |
 | `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then working panels; flash the current sidebar selection if nothing remains |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
+| `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 | `Cmd+F` | Find in active terminal scrollback |
 | `Cmd+G` | Find next in active terminal scrollback |
 | `Cmd+Shift+G` | Find previous in active terminal scrollback |

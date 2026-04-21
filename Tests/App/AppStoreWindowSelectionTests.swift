@@ -248,6 +248,55 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(store.commandSelection(preferredWindowID: nil))
     }
 
+    func testJumpToNextActiveFocusesUnreadProcessWatchViaUnreadPanelPath() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let firstPanelID = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+
+        XCTAssertTrue(store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right)))
+
+        let workspaceAfterSplit = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let watchedPanelID = try XCTUnwrap(workspaceAfterSplit.focusedPanelID)
+        XCTAssertNotEqual(watchedPanelID, firstPanelID)
+        XCTAssertTrue(store.send(.focusPanel(workspaceID: workspaceID, panelID: firstPanelID)))
+
+        sessionRuntimeStore.startProcessWatch(
+            sessionID: "watcher",
+            panelID: watchedPanelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            displayTitleOverride: "npm test",
+            cwd: "/tmp/project",
+            repoRoot: nil,
+            at: Date(timeIntervalSinceReferenceDate: 10)
+        )
+        XCTAssertTrue(
+            sessionRuntimeStore.handleCommandFinished(
+                panelID: watchedPanelID,
+                exitCode: 0,
+                at: Date(timeIntervalSinceReferenceDate: 20)
+            )
+        )
+
+        let workspaceBeforeJump = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceBeforeJump.focusedPanelID, firstPanelID)
+        XCTAssertEqual(workspaceBeforeJump.unreadPanelIDs, [watchedPanelID])
+
+        XCTAssertTrue(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+        )
+
+        let workspaceAfterJump = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterJump.focusedPanelID, watchedPanelID)
+        XCTAssertTrue(workspaceAfterJump.unreadPanelIDs.isEmpty)
+    }
+
     func testPreferredLocalDocumentOpenDirectoryUsesFocusedTerminalLiveCWD() throws {
         let fileManager = FileManager.default
         let cwdURL = fileManager.temporaryDirectory

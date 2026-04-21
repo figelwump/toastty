@@ -18,6 +18,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canOpenLocalDocumentValue = true
     var canToggleSidebarValue = true
     var canToggleFocusedPanelModeValue = true
+    var canWatchRunningCommandValue = true
     var canClosePanelValue = true
     var canRenameWorkspaceValue = true
     var canCloseWorkspaceValue = true
@@ -40,6 +41,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var openLocalDocumentResult = true
     var toggleSidebarResult = true
     var toggleFocusedPanelModeResult = true
+    var watchRunningCommandResult = true
     var closePanelResult = true
     var renameWorkspaceResult = true
     var closeWorkspaceResult = true
@@ -64,6 +66,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var localDocumentCalls: [RecordedPaletteLocalDocumentCall] = []
     var toggledSidebarWindowIDs: [UUID] = []
     var toggledFocusedPanelModeWindowIDs: [UUID] = []
+    var watchedRunningCommandWindowIDs: [UUID] = []
     var closedPanelWindowIDs: [UUID] = []
     var renamedWorkspaceWindowIDs: [UUID] = []
     var closedWorkspaceWindowIDs: [UUID] = []
@@ -214,6 +217,16 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     func toggleFocusedPanelModeTitle(originWindowID: UUID) -> String {
         _ = originWindowID
         return focusedPanelModeTitleValue
+    }
+
+    func canWatchRunningCommand(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canWatchRunningCommandValue
+    }
+
+    func watchRunningCommand(originWindowID: UUID) -> Bool {
+        watchedRunningCommandWindowIDs.append(originWindowID)
+        return watchRunningCommandResult
     }
 
     func canClosePanel(originWindowID: UUID) -> Bool {
@@ -385,6 +398,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return toggleSidebar(originWindowID: originWindowID)
             case .toggleFocusedPanelMode:
                 return toggleFocusedPanelMode(originWindowID: originWindowID)
+            case .watchRunningCommand:
+                return watchRunningCommand(originWindowID: originWindowID)
             case .closePanel:
                 return closePanel(originWindowID: originWindowID)
             case .renameWorkspace:

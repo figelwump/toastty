@@ -59,6 +59,7 @@ enum CommandPaletteCatalog {
             (.openLocalFileInSplit, actions.canOpenLocalDocument(originWindowID: originWindowID)),
             (.toggleSidebar, actions.canToggleSidebar(originWindowID: originWindowID)),
             (.toggleFocusedPanelMode, actions.canToggleFocusedPanelMode(originWindowID: originWindowID)),
+            (.watchRunningCommand, actions.canWatchRunningCommand(originWindowID: originWindowID)),
             (.closePanel, actions.canClosePanel(originWindowID: originWindowID)),
             (.renameWorkspace, actions.canRenameWorkspace(originWindowID: originWindowID)),
             (.closeWorkspace, actions.canCloseWorkspace(originWindowID: originWindowID)),

@@ -116,6 +116,21 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isToggleFocusedPanelShortcut(repeatedEvent))
     }
 
+    func testWatchRunningCommandShortcutMatchesCommandShiftMOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "M", modifiers: [.command, .shift], keyCode: 0x2E)
+        let plainCommandEvent = try makeKeyEvent(characters: "m", modifiers: [.command], keyCode: 0x2E)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "M",
+            modifiers: [.command, .shift],
+            keyCode: 0x2E,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isWatchRunningCommandShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isWatchRunningCommandShortcut(plainCommandEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isWatchRunningCommandShortcut(repeatedEvent))
+    }
+
     func testRenameTabShortcutMatchesOptionShiftPhysicalEOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "E", modifiers: [.option, .shift], keyCode: 0x0E)
         let wrongKeyEvent = try makeKeyEvent(characters: "I", modifiers: [.option, .shift], keyCode: 0x22)
@@ -1213,6 +1228,7 @@ private func waitUntil(
 @MainActor
 private func makeInterceptor(
     store: AppStore,
+    promptStateResolver: ((UUID) -> TerminalPromptState)? = nil,
     isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
     toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false }
 ) -> DisplayShortcutInterceptor {
@@ -1227,12 +1243,19 @@ private func makeInterceptor(
         runtimeRegistry: terminalRuntimeRegistry,
         slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
     )
+    let processWatchCommandController = ProcessWatchCommandController(
+        store: store,
+        terminalRuntimeRegistry: terminalRuntimeRegistry,
+        sessionRuntimeStore: sessionRuntimeStore,
+        promptStateResolver: promptStateResolver
+    )
     return DisplayShortcutInterceptor(
         store: store,
         terminalRuntimeRegistry: terminalRuntimeRegistry,
         webPanelRuntimeRegistry: webPanelRuntimeRegistry,
         sessionRuntimeStore: sessionRuntimeStore,
         focusedPanelCommandController: focusedPanelCommandController,
+        processWatchCommandController: processWatchCommandController,
         isCommandPalettePresented: isCommandPalettePresented,
         toggleCommandPalette: toggleCommandPalette,
         installEventMonitor: false

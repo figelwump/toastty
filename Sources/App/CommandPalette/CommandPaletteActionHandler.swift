@@ -29,6 +29,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool
     func toggleFocusedPanelMode(originWindowID: UUID) -> Bool
     func toggleFocusedPanelModeTitle(originWindowID: UUID) -> String
+    func canWatchRunningCommand(originWindowID: UUID) -> Bool
+    func watchRunningCommand(originWindowID: UUID) -> Bool
     func canClosePanel(originWindowID: UUID) -> Bool
     func closePanel(originWindowID: UUID) -> Bool
     func canRenameWorkspace(originWindowID: UUID) -> Bool
@@ -57,6 +59,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
+    private let processWatchCommandController: ProcessWatchCommandController
     private let agentLaunchService: AgentLaunchService
     private let terminalProfilesMenuController: TerminalProfilesMenuController
     private let supportsConfigurationReload: @MainActor () -> Bool
@@ -73,13 +76,19 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         terminalProfilesMenuController: TerminalProfilesMenuController,
         supportsConfigurationReload: @escaping @MainActor () -> Bool,
         reloadConfigurationAction: @escaping @MainActor () -> Void,
-        openLocalDocumentAction: @escaping @MainActor (UUID?, WebPanelPlacement) -> Bool
+        openLocalDocumentAction: @escaping @MainActor (UUID?, WebPanelPlacement) -> Bool,
+        processWatchCommandController: ProcessWatchCommandController? = nil
     ) {
         self.store = store
         self.splitLayoutCommandController = splitLayoutCommandController
         self.focusedPanelCommandController = focusedPanelCommandController
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
+        self.processWatchCommandController = processWatchCommandController ?? ProcessWatchCommandController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
         self.agentLaunchService = agentLaunchService
         self.terminalProfilesMenuController = terminalProfilesMenuController
         self.supportsConfigurationReload = supportsConfigurationReload
@@ -232,6 +241,14 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return ToasttyBuiltInCommand.toggleFocusedPanelModeTitle(
             focusedPanelModeActive: focusedPanelModeActive
         )
+    }
+
+    func canWatchRunningCommand(originWindowID: UUID) -> Bool {
+        processWatchCommandController.canWatchFocusedProcess(preferredWindowID: originWindowID)
+    }
+
+    func watchRunningCommand(originWindowID: UUID) -> Bool {
+        processWatchCommandController.watchFocusedProcess(preferredWindowID: originWindowID)
     }
 
     func canClosePanel(originWindowID: UUID) -> Bool {
@@ -424,6 +441,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return toggleSidebar(originWindowID: originWindowID)
         case .toggleFocusedPanelMode:
             return toggleFocusedPanelMode(originWindowID: originWindowID)
+        case .watchRunningCommand:
+            return watchRunningCommand(originWindowID: originWindowID)
         case .closePanel:
             return closePanel(originWindowID: originWindowID)
         case .renameWorkspace:

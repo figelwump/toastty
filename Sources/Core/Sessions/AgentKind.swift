@@ -38,6 +38,7 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
 
     public static let claude = Self(rawValue: "claude")!
     public static let codex = Self(rawValue: "codex")!
+    public static let processWatch = Self(rawValue: "process-watch")!
 
     public var displayName: String {
         switch self {
@@ -45,6 +46,8 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
             return "Claude Code"
         case .codex:
             return "Codex"
+        case .processWatch:
+            return "Process Watch"
         default:
             return rawValue
                 .split(separator: "-")
