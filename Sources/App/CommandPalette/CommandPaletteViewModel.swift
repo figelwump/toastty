@@ -204,7 +204,8 @@ final class CommandPaletteViewModel: ObservableObject {
                 .map(\.result)
         }
 
-        footerText = "\(results.count) results"
+        // footerText is unused in commands mode; the view shows a static "@" hint.
+        footerText = ""
         emptyState = PaletteEmptyState(
             title: "No matching commands",
             message: "Try a broader query."

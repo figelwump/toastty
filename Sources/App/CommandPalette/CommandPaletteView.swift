@@ -125,11 +125,16 @@ struct CommandPaletteView: View {
                 .overlay(Color.white.opacity(0.09))
 
             HStack(spacing: 16) {
-                Text(viewModel.footerText)
-                    .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(ToastyTheme.subtleText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                switch viewModel.mode {
+                case .commands:
+                    CommandPaletteFooterHint(label: "Open local files", shortcut: "@")
+                case .fileOpen:
+                    Text(viewModel.footerText)
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.subtleText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
 
                 Spacer()
 
