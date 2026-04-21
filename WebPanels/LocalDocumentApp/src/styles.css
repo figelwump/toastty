@@ -242,6 +242,9 @@ body {
 
 .local-document-code-frame {
   --local-document-code-line-height: calc(21.45px * var(--toastty-markdown-text-scale));
+  --local-document-code-gutter-padding-left: 18px;
+  --local-document-code-gutter-padding-right: 10px;
+  --local-document-code-gutter-digit-width: 3ch;
   flex: 1;
   min-height: 0;
   background: var(--pre-bg);
@@ -273,7 +276,7 @@ body {
 
 .local-document-code-gutter {
   margin: 0;
-  padding: 20px 14px 28px 22px;
+  padding: 20px var(--local-document-code-gutter-padding-right) 28px var(--local-document-code-gutter-padding-left);
   background: transparent;
   color: #8a7566;
   font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
@@ -344,12 +347,10 @@ body {
 }
 
 .local-document-code-markdown-gutter {
-  --local-document-code-gutter-padding-left: 22px;
-  --local-document-code-gutter-padding-right: 14px;
   min-width: calc(
     var(--local-document-code-gutter-padding-left) +
     var(--local-document-code-gutter-padding-right) +
-    5ch
+    var(--local-document-code-gutter-digit-width)
   );
   padding: 20px 0 28px;
   border-right: 1px solid rgba(255, 224, 191, 0.08);

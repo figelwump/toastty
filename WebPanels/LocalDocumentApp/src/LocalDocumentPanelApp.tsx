@@ -843,6 +843,9 @@ function MarkdownCodeDocumentView(props: {
   highlightedHTML: string | null;
   lines: string[];
 }) {
+  const markdownGutterStyle = {
+    "--local-document-code-gutter-digit-width": `${Math.max(String(props.lines.length).length, 2)}ch`
+  } as React.CSSProperties;
   const sourceHTML = React.useMemo(
     () => props.highlightedHTML ?? renderPlainMarkdownSourceHtml(props.content),
     [props.content, props.highlightedHTML]
@@ -859,7 +862,11 @@ function MarkdownCodeDocumentView(props: {
     <div className="local-document-code-frame local-document-code-frame-markdown">
       <div className="local-document-code-scroll local-document-code-scroll-markdown" ref={scrollRef}>
         <div className="local-document-code-markdown-grid">
-          <div className="local-document-code-markdown-gutter" aria-hidden="true">
+          <div
+            className="local-document-code-markdown-gutter"
+            aria-hidden="true"
+            style={markdownGutterStyle}
+          >
             <div
               className="local-document-code-markdown-gutter-inner"
               style={{ height: `${lineLayout.contentHeight}px` }}

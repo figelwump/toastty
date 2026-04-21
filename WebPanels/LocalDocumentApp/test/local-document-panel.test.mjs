@@ -53,6 +53,8 @@ test("markdown read-only code view uses a dedicated wrapped source layout", asyn
   assert.match(source, /className="local-document-code-markdown-gutter"/);
   assert.match(source, /className="local-document-code-markdown-gutter-inner"/);
   assert.match(source, /className="local-document-code-markdown-surface"/);
+  assert.match(source, /--local-document-code-gutter-digit-width/);
+  assert.match(source, /Math\.max\(String\(props\.lines\.length\)\.length, 2\)\}ch/);
   assert.match(source, /\? "starry-night local-document-code-markdown"/);
   assert.match(source, /: "local-document-code-plain local-document-code-plain-markdown"/);
   assert.match(source, /MARKDOWN_LINE_START_SELECTOR/);
@@ -67,8 +69,11 @@ test("markdown gutter stays non-selectable while wrapped content stays continuou
   );
 
   assert.match(styles, /\.local-document-code-gutter-cell[\s\S]*user-select: none/);
-  assert.match(styles, /\.local-document-code-markdown-gutter\s*\{[^}]*--local-document-code-gutter-padding-left: 22px/);
+  assert.match(styles, /\.local-document-code-frame\s*\{[^}]*--local-document-code-gutter-padding-left: 18px/);
+  assert.match(styles, /\.local-document-code-frame\s*\{[^}]*--local-document-code-gutter-padding-right: 10px/);
+  assert.match(styles, /\.local-document-code-gutter\s*\{[^}]*padding: 20px var\(--local-document-code-gutter-padding-right\) 28px var\(--local-document-code-gutter-padding-left\)/);
   assert.match(styles, /\.local-document-code-markdown-gutter\s*\{[^}]*min-width: calc\(/);
+  assert.match(styles, /\.local-document-code-markdown-gutter\s*\{[^}]*var\(--local-document-code-gutter-digit-width\)/);
   assert.match(styles, /\.local-document-code-markdown-gutter-inner\s*\{[^}]*position: relative/);
   assert.match(
     styles,
