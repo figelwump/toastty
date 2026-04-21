@@ -28,6 +28,18 @@ test("preview edit button shows the Cmd+E shortcut hint", async () => {
   assert.match(source, />⌘E<\/span>/);
 });
 
+test("editor mount focuses the textarea and moves the caret to the file start", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /React\.useLayoutEffect\(\(\) => \{/);
+  assert.match(source, /textarea\.focus\(\)/);
+  assert.match(source, /textarea\.setSelectionRange\(0, 0\)/);
+  assert.match(source, /ref=\{textareaRef\}/);
+});
+
 test("plain-code formats guard null highlight languages before touching highlight.js", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),

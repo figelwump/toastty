@@ -334,6 +334,18 @@ function LocalDocumentEditor(props: {
   draftContent: string;
   updateDraftContent: (nextContent: string) => void;
 }) {
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  React.useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.focus();
+    textarea.setSelectionRange(0, 0);
+  }, []);
+
   return (
     <section className="local-document-editor-shell">
       {(props.bootstrap.hasExternalConflict || props.bootstrap.saveErrorMessage) && (
@@ -351,6 +363,7 @@ function LocalDocumentEditor(props: {
         </div>
       )}
       <textarea
+        ref={textareaRef}
         className="local-document-editor"
         value={props.draftContent}
         onChange={(event) => props.updateDraftContent(event.target.value)}
