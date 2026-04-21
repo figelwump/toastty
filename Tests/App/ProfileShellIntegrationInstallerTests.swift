@@ -833,6 +833,87 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
     }
 
+    func testManagedZshSnippetWritesPaneHistoryDebugRecordsForImport() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let panelID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-zsh.journal")
+        let debugLogFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("logs/pane-history-debug/test-zsh.log")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try paneJournalData(entries: ["echo toastty-zsh", "git status"]).write(
+            to: journalFileURL,
+            options: .atomic
+        )
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; cat \"$TOASTTY_PANE_HISTORY_DEBUG_LOG_FILE\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                ToasttyLaunchContextEnvironment.paneHistoryDebugLogFileKey: debugLogFileURL.path,
+                ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
+                ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertTrue(output.contains("event=initialize"))
+        XCTAssertTrue(output.contains("event=import"))
+        XCTAssertTrue(output.contains("panel_id=\(panelID.uuidString)"))
+        XCTAssertTrue(output.contains("imported_entry_count=2"))
+        XCTAssertTrue(output.contains("last_imported_entry=git status"))
+    }
+
+    func testManagedZshSnippetWritesPaneHistoryDebugRecordsForPreexecAndAppend() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let panelID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-zsh.journal")
+        let debugLogFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("logs/pane-history-debug/test-zsh.log")
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; _toastty_preexec \"echo toastty-zsh\"; print -s -- \"echo toastty-zsh\"; _toastty_append_last_history_entry_to_journal; cat \"$TOASTTY_PANE_HISTORY_DEBUG_LOG_FILE\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                ToasttyLaunchContextEnvironment.paneHistoryDebugLogFileKey: debugLogFileURL.path,
+                ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertTrue(output.contains("event=preexec"))
+        XCTAssertTrue(output.contains("preexec_command=echo toastty-zsh"))
+        XCTAssertTrue(output.contains("event=append"))
+        XCTAssertTrue(output.contains("selected_history_entry=echo toastty-zsh"))
+        XCTAssertTrue(output.contains("panel_id=\(panelID.uuidString)"))
+    }
+
     func testManagedZshSnippetAvoidsDuplicateJournalWritesForSameHistoryEntry() throws {
         let snippetURL = try writeStandaloneSnippet(
             ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",

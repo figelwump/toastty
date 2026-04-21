@@ -1052,6 +1052,26 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let requestedWorkingDirectory = terminalState.workingDirectorySeed
         let isRestoredLaunch = terminalState.expectedProcessWorkingDirectory == nil &&
             TerminalRuntimeRegistry.normalizedCWDValue(terminalState.launchWorkingDirectory) != nil
+        ToasttyLog.debug(
+            "Determined terminal surface launch classification",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "is_restored_launch": isRestoredLaunch ? "true" : "false",
+                "requested_working_directory_sample": String(requestedWorkingDirectory.prefix(120)),
+                "launch_working_directory_present": TerminalRuntimeRegistry
+                    .normalizedCWDValue(terminalState.launchWorkingDirectory) == nil ? "false" : "true",
+                "launch_working_directory_sample": terminalState.launchWorkingDirectory.map {
+                    String($0.prefix(120))
+                } ?? "none",
+                "expected_process_working_directory_present": terminalState.expectedProcessWorkingDirectory == nil
+                    ? "false"
+                    : "true",
+                "expected_process_working_directory_sample": terminalState.expectedProcessWorkingDirectory.map {
+                    String($0.prefix(120))
+                } ?? "none",
+            ]
+        )
 
         // Snapshot child PIDs before surface creation so we can diff after
         // to find the newly spawned login/shell process for CWD tracking.

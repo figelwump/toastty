@@ -96,6 +96,7 @@ final class TerminalProcessWorkingDirectoryResolver {
         isRestoredLaunch: Bool
     ) {
         let canonicalExpectedWorkingDirectory = Self.canonicalWorkingDirectory(expectedWorkingDirectory)
+        let requiresResolvedShellWorkingDirectory = isRestoredLaunch
         if let canonicalExpectedWorkingDirectory {
             expectedWorkingDirectoryByPanelID[panelID] = canonicalExpectedWorkingDirectory
         } else {
@@ -120,6 +121,7 @@ final class TerminalProcessWorkingDirectoryResolver {
                     "panel_id": panelID.uuidString,
                     "previous_child_count": String(previousChildren.count),
                     "current_child_count": String(currentChildren.count),
+                    "is_restored_launch": requiresResolvedShellWorkingDirectory ? "true" : "false",
                 ]
             )
             return
@@ -134,7 +136,7 @@ final class TerminalProcessWorkingDirectoryResolver {
             panelID: panelID,
             candidates: candidates,
             preferNewestWhenAmbiguous: true,
-            requireResolvedShellWorkingDirectory: restoredLaunchPanelIDs.contains(panelID)
+            requireResolvedShellWorkingDirectory: requiresResolvedShellWorkingDirectory
         ) else {
             markPendingDeferredRegistration(panelID: panelID)
             ToasttyLog.debug(
@@ -143,6 +145,7 @@ final class TerminalProcessWorkingDirectoryResolver {
                 metadata: [
                     "panel_id": panelID.uuidString,
                     "candidate_count": String(candidates.count),
+                    "is_restored_launch": requiresResolvedShellWorkingDirectory ? "true" : "false",
                 ]
             )
             return
@@ -157,6 +160,7 @@ final class TerminalProcessWorkingDirectoryResolver {
                 expectedWorkingDirectory: canonicalExpectedWorkingDirectory,
                 additionalMetadata: [
                     "selection_source": "snapshot_diff",
+                    "is_restored_launch": requiresResolvedShellWorkingDirectory ? "true" : "false",
                 ]
             )
         )
@@ -164,7 +168,7 @@ final class TerminalProcessWorkingDirectoryResolver {
             panelID: panelID,
             selectedCandidate: selectedCandidate,
             source: "snapshot_diff",
-            allowProvisionalLoginBinding: restoredLaunchPanelIDs.contains(panelID) == false
+            allowProvisionalLoginBinding: requiresResolvedShellWorkingDirectory == false
         )
     }
 
@@ -242,9 +246,19 @@ final class TerminalProcessWorkingDirectoryResolver {
                     "login_pid": String(loginPID),
                     "shell_pid": String(shellPID),
                     "source": source,
+                    "restored_launch_probe_expected": shouldProbeObservedLaunchContext ? "true" : "false",
                 ]
             )
             if shouldProbeObservedLaunchContext {
+                ToasttyLog.debug(
+                    "Scheduling restored shell launch context probe",
+                    category: .terminal,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "shell_pid": String(shellPID),
+                        "source": source,
+                    ]
+                )
                 Self.scheduleObservedLaunchContextProbe(
                     panelID: panelID,
                     shellPID: shellPID,
@@ -308,6 +322,7 @@ final class TerminalProcessWorkingDirectoryResolver {
                     expectedWorkingDirectory: expectedWorkingDirectoryByPanelID[panelID],
                     additionalMetadata: [
                         "selection_source": "deferred_scan",
+                        "is_restored_launch": requiresResolvedShellWorkingDirectory ? "true" : "false",
                     ]
                 )
             )
