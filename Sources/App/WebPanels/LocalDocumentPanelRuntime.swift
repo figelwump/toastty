@@ -308,6 +308,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
     typealias ExternalFileOpener = @Sendable (URL) -> Bool
     typealias SearchExecutor = @MainActor (FocusAwareWKWebView, LocalDocumentSearchCommand, @escaping (Bool?) -> Void) -> Void
+    typealias SearchSessionResetter = @MainActor (FocusAwareWKWebView) -> Void
     private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
     nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
@@ -321,6 +322,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private let savedDocumentReader: SavedDocumentReader
     private let externalFileOpener: ExternalFileOpener
     private let searchExecutor: SearchExecutor
+    private let searchSessionResetter: SearchSessionResetter
     private let reloadDebounceNanoseconds: UInt64
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
@@ -369,6 +371,9 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
                 completion(LocalDocumentPanelRuntime.searchExecutionResult(from: result))
             }
         },
+        searchSessionResetter: @escaping SearchSessionResetter = { webView in
+            LocalDocumentPanelRuntime.resetSearchSession(in: webView)
+        },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
@@ -380,6 +385,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.savedDocumentReader = savedDocumentReader
         self.externalFileOpener = externalFileOpener
         self.searchExecutor = searchExecutor
+        self.searchSessionResetter = searchSessionResetter
         self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         let configuration = Self.makeWebViewConfiguration(
@@ -501,7 +507,13 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
 
     @discardableResult
     func startSearch() -> Bool {
+        let isNewSearchSession = searchStateValue?.isPresented != true
         ensurePanelAppLoaded()
+        if isNewSearchSession {
+            cancelPendingSearchResult()
+            shouldRefreshSearchAfterBootstrap = false
+            searchSessionResetter(webView)
+        }
         var nextState = searchStateValue ?? LocalDocumentSearchState(
             isPresented: true,
             query: ""
@@ -890,6 +902,21 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             return matchFound
         }
         return nil
+    }
+
+    @MainActor
+    private static func resetSearchSession(in webView: FocusAwareWKWebView) {
+        let script = """
+        (() => {
+          const panel = window.ToasttyLocalDocumentPanel;
+          if (!panel?.resetSearchState) {
+            return false;
+          }
+          panel.resetSearchState();
+          return true;
+        })();
+        """
+        webView.evaluateJavaScript(script) { _, _ in }
     }
 }
 

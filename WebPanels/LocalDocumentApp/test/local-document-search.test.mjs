@@ -15,12 +15,14 @@ test("bootstrap exposes imperative search commands for the native runtime bridge
   assert.match(source, /registerSearchController/);
   assert.match(source, /performSearchCommand/);
   assert.match(source, /setCurrentSearchState/);
+  assert.match(source, /resetSearchState/);
   assert.match(source, /localDocumentNativeBridge\.bridgeReady\(\)/);
   assert.match(source, /return null;/);
   assert.match(source, /type: "setQuery"/);
   assert.match(source, /type: "next"/);
   assert.match(source, /type: "previous"/);
   assert.match(source, /type: "clear"/);
+  assert.match(source, /currentSearchController\.perform\(\{ type: "clear" \}\)/);
 });
 
 test("local-document search keeps preview highlights in the DOM layer and editor matches in the textarea selection", async () => {

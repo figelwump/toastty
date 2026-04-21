@@ -79,6 +79,7 @@ declare global {
       subscribe: (listener: BootstrapListener) => () => void;
       getCurrentSearchState: () => LocalDocumentPanelSearchState;
       setCurrentSearchState: (searchState: LocalDocumentPanelSearchState) => void;
+      resetSearchState: () => void;
       registerSearchController: (controller: LocalDocumentPanelSearchController | null) => void;
       performSearchCommand: (
         command: LocalDocumentPanelSearchCommand
@@ -153,6 +154,14 @@ window.ToasttyLocalDocumentPanel = {
   },
   setCurrentSearchState(searchState) {
     currentSearchState = searchState;
+  },
+  resetSearchState() {
+    if (currentSearchController) {
+      currentSearchState = currentSearchController.perform({ type: "clear" });
+      return;
+    }
+
+    currentSearchState = emptySearchState();
   },
   registerSearchController(controller) {
     currentSearchController = controller;

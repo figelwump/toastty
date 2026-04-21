@@ -519,6 +519,48 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(runtime.searchState()?.lastMatchFound, true)
     }
 
+    func testStartSearchResetsWebSearchSessionOnlyForNewSessions() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let resetSpy = SearchSessionResetterSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchSessionResetter: resetSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 1)
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 1)
+
+        XCTAssertTrue(runtime.endSearch())
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 2)
+    }
+
     func testFindNextAndPreviousRequireActiveNonEmptyQuery() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
         let searchSpy = LocalDocumentSearchExecutorSpy()
@@ -1907,6 +1949,16 @@ private final class LocalDocumentSearchExecutorSpy {
 
     func removeAllCalls() {
         calls.removeAll()
+    }
+}
+
+@MainActor
+private final class SearchSessionResetterSpy {
+    private(set) var callCount = 0
+
+    func record(_ webView: FocusAwareWKWebView) {
+        _ = webView
+        callCount += 1
     }
 }
 
