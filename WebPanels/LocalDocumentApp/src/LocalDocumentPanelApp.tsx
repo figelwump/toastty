@@ -143,6 +143,10 @@ type RevealLayout = {
 // padding while the content pre's padding lives on the surrounding frame), and
 // previous formula-based attempts kept producing a one-line offset for the
 // gutter highlight as a result.
+//
+// A blank first line still produces `rects[0]` at the blank line's own y (not
+// skipped to the first non-empty line) in WebKit/Chromium, so
+// `(N - 1) * line-height` from this anchor lands on the right line for any N.
 function measureFirstRenderedLineTop(element: HTMLElement): number | null {
   const range = document.createRange();
   range.selectNodeContents(element);
@@ -150,7 +154,8 @@ function measureFirstRenderedLineTop(element: HTMLElement): number | null {
   if (rects.length === 0) {
     return null;
   }
-  return rects[0].top;
+  const top = rects[0].top;
+  return Number.isFinite(top) ? top : null;
 }
 
 function resolveComputedLineHeight(element: HTMLElement): number | null {
@@ -636,6 +641,10 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
   }, [
     activeReveal?.lineNumber,
     activeReveal?.requestID,
+    // `highlightedHTML` stays in the dep list so the measurement re-runs once
+    // the content code element is swapped out by the async markdown highlighter
+    // — `contentCodeRef` gets re-attached and our Range-based anchor needs to
+    // re-read geometry against the new node.
     highlightedHTML,
     lines.length,
     props.bootstrap.isEditing,
