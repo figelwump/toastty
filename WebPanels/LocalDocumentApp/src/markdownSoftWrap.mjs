@@ -13,3 +13,9 @@ export function createMarkdownLineStartMarker(lineNumber) {
     children: []
   };
 }
+
+export function trimMarkdownLineBoundaryNewlines(fragmentHtml) {
+  return String(fragmentHtml)
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "");
+}

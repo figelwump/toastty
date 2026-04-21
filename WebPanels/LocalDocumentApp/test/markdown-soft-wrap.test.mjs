@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   MARKDOWN_LINE_START_CLASS,
-  createMarkdownLineStartMarker
+  createMarkdownLineStartMarker,
+  trimMarkdownLineBoundaryNewlines
 } from "../src/markdownSoftWrap.mjs";
 
 test("markdown soft-wrap markers use a stable hidden span", () => {
@@ -16,4 +17,19 @@ test("markdown soft-wrap markers use a stable hidden span", () => {
     },
     children: []
   });
+});
+
+test("markdown soft-wrap trimming removes only boundary newlines", () => {
+  assert.equal(
+    trimMarkdownLineBoundaryNewlines("\n<span class=\"pl-ml\">-</span> item\n"),
+    "<span class=\"pl-ml\">-</span> item"
+  );
+  assert.equal(
+    trimMarkdownLineBoundaryNewlines("\nalpha\nbeta\n"),
+    "alpha\nbeta"
+  );
+  assert.equal(
+    trimMarkdownLineBoundaryNewlines(""),
+    ""
+  );
 });

@@ -13,6 +13,7 @@ import {
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import {
   MARKDOWN_LINE_START_SELECTOR,
+  trimMarkdownLineBoundaryNewlines,
 } from "./markdownSoftWrap.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
@@ -429,44 +430,6 @@ function useDocumentHighlightHTML(
   return bootstrap.format === "markdown" ? markdownHighlight : syncHighlight;
 }
 
-function trimTrailingNewline(node: Node): boolean {
-  if (node.nodeType === Node.TEXT_NODE) {
-    const value = node.textContent ?? "";
-    if (!value.endsWith("\n")) {
-      return false;
-    }
-
-    const trimmedValue = value.slice(0, -1);
-    if (trimmedValue.length > 0) {
-      node.textContent = trimmedValue;
-    } else {
-      node.parentNode?.removeChild(node);
-    }
-    return true;
-  }
-
-  let child = node.lastChild;
-  while (child) {
-    if (trimTrailingNewline(child)) {
-      if (child.nodeType === Node.ELEMENT_NODE && child.childNodes.length === 0) {
-        child.parentNode?.removeChild(child);
-      }
-      return true;
-    }
-
-    if (child.nodeType === Node.ELEMENT_NODE && child.childNodes.length === 0) {
-      const previousSibling = child.previousSibling;
-      child.parentNode?.removeChild(child);
-      child = previousSibling;
-      continue;
-    }
-
-    child = child.previousSibling;
-  }
-
-  return false;
-}
-
 function splitHighlightedMarkdownIntoLogicalLines(
   highlightedHTML: string,
   lineCount: number
@@ -496,8 +459,7 @@ function splitHighlightedMarkdownIntoLogicalLines(
 
     const container = parsedDocument.createElement("div");
     container.append(range.cloneContents());
-    trimTrailingNewline(container);
-    return container.innerHTML;
+    return trimMarkdownLineBoundaryNewlines(container.innerHTML);
   });
 
   while (logicalLines.length < lineCount) {
@@ -530,7 +492,7 @@ function MarkdownCodeDocumentView(props: {
               <div className="local-document-code-gutter-cell" aria-hidden="true">
                 {index + 1}
               </div>
-              <pre className="local-document-code-markdown-line">
+              <div className="local-document-code-markdown-line">
                 {highlightedLines ? (
                   <code
                     className="starry-night local-document-code-markdown"
@@ -541,7 +503,7 @@ function MarkdownCodeDocumentView(props: {
                     {line}
                   </code>
                 )}
-              </pre>
+              </div>
             </React.Fragment>
           ))}
         </div>

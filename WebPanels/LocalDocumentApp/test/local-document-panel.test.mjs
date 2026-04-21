@@ -26,9 +26,12 @@ test("markdown read-only code view uses a dedicated wrapped source layout", asyn
 
   assert.match(source, /if \(props\.bootstrap\.format === "markdown"\)/);
   assert.match(source, /className="local-document-code-frame local-document-code-frame-markdown"/);
+  assert.match(source, /trimMarkdownLineBoundaryNewlines\(container\.innerHTML\)/);
+  assert.match(source, /<div className="local-document-code-markdown-line">/);
   assert.match(source, /className="starry-night local-document-code-markdown"/);
   assert.match(source, /className="local-document-code-plain local-document-code-plain-markdown"/);
   assert.match(source, /MARKDOWN_LINE_START_SELECTOR/);
+  assert.doesNotMatch(source, /<pre className="local-document-code-markdown-line">/);
 });
 
 test("plain-code formats guard null highlight languages before touching highlight.js", async () => {
