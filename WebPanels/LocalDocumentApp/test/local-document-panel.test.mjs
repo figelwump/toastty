@@ -112,7 +112,9 @@ test("highlight.js registers the first-slice source-code grammars", async () => 
 test("line reveal helpers clamp requests and choose reduced-motion-safe scroll behavior", async () => {
   const {
     clampRevealLineNumber,
-    clampScrollTop
+    clampScrollTop,
+    computeRevealLayout,
+    resolveMeasuredLineHeight
   } = await import(
     new URL("../src/lineReveal.mjs", import.meta.url).href
   );
@@ -122,6 +124,29 @@ test("line reveal helpers clamp requests and choose reduced-motion-safe scroll b
   assert.equal(clampRevealLineNumber(3, 0), 1);
   assert.equal(clampScrollTop(-40, 200), 0);
   assert.equal(clampScrollTop(400, 200), 200);
+  assert.equal(resolveMeasuredLineHeight(Number.NaN, 288, 12, 24), 22);
+  assert.equal(resolveMeasuredLineHeight(24, 264, 12), 24);
+  assert.deepEqual(
+    computeRevealLayout({
+      lineNumber: 120,
+      lineCount: 134,
+      contentTopBase: 20,
+      gutterTopBase: 20,
+      contentLineHeight: 22,
+      gutterLineHeight: 22,
+      contentFrameOffsetTop: 0,
+      scrollViewportHeight: 400,
+      scrollContentHeight: 3200
+    }),
+    {
+      lineNumber: 120,
+      contentTop: 2638,
+      gutterTop: 2638,
+      contentHeight: 22,
+      gutterHeight: 22,
+      targetScrollTop: 2509
+    }
+  );
 });
 
 test("bootstrap bridge exposes one-shot line reveal registration and consumption", async () => {
@@ -144,16 +169,23 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
 
   assert.match(source, /window\.ToasttyLocalDocumentPanel\?\.consumeRevealRequest\(revealRequest\.requestID\)/);
   assert.match(source, /const targetLineNumber = clampRevealLineNumber\(revealRequest\.lineNumber, lines\.length\)/);
-  assert.match(source, /targetScrollTop,/);
+  assert.match(source, /measureRevealLayout\(\{/);
+  assert.match(source, /setRevealLayout\(null\);/);
   assert.match(source, /revealScrollSequenceRef/);
   assert.match(source, /window\.requestAnimationFrame\(\(\) => \{/);
   assert.match(source, /revealScrollSequence !== revealScrollSequenceRef\.current/);
-  assert.match(source, /scrollElement\.scrollTop = activeReveal\.targetScrollTop/);
+  assert.match(source, /scrollElement\.scrollTop = revealLayout\.targetScrollTop/);
   assert.match(source, /event\.key !== "Escape"/);
   assert.doesNotMatch(source, /document\.hasFocus/);
+  assert.doesNotMatch(source, /getPropertyValue\("--local-document-code-line-height"\)/);
+  assert.doesNotMatch(source, /resolvedLineHeight\(/);
   assert.match(source, /props\.bootstrap\.contentRevision !== activeReveal\.contentRevision/);
   assert.match(source, /props\.bootstrap\.filePath !== activeReveal\.filePath/);
   assert.match(source, /setActiveReveal\(null\)/);
+  assert.match(source, /top: `\$\{revealLayout\.contentTop}px`/);
+  assert.match(source, /height: `\$\{revealLayout\.contentHeight}px`/);
+  assert.match(source, /top: `\$\{revealLayout\.gutterTop}px`/);
+  assert.match(source, /height: `\$\{revealLayout\.gutterHeight}px`/);
   assert.match(source, /className="local-document-code-line-reveal"/);
   assert.match(source, /className="local-document-code-gutter-reveal"/);
 });

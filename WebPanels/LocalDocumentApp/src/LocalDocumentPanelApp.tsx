@@ -19,7 +19,8 @@ import {
 } from "./bootstrap";
 import {
   clampRevealLineNumber,
-  clampScrollTop
+  computeRevealLayout,
+  resolveMeasuredLineHeight
 } from "./lineReveal.mjs";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
@@ -121,15 +122,64 @@ function useRevealRequest(): LocalDocumentLineRevealRequest | null {
   return revealRequest;
 }
 
-function resolvedLineHeight(element: HTMLElement): number {
-  const rawValue = window.getComputedStyle(element).getPropertyValue("--local-document-code-line-height");
-  const parsed = Number.parseFloat(rawValue);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 21.45;
-}
+type ActiveReveal = {
+  lineNumber: number;
+  requestID: number;
+  filePath: string | null;
+  contentRevision: number;
+};
 
-function resolvedTopPadding(element: HTMLElement): number {
-  const parsed = Number.parseFloat(window.getComputedStyle(element).paddingTop);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+type RevealLayout = {
+  contentTop: number;
+  gutterTop: number;
+  contentHeight: number;
+  gutterHeight: number;
+  targetScrollTop: number;
+};
+
+function measureRevealLayout(args: {
+  lineNumber: number;
+  lineCount: number;
+  scrollElement: HTMLDivElement;
+  contentFrameElement: HTMLDivElement;
+  gutterFrameElement: HTMLDivElement;
+  contentElement: HTMLElement;
+  gutterElement: HTMLElement;
+}): RevealLayout | null {
+  const contentFrameRect = args.contentFrameElement.getBoundingClientRect();
+  const gutterFrameRect = args.gutterFrameElement.getBoundingClientRect();
+  const contentRect = args.contentElement.getBoundingClientRect();
+  const gutterRect = args.gutterElement.getBoundingClientRect();
+  const contentStyle = window.getComputedStyle(args.contentElement);
+  const gutterStyle = window.getComputedStyle(args.gutterElement);
+  const contentLineHeight = resolveMeasuredLineHeight(
+    Number.parseFloat(contentStyle.lineHeight),
+    contentRect.height,
+    args.lineCount,
+    Number.parseFloat(contentStyle.paddingTop) + Number.parseFloat(contentStyle.paddingBottom)
+  );
+  const gutterLineHeight = resolveMeasuredLineHeight(
+    Number.parseFloat(gutterStyle.lineHeight),
+    gutterRect.height,
+    args.lineCount,
+    Number.parseFloat(gutterStyle.paddingTop) + Number.parseFloat(gutterStyle.paddingBottom)
+  );
+
+  if (contentLineHeight <= 0 || gutterLineHeight <= 0) {
+    return null;
+  }
+
+  return computeRevealLayout({
+    lineNumber: args.lineNumber,
+    lineCount: args.lineCount,
+    contentTopBase: contentRect.top - contentFrameRect.top,
+    gutterTopBase: gutterRect.top - gutterFrameRect.top,
+    contentLineHeight,
+    gutterLineHeight,
+    contentFrameOffsetTop: args.contentFrameElement.offsetTop,
+    scrollViewportHeight: args.scrollElement.clientHeight,
+    scrollContentHeight: args.scrollElement.scrollHeight
+  });
 }
 
 function useLocalDocumentPanelState(): {
@@ -478,20 +528,17 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
   const revealRequest = useRevealRequest();
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const gutterFrameRef = React.useRef<HTMLDivElement | null>(null);
+  const gutterPreRef = React.useRef<HTMLPreElement | null>(null);
   const contentFrameRef = React.useRef<HTMLDivElement | null>(null);
+  const contentCodeRef = React.useRef<HTMLElement | null>(null);
   const revealScrollFrameRef = React.useRef<{
     outer: number | null;
     inner: number | null;
   }>({ outer: null, inner: null });
   const revealScrollSequenceRef = React.useRef(0);
-  const [activeReveal, setActiveReveal] = React.useState<{
-    lineNumber: number;
-    requestID: number;
-    top: number;
-    targetScrollTop: number;
-    filePath: string | null;
-    contentRevision: number;
-  } | null>(null);
+  const [activeReveal, setActiveReveal] = React.useState<ActiveReveal | null>(null);
+  const [revealLayout, setRevealLayout] = React.useState<RevealLayout | null>(null);
   const language = props.bootstrap.syntaxLanguage;
   const statusMessage = highlightStatusMessage(
     props.bootstrap.highlightState,
@@ -526,27 +573,15 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
       return;
     }
 
-    const scrollElement = scrollRef.current;
-    const contentFrameElement = contentFrameRef.current;
-    if (!scrollElement || !contentFrameElement || props.bootstrap.isEditing) {
+    if (props.bootstrap.isEditing) {
       return;
     }
 
     const targetLineNumber = clampRevealLineNumber(revealRequest.lineNumber, lines.length);
-    const lineHeight = resolvedLineHeight(contentFrameElement);
-    const topPadding = resolvedTopPadding(contentFrameElement);
-    const highlightTop = topPadding + (targetLineNumber - 1) * lineHeight;
-    const maxScrollTop = scrollElement.scrollHeight - scrollElement.clientHeight;
-    const targetScrollTop = clampScrollTop(
-      highlightTop - scrollElement.clientHeight * 0.35 + lineHeight * 0.5,
-      maxScrollTop
-    );
-
+    setRevealLayout(null);
     setActiveReveal({
       lineNumber: targetLineNumber,
       requestID: revealRequest.requestID,
-      top: highlightTop,
-      targetScrollTop,
       filePath: props.bootstrap.filePath,
       contentRevision: props.bootstrap.contentRevision
     });
@@ -554,7 +589,46 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
   }, [props.bootstrap.contentRevision, props.bootstrap.filePath, props.bootstrap.isEditing, revealRequest, lines.length]);
 
   React.useLayoutEffect(() => {
-    if (!activeReveal) {
+    if (!activeReveal || props.bootstrap.isEditing) {
+      setRevealLayout(null);
+      return;
+    }
+
+    const scrollElement = scrollRef.current;
+    const gutterFrameElement = gutterFrameRef.current;
+    const gutterPreElement = gutterPreRef.current;
+    const contentFrameElement = contentFrameRef.current;
+    const contentCodeElement = contentCodeRef.current;
+    if (!scrollElement ||
+        !gutterFrameElement ||
+        !gutterPreElement ||
+        !contentFrameElement ||
+        !contentCodeElement) {
+      return;
+    }
+
+    setRevealLayout(
+      measureRevealLayout({
+        lineNumber: activeReveal.lineNumber,
+        lineCount: lines.length,
+        scrollElement,
+        gutterFrameElement,
+        gutterElement: gutterPreElement,
+        contentFrameElement,
+        contentElement: contentCodeElement
+      })
+    );
+  }, [
+    activeReveal?.lineNumber,
+    activeReveal?.requestID,
+    highlightedHTML,
+    lines.length,
+    props.bootstrap.isEditing,
+    props.bootstrap.textScale
+  ]);
+
+  React.useLayoutEffect(() => {
+    if (!activeReveal || !revealLayout) {
       return;
     }
 
@@ -579,14 +653,14 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
         if (!scrollElement) {
           return;
         }
-        scrollElement.scrollTop = activeReveal.targetScrollTop;
+        scrollElement.scrollTop = revealLayout.targetScrollTop;
       });
     });
 
     return () => {
       cancelScheduledRevealScroll();
     };
-  }, [activeReveal?.requestID, activeReveal?.targetScrollTop, cancelScheduledRevealScroll]);
+  }, [activeReveal?.requestID, cancelScheduledRevealScroll, revealLayout?.targetScrollTop]);
 
   React.useEffect(() => {
     if (!activeReveal) {
@@ -597,6 +671,7 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
         props.bootstrap.filePath !== activeReveal.filePath ||
         props.bootstrap.contentRevision !== activeReveal.contentRevision) {
       cancelScheduledRevealScroll();
+      setRevealLayout(null);
       setActiveReveal(null);
     }
   }, [
@@ -616,6 +691,7 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
       }
 
       cancelScheduledRevealScroll();
+      setRevealLayout(null);
       setActiveReveal(null);
       event.preventDefault();
       event.stopPropagation();
@@ -639,31 +715,41 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
       <div className="local-document-code-frame">
         <div className="local-document-code-scroll" ref={scrollRef}>
           <div className="local-document-code-scroll-inner">
-            <div className="local-document-code-gutter-frame">
-              {activeReveal ? (
+            <div className="local-document-code-gutter-frame" ref={gutterFrameRef}>
+              {revealLayout ? (
                 <div
                   aria-hidden="true"
                   className="local-document-code-gutter-reveal"
-                  style={{ top: `${activeReveal.top}px` }}
+                  style={{
+                    top: `${revealLayout.gutterTop}px`,
+                    height: `${revealLayout.gutterHeight}px`
+                  }}
                 />
               ) : null}
-              <pre className="local-document-code-gutter" aria-hidden="true">
+              <pre className="local-document-code-gutter" aria-hidden="true" ref={gutterPreRef}>
                 {lines.map((_, index) => String(index + 1)).join("\n")}
               </pre>
             </div>
             <div className="local-document-code-content-frame" ref={contentFrameRef}>
-              {activeReveal ? (
+              {revealLayout ? (
                 <div
                   aria-hidden="true"
                   className="local-document-code-line-reveal"
-                  style={{ top: `${activeReveal.top}px` }}
+                  style={{
+                    top: `${revealLayout.contentTop}px`,
+                    height: `${revealLayout.contentHeight}px`
+                  }}
                 />
               ) : null}
               <pre className="local-document-code-content">
                 {highlightedHTML ? (
-                  <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
+                  <code
+                    ref={contentCodeRef}
+                    className={codeClassName}
+                    dangerouslySetInnerHTML={{ __html: highlightedHTML }}
+                  />
                 ) : (
-                  <code className="local-document-code-plain">{props.content}</code>
+                  <code ref={contentCodeRef} className="local-document-code-plain">{props.content}</code>
                 )}
               </pre>
             </div>

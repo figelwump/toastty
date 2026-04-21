@@ -1,5 +1,3 @@
-export const REVEAL_HIGHLIGHT_DURATION_MS = 1800;
-
 export function clampRevealLineNumber(lineNumber, lineCount) {
   const normalizedLineCount = Number.isFinite(lineCount)
     ? Math.max(1, Math.floor(lineCount))
@@ -20,6 +18,67 @@ export function clampScrollTop(scrollTop, maxScrollTop) {
     ? Math.max(0, maxScrollTop)
     : 0;
   return Math.min(Math.max(scrollTop, 0), normalizedMaxScrollTop);
+}
+
+export function resolveMeasuredLineHeight(lineHeight, blockHeight, lineCount, verticalPadding = 0) {
+  if (Number.isFinite(lineHeight) && lineHeight > 0) {
+    return lineHeight;
+  }
+
+  const normalizedLineCount = Number.isFinite(lineCount)
+    ? Math.max(1, Math.floor(lineCount))
+    : 1;
+  const normalizedVerticalPadding = Number.isFinite(verticalPadding) && verticalPadding > 0
+    ? verticalPadding
+    : 0;
+  const contentHeight = Number.isFinite(blockHeight)
+    ? blockHeight - normalizedVerticalPadding
+    : Number.NaN;
+  if (Number.isFinite(contentHeight) && contentHeight > 0) {
+    return contentHeight / normalizedLineCount;
+  }
+
+  return 21.45;
+}
+
+export function computeRevealLayout({
+  lineNumber,
+  lineCount,
+  contentTopBase,
+  gutterTopBase,
+  contentLineHeight,
+  gutterLineHeight,
+  contentFrameOffsetTop,
+  scrollViewportHeight,
+  scrollContentHeight
+}) {
+  const normalizedLineNumber = clampRevealLineNumber(lineNumber, lineCount);
+  const normalizedContentTopBase = Number.isFinite(contentTopBase) ? contentTopBase : 0;
+  const normalizedGutterTopBase = Number.isFinite(gutterTopBase) ? gutterTopBase : 0;
+  const normalizedContentFrameOffsetTop = Number.isFinite(contentFrameOffsetTop)
+    ? contentFrameOffsetTop
+    : 0;
+  const contentTop = normalizedContentTopBase
+    + (normalizedLineNumber - 1) * contentLineHeight;
+  const gutterTop = normalizedGutterTopBase
+    + (normalizedLineNumber - 1) * gutterLineHeight;
+  const maxScrollTop = scrollContentHeight - scrollViewportHeight;
+  const targetScrollTop = clampScrollTop(
+    normalizedContentFrameOffsetTop
+      + contentTop
+      - scrollViewportHeight * 0.35
+      + contentLineHeight * 0.5,
+    maxScrollTop
+  );
+
+  return {
+    lineNumber: normalizedLineNumber,
+    contentTop,
+    gutterTop,
+    contentHeight: contentLineHeight,
+    gutterHeight: gutterLineHeight,
+    targetScrollTop
+  };
 }
 
 export function revealScrollBehavior(prefersReducedMotion) {
