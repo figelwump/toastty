@@ -18,6 +18,8 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     let filePath: String?
     let displayName: String
     let format: LocalDocumentFormat
+    let syntaxLanguage: LocalDocumentSyntaxLanguage?
+    let formatLabel: String
     let shouldHighlight: Bool
     let highlightState: LocalDocumentHighlightState
     let content: String
@@ -31,10 +33,12 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     let textScale: Double
 
     init(
-        contractVersion: Int = 5,
+        contractVersion: Int = 6,
         filePath: String?,
         displayName: String,
         format: LocalDocumentFormat = .markdown,
+        syntaxLanguage: LocalDocumentSyntaxLanguage? = nil,
+        formatLabel: String? = nil,
         highlightState: LocalDocumentHighlightState = .enabled,
         shouldHighlight: Bool? = nil,
         content: String,
@@ -47,10 +51,16 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
         theme: LocalDocumentPanelTheme,
         textScale: Double = AppState.defaultMarkdownTextScale
     ) {
+        let classification = LocalDocumentClassifier.classification(
+            format: format,
+            filePath: filePath
+        )
         self.contractVersion = contractVersion
         self.filePath = filePath
         self.displayName = displayName
         self.format = format
+        self.syntaxLanguage = syntaxLanguage ?? classification.syntaxLanguage
+        self.formatLabel = formatLabel ?? classification.formatLabel
         self.highlightState = highlightState
         self.shouldHighlight = shouldHighlight ?? (highlightState == .enabled)
         self.content = content
@@ -72,6 +82,8 @@ extension LocalDocumentPanelBootstrap {
             filePath: filePath,
             displayName: displayName,
             format: format,
+            syntaxLanguage: syntaxLanguage,
+            formatLabel: formatLabel,
             highlightState: highlightState,
             shouldHighlight: shouldHighlight,
             content: content,
@@ -92,6 +104,8 @@ extension LocalDocumentPanelBootstrap {
             filePath: filePath,
             displayName: displayName,
             format: format,
+            syntaxLanguage: syntaxLanguage,
+            formatLabel: formatLabel,
             highlightState: highlightState,
             shouldHighlight: shouldHighlight,
             content: content,

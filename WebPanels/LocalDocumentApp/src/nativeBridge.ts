@@ -1,5 +1,6 @@
 export type LocalDocumentPanelEvent =
   | { type: "enterEdit" }
+  | { type: "openInDefaultApp" }
   | { type: "draftDidChange"; content: string; baseContentRevision: number }
   | { type: "save"; baseContentRevision: number }
   | { type: "cancelEdit"; baseContentRevision: number }
@@ -26,6 +27,9 @@ function postEvent(event: LocalDocumentPanelEvent) {
 export const localDocumentNativeBridge = {
   enterEdit() {
     postEvent({ type: "enterEdit" });
+  },
+  openInDefaultApp() {
+    postEvent({ type: "openInDefaultApp" });
   },
   draftDidChange(content: string, baseContentRevision: number) {
     postEvent({ type: "draftDidChange", content, baseContentRevision });

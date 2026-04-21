@@ -23,11 +23,26 @@ enum LocalDocumentOpenPanel {
     static func allowedContentTypes() -> [UTType] {
         var types: [UTType] = []
         for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
-            if let type = UTType(filenameExtension: fileExtension),
+            if let type = contentType(forFileExtension: fileExtension),
                types.contains(type) == false {
                 types.append(type)
             }
         }
         return types
+    }
+
+    static func contentType(forFileExtension fileExtension: String) -> UTType? {
+        let normalizedExtension = fileExtension.lowercased()
+
+        for preferredBaseType in [UTType.sourceCode, .text] {
+            if let contentType = UTType(
+                filenameExtension: normalizedExtension,
+                conformingTo: preferredBaseType
+            ) {
+                return contentType
+            }
+        }
+
+        return UTType(filenameExtension: normalizedExtension)
     }
 }

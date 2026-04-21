@@ -143,6 +143,7 @@ body {
   z-index: 1;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   padding: 18px 24px 16px;
   border-bottom: 1px solid var(--border);
@@ -156,11 +157,14 @@ body {
   position: relative;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+  justify-content: flex-end;
 }
 
 .local-document-panel-title-wrap {
   min-width: 0;
+  flex: 1 1 240px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -654,5 +658,10 @@ body {
 @media (max-width: 720px) {
   .local-document-panel-header {
     padding: 16px 16px 14px;
+  }
+
+  .local-document-panel-actions {
+    margin-left: 0;
+    justify-content: flex-start;
   }
 }

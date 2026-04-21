@@ -26,6 +26,14 @@ test("markdown source highlighting colors fenced code using the declared languag
   assert.match(html, /class="pl-c1">42<\/span>/);
 });
 
+test("markdown source highlighting colors swift fenced code with swift tokens", async () => {
+  const html = await highlightMarkdownSourceToHtml("```swift\nlet answer = 42\n```");
+
+  assert.match(html, /class="pl-s">```<\/span><span class="pl-en">swift<\/span>/);
+  assert.match(html, /class="pl-k">let<\/span>/);
+  assert.match(html, /class="pl-c1">42<\/span>/);
+});
+
 test("ordered list markers render as a single markdown list token", async () => {
   const html = await highlightMarkdownSourceToHtml("1. Confirm\n2. Require");
 
