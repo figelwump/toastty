@@ -1375,14 +1375,44 @@ export function LocalDocumentPanelApp() {
     );
   }
 
-  const renderedContent = bootstrap.isEditing ? draftContent : bootstrap.content;
+  return (
+    <LoadedLocalDocumentPanelApp
+      bootstrap={bootstrap}
+      draftContent={draftContent}
+      isDirty={isDirty}
+      canSave={canSave}
+      canOverwrite={canOverwrite}
+      openInDefaultApp={openInDefaultApp}
+      enterEdit={enterEdit}
+      saveEdit={saveEdit}
+      overwriteAfterConflict={overwriteAfterConflict}
+      cancelEdit={cancelEdit}
+      updateDraftContent={updateDraftContent}
+    />
+  );
+}
+
+function LoadedLocalDocumentPanelApp(props: {
+  bootstrap: LocalDocumentPanelBootstrap;
+  draftContent: string;
+  isDirty: boolean;
+  canSave: boolean;
+  canOverwrite: boolean;
+  openInDefaultApp: () => void;
+  enterEdit: () => void;
+  saveEdit: () => void;
+  overwriteAfterConflict: () => void;
+  cancelEdit: () => void;
+  updateDraftContent: (nextContent: string) => void;
+}) {
+  const renderedContent = props.bootstrap.isEditing ? props.draftContent : props.bootstrap.content;
   const previewRootRef = React.useRef<HTMLElement | null>(null);
   const previewContentRef = React.useRef<HTMLElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
 
   useLocalDocumentSearchController({
     content: renderedContent,
-    isEditing: bootstrap.isEditing,
+    isEditing: props.bootstrap.isEditing,
     previewRootRef,
     previewContentRef,
     textareaRef
@@ -1391,27 +1421,27 @@ export function LocalDocumentPanelApp() {
   return (
     <main className="local-document-shell">
       <Header
-        bootstrap={bootstrap}
+        bootstrap={props.bootstrap}
         content={renderedContent}
-        isDirty={isDirty}
-        canSave={canSave}
-        canOverwrite={canOverwrite}
-        openInDefaultApp={openInDefaultApp}
-        enterEdit={enterEdit}
-        saveEdit={saveEdit}
-        overwriteAfterConflict={overwriteAfterConflict}
-        cancelEdit={cancelEdit}
+        isDirty={props.isDirty}
+        canSave={props.canSave}
+        canOverwrite={props.canOverwrite}
+        openInDefaultApp={props.openInDefaultApp}
+        enterEdit={props.enterEdit}
+        saveEdit={props.saveEdit}
+        overwriteAfterConflict={props.overwriteAfterConflict}
+        cancelEdit={props.cancelEdit}
       />
-      {bootstrap.isEditing ? (
+      {props.bootstrap.isEditing ? (
         <LocalDocumentEditor
-          bootstrap={bootstrap}
-          draftContent={draftContent}
+          bootstrap={props.bootstrap}
+          draftContent={props.draftContent}
           textareaRef={textareaRef}
-          updateDraftContent={updateDraftContent}
+          updateDraftContent={props.updateDraftContent}
         />
       ) : (
         <CodeDocumentView
-          bootstrap={bootstrap}
+          bootstrap={props.bootstrap}
           content={renderedContent}
           previewRootRef={previewRootRef}
           previewContentRef={previewContentRef}

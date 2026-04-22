@@ -210,6 +210,28 @@ test("panel app reports render readiness once bootstrap-backed content is mounte
   assert.match(source, /bootstrap\.isEditing/);
 });
 
+test("panel app keeps bootstrap-null loading separate from loaded-only hooks", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+  const loadedComponentStart = source.indexOf("function LoadedLocalDocumentPanelApp");
+  const searchHookIndex = source.indexOf("useLocalDocumentSearchController({", loadedComponentStart);
+  const loadedReturnIndex = source.indexOf("return (", loadedComponentStart);
+
+  assert.match(source, /if \(!bootstrap\) \{\s*return \(/);
+  assert.match(source, /return \(\s*<LoadedLocalDocumentPanelApp/);
+  assert.match(source, /function LoadedLocalDocumentPanelApp\(props: \{/);
+  assert.match(source, /const previewRootRef = React\.useRef<HTMLElement \| null>\(null\);/);
+  assert.match(source, /const previewContentRef = React\.useRef<HTMLElement \| null>\(null\);/);
+  assert.match(source, /const textareaRef = React\.useRef<HTMLTextAreaElement \| null>\(null\);/);
+  assert.match(source, /useLocalDocumentSearchController\(\{/);
+  assert.notEqual(loadedComponentStart, -1);
+  assert.notEqual(searchHookIndex, -1);
+  assert.notEqual(loadedReturnIndex, -1);
+  assert.ok(searchHookIndex < loadedReturnIndex);
+});
+
 test("main module reports root lifecycle and React root errors through the native bridge", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/main.tsx"),
