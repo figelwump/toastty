@@ -551,7 +551,7 @@ struct SidebarView: View {
                     Image(systemName: "flag.fill")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(
-                            ToastyTheme.inactiveText.opacity(showsUnreadSessionAccent ? 0.62 : 0.42)
+                            ToastyTheme.accent.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
                         )
                         .accessibilityHidden(true)
                 }
