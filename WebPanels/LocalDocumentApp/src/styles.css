@@ -112,13 +112,21 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  /* Definite heights are required for the nested flex chain so the preview
+  <pre> becomes a real scroll container. Using min-height: 100vh leaves the
+  flex parents indefinite, which lets the pre grow to its full content
+  height and silently disables overflow: auto — breaking find reveal. */
+  height: 100%;
+}
+
 html {
   scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
-  min-height: 100vh;
   background:
     radial-gradient(circle at top left, var(--bg-glow), transparent 24rem),
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 100%);
@@ -127,11 +135,11 @@ body {
 }
 
 #root {
-  min-height: 100vh;
+  height: 100%;
 }
 
 .local-document-shell {
-  min-height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
 }
