@@ -64,6 +64,7 @@ struct SessionRegistryTests {
             panelID: UUID(),
             windowID: UUID(),
             workspaceID: UUID(),
+            isFlaggedForLater: true,
             usesSessionStatusNotifications: true,
             status: SessionStatus(kind: .ready, summary: "Ready", detail: "Done"),
             repoRoot: "/repo",
@@ -75,17 +76,48 @@ struct SessionRegistryTests {
         let decoder = JSONDecoder()
         let data = try encoder.encode(record)
         var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "isFlaggedForLater")
         object.removeValue(forKey: "usesSessionStatusNotifications")
         let legacyData = try JSONSerialization.data(withJSONObject: object)
 
         let decoded = try decoder.decode(SessionRecord.self, from: legacyData)
 
+        #expect(decoded.isFlaggedForLater == false)
         #expect(decoded.usesSessionStatusNotifications == false)
         #expect(decoded.sessionID == record.sessionID)
         #expect(decoded.agent == record.agent)
         #expect(decoded.panelID == record.panelID)
         #expect(decoded.workspaceID == record.workspaceID)
         #expect(decoded.status == record.status)
+    }
+
+    @Test
+    func laterFlagMutatorsOnlyAffectActiveSessions() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 1_100)
+
+        registry.startSession(
+            sessionID: "flagged",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        registry.setLaterFlag(sessionID: "flagged", isFlagged: true)
+        #expect(registry.isLaterFlagged(sessionID: "flagged"))
+        #expect(try #require(registry.activeSession(for: panelID)).isFlaggedForLater)
+
+        registry.toggleLaterFlag(sessionID: "flagged")
+        #expect(registry.isLaterFlagged(sessionID: "flagged") == false)
+
+        registry.stopSession(sessionID: "flagged", at: now.addingTimeInterval(1))
+        registry.setLaterFlag(sessionID: "flagged", isFlagged: true)
+        #expect(registry.sessionsByID["flagged"]?.isFlaggedForLater == false)
     }
 
     @Test

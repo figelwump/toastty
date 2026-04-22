@@ -157,6 +157,12 @@ final class SessionRuntimeStore: ObservableObject {
         )
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
+        clearLaterFlagForMeaningfulSessionAdvanceIfNeeded(
+            previousRecord: previousRecord,
+            sessionID: sessionID,
+            nextStatus: storedStatus,
+            registry: &nextRegistry
+        )
         if let currentRecord = nextRegistry.sessionsByID[sessionID] {
             ToasttyLog.debug(
                 "Updated managed session status",
@@ -227,6 +233,31 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry.panelStatus(for: panelID)
     }
 
+    func isLaterFlagged(sessionID: String) -> Bool {
+        sessionRegistry.isLaterFlagged(sessionID: sessionID)
+    }
+
+    func setLaterFlag(sessionID: String, isFlagged: Bool) {
+        var nextRegistry = sessionRegistry
+        nextRegistry.setLaterFlag(sessionID: sessionID, isFlagged: isFlagged)
+        publish(nextRegistry)
+    }
+
+    func toggleLaterFlag(sessionID: String) {
+        var nextRegistry = sessionRegistry
+        nextRegistry.toggleLaterFlag(sessionID: sessionID)
+        publish(nextRegistry)
+    }
+
+    @discardableResult
+    func toggleLaterFlagForPanel(panelID: UUID) -> Bool {
+        guard let sessionID = sessionRegistry.activeSession(for: panelID)?.sessionID else {
+            return false
+        }
+        toggleLaterFlag(sessionID: sessionID)
+        return true
+    }
+
     func activePanelIDs(matching kinds: Set<SessionStatusKind>) -> Set<UUID> {
         Set(
             sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
@@ -234,6 +265,19 @@ final class SessionRuntimeStore: ObservableObject {
                       record.isActive,
                       let status = record.status,
                       kinds.contains(status.kind) else {
+                    return nil
+                }
+                return panelID
+            }
+        )
+    }
+
+    func activeLaterPanelIDs() -> Set<UUID> {
+        Set(
+            sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
+                guard let record = sessionRegistry.sessionsByID[sessionID],
+                      record.isActive,
+                      record.isFlaggedForLater else {
                     return nil
                 }
                 return panelID
@@ -441,6 +485,24 @@ final class SessionRuntimeStore: ObservableObject {
         return metadata
     }
 
+    private func clearLaterFlagForMeaningfulSessionAdvanceIfNeeded(
+        previousRecord: SessionRecord?,
+        sessionID: String,
+        nextStatus: SessionStatus,
+        registry: inout SessionRegistry
+    ) {
+        guard previousRecord?.isFlaggedForLater == true else {
+            return
+        }
+        guard shouldClearLaterFlag(
+            previousKind: previousRecord?.status?.kind,
+            nextKind: nextStatus.kind
+        ) else {
+            return
+        }
+        registry.setLaterFlag(sessionID: sessionID, isFlagged: false)
+    }
+
     private func handleActionableStatusTransitionIfNeeded(
         previousRecord: SessionRecord?,
         sessionID: String,
@@ -624,6 +686,19 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func isActionableStatusKind(_ kind: SessionStatusKind) -> Bool {
         kind == .needsApproval || kind == .ready || kind == .error
+    }
+
+    private func shouldClearLaterFlag(
+        previousKind: SessionStatusKind?,
+        nextKind: SessionStatusKind
+    ) -> Bool {
+        if previousKind != .working && nextKind == .working {
+            return true
+        }
+        if previousKind != nextKind && isActionableStatusKind(nextKind) {
+            return true
+        }
+        return false
     }
 
     private func panelIsUnread(panelID: UUID, in workspace: WorkspaceState?) -> Bool {

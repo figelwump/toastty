@@ -1,6 +1,26 @@
 import CoreState
 import SwiftUI
 
+private struct SidebarSemanticTextBridge: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.isHidden = true
+        label.isEditable = false
+        label.isSelectable = false
+        label.drawsBackground = false
+        label.isBezeled = false
+        label.isBordered = false
+        label.setAccessibilityElement(false)
+        return label
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        nsView.stringValue = text
+    }
+}
+
 struct SidebarView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
@@ -400,9 +420,20 @@ struct SidebarView: View {
         isHovered: Bool
     ) -> some View {
         let status = workspaceSessionStatus.status
+        let isLaterFlagged = sessionRuntimeStore.isLaterFlagged(sessionID: workspaceSessionStatus.sessionID)
         let showsUnreadSessionAccent = showsUnreadSessionAccent(
             for: workspaceSessionStatus.panelID,
             in: workspace
+        )
+        let accessibilityLabel = Self.sessionAccessibilityLabel(
+            agentName: workspaceSessionStatus.agent.displayName,
+            chipKind: Self.sessionStatusChipKind(
+                for: status,
+                showsUnreadSessionAccent: showsUnreadSessionAccent
+            ),
+            detailText: normalizedSessionDetail(status.detail),
+            cwd: Self.abbreviatedPathLabel(workspaceSessionStatus.cwd),
+            isLaterFlagged: isLaterFlagged
         )
         let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
         let isActivePanel = store.selectedWorkspaceID(in: windowID) == workspace.id
@@ -420,6 +451,7 @@ struct SidebarView: View {
                     sessionStatusLabel(
                         workspaceSessionStatus,
                         status: status,
+                        isLaterFlagged: isLaterFlagged,
                         showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isActivePanel: isActivePanel,
                         isHovered: isHovered,
@@ -434,23 +466,50 @@ struct SidebarView: View {
                         hoveredPanelID = nil
                     }
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilityLabel)
                 .accessibilityIdentifier("sidebar.workspace.session.\(workspaceSessionStatus.sessionID)")
             } else {
                 sessionStatusLabel(
                     workspaceSessionStatus,
                     status: status,
+                    isLaterFlagged: isLaterFlagged,
                     showsUnreadSessionAccent: showsUnreadSessionAccent,
                     isActivePanel: isActivePanel,
                     isHovered: false,
                     isFlashing: isFlashing
                 )
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilityLabel)
             }
+        }
+        .contextMenu {
+            Button(
+                ToasttyKeyboardShortcuts.toggleLaterFlag.menuTitle(
+                    Self.laterFlagActionTitle(isFlaggedForLater: isLaterFlagged)
+                )
+            ) {
+                sessionRuntimeStore.setLaterFlag(
+                    sessionID: workspaceSessionStatus.sessionID,
+                    isFlagged: !isLaterFlagged
+                )
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        // SwiftUI context menus can collapse the hosted AppKit text tree into
+        // drawing-only layers. Keep a zero-size hidden text bridge so row text
+        // remains discoverable to host-based tests and AppKit inspectors.
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityLabel)
+                .frame(width: 0, height: 0)
         }
     }
 
     private func sessionStatusLabel(
         _ workspaceSessionStatus: WorkspaceSessionStatus,
         status: SessionStatus,
+        isLaterFlagged: Bool,
         showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
         isHovered: Bool,
@@ -487,6 +546,15 @@ struct SidebarView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if isLaterFlagged {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(
+                            ToastyTheme.accent.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
+                        )
+                        .accessibilityHidden(true)
+                }
             }
 
             if status.kind != .idle || detailText != nil {
@@ -855,6 +923,33 @@ struct SidebarView: View {
         case .idle, .working:
             return ""
         }
+    }
+
+    static func laterFlagActionTitle(isFlaggedForLater: Bool) -> String {
+        isFlaggedForLater ? "Clear Later Flag" : "Flag for Later"
+    }
+
+    static func sessionAccessibilityLabel(
+        agentName: String,
+        chipKind: SessionStatusKind?,
+        detailText: String?,
+        cwd: String?,
+        isLaterFlagged: Bool
+    ) -> String {
+        var components = [agentName]
+        if let chipKind {
+            components.append(sessionStatusChipLabel(for: chipKind))
+        }
+        if let detailText {
+            components.append(detailText)
+        }
+        if let cwd {
+            components.append(cwd)
+        }
+        if isLaterFlagged {
+            components.append("flagged for later")
+        }
+        return components.joined(separator: ", ")
     }
 
     static func canFocusSessionPanel(_ panelID: UUID, in workspace: WorkspaceState) -> Bool {

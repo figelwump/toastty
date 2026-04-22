@@ -199,6 +199,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let toggleLaterFlag = ToasttyKeyboardShortcut(
+        "l",
+        modifiers: [.command, .shift]
+    )
+
     static let splitHorizontal = ToasttyKeyboardShortcut(
         "d",
         modifiers: [.command]

@@ -99,6 +99,22 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         sessionsByID[sessionID] = record
     }
 
+    public mutating func setLaterFlag(sessionID: String, isFlagged: Bool) {
+        guard var record = sessionsByID[sessionID], record.isActive else { return }
+        guard record.isFlaggedForLater != isFlagged else { return }
+        record.isFlaggedForLater = isFlagged
+        sessionsByID[sessionID] = record
+    }
+
+    public mutating func toggleLaterFlag(sessionID: String) {
+        guard let record = sessionsByID[sessionID], record.isActive else { return }
+        setLaterFlag(sessionID: sessionID, isFlagged: record.isFlaggedForLater == false)
+    }
+
+    public func isLaterFlagged(sessionID: String) -> Bool {
+        activeSession(sessionID: sessionID)?.isFlaggedForLater == true
+    }
+
     public mutating func updatePanelLocation(
         panelID: UUID,
         windowID: UUID,

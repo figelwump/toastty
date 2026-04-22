@@ -8,7 +8,7 @@ Toastty is a flexible, native, powerful home for working with agents.
 
 It's a native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
 
-Toastty builds on the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, real-time coding agent status in the sidebar, notifications and unread badges when agents need attention, and jumping to the next unread/active agent session.
+Toastty builds on the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, real-time coding agent status in the sidebar, notifications and unread badges when agents need attention, manual later flags for sessions you want to revisit, and jumping to the next unread/active agent session.
 
 There are also little features throughout: scrollback search, configurable terminal profiles for setups like `tmux`, `zmx`, or `ssh`, keyboard shortcuts to navigate workspaces and panels, horizontal tabs per-workspace, and panel-aware text size and zoom control.
 
@@ -27,7 +27,8 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 ## Features
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
-- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions, then working sessions.
+- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions, then working sessions, then later-flagged sessions.
+- **Later flags** — Mark a managed session for follow-up without pinning or reordering it; the flag stays until you clear it or the session meaningfully advances
 - **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
 - **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
 - **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`
@@ -61,7 +62,8 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
 | `Cmd+[` | Focus previous pane |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then working panels; flash the current sidebar selection if nothing remains |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then working panels, then later-flagged panels; flash the current sidebar selection if nothing remains |
+| `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 | `Cmd+F` | Find in the focused terminal scrollback or local document |
@@ -91,7 +93,7 @@ For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md
 
 ## Running Agents
 
-Toastty can launch coding agents directly into terminal panels from the `Agent` menu, the top bar, the command palette, or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically — no separate agent skill or manual wiring needed.
+Toastty can launch coding agents directly into terminal panels from the `Agent` menu, the top bar, the command palette, or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically, while later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed.
 
 For full details see [docs/running-agents.md](docs/running-agents.md).
 
