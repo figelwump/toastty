@@ -53,6 +53,19 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
+        case .moveWorkspace(let windowID, let fromIndex, let toIndex):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            guard moveElement(in: &state.windows[windowIndex].workspaceIDs, fromIndex: fromIndex, toIndex: toIndex) else {
+                return false
+            }
+            return true
+
+        case .moveWorkspaceTab(let workspaceID, let fromIndex, let toIndex):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard moveElement(in: &workspace.tabIDs, fromIndex: fromIndex, toIndex: toIndex) else { return false }
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
         case .createWorkspace(let windowID, let title):
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
 
@@ -1337,6 +1350,21 @@ public struct AppReducer {
             merged.removeFirst(merged.count - 10)
         }
         return merged
+    }
+
+    @discardableResult
+    private static func moveElement<T>(
+        in values: inout [T],
+        fromIndex: Int,
+        toIndex: Int
+    ) -> Bool {
+        guard values.indices.contains(fromIndex) else { return false }
+        guard values.indices.contains(toIndex) else { return false }
+        guard fromIndex != toIndex else { return false }
+
+        let movedValue = values.remove(at: fromIndex)
+        values.insert(movedValue, at: toIndex)
+        return true
     }
 
     private static func reopenedTabInsertionIndex(

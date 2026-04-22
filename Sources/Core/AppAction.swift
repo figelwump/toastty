@@ -28,6 +28,8 @@ public enum AppAction: Equatable, Sendable {
     case updateWindowFrame(windowID: UUID, frame: CGRectCodable)
     case selectWorkspace(windowID: UUID, workspaceID: UUID)
     case selectWorkspaceTab(workspaceID: UUID, tabID: UUID)
+    case moveWorkspace(windowID: UUID, fromIndex: Int, toIndex: Int)
+    case moveWorkspaceTab(workspaceID: UUID, fromIndex: Int, toIndex: Int)
     case createWorkspace(windowID: UUID, title: String?)
     case createWorkspaceTab(workspaceID: UUID, seed: WindowLaunchSeed?)
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
@@ -92,6 +94,10 @@ public extension AppAction {
             return "selectWorkspace"
         case .selectWorkspaceTab:
             return "selectWorkspaceTab"
+        case .moveWorkspace:
+            return "moveWorkspace"
+        case .moveWorkspaceTab:
+            return "moveWorkspaceTab"
         case .createWorkspace:
             return "createWorkspace"
         case .createWorkspaceTab:

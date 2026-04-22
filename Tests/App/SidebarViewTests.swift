@@ -208,6 +208,81 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceReorderTargetIndexHandlesBeforeFirstBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredHeaderFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: -8
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceReorderTargetIndexHandlesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredHeaderFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 150
+        )
+
+        XCTAssertEqual(targetIndex, 2)
+    }
+
+    func testWorkspaceReorderTargetIndexTreatsSelfDropAsNoOpIndex() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredHeaderFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 60
+        )
+
+        XCTAssertEqual(targetIndex, 1)
+    }
+
+    func testWorkspaceReorderTargetIndexReturnsNilWhenHeaderFramesAreMissing() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredHeaderFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 120
+        )
+
+        XCTAssertNil(targetIndex)
+    }
+
     func testBackgroundTabSessionPanelRemainsFocusable() throws {
         let backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
         let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")

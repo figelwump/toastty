@@ -6,10 +6,12 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case windowSidebarToggle = "window.sidebar.toggle"
     case workspaceCreate = "workspace.create"
     case workspaceSelect = "workspace.select"
+    case workspaceMove = "workspace.move"
     case workspaceRename = "workspace.rename"
     case workspaceClose = "workspace.close"
     case workspaceTabCreate = "workspace.tab.create"
     case workspaceTabSelect = "workspace.tab.select"
+    case workspaceTabMove = "workspace.tab.move"
     case workspaceTabSelectPrevious = "workspace.tab.select-previous"
     case workspaceTabSelectNext = "workspace.tab.select-next"
     case workspaceTabRename = "workspace.tab.rename"
@@ -132,6 +134,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 selectors: [.windowID, .workspaceID],
                 parameters: [.index(summary: "1-based workspace index in the target window.", required: false)]
             )
+        case .workspaceMove:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Move a workspace from one 1-based index to another within the target window.",
+                selectors: [.windowID],
+                parameters: [
+                    .index(summary: "1-based source workspace index in the target window.", required: true),
+                    .toIndex(summary: "1-based destination workspace index in the target window.", required: true),
+                ]
+            )
         case .workspaceRename:
             return .init(
                 id: rawValue,
@@ -151,6 +164,17 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 summary: "Select a tab by ID or 1-based index.",
                 selectors: [.windowID, .workspaceID],
                 parameters: [.tabID(required: false), .index(summary: "1-based tab index in the target workspace.", required: false)]
+            )
+        case .workspaceTabMove:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Move a tab from one 1-based index to another within the target workspace.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [
+                    .index(summary: "1-based source tab index in the target workspace.", required: true),
+                    .toIndex(summary: "1-based destination tab index in the target workspace.", required: true),
+                ]
             )
         case .workspaceTabSelectPrevious:
             return .init(id: rawValue, kind: .action, summary: "Select the previous tab in the target workspace.", selectors: [.windowID, .workspaceID])
@@ -358,6 +382,10 @@ private extension AppControlParameterDescriptor {
 
     static func text(required: Bool) -> Self {
         .init(name: "text", summary: "Text payload.", valueType: .string, required: required)
+    }
+
+    static func toIndex(summary: String, required: Bool) -> Self {
+        .init(name: "toIndex", summary: summary, valueType: .integer, required: required)
     }
 
     static func title(required: Bool) -> Self {

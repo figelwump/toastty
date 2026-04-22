@@ -220,6 +220,81 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceTabReorderTargetIndexHandlesBeforeFirstBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: -12
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceTabReorderTargetIndexHandlesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 360
+        )
+
+        XCTAssertEqual(targetIndex, 2)
+    }
+
+    func testWorkspaceTabReorderTargetIndexTreatsSelfDropAsNoOpIndex() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 150
+        )
+
+        XCTAssertEqual(targetIndex, 1)
+    }
+
+    func testWorkspaceTabReorderTargetIndexReturnsNilWhenFramesAreMissing() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 210
+        )
+
+        XCTAssertNil(targetIndex)
+    }
+
     func testResolvedWorkspaceTitleWidthUsesIntrinsicWidthWhenItFits() {
         XCTAssertEqual(
             WorkspaceView.resolvedWorkspaceTitleWidth(

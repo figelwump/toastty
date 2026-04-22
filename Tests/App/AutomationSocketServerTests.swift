@@ -387,6 +387,8 @@ struct AutomationSocketServerTests {
         }
         #expect(ids.contains("window.create"))
         #expect(ids.contains("window.sidebar.toggle"))
+        #expect(ids.contains("workspace.move"))
+        #expect(ids.contains("workspace.tab.move"))
         #expect(ids.contains("panel.close"))
         #expect(ids.contains("agent.launch"))
         #expect(ids.contains("config.reload") == false)
