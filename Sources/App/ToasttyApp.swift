@@ -2046,9 +2046,6 @@ struct ToasttyApp: App {
         let launchPath = shimDirectoryPath.map {
             AgentCommandShimInstaller.pathValue(prepending: $0, to: basePath)
         } ?? basePath
-        let paneHistoryDebugDirectoryPath = resolvedPaneHistoryDebugDirectoryPath(
-            runtimePaths: runtimePaths
-        )
         ToasttyLog.info(
             "Configured terminal launch context environment",
             category: .bootstrap,
@@ -2071,8 +2068,6 @@ struct ToasttyApp: App {
                 ) ? "true" : "false",
                 "path_sample": pathEntriesSample(launchPath),
                 "agent_base_path_sample": pathEntriesSample(agentBasePath),
-                "pane_history_debug_enabled": paneHistoryDebugDirectoryPath == nil ? "false" : "true",
-                "pane_history_debug_directory": paneHistoryDebugDirectoryPath ?? "none",
             ]
         )
         terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
@@ -2084,14 +2079,6 @@ struct ToasttyApp: App {
             ]
             if let cliExecutablePath {
                 environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
-            }
-            if let paneHistoryDebugDirectoryPath {
-                environment[ToasttyLaunchContextEnvironment.paneHistoryDebugLogFileKey] = URL(
-                    fileURLWithPath: paneHistoryDebugDirectoryPath,
-                    isDirectory: true
-                )
-                .appendingPathComponent("\(panelID.uuidString).log", isDirectory: false)
-                .path
             }
             if let agentBasePath {
                 environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = agentBasePath
@@ -2105,19 +2092,6 @@ struct ToasttyApp: App {
             }
             return environment
         }
-    }
-
-    private static func resolvedPaneHistoryDebugDirectoryPath(
-        runtimePaths: ToasttyRuntimePaths
-    ) -> String? {
-        #if DEBUG
-        return runtimePaths.defaultLogFileURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("pane-history-debug", isDirectory: true)
-            .path
-        #else
-        return nil
-        #endif
     }
 
     private static func pathEntriesSample(_ path: String?, limit: Int = 4) -> String {
