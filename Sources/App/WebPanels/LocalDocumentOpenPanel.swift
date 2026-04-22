@@ -2,11 +2,10 @@ import AppKit
 import CoreState
 
 enum LocalDocumentOpenPanel {
-    // The local-document surface is intentionally extension-driven. UTType
-    // resolution is ambiguous for some supported extensions (`.ts`, `.mts`)
-    // and synthetic text-compatible UTTypes do not necessarily match the
-    // filesystem-reported content types for files we already support.
-    private static let allowedPathExtensions = Set(LocalDocumentClassifier.supportedFilenameExtensions)
+    // The local-document surface is intentionally filename-driven rather than
+    // UTType-driven. Some supported files are identified by exact basename
+    // (for example `.gitignore`), and UTType resolution remains ambiguous for
+    // extensions like `.ts` and `.mts`.
 
     @MainActor
     static func chooseFile(
@@ -41,7 +40,7 @@ enum LocalDocumentOpenPanel {
             return true
         }
 
-        return allowedPathExtensions.contains(url.pathExtension.lowercased())
+        return LocalDocumentClassifier.format(forFilePath: url.path) != nil
     }
 
     private final class SelectionFilterDelegate: NSObject, NSOpenSavePanelDelegate {

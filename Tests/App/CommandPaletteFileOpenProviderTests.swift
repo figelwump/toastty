@@ -43,6 +43,42 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
         )
     }
 
+    func testProviderIndexesSupportedFilesInsideHiddenDirectoriesAndSkipsHiddenFiles() async throws {
+        let fixture = try TemporaryProviderFileScope(
+            files: [
+                ".agents/skills/worktree-create/SKILL.md": "# Worktree Create\n",
+                ".claude/CLAUDE.md": "# Claude\n",
+                ".gitignore": "Derived*\n",
+                ".markdownlint.json": "{\n  \"default\": true\n}\n",
+                ".git/ignored.md": "# ignored\n",
+                "Derived-tests/cache.json": "{\n  \"ignored\": true\n}\n",
+                "DerivedData/build-log.md": "# ignored\n",
+                "DerivedState/model.md": "# keep\n",
+                ".yarn/cache/dep.md": "# ignored\n",
+                ".yarn/unplugged/dep.md": "# ignored\n",
+            ]
+        )
+        let provider = CommandPaletteFileOpenProvider()
+        let scope = PaletteFileSearchScope(
+            rootPath: fixture.rootURL.path,
+            kind: .workingDirectory
+        )
+
+        let results = await provider.indexedFiles(in: scope)
+        let relativePaths = Set(results.map(\.relativePath))
+
+        XCTAssertTrue(relativePaths.contains(".agents/skills/worktree-create/SKILL.md"))
+        XCTAssertTrue(relativePaths.contains(".claude/CLAUDE.md"))
+        XCTAssertTrue(relativePaths.contains(".gitignore"))
+        XCTAssertTrue(relativePaths.contains("DerivedState/model.md"))
+        XCTAssertFalse(relativePaths.contains(".markdownlint.json"))
+        XCTAssertFalse(relativePaths.contains(".git/ignored.md"))
+        XCTAssertFalse(relativePaths.contains("Derived-tests/cache.json"))
+        XCTAssertFalse(relativePaths.contains("DerivedData/build-log.md"))
+        XCTAssertFalse(relativePaths.contains(".yarn/cache/dep.md"))
+        XCTAssertFalse(relativePaths.contains(".yarn/unplugged/dep.md"))
+    }
+
     func testRoutingSupportsNewLocalDocumentFormatsAndHTMLOnly() {
         XCTAssertEqual(
             CommandPaletteFileOpenRouting.destination(
@@ -55,6 +91,12 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
                 forNormalizedFilePath: "/tmp/index.html"
             ),
             .browser(fileURLString: URL(fileURLWithPath: "/tmp/index.html").absoluteString)
+        )
+        XCTAssertEqual(
+            CommandPaletteFileOpenRouting.destination(
+                forNormalizedFilePath: "/tmp/.gitignore"
+            ),
+            .localDocument(filePath: "/tmp/.gitignore")
         )
         XCTAssertNil(
             CommandPaletteFileOpenRouting.destination(

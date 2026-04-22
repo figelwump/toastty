@@ -47,6 +47,18 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
         }
     }
 
+    func testAllowsSelectionForSupportedExactFileNames() throws {
+        try withTemporaryDirectory { temporaryDirectoryURL in
+            let fileURL = temporaryDirectoryURL.appendingPathComponent(".gitignore", isDirectory: false)
+            try "*.xcuserstate\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+            XCTAssertTrue(
+                LocalDocumentOpenPanel.allowsSelection(at: fileURL),
+                "expected picker to allow .gitignore"
+            )
+        }
+    }
+
     func testAllowsSelectionKeepsDirectoriesEnabledForNavigation() throws {
         try withTemporaryDirectory { temporaryDirectoryURL in
             let nestedDirectoryURL = temporaryDirectoryURL.appendingPathComponent(

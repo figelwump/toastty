@@ -12,7 +12,7 @@ enum CommandPaletteFileOpenRouting {
             return .browser(fileURLString: fileURL.absoluteString)
         }
 
-        guard LocalDocumentClassifier.format(forPathExtension: pathExtension) != nil else {
+        guard LocalDocumentClassifier.format(forFilePath: normalizedFilePath) != nil else {
             return nil
         }
 
@@ -21,5 +21,9 @@ enum CommandPaletteFileOpenRouting {
 
     static var supportedPathExtensions: Set<String> {
         Set(LocalDocumentClassifier.supportedFilenameExtensions).union(browserExtensions)
+    }
+
+    static var supportedExactFileNames: Set<String> {
+        Set(LocalDocumentClassifier.supportedExactFileNames)
     }
 }

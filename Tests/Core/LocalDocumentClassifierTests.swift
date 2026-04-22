@@ -100,6 +100,8 @@ struct LocalDocumentClassifierTests {
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/Toastty.toml") == .toml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/settings.JSON") == .json)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/logs/events.jsonl") == .jsonl)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/.gitignore") == .config)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/.gitignore:42") == .config)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/.toastty/config.properties") == .config)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/data/report.csv") == .csv)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/layout.xml") == .xml)

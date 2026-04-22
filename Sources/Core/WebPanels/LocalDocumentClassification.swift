@@ -36,6 +36,10 @@ public enum LocalDocumentClassifier {
     // Keep grouped text/code families intentionally small. Some extensions like
     // `.jsonc` and `.properties` still share a broad viewer family even when we
     // do not offer specialized syntax highlighting for them yet.
+    private static let exactFileNameToClassification: [String: LocalDocumentClassification] = [
+        ".gitignore": .init(format: .config, syntaxLanguage: nil, formatLabel: "Git Ignore"),
+    ]
+
     private static let filenameExtensionToClassification: [String: LocalDocumentClassification] = [
         "md": .init(format: .markdown, syntaxLanguage: nil, formatLabel: "Markdown"),
         "markdown": .init(format: .markdown, syntaxLanguage: nil, formatLabel: "Markdown"),
@@ -91,6 +95,9 @@ public enum LocalDocumentClassifier {
     public static let supportedFilenameExtensions: [String] =
         filenameExtensionToClassification.keys.sorted()
 
+    public static let supportedExactFileNames: [String] =
+        exactFileNameToClassification.keys.sorted()
+
     public static func classification(forPathExtension pathExtension: String) -> LocalDocumentClassification? {
         let normalizedExtension = pathExtension.lowercased()
         guard normalizedExtension.isEmpty == false else {
@@ -106,7 +113,7 @@ public enum LocalDocumentClassifier {
         }
 
         let fileURL = URL(fileURLWithPath: normalizedFilePath)
-        if let directClassification = classification(forPathExtension: fileURL.pathExtension) {
+        if let directClassification = classification(forFileName: fileURL.lastPathComponent) {
             return directClassification
         }
 
@@ -122,13 +129,23 @@ public enum LocalDocumentClassifier {
         var candidateFileName = fileName
         while let separatorIndex = candidateFileName.lastIndex(of: ":") {
             candidateFileName.removeSubrange(separatorIndex...)
-            let pathExtension = (candidateFileName as NSString).pathExtension
-            if let classification = classification(forPathExtension: pathExtension) {
+            if let classification = classification(forFileName: candidateFileName) {
                 return classification
             }
         }
 
         return nil
+    }
+
+    private static func classification(
+        forFileName fileName: String
+    ) -> LocalDocumentClassification? {
+        if let directClassification = exactFileNameToClassification[fileName] {
+            return directClassification
+        }
+
+        let pathExtension = (fileName as NSString).pathExtension
+        return classification(forPathExtension: pathExtension)
     }
 
     public static func classification(

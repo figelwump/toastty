@@ -45,9 +45,30 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
     private static let skippedDirectoryNames: Set<String> = [
         ".build",
         ".git",
-        "Derived",
         "build",
         "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".tox",
+        ".nox",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".next",
+        ".nuxt",
+        ".svelte-kit",
+        ".turbo",
+        ".parcel-cache",
+    ]
+
+    private static let skippedTopLevelDirectoryNames: Set<String> = [
+        "Derived",
+    ]
+
+    private static let skippedTopLevelDirectoryPrefixes: [String] = [
+        "Derived-",
+        "DerivedData",
     ]
 
     private let staleAfter: TimeInterval
@@ -155,13 +176,14 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
                 .isRegularFileKey,
                 .isSymbolicLinkKey,
             ],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            options: [.skipsPackageDescendants],
             errorHandler: { _, _ in true }
         ) else {
             return []
         }
 
         let supportedExtensions = CommandPaletteFileOpenRouting.supportedPathExtensions
+        let supportedExactFileNames = CommandPaletteFileOpenRouting.supportedExactFileNames
         var results: [PaletteFileResult] = []
 
         while let candidate = enumerator.nextObject() as? URL {
@@ -169,6 +191,8 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
                 return []
             }
 
+            let normalizedCandidatePath = normalizedFilePath(candidate.path)
+            let candidateRelativePath = relativePath(for: normalizedCandidatePath, rootPath: rootPath)
             let resourceValues = try? candidate.resourceValues(forKeys: [
                 .isDirectoryKey,
                 .isRegularFileKey,
@@ -176,7 +200,11 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
             ])
 
             if resourceValues?.isDirectory == true {
-                if shouldSkipDescendants(of: candidate, resourceValues: resourceValues) {
+                if shouldSkipDescendants(
+                    of: candidate,
+                    relativePath: candidateRelativePath,
+                    resourceValues: resourceValues
+                ) {
                     enumerator.skipDescendants()
                 }
                 continue
@@ -186,24 +214,28 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
                 continue
             }
 
-            let pathExtension = candidate.pathExtension.lowercased()
-            guard supportedExtensions.contains(pathExtension) else {
+            let fileName = candidate.lastPathComponent
+            if shouldSkipFile(fileName: fileName, relativePath: candidateRelativePath) {
                 continue
             }
 
-            let normalizedFilePath = normalizedFilePath(candidate.path)
-            guard isDescendant(normalizedFilePath, of: rootPath),
+            let pathExtension = candidate.pathExtension.lowercased()
+            guard supportedExtensions.contains(pathExtension) || supportedExactFileNames.contains(fileName) else {
+                continue
+            }
+
+            guard isDescendant(normalizedCandidatePath, of: rootPath),
                   let destination = CommandPaletteFileOpenRouting.destination(
-                      forNormalizedFilePath: normalizedFilePath
+                      forNormalizedFilePath: normalizedCandidatePath
                   ) else {
                 continue
             }
 
             results.append(
                 PaletteFileResult(
-                    filePath: normalizedFilePath,
+                    filePath: normalizedCandidatePath,
                     fileName: candidate.lastPathComponent,
-                    relativePath: relativePath(for: normalizedFilePath, rootPath: rootPath),
+                    relativePath: relativePath(for: normalizedCandidatePath, rootPath: rootPath),
                     destination: destination
                 )
             )
@@ -219,13 +251,50 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
 
     private static func shouldSkipDescendants(
         of directoryURL: URL,
+        relativePath: String,
         resourceValues: URLResourceValues?
     ) -> Bool {
-        if skippedDirectoryNames.contains(directoryURL.lastPathComponent) {
+        if resourceValues?.isSymbolicLink == true {
             return true
         }
 
-        return resourceValues?.isSymbolicLink == true
+        let directoryName = directoryURL.lastPathComponent
+        if skippedDirectoryNames.contains(directoryName) {
+            return true
+        }
+
+        let pathComponents = relativePath.split(separator: "/")
+        if pathComponents.count >= 2,
+           pathComponents[0] == ".yarn",
+           (pathComponents[1] == "cache" || pathComponents[1] == "unplugged") {
+            return true
+        }
+
+        if pathComponents.count == 1,
+           (
+               skippedTopLevelDirectoryNames.contains(directoryName) ||
+                   skippedTopLevelDirectoryPrefixes.contains(where: { directoryName.hasPrefix($0) })
+           ) {
+            return true
+        }
+
+        return false
+    }
+
+    private static func shouldSkipFile(fileName: String, relativePath: String) -> Bool {
+        if fileName.hasPrefix("."),
+           CommandPaletteFileOpenRouting.supportedExactFileNames.contains(fileName) == false {
+            return true
+        }
+
+        let pathComponents = relativePath.split(separator: "/")
+        if pathComponents.count >= 2,
+           pathComponents[0] == ".yarn",
+           (pathComponents[1] == "cache" || pathComponents[1] == "unplugged") {
+            return true
+        }
+
+        return false
     }
 
     private static func relativePath(for filePath: String, rootPath: String) -> String {
