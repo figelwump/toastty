@@ -1067,7 +1067,8 @@ final class AppStore: ObservableObject {
         if let target = nextUnreadOrActiveFallbackTarget(
             selection: selection,
             selectedTabID: selectedTabID,
-            matchingPanelIDs: workingPanelIDs
+            matchingPanelIDs: workingPanelIDs,
+            includeCurrentWorkspaceWrap: false
         ) {
             logNextUnreadOrActivePanelResolution(
                 selection: selection,
@@ -1080,15 +1081,32 @@ final class AppStore: ObservableObject {
         }
 
         let laterPanelIDs = sessionRuntimeStore.activeLaterPanelIDs()
-        let target = nextUnreadOrActiveFallbackTarget(
+        if let target = nextUnreadOrActiveFallbackTarget(
             selection: selection,
             selectedTabID: selectedTabID,
             matchingPanelIDs: laterPanelIDs
+        ) {
+            logNextUnreadOrActivePanelResolution(
+                selection: selection,
+                selectedTabID: selectedTabID,
+                resolution: "fallback_later",
+                target: target,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+            return target
+        }
+
+        // Let later-flagged sessions surface before we wrap back to already
+        // visited working sessions in the current workspace.
+        let target = nextUnreadOrActiveFallbackTarget(
+            selection: selection,
+            selectedTabID: selectedTabID,
+            matchingPanelIDs: workingPanelIDs
         )
         logNextUnreadOrActivePanelResolution(
             selection: selection,
             selectedTabID: selectedTabID,
-            resolution: target == nil ? "none" : "fallback_later",
+            resolution: target == nil ? "none" : "fallback_working_wrapped",
             target: target,
             sessionRuntimeStore: sessionRuntimeStore
         )
@@ -1098,7 +1116,8 @@ final class AppStore: ObservableObject {
     private func nextUnreadOrActiveFallbackTarget(
         selection: WindowCommandSelection,
         selectedTabID: UUID,
-        matchingPanelIDs: Set<UUID>
+        matchingPanelIDs: Set<UUID>,
+        includeCurrentWorkspaceWrap: Bool = true
     ) -> PanelNavigationTarget? {
         guard matchingPanelIDs.isEmpty == false else {
             return nil
@@ -1108,7 +1127,8 @@ final class AppStore: ObservableObject {
             fromWindowID: selection.windowID,
             workspaceID: selection.workspace.id,
             tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID
+            focusedPanelID: selection.workspace.focusedPanelID,
+            includeCurrentWorkspaceWrap: includeCurrentWorkspaceWrap
         ) { _, panelID in
             matchingPanelIDs.contains(panelID)
         }

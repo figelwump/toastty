@@ -635,6 +635,115 @@ final class AppStateSelectionTests: XCTestCase {
         XCTAssertEqual(target.panelID, siblingWorkspaceTab.panelIDs[0])
     }
 
+    func testNextMatchingPanelCanSkipCurrentWorkspaceWrap() {
+        let currentEarlierTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [],
+            panelCount: 2
+        )
+        let currentSelectedTab = makeTabFixture(
+            focusedPanelIndex: 1,
+            unreadPanelIndices: [],
+            panelCount: 2
+        )
+        let workspace = makeWorkspaceFixture(
+            title: "One",
+            tabs: [currentEarlierTab, currentSelectedTab],
+            selectedTabIndex: 1
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        let matchingPanelIDs: Set<UUID> = [currentEarlierTab.panelIDs[0]]
+
+        let target = state.nextMatchingPanel(
+            fromWindowID: windowID,
+            workspaceID: workspace.id,
+            tabID: currentSelectedTab.tab.id,
+            focusedPanelID: currentSelectedTab.panelIDs[1],
+            includeCurrentWorkspaceWrap: false
+        ) { _, panelID in
+            matchingPanelIDs.contains(panelID)
+        }
+
+        XCTAssertNil(target)
+    }
+
+    func testNextMatchingPanelWithoutCurrentWorkspaceWrapStillTraversesSiblingWorkspaces() throws {
+        let currentEarlierTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [],
+            panelCount: 2
+        )
+        let currentSelectedTab = makeTabFixture(
+            focusedPanelIndex: 1,
+            unreadPanelIndices: [],
+            panelCount: 2
+        )
+        let currentWorkspace = makeWorkspaceFixture(
+            title: "One",
+            tabs: [currentEarlierTab, currentSelectedTab],
+            selectedTabIndex: 1
+        )
+        let siblingTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [],
+            panelCount: 2
+        )
+        let siblingWorkspace = makeWorkspaceFixture(
+            title: "Two",
+            tabs: [siblingTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [currentWorkspace.id, siblingWorkspace.id],
+                    selectedWorkspaceID: currentWorkspace.id
+                )
+            ],
+            workspacesByID: [
+                currentWorkspace.id: currentWorkspace,
+                siblingWorkspace.id: siblingWorkspace,
+            ],
+            selectedWindowID: windowID
+        )
+        let matchingPanelIDs: Set<UUID> = [
+            currentEarlierTab.panelIDs[0],
+            siblingTab.panelIDs[0],
+        ]
+
+        let target = try XCTUnwrap(
+            state.nextMatchingPanel(
+                fromWindowID: windowID,
+                workspaceID: currentWorkspace.id,
+                tabID: currentSelectedTab.tab.id,
+                focusedPanelID: currentSelectedTab.panelIDs[1],
+                includeCurrentWorkspaceWrap: false
+            ) { _, panelID in
+                matchingPanelIDs.contains(panelID)
+            }
+        )
+
+        XCTAssertEqual(target.windowID, windowID)
+        XCTAssertEqual(target.workspaceID, siblingWorkspace.id)
+        XCTAssertEqual(target.tabID, siblingTab.tab.id)
+        XCTAssertEqual(target.panelID, siblingTab.panelIDs[0])
+    }
+
     func testNextMatchingPanelReachesEarlierTabInSiblingWorkspaceBeforeRepeatingSelectedTab() throws {
         let currentEarlierTab = makeTabFixture(
             focusedPanelIndex: 0,

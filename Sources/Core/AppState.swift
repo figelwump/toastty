@@ -297,6 +297,7 @@ public struct AppState: Codable, Equatable, Sendable {
         workspaceID: UUID,
         tabID: UUID,
         focusedPanelID: UUID?,
+        includeCurrentWorkspaceWrap: Bool = true,
         matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
     ) -> PanelNavigationTarget? {
         guard let currentWindow = window(id: fromWindowID),
@@ -349,6 +350,10 @@ public struct AppState: Codable, Equatable, Sendable {
 
         // Keep the current workspace non-wrapping on the first pass so sibling
         // workspaces and windows are considered before we loop back locally.
+        guard includeCurrentWorkspaceWrap else {
+            return nil
+        }
+
         if let target = nextMatchingPanel(
             in: currentWorkspace,
             windowID: fromWindowID,

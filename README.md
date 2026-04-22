@@ -27,7 +27,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 ## Features
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
-- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions, then working sessions, then later-flagged sessions.
+- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions, then forward working sessions; if none remain ahead, later-flagged sessions surface before wrapping back to earlier working sessions.
 - **Later flags** — Mark a managed session for follow-up without pinning or reordering it; the flag stays until you clear it or the session meaningfully advances
 - **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
 - **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
@@ -62,7 +62,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
 | `Cmd+[` | Focus previous pane |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then working panels, then later-flagged panels; flash the current sidebar selection if nothing remains |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then forward working panels; if none remain ahead, later-flagged panels surface before wrapping back to earlier working panels; flash the current sidebar selection if nothing remains |
 | `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |

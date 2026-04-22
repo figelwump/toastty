@@ -352,10 +352,10 @@ Supported action IDs:
   - unread traversal still wraps within the current workspace before moving on
   - a `ready` session only participates while unread; once visited it collapses back to `idle`
   - if no unread panel exists, it next falls back to managed-session panels whose live status is `needsApproval` or `error`
-  - if no attention-required panel exists, it then falls back to managed-session panels whose live status is `working`
-  - active fallback scans the rest of the current workspace first, then sibling workspaces later in the current window's workspace order
-  - after that it scans later windows in window order, trying each window's selected workspace first and then the remaining workspaces in that window order
-  - only after those passes does it wrap back to earlier panels in the current workspace
+  - if no attention-required panel exists, it next scans managed-session panels whose live status is `working` without wrapping back inside the current workspace
+  - that forward working scan visits the rest of the current workspace first, then sibling workspaces later in the current window's workspace order, then later windows in window order, trying each window's selected workspace first and then the remaining workspaces in that window order
+  - if no forward working panel exists, it then scans later-flagged managed-session panels using the normal active traversal order
+  - if no later-flagged panel exists, it finally wraps back to earlier working panels in the current workspace
   - if no target exists, the selected sidebar row flashes instead of changing focus
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
