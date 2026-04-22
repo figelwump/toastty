@@ -115,6 +115,16 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testMountedContentOpacityKeepsVisibleContentOpaque() {
+        XCTAssertEqual(WorkspaceView.mountedContentOpacity(isVisible: true), 1)
+    }
+
+    func testMountedContentOpacityKeepsHiddenContentNonZeroButEffectivelyInvisible() {
+        let opacity = WorkspaceView.mountedContentOpacity(isVisible: false)
+        XCTAssertGreaterThan(opacity, 0)
+        XCTAssertLessThanOrEqual(opacity, 0.01)
+    }
+
     func testWorkspaceTabManagementAffordancesStayEnabledForVisibleTabs() {
         XCTAssertFalse(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 0))
         XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 1))

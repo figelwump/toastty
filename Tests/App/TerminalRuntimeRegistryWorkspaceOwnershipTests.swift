@@ -21,7 +21,7 @@ final class TerminalRuntimeRegistryWorkspaceOwnershipTests: XCTestCase {
         )
 
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
-        XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: "Second Workspace")))
+        XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: "Second Workspace", activate: true)))
         let targetWorkspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
 
         XCTAssertTrue(

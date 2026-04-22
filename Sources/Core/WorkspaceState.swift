@@ -39,6 +39,7 @@ public struct ClosedPanelRecord: Codable, Equatable, Sendable {
 public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public var title: String
+    public var hasBeenVisited: Bool
     public var selectedTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: WorkspaceTabState]
@@ -57,6 +58,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public init(
         id: UUID,
         title: String,
+        hasBeenVisited: Bool = true,
         selectedTabID: UUID?,
         tabIDs: [UUID],
         tabsByID: [UUID: WorkspaceTabState],
@@ -69,6 +71,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         )
         self.id = id
         self.title = title
+        self.hasBeenVisited = hasBeenVisited
         self.selectedTabID = sanitizedTabs.selectedTabID
         self.tabIDs = sanitizedTabs.tabIDs
         self.tabsByID = sanitizedTabs.tabsByID
@@ -78,6 +81,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public init(
         id: UUID,
         title: String,
+        hasBeenVisited: Bool = true,
         layoutTree: LayoutNode,
         panels: [UUID: PanelState],
         focusedPanelID: UUID?,
@@ -102,6 +106,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.init(
             id: id,
             title: title,
+            hasBeenVisited: hasBeenVisited,
             selectedTabID: tab.id,
             tabIDs: [tab.id],
             tabsByID: [tab.id: tab],
@@ -112,7 +117,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public static func bootstrap(
         title: String = "Workspace 1",
         initialTerminalCWD: String? = nil,
-        initialTerminalProfileBinding: TerminalProfileBinding? = nil
+        initialTerminalProfileBinding: TerminalProfileBinding? = nil,
+        hasBeenVisited: Bool = true
     ) -> WorkspaceState {
         let tab = WorkspaceTabState.bootstrap(
             initialTerminalCWD: initialTerminalCWD,
@@ -121,6 +127,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         return WorkspaceState(
             id: UUID(),
             title: title,
+            hasBeenVisited: hasBeenVisited,
             selectedTabID: tab.id,
             tabIDs: [tab.id],
             tabsByID: [tab.id: tab]
@@ -312,6 +319,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case title
+        case hasBeenVisited
         case selectedTabID
         case tabIDs
         case tabsByID
@@ -328,6 +336,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
+        hasBeenVisited = try container.decodeIfPresent(Bool.self, forKey: .hasBeenVisited) ?? true
         let decodedSelectedTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTabID)
         let decodedTabIDs = try container.decodeIfPresent([UUID].self, forKey: .tabIDs)
         let decodedTabsByID = try container.decodeIfPresent([UUID: WorkspaceTabState].self, forKey: .tabsByID)
@@ -370,6 +379,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
+        try container.encode(hasBeenVisited, forKey: .hasBeenVisited)
         try container.encodeIfPresent(resolvedSelectedTabID, forKey: .selectedTabID)
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)

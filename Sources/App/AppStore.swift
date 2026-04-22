@@ -662,7 +662,7 @@ final class AppStore: ObservableObject {
 
         switch target {
         case .existingWindow(let windowID):
-            return send(.createWorkspace(windowID: windowID, title: nil))
+            return send(.createWorkspace(windowID: windowID, title: nil, activate: true))
         case .newWindow:
             return send(
                 .createWindow(

@@ -187,24 +187,18 @@ if [[ -z "$window_id" ]]; then
 fi
 
 create_output=""
-if ! create_output="$("$TOASTTY_CLI_PATH" action run workspace.create --window "$window_id" "title=$workspace_name" 2>&1)"; then
+if ! create_output="$(run_cli_json action run workspace.create --window "$window_id" "title=$workspace_name" activate=false 2>&1)"; then
   echo "error: failed to create workspace: $create_output" >&2
   exit 1
 fi
-
-snapshot_args=(query run workspace.snapshot)
-snapshot_args+=(--window "$window_id")
-
-workspace_id="$(
-  retry_json_result_field \
-    30 \
-    0.2 \
-    workspaceID \
-    run_cli_json "${snapshot_args[@]}"
-)"
+if ! workspace_id="$(extract_json_result_field "workspaceID" <<<"$create_output" 2>/dev/null)"; then
+  echo "error: failed to parse workspaceID from workspace.create response" >&2
+  printf '%s\n' "$create_output" >&2
+  exit 1
+fi
 
 if [[ -z "$workspace_id" ]]; then
-  echo "error: failed to resolve selected workspace after workspace creation" >&2
+  echo "error: failed to resolve created workspace after workspace creation" >&2
   exit 1
 fi
 

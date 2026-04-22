@@ -215,6 +215,15 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `terminal.send-text`
 - `terminal.drop-image-files`
 
+Notable action-specific behavior:
+
+- `workspace.create`
+  - `args.title` is optional.
+  - `args.activate` is optional and defaults to `true`.
+  - When `args.activate=false`, Toastty creates the workspace without changing
+    the visible workspace selection.
+  - The action result includes `workspaceID` and `windowID`.
+
 ### `app_control.list_queries`
 
 Request payload: empty

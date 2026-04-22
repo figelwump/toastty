@@ -197,6 +197,36 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
     }
 
+    func testUnvisitedWorkspaceTitleUsesEmphasizedWeight() {
+        XCTAssertEqual(
+            SidebarView.workspaceTitleFontWeight(isSelected: false, hasBeenVisited: false),
+            .semibold
+        )
+        XCTAssertEqual(
+            SidebarView.workspaceTitleFontWeight(isSelected: false, hasBeenVisited: true),
+            .medium
+        )
+    }
+
+    func testUnvisitedWorkspaceTitleRendersDistinctWeightFromVisitedTitle() throws {
+        let unvisitedBitmap = try renderedBitmap(
+            for: SidebarView.styledWorkspaceTitleText(
+                "Workspace 2",
+                isSelected: false,
+                hasBeenVisited: false
+            )
+        )
+        let visitedBitmap = try renderedBitmap(
+            for: SidebarView.styledWorkspaceTitleText(
+                "Workspace 2",
+                isSelected: false,
+                hasBeenVisited: true
+            )
+        )
+
+        XCTAssertGreaterThan(try differingPixelCount(between: unvisitedBitmap, and: visitedBitmap), 0)
+    }
+
     func testWorkspaceRenameFontsMatchSidebarTitleFonts() {
         XCTAssertEqual(
             ToastyTheme.sidebarWorkspaceNameNSFont(isSelected: true),

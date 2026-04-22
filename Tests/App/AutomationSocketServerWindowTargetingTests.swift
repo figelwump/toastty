@@ -55,6 +55,37 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testWorkspaceCreateCanCreateBackgroundWorkspaceAndReturnCreatedWorkspaceID() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "app_control.run_action",
+                payload: [
+                    "id": "workspace.create",
+                    "args": [
+                        "windowID": fixture.windowID.uuidString,
+                        "title": "Background",
+                        "activate": false,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, fixture.windowID.uuidString)
+            let workspaceIDString = try XCTUnwrap(response.result["workspaceID"] as? String)
+            let createdWorkspaceID = try XCTUnwrap(UUID(uuidString: workspaceIDString))
+            XCTAssertNotEqual(createdWorkspaceID, fixture.workspaceID)
+
+            let state = await MainActor.run { harness.store.state }
+            let window = try XCTUnwrap(state.window(id: fixture.windowID))
+            XCTAssertEqual(window.selectedWorkspaceID, fixture.workspaceID)
+            XCTAssertEqual(window.workspaceIDs.last, createdWorkspaceID)
+            XCTAssertFalse(try XCTUnwrap(state.workspacesByID[createdWorkspaceID]).hasBeenVisited)
+        }
+    }
+
     func testWorkspaceTabActionsCreateSelectAndCloseTabsByIndex() async throws {
         let fixture = makeSingleWindowFixture()
 

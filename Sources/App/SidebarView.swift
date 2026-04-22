@@ -116,7 +116,7 @@ struct SidebarView: View {
 
             Button {
                 cancelWorkspaceRename()
-                store.send(.createWorkspace(windowID: windowID, title: nil))
+                store.send(.createWorkspace(windowID: windowID, title: nil, activate: true))
             } label: {
                 HStack(spacing: 6) {
                     Canvas { context, _ in
@@ -243,8 +243,11 @@ struct SidebarView: View {
                             selectionSubtitle: nil,
                             isSelected: isSelected
                         ) {
-                            Text(workspace.title)
-                                .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
+                            Self.styledWorkspaceTitleText(
+                                workspace.title,
+                                isSelected: isSelected,
+                                hasBeenVisited: workspace.hasBeenVisited
+                            )
                                 .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -426,7 +429,7 @@ struct SidebarView: View {
             in: workspace
         )
         let accessibilityLabel = Self.sessionAccessibilityLabel(
-            agentName: workspaceSessionStatus.agent.displayName,
+            primaryTitle: workspaceSessionStatus.displayTitle,
             chipKind: Self.sessionStatusChipKind(
                 for: status,
                 showsUnreadSessionAccent: showsUnreadSessionAccent
@@ -941,13 +944,13 @@ struct SidebarView: View {
     }
 
     static func sessionAccessibilityLabel(
-        agentName: String,
+        primaryTitle: String,
         chipKind: SessionStatusKind?,
         detailText: String?,
         cwd: String?,
         isLaterFlagged: Bool
     ) -> String {
-        var components = [agentName]
+        var components = [primaryTitle]
         if let chipKind {
             components.append(sessionStatusChipLabel(for: chipKind))
         }
@@ -986,6 +989,29 @@ struct SidebarView: View {
 
     static func sessionTextUsesItalic(for kind: SessionStatusKind) -> Bool {
         kind == .working
+    }
+
+    static func workspaceTitleFontWeight(isSelected: Bool, hasBeenVisited: Bool) -> Font.Weight {
+        if isSelected || hasBeenVisited == false {
+            return .semibold
+        }
+        return .medium
+    }
+
+    static func styledWorkspaceTitleText(
+        _ text: String,
+        isSelected: Bool,
+        hasBeenVisited: Bool
+    ) -> Text {
+        Text(text).font(
+            Font.system(
+                size: 13,
+                weight: workspaceTitleFontWeight(
+                    isSelected: isSelected,
+                    hasBeenVisited: hasBeenVisited
+                )
+            )
+        )
     }
 
     static func styledSessionAgentText(

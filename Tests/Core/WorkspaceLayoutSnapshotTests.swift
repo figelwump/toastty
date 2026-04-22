@@ -226,6 +226,41 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func makeAppStatePreservesBackgroundWorkspaceVisitState() throws {
+        let windowID = UUID()
+        let selectedWorkspace = WorkspaceState.bootstrap(title: "One")
+        let backgroundWorkspace = WorkspaceState.bootstrap(
+            title: "Two",
+            hasBeenVisited: false
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [selectedWorkspace.id, backgroundWorkspace.id],
+                    selectedWorkspaceID: selectedWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                selectedWorkspace.id: selectedWorkspace,
+                backgroundWorkspace.id: backgroundWorkspace,
+            ],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        #expect(snapshot.workspacesByID[selectedWorkspace.id]?.hasBeenVisited == true)
+        #expect(snapshot.workspacesByID[backgroundWorkspace.id]?.hasBeenVisited == false)
+
+        let restoredState = snapshot.makeAppState()
+        #expect(restoredState.workspacesByID[selectedWorkspace.id]?.hasBeenVisited == true)
+        #expect(restoredState.workspacesByID[backgroundWorkspace.id]?.hasBeenVisited == false)
+        try StateValidator.validate(restoredState)
+    }
+
+    @Test
     func makeAppStatePreservesMarkdownPanelFilePath() throws {
         let windowID = UUID()
         let workspaceID = UUID()
