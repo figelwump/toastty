@@ -93,6 +93,92 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
         XCTAssertTrue(recorder.callbacks.isEmpty)
     }
 
+    func testCoordinatorDoesNotRefocusWebViewWhilePanelRemainsActive() {
+        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let coordinator = LocalDocumentPanelHostView.Coordinator(
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+
+        let window = LocalDocumentFocusTestWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let attachment = PanelHostAttachmentToken.next()
+        window.contentView?.addSubview(container)
+        runtime.attachHost(to: container, attachment: attachment)
+
+        coordinator.requestFocusIfNeeded(isActivePanel: true, runtime: runtime)
+        XCTAssertEqual(window.makeFirstResponderCallCount, 1)
+        XCTAssertTrue(window.makeFirstResponderCalled)
+        XCTAssertTrue(recorder.callbacks.isEmpty)
+
+        coordinator.requestFocusIfNeeded(isActivePanel: true, runtime: runtime)
+        XCTAssertEqual(window.makeFirstResponderCallCount, 1)
+        XCTAssertTrue(recorder.callbacks.isEmpty)
+    }
+
+    func testCoordinatorDoesNotStealFocusFromSearchField() {
+        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let coordinator = LocalDocumentPanelHostView.Coordinator(
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+
+        let window = LocalDocumentFocusTestWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let attachment = PanelHostAttachmentToken.next()
+        window.contentView?.addSubview(container)
+        runtime.attachHost(to: container, attachment: attachment)
+        runtime.setSearchFieldFocused(true)
+
+        coordinator.requestFocusIfNeeded(isActivePanel: true, runtime: runtime)
+
+        XCTAssertEqual(window.makeFirstResponderCallCount, 0)
+        XCTAssertTrue(recorder.callbacks.isEmpty)
+    }
+
+    func testCoordinatorDeferredFocusCancelsWhenSearchFieldTakesFocus() throws {
+        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let coordinator = LocalDocumentPanelHostView.Coordinator(
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+
+        coordinator.requestFocusIfNeeded(isActivePanel: true, runtime: runtime)
+        XCTAssertEqual(recorder.callbacks.count, 1)
+
+        let window = LocalDocumentFocusTestWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let attachment = PanelHostAttachmentToken.next()
+        window.contentView?.addSubview(container)
+        runtime.attachHost(to: container, attachment: attachment)
+        runtime.setSearchFieldFocused(true)
+
+        recorder.callbacks.removeFirst()()
+
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        XCTAssertEqual(window.makeFirstResponderCallCount, 0)
+        XCTAssertFalse(window.firstResponder === webView)
+        XCTAssertTrue(recorder.callbacks.isEmpty)
+    }
+
     func testCoordinatorResetCancelsPendingDeferredFocus() throws {
         let recorder = ScheduledLocalDocumentFocusRecorder()
         let runtime = LocalDocumentPanelRuntime(
@@ -158,6 +244,7 @@ private final class ScheduledLocalDocumentFocusRecorder: @unchecked Sendable {
 @MainActor
 private final class LocalDocumentFocusTestWindow: NSWindow {
     private(set) var makeFirstResponderCalled = false
+    private(set) var makeFirstResponderCallCount = 0
     private var storedFirstResponder: NSResponder?
 
     override var firstResponder: NSResponder? {
@@ -175,6 +262,7 @@ private final class LocalDocumentFocusTestWindow: NSWindow {
 
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
         makeFirstResponderCalled = true
+        makeFirstResponderCallCount += 1
         storedFirstResponder = responder
         return true
     }

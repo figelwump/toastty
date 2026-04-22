@@ -1,4 +1,7 @@
 export type LocalDocumentPanelEvent =
+  | { type: "bridgeReady" }
+  | { type: "searchControllerReady" }
+  | { type: "searchControllerUnavailable" }
   | { type: "enterEdit" }
   | { type: "openInDefaultApp" }
   | { type: "draftDidChange"; content: string; baseContentRevision: number }
@@ -25,6 +28,15 @@ function postEvent(event: LocalDocumentPanelEvent) {
 }
 
 export const localDocumentNativeBridge = {
+  bridgeReady() {
+    postEvent({ type: "bridgeReady" });
+  },
+  searchControllerReady() {
+    postEvent({ type: "searchControllerReady" });
+  },
+  searchControllerUnavailable() {
+    postEvent({ type: "searchControllerUnavailable" });
+  },
   enterEdit() {
     postEvent({ type: "enterEdit" });
   },

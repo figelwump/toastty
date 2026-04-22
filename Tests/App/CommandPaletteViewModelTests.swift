@@ -454,6 +454,69 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedResult?.id, "beta")
     }
 
+    func testRefreshProjectedCommandsReflectsReloadedAgentAndTerminalProfileCatalogs() throws {
+        let originWindowID = UUID()
+        let actions = CommandPaletteActionSpy()
+        let catalogStores = try ReloadablePaletteCatalogStores()
+        let viewModel = makeViewModel(
+            originWindowID: originWindowID,
+            projectCommands: {
+                CommandPaletteCatalog.commands(
+                    originWindowID: originWindowID,
+                    actions: actions,
+                    agentCatalog: catalogStores.agentCatalogStore.catalog,
+                    terminalProfileCatalog: catalogStores.terminalProfileStore.catalog,
+                    profileShortcutRegistry: makeProfileShortcutRegistry(
+                        terminalProfiles: catalogStores.terminalProfileStore.catalog,
+                        terminalProfilesFilePath: catalogStores.terminalProfileStore.fileURL.path,
+                        agentProfiles: catalogStores.agentCatalogStore.catalog,
+                        agentProfilesFilePath: catalogStores.agentCatalogStore.fileURL.path
+                    )
+                )
+            }
+        )
+
+        XCTAssertFalse(viewModel.results.contains(where: { $0.id == "agent.run.codex" }))
+        XCTAssertFalse(viewModel.results.contains(where: { $0.id == "terminal-profile.zmx.split-right" }))
+
+        try catalogStores.writeAgentsToml(
+            """
+            [codex]
+            displayName = "Codex"
+            argv = ["codex"]
+            shortcutKey = "c"
+            """
+        )
+        try catalogStores.writeTerminalProfilesToml(
+            """
+            [zmx]
+            displayName = "ZMX"
+            badge = "ZMX"
+            startupCommand = "zmx attach"
+            shortcutKey = "z"
+            """
+        )
+
+        switch catalogStores.agentCatalogStore.reload() {
+        case .success:
+            break
+        case .failure(let error):
+            XCTFail("agent reload failed: \(error)")
+        }
+        switch catalogStores.terminalProfileStore.reload() {
+        case .success:
+            break
+        case .failure(let error):
+            XCTFail("terminal profile reload failed: \(error)")
+        }
+
+        viewModel.refreshProjectedCommands()
+
+        XCTAssertTrue(viewModel.results.contains(where: { $0.id == "agent.run.codex" }))
+        XCTAssertTrue(viewModel.results.contains(where: { $0.id == "terminal-profile.zmx.split-right" }))
+        XCTAssertTrue(viewModel.results.contains(where: { $0.id == "terminal-profile.zmx.split-down" }))
+    }
+
     func testBareAtSwitchesToFileModeWithoutListingAllFiles() async throws {
         let scope = PaletteFileSearchScope(
             rootPath: "/tmp/toastty-worktree",
@@ -811,6 +874,63 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(prepareCallCount, 1)
     }
 
+    func testSeparateViewModelsReuseSharedFileIndexServiceAcrossPaletteSessions() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let readmePath = "/tmp/toastty-worktree/README.md"
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .indexing(results: []),
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: readmePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: readmePath)
+                            ),
+                        ]),
+                    ],
+                    indexedResults: [
+                        [
+                            self.makeFileResult(
+                                filePath: readmePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: readmePath)
+                            ),
+                        ],
+                    ]
+                ),
+            ]
+        )
+        let firstViewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService
+        )
+
+        firstViewModel.query = "@read"
+        try await waitUntil {
+            firstViewModel.results.map(\.id) == [readmePath]
+        }
+
+        let secondViewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService
+        )
+
+        secondViewModel.query = "@read"
+        try await waitUntil {
+            secondViewModel.results.map(\.id) == [readmePath]
+        }
+
+        let indexedFilesCallCount = await fileIndexService.indexedFilesCallCount(for: scope.rootPath)
+        XCTAssertEqual(indexedFilesCallCount, 1)
+    }
+
     func testFileModeMatchesWhitespaceSeparatedTermsAcrossTitleAndPath() async throws {
         let scope = PaletteFileSearchScope(
             rootPath: "/tmp/toastty-worktree",
@@ -1111,6 +1231,7 @@ private final class MockCommandPaletteUsageTracker: CommandPaletteUsageTracking 
 
     private var states: [String: ScopeState]
     private var prepareCallCounts: [String: Int] = [:]
+    private var indexedFilesCallCounts: [String: Int] = [:]
 
     init(states: [String: ScopeState] = [:]) {
         self.states = states
@@ -1131,6 +1252,7 @@ private final class MockCommandPaletteUsageTracker: CommandPaletteUsageTracking 
     }
 
     func indexedFiles(in scope: PaletteFileSearchScope) async -> [PaletteFileResult] {
+        indexedFilesCallCounts[scope.rootPath, default: 0] += 1
         var state = states[scope.rootPath] ?? ScopeState(
             prepareSnapshots: [],
             indexedResults: [[]]
@@ -1149,6 +1271,44 @@ private final class MockCommandPaletteUsageTracker: CommandPaletteUsageTracking 
 
     func prepareCallCount(for scopeRootPath: String) -> Int {
         prepareCallCounts[scopeRootPath, default: 0]
+    }
+
+    func indexedFilesCallCount(for scopeRootPath: String) -> Int {
+        indexedFilesCallCounts[scopeRootPath, default: 0]
+    }
+}
+
+@MainActor
+private struct ReloadablePaletteCatalogStores {
+    let tempHomeURL: URL
+    let agentCatalogStore: AgentCatalogStore
+    let terminalProfileStore: TerminalProfileStore
+
+    init() throws {
+        tempHomeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHomeURL, withIntermediateDirectories: true)
+        agentCatalogStore = AgentCatalogStore(
+            fileManager: .default,
+            homeDirectoryPath: tempHomeURL.path
+        )
+        terminalProfileStore = TerminalProfileStore(
+            fileManager: .default,
+            homeDirectoryPath: tempHomeURL.path,
+            environment: [:]
+        )
+    }
+
+    func writeAgentsToml(_ contents: String) throws {
+        let url = AgentProfilesFile.fileURL(homeDirectoryPath: tempHomeURL.path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try contents.appending("\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func writeTerminalProfilesToml(_ contents: String) throws {
+        let url = TerminalProfilesFile.fileURL(homeDirectoryPath: tempHomeURL.path, environment: [:])
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try contents.appending("\n").write(to: url, atomically: true, encoding: .utf8)
     }
 }
 

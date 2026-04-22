@@ -751,6 +751,43 @@ final class WorkspaceViewTests: XCTestCase {
         harness.window.orderOut(nil)
     }
 
+    @MainActor
+    func testLocalDocumentHeaderSearchAppearsWhenRuntimeStartsSearch() throws {
+        let documentURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("md")
+        try """
+        # Search Harness
+
+        Toastty local document header search validation.
+        """.write(to: documentURL, atomically: true, encoding: .utf8)
+
+        let harness = try makeWorkspaceHarness(
+            panelState: .web(
+                WebPanelState(
+                    definition: .localDocument,
+                    title: documentURL.lastPathComponent,
+                    filePath: documentURL.path
+                )
+            )
+        )
+        defer {
+            harness.window.orderOut(nil)
+            try? FileManager.default.removeItem(at: documentURL)
+        }
+
+        let runtime = harness.webPanelRuntimeRegistry.localDocumentRuntime(for: harness.panelID)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(findDescendantView(in: harness.hostingView, ofType: LocalDocumentSearchTextField.self))
+
+        runtime.startSearch()
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNotNil(findDescendantView(in: harness.hostingView, ofType: LocalDocumentSearchTextField.self))
+    }
+
     private func assertColor(
         _ actual: Color,
         equals expected: Color,
@@ -787,10 +824,18 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    private func makeWorkspaceHarness() throws -> WorkspaceHarness {
-        let state = AppState.bootstrap()
+    private func makeWorkspaceHarness(panelState overridePanelState: PanelState? = nil) throws -> WorkspaceHarness {
+        var state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
         let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        if let overridePanelState {
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            let panelID = UUID()
+            workspace.layoutTree = .slot(slotID: UUID(), panelID: panelID)
+            workspace.panels = [panelID: overridePanelState]
+            workspace.focusedPanelID = panelID
+            state.workspacesByID[workspaceID] = workspace
+        }
         let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
         let panelID = try XCTUnwrap(workspace.focusedPanelID)
         let store = AppStore(state: state, persistTerminalFontPreference: false)
@@ -946,5 +991,20 @@ final class WorkspaceViewTests: XCTestCase {
         }
 
         return differenceCount
+    }
+
+    @MainActor
+    private func findDescendantView<T: NSView>(in root: NSView, ofType viewType: T.Type) -> T? {
+        if let matchingView = root as? T {
+            return matchingView
+        }
+
+        for subview in root.subviews {
+            if let matchingView = findDescendantView(in: subview, ofType: viewType) {
+                return matchingView
+            }
+        }
+
+        return nil
     }
 }

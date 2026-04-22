@@ -73,21 +73,36 @@ struct LocalDocumentPanelCreateRequest: Equatable, Sendable {
     static let defaultPlacement: WebPanelPlacement = .rootRight
 
     var filePath: String
+    var lineNumber: Int?
     var placementOverride: WebPanelPlacement?
     var formatOverride: LocalDocumentFormat?
 
     init(
         filePath: String,
+        lineNumber: Int? = nil,
         placementOverride: WebPanelPlacement? = nil,
         formatOverride: LocalDocumentFormat? = nil
     ) {
         self.filePath = filePath
+        self.lineNumber = lineNumber.flatMap { $0 > 0 ? $0 : nil }
         self.placementOverride = placementOverride
         self.formatOverride = formatOverride
     }
 
     var resolvedPlacement: WebPanelPlacement {
         placementOverride ?? Self.defaultPlacement
+    }
+}
+
+enum LocalDocumentPanelOpenOutcome: Equatable {
+    case opened(panelID: UUID)
+    case focusedExisting(panelID: UUID)
+
+    var panelID: UUID {
+        switch self {
+        case .opened(let panelID), .focusedExisting(let panelID):
+            return panelID
+        }
     }
 }
 
@@ -161,6 +176,10 @@ final class AppStore: ObservableObject {
     static let nextUnreadOrWorkingFallbackStatusKinds: Set<SessionStatusKind> = [.working]
 
     @Published private(set) var state: AppState
+    /// Persisted compatibility flag that switches windows into the wider
+    /// sidebar layout once managed session-status UI has been used at least
+    /// once. It originally tracked agent launches, but process-watch rows
+    /// should opt into the same expanded session-status treatment.
     @Published private(set) var hasEverLaunchedAgent: Bool
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
@@ -474,23 +493,37 @@ final class AppStore: ObservableObject {
         workspaceID: UUID,
         request: LocalDocumentPanelCreateRequest
     ) -> Bool {
+        createLocalDocumentPanelOutcome(
+            workspaceID: workspaceID,
+            request: request
+        ) != nil
+    }
+
+    func createLocalDocumentPanelOutcome(
+        workspaceID: UUID,
+        request: LocalDocumentPanelCreateRequest
+    ) -> LocalDocumentPanelOpenOutcome? {
         guard let workspace = state.workspacesByID[workspaceID],
               let resolvedLocalDocument = Self.resolvedLocalDocument(
                   request.filePath,
                   formatOverride: request.formatOverride
               ) else {
-            return false
+            return nil
         }
 
         if let existingPanelID = existingLocalDocumentPanelID(
             in: workspace,
             normalizedFilePath: resolvedLocalDocument.normalizedFilePath
         ) {
-            return focusPanel(containing: existingPanelID)
+            guard focusPanel(containing: existingPanelID) else {
+                return nil
+            }
+            return .focusedExisting(panelID: existingPanelID)
         }
 
+        let existingPanelIDs = Set(workspace.panels.keys)
         let displayName = Self.localDocumentDisplayName(for: resolvedLocalDocument.normalizedFilePath)
-        return send(
+        guard send(
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
@@ -503,7 +536,19 @@ final class AppStore: ObservableObject {
                 ),
                 placement: request.resolvedPlacement
             )
-        )
+        ) else {
+            return nil
+        }
+
+        guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID),
+              let panelID = createdLocalDocumentPanelID(
+                  in: selection.workspace,
+                  previousPanelIDs: existingPanelIDs
+              ) else {
+            return nil
+        }
+
+        return .opened(panelID: panelID)
     }
 
     @discardableResult
@@ -511,11 +556,21 @@ final class AppStore: ObservableObject {
         preferredWindowID: UUID?,
         request: LocalDocumentPanelCreateRequest
     ) -> Bool {
+        createLocalDocumentPanelFromCommandOutcome(
+            preferredWindowID: preferredWindowID,
+            request: request
+        ) != nil
+    }
+
+    func createLocalDocumentPanelFromCommandOutcome(
+        preferredWindowID: UUID?,
+        request: LocalDocumentPanelCreateRequest
+    ) -> LocalDocumentPanelOpenOutcome? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
-            return false
+            return nil
         }
 
-        return createLocalDocumentPanel(
+        return createLocalDocumentPanelOutcome(
             workspaceID: selection.workspace.id,
             request: request
         )
@@ -895,11 +950,15 @@ final class AppStore: ObservableObject {
         actionAppliedObservers.removeValue(forKey: token)
     }
 
-    func recordSuccessfulAgentLaunch() {
+    func recordSessionStatusSidebarExpansionEligibility() {
         guard hasEverLaunchedAgent == false else { return }
         hasEverLaunchedAgent = true
         guard persistUserSettings else { return }
         ToasttySettingsStore.persistHasEverLaunchedAgent(true)
+    }
+
+    func recordSuccessfulAgentLaunch() {
+        recordSessionStatusSidebarExpansionEligibility()
     }
 
     func setAskBeforeQuitting(_ askBeforeQuitting: Bool) {
@@ -1057,6 +1116,27 @@ final class AppStore: ObservableObject {
                 return false
             }
             return webState.definition == .browser
+        }
+    }
+
+    private func createdLocalDocumentPanelID(
+        in workspace: WorkspaceState,
+        previousPanelIDs: Set<UUID>
+    ) -> UUID? {
+        let createdPanelIDs = Set(workspace.panels.keys).subtracting(previousPanelIDs)
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           createdPanelIDs.contains(focusedPanelID),
+           case .web(let webState)? = workspace.panels[focusedPanelID],
+           webState.definition == .localDocument {
+            return focusedPanelID
+        }
+
+        return createdPanelIDs.first { panelID in
+            guard case .web(let webState)? = workspace.panels[panelID] else {
+                return false
+            }
+            return webState.definition == .localDocument
         }
     }
 

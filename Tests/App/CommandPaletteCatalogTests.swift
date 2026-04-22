@@ -28,6 +28,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInTab.id, "local-document.open-tab")
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInSplit.id, "local-document.open-split")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
+        XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
         XCTAssertEqual(ToasttyBuiltInCommand.reloadConfiguration.id, "app.reload-configuration")
     }
 
@@ -63,6 +64,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.openLocalFileInSplit.id,
                 ToasttyBuiltInCommand.toggleSidebar.id,
                 ToasttyBuiltInCommand.toggleFocusedPanelMode.id,
+                ToasttyBuiltInCommand.watchRunningCommand.id,
                 ToasttyBuiltInCommand.closePanel.id,
                 ToasttyBuiltInCommand.renameWorkspace.id,
                 ToasttyBuiltInCommand.closeWorkspace.id,
@@ -101,6 +103,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.canEqualizeSplitsValue = false
         actions.canCreateBrowserValue = false
         actions.canOpenLocalDocumentValue = false
+        actions.canWatchRunningCommandValue = false
         actions.canReloadValue = false
 
         let commands = makeCommands(actions: actions)
@@ -108,6 +111,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.equalizeSplits.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.newBrowser.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.openLocalFile.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.reloadConfiguration.id }))
     }
 
@@ -225,11 +229,13 @@ final class CommandPaletteCatalogTests: XCTestCase {
         )
 
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.newWindow.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "workspace.switch.\(workspaceID.uuidString)" })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "agent.run.codex" })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "terminal-profile.zmx.split-right" })).invocation, originWindowID: originWindowID))
 
         XCTAssertEqual(actions.createdWindowIDs, [originWindowID])
+        XCTAssertEqual(actions.watchedRunningCommandWindowIDs, [originWindowID])
         XCTAssertEqual(
             actions.workspaceSwitchCalls,
             [RecordedPaletteWorkspaceSwitchCall(workspaceID: workspaceID, originWindowID: originWindowID)]

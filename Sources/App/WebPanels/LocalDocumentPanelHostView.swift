@@ -47,12 +47,17 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
                 return
             }
 
-            if runtime.focusWebView() {
+            guard shouldRequestFocus else {
+                return
+            }
+
+            guard Self.shouldPreserveSearchFieldFocus(runtime: runtime) == false else {
                 resetPendingFocusRequest()
                 return
             }
 
-            guard shouldRequestFocus else {
+            if runtime.focusWebView() {
+                resetPendingFocusRequest()
                 return
             }
 
@@ -81,6 +86,11 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
                     return
                 }
 
+                guard Self.shouldPreserveSearchFieldFocus(runtime: runtime) == false else {
+                    self.resetPendingFocusRequest()
+                    return
+                }
+
                 if runtime.focusWebView() {
                     self.resetPendingFocusRequest()
                     return
@@ -104,6 +114,11 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
                 return
             }
 
+            guard Self.shouldPreserveSearchFieldFocus(runtime: runtime) == false else {
+                resetPendingFocusRequest()
+                return
+            }
+
             if runtime.focusWebView() {
                 resetPendingFocusRequest()
             }
@@ -114,6 +129,12 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
             nextIsActivePanel: Bool
         ) -> Bool {
             nextIsActivePanel && previousIsActivePanel == false
+        }
+
+        static func shouldPreserveSearchFieldFocus(
+            runtime: LocalDocumentPanelRuntime
+        ) -> Bool {
+            runtime.isSearchFieldFocused()
         }
 
         private func resetPendingFocusRequest() {

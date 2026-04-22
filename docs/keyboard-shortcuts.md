@@ -14,6 +14,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Option+Shift+E` | Rename tab |
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+W` | Close focused panel |
+| `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 
 `Cmd+W` and `File > Close` both use Toastty's panel-close behavior. Dirty local-document drafts ask before discard, panels with a local-document save in progress refuse destructive close, and the native red close button still asks for confirmation before closing the full window.
 
@@ -63,7 +64,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 
 | Shortcut | Action |
 |---|---|
-| `Cmd+F` | Find in active terminal scrollback |
+| `Cmd+F` | Find in the focused terminal scrollback or local document |
 | `Cmd+G` | Find next match |
 | `Cmd+Shift+G` | Find previous match |
 

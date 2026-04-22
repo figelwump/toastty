@@ -281,6 +281,56 @@ final class AppControlExecutor {
                 result: nil
             )
 
+        case .panelLocalDocumentSearchStart:
+            let resolved = try resolveLocalDocumentTarget(payload: args)
+            let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
+            runtime.apply(webState: resolved.webState)
+            return .init(
+                didMutateState: runtime.startSearch(),
+                result: nil
+            )
+
+        case .panelLocalDocumentSearchUpdateQuery:
+            guard let query = args.stringValue("query") else {
+                throw AutomationSocketError.invalidPayload("query is required")
+            }
+            let resolved = try resolveLocalDocumentTarget(payload: args)
+            let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
+            runtime.apply(webState: resolved.webState)
+            let before = runtime.searchState()
+            runtime.updateSearchQuery(query)
+            return .init(
+                didMutateState: before != runtime.searchState(),
+                result: nil
+            )
+
+        case .panelLocalDocumentSearchNext:
+            let resolved = try resolveLocalDocumentTarget(payload: args)
+            let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
+            runtime.apply(webState: resolved.webState)
+            return .init(
+                didMutateState: runtime.findNext(),
+                result: nil
+            )
+
+        case .panelLocalDocumentSearchPrevious:
+            let resolved = try resolveLocalDocumentTarget(payload: args)
+            let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
+            runtime.apply(webState: resolved.webState)
+            return .init(
+                didMutateState: runtime.findPrevious(),
+                result: nil
+            )
+
+        case .panelLocalDocumentSearchHide:
+            let resolved = try resolveLocalDocumentTarget(payload: args)
+            let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
+            runtime.apply(webState: resolved.webState)
+            return .init(
+                didMutateState: runtime.endSearch(),
+                result: nil
+            )
+
         case .panelFocusModeToggle:
             return .init(
                 didMutateState: terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: try resolveWorkspaceID(args: args)),
@@ -848,6 +898,10 @@ private extension AppControlExecutor {
             "hasCurrentBootstrap": .bool(runtimeState.currentBootstrap != nil),
             "pendingBootstrapScript": .bool(runtimeState.hasPendingBootstrapScript),
             "currentAssetPath": runtimeState.currentAssetPath.map { .string($0) } ?? .null,
+            "searchIsPresented": .bool(runtimeState.searchState?.isPresented == true),
+            "searchQuery": runtimeState.searchState.map { .string($0.query) } ?? .null,
+            "searchLastMatchFound": runtimeState.searchState?.lastMatchFound.map { .bool($0) } ?? .null,
+            "searchFieldFocused": .bool(runtimeState.isSearchFieldFocused),
         ]
 
         if let bootstrap = runtimeState.currentBootstrap {

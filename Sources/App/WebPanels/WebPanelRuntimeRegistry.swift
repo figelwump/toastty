@@ -28,6 +28,7 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     private var browserRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
     private var localDocumentRuntimeByPanelID: [UUID: LocalDocumentPanelRuntime] = [:]
     private var localDocumentRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
+    private var pendingLocalDocumentRevealLineByPanelID: [UUID: Int] = [:]
 
     func bind(store: AppStore) {
         if let existingStore = self.store {
@@ -71,7 +72,10 @@ final class WebPanelRuntimeRegistry: ObservableObject {
                         destination: .toasttyBrowser,
                         browserPlacement: .newTab,
                         alternateBrowserPlacement: .newTab
-                    )
+                    ),
+                    requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
+                        self?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                    }
                 )
             }
         )
@@ -102,6 +106,9 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         localDocumentRuntimeObservationByPanelID[panelID] = runtime.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        if let pendingRevealLine = pendingLocalDocumentRevealLineByPanelID.removeValue(forKey: panelID) {
+            runtime.requestReveal(lineNumber: pendingRevealLine)
+        }
         return runtime
     }
 
@@ -121,6 +128,14 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         localDocumentRuntimeByPanelID[panelID]?.canCancelEditFromCommand() == true
     }
 
+    func localDocumentSearchState(panelID: UUID) -> LocalDocumentSearchState? {
+        localDocumentRuntimeByPanelID[panelID]?.searchState()
+    }
+
+    func isLocalDocumentSearchFieldFocused(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.isSearchFieldFocused() == true
+    }
+
     @discardableResult
     func enterEditingLocalDocumentPanel(panelID: UUID) -> Bool {
         localDocumentRuntimeByPanelID[panelID]?.enterEditFromCommand() == true
@@ -134,6 +149,35 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     @discardableResult
     func cancelEditingLocalDocumentPanel(panelID: UUID) -> Bool {
         localDocumentRuntimeByPanelID[panelID]?.cancelEditFromCommand() == true
+    }
+
+    @discardableResult
+    func startSearchLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntime(for: panelID).startSearch()
+    }
+
+    func updateSearchQueryLocalDocumentPanel(_ query: String, panelID: UUID) {
+        localDocumentRuntime(for: panelID).updateSearchQuery(query)
+    }
+
+    @discardableResult
+    func findNextLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.findNext() == true
+    }
+
+    @discardableResult
+    func findPreviousLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.findPrevious() == true
+    }
+
+    @discardableResult
+    func endSearchLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.endSearch() == true
+    }
+
+    @discardableResult
+    func restoreLocalDocumentFocusAfterSearch(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.focusWebView() == true
     }
 
     func localDocumentCloseConfirmationState(panelID: UUID) -> LocalDocumentCloseConfirmationState? {
@@ -176,6 +220,26 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             firstSaveInProgressDisplayName: firstSaveInProgressDisplayName
         )
     }
+
+    @discardableResult
+    func requestLocalDocumentReveal(panelID: UUID, lineNumber: Int) -> Bool {
+        guard lineNumber > 0,
+              let store else {
+            return false
+        }
+
+        let liveLocalDocumentPanelIDs = liveLocalDocumentPanelIDs(in: store.state)
+        guard liveLocalDocumentPanelIDs.contains(panelID) else {
+            return false
+        }
+
+        if let runtime = localDocumentRuntimeByPanelID[panelID] {
+            runtime.requestReveal(lineNumber: lineNumber)
+        } else {
+            pendingLocalDocumentRevealLineByPanelID[panelID] = lineNumber
+        }
+        return true
+    }
 }
 
 private extension WebPanelRuntimeRegistry {
@@ -201,6 +265,9 @@ private extension WebPanelRuntimeRegistry {
             liveLocalDocumentPanelIDs.contains(panelID)
         }
         localDocumentRuntimeObservationByPanelID = localDocumentRuntimeObservationByPanelID.filter { panelID, _ in
+            liveLocalDocumentPanelIDs.contains(panelID)
+        }
+        pendingLocalDocumentRevealLineByPanelID = pendingLocalDocumentRevealLineByPanelID.filter { panelID, _ in
             liveLocalDocumentPanelIDs.contains(panelID)
         }
     }

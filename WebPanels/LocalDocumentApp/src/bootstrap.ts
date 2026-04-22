@@ -1,3 +1,5 @@
+import { localDocumentNativeBridge } from "./nativeBridge";
+
 export type LocalDocumentPanelTheme = "light" | "dark";
 export type LocalDocumentHighlightState =
   | "enabled"
@@ -50,20 +52,67 @@ export interface LocalDocumentPanelBootstrap {
 }
 
 type BootstrapListener = (bootstrap: LocalDocumentPanelBootstrap | null) => void;
+export interface LocalDocumentLineRevealRequest {
+  requestID: number;
+  lineNumber: number;
+}
+type RevealListener = (request: LocalDocumentLineRevealRequest | null) => void;
+
+export interface LocalDocumentPanelSearchState {
+  query: string;
+  matchCount: number;
+  activeMatchIndex: number | null;
+  matchFound: boolean;
+}
+
+export type LocalDocumentPanelSearchCommand =
+  | { type: "setQuery"; query: string }
+  | { type: "next"; query: string }
+  | { type: "previous"; query: string }
+  | { type: "clear" };
+
+interface LocalDocumentPanelSearchController {
+  perform: (command: LocalDocumentPanelSearchCommand) => LocalDocumentPanelSearchState;
+}
 
 declare global {
   interface Window {
     ToasttyLocalDocumentPanel?: {
       receiveBootstrap: (bootstrap: LocalDocumentPanelBootstrap) => void;
       setTextScale: (textScale: number) => void;
+      revealLine: (lineNumber: number) => void;
       getCurrentBootstrap: () => LocalDocumentPanelBootstrap | null;
+      getCurrentRevealRequest: () => LocalDocumentLineRevealRequest | null;
+      consumeRevealRequest: (requestID: number) => void;
       subscribe: (listener: BootstrapListener) => () => void;
+      getCurrentSearchState: () => LocalDocumentPanelSearchState;
+      setCurrentSearchState: (searchState: LocalDocumentPanelSearchState) => void;
+      resetSearchState: () => void;
+      registerSearchController: (controller: LocalDocumentPanelSearchController | null) => void;
+      performSearchCommand: (
+        command: LocalDocumentPanelSearchCommand
+      ) => LocalDocumentPanelSearchState | null;
+      subscribeReveal: (listener: RevealListener) => () => void;
     };
   }
 }
 
 const listeners = new Set<BootstrapListener>();
+const revealListeners = new Set<RevealListener>();
 let currentBootstrap: LocalDocumentPanelBootstrap | null = null;
+let currentRevealRequest: LocalDocumentLineRevealRequest | null = null;
+let revealRequestID = 0;
+let currentSearchState: LocalDocumentPanelSearchState = emptySearchState();
+let currentSearchController: LocalDocumentPanelSearchController | null = null;
+
+function emptySearchState(query = ""): LocalDocumentPanelSearchState {
+  return {
+    query,
+    matchCount: 0,
+    activeMatchIndex: null,
+    matchFound: false
+  };
+}
 
 function applyTheme(bootstrap: LocalDocumentPanelBootstrap | null) {
   if (!bootstrap) {
@@ -93,6 +142,20 @@ function notifyListeners() {
   }
 }
 
+function normalizedRevealLineNumber(lineNumber: number): number | null {
+  const normalized = Number.isFinite(lineNumber) ? Math.floor(lineNumber) : Number.NaN;
+  if (!Number.isFinite(normalized) || normalized < 1) {
+    return null;
+  }
+  return normalized;
+}
+
+function notifyRevealListeners() {
+  for (const listener of revealListeners) {
+    listener(currentRevealRequest);
+  }
+}
+
 window.ToasttyLocalDocumentPanel = {
   receiveBootstrap(bootstrap) {
     currentBootstrap = bootstrap;
@@ -109,8 +172,63 @@ window.ToasttyLocalDocumentPanel = {
     applyTextScale(currentBootstrap);
     notifyListeners();
   },
+  revealLine(lineNumber) {
+    const normalizedLineNumber = normalizedRevealLineNumber(lineNumber);
+    if (normalizedLineNumber == null) {
+      return;
+    }
+
+    currentRevealRequest = {
+      requestID: ++revealRequestID,
+      lineNumber: normalizedLineNumber
+    };
+    notifyRevealListeners();
+  },
   getCurrentBootstrap() {
     return currentBootstrap;
+  },
+  getCurrentRevealRequest() {
+    return currentRevealRequest;
+  },
+  consumeRevealRequest(requestID) {
+    if (currentRevealRequest?.requestID !== requestID) {
+      return;
+    }
+    currentRevealRequest = null;
+    notifyRevealListeners();
+  },
+  getCurrentSearchState() {
+    return currentSearchState;
+  },
+  setCurrentSearchState(searchState) {
+    currentSearchState = searchState;
+  },
+  resetSearchState() {
+    if (currentSearchController) {
+      currentSearchState = currentSearchController.perform({ type: "clear" });
+      return;
+    }
+
+    currentSearchState = emptySearchState();
+  },
+  registerSearchController(controller) {
+    currentSearchController = controller;
+
+    if (controller && currentSearchState.query.length > 0) {
+      currentSearchState = controller.perform({
+        type: "setQuery",
+        query: currentSearchState.query
+      });
+    }
+  },
+  performSearchCommand(command) {
+    if (!currentSearchController) {
+      return null;
+    }
+
+    const nextState = currentSearchController.perform(command);
+    currentSearchState = nextState;
+    return nextState;
   },
   subscribe(listener) {
     listeners.add(listener);
@@ -118,5 +236,14 @@ window.ToasttyLocalDocumentPanel = {
     return () => {
       listeners.delete(listener);
     };
+  },
+  subscribeReveal(listener) {
+    revealListeners.add(listener);
+    listener(currentRevealRequest);
+    return () => {
+      revealListeners.delete(listener);
+    };
   }
 };
+
+localDocumentNativeBridge.bridgeReady();

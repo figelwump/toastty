@@ -23,12 +23,14 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         return (state, windowID, workspace.id)
     }
 
-    private func makeMarkdownFixture() throws -> (canonicalPath: String, alternatePath: String) {
+    private func makeMarkdownFixture(
+        fileName: String = "README.md"
+    ) throws -> (canonicalPath: String, alternatePath: String) {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
             .appendingPathComponent("toastty-markdown-tests-\(UUID().uuidString)", isDirectory: true)
         let alternateDirectoryURL = rootURL.appendingPathComponent("alternate", isDirectory: true)
-        let fileURL = rootURL.appendingPathComponent("README.md", conformingTo: .plainText)
+        let fileURL = rootURL.appendingPathComponent(fileName, isDirectory: false)
 
         try fileManager.createDirectory(at: alternateDirectoryURL, withIntermediateDirectories: true)
         try Data("# Toastty Markdown Fixture\n".utf8).write(to: fileURL)
@@ -38,7 +40,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         let canonicalPath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
         let alternatePath = alternateDirectoryURL
-            .appendingPathComponent("../README.md", conformingTo: .plainText)
+            .appendingPathComponent("../\(fileName)", isDirectory: false)
             .path
         return (canonicalPath, alternatePath)
     }
@@ -246,6 +248,55 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         XCTAssertNil(store.commandSelection(preferredWindowID: UUID()))
         XCTAssertNil(store.commandSelection(preferredWindowID: nil))
+    }
+
+    func testJumpToNextActiveFocusesUnreadProcessWatchViaUnreadPanelPath() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let firstPanelID = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+
+        XCTAssertTrue(store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right)))
+
+        let workspaceAfterSplit = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let watchedPanelID = try XCTUnwrap(workspaceAfterSplit.focusedPanelID)
+        XCTAssertNotEqual(watchedPanelID, firstPanelID)
+        XCTAssertTrue(store.send(.focusPanel(workspaceID: workspaceID, panelID: firstPanelID)))
+
+        sessionRuntimeStore.startProcessWatch(
+            sessionID: "watcher",
+            panelID: watchedPanelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            displayTitleOverride: "npm test",
+            cwd: "/tmp/project",
+            repoRoot: nil,
+            at: Date(timeIntervalSinceReferenceDate: 10)
+        )
+        XCTAssertTrue(
+            sessionRuntimeStore.handleCommandFinished(
+                panelID: watchedPanelID,
+                exitCode: 0,
+                at: Date(timeIntervalSinceReferenceDate: 20)
+            )
+        )
+
+        let workspaceBeforeJump = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceBeforeJump.focusedPanelID, firstPanelID)
+        XCTAssertEqual(workspaceBeforeJump.unreadPanelIDs, [watchedPanelID])
+
+        XCTAssertTrue(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+        )
+
+        let workspaceAfterJump = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterJump.focusedPanelID, watchedPanelID)
+        XCTAssertTrue(workspaceAfterJump.unreadPanelIDs.isEmpty)
     }
 
     func testPreferredLocalDocumentOpenDirectoryUsesFocusedTerminalLiveCWD() throws {
@@ -712,6 +763,41 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
     }
 
+    func testCreateMarkdownPanelFromCommandSupportsExactColonSuffixedFilename() throws {
+        let fixture = try makeMarkdownFixture(fileName: "README.md:42")
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: fixture.canonicalPath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected tab panel to be markdown")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.title, "README.md:42")
+        XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: fixture.canonicalPath, format: .markdown)
+        )
+    }
+
     func testCreateYamlPanelFromCommandCreatesTypedLocalDocument() throws {
         let fixturePath = try makeLocalDocumentFixture(fileName: "config.yaml")
         let state = AppState.bootstrap()
@@ -861,6 +947,75 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(workspaceAfterDedupedOpen.orderedTabs.count, 2)
         XCTAssertEqual(workspaceAfterDedupedOpen.resolvedSelectedTabID, markdownTabID)
         XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, markdownPanelID)
+    }
+
+    func testCreateMarkdownPanelOutcomeReportsOpenedPanelIDForNewPanel() throws {
+        let fixture = try makeMarkdownFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        let outcome = store.createLocalDocumentPanelFromCommandOutcome(
+            preferredWindowID: sourceWindowID,
+            request: LocalDocumentPanelCreateRequest(
+                filePath: fixture.canonicalPath,
+                lineNumber: 17,
+                placementOverride: .newTab
+            )
+        )
+
+        let panelID: UUID
+        switch outcome {
+        case .opened(let createdPanelID):
+            panelID = createdPanelID
+        default:
+            XCTFail("expected opened panel outcome")
+            return
+        }
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        XCTAssertEqual(selectedTab.focusedPanelID, panelID)
+    }
+
+    func testCreateMarkdownPanelOutcomeReportsFocusedExistingPanelIDWhenDeduped() throws {
+        let fixture = try makeMarkdownFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: fixture.canonicalPath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+
+        let workspaceAfterCreate = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let existingTabID = try XCTUnwrap(workspaceAfterCreate.resolvedSelectedTabID)
+        let existingPanelID = try XCTUnwrap(workspaceAfterCreate.tab(id: existingTabID)?.focusedPanelID)
+        let originalTabID = try XCTUnwrap(workspaceAfterCreate.tabIDs.first)
+        XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: sourceWorkspaceID, tabID: originalTabID)))
+
+        let outcome = store.createLocalDocumentPanelFromCommandOutcome(
+            preferredWindowID: sourceWindowID,
+            request: LocalDocumentPanelCreateRequest(
+                filePath: fixture.alternatePath,
+                lineNumber: 42,
+                placementOverride: .splitRight
+            )
+        )
+
+        XCTAssertEqual(outcome, .focusedExisting(panelID: existingPanelID))
+        let workspaceAfterDedupedOpen = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspaceAfterDedupedOpen.resolvedSelectedTabID, existingTabID)
+        XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, existingPanelID)
     }
 
     func testCreateLocalDocumentPanelFromCommandRejectsUnsupportedFileExtension() throws {

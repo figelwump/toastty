@@ -25,6 +25,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
     public var panelID: UUID
     public var agent: AgentKind
     public var status: SessionStatus
+    public var displayTitleOverride: String?
     public var cwd: String?
     public var updatedAt: Date
     public var isActive: Bool
@@ -34,6 +35,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         panelID: UUID,
         agent: AgentKind,
         status: SessionStatus,
+        displayTitleOverride: String? = nil,
         cwd: String?,
         updatedAt: Date,
         isActive: Bool
@@ -42,8 +44,13 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         self.panelID = panelID
         self.agent = agent
         self.status = status
+        self.displayTitleOverride = displayTitleOverride
         self.cwd = cwd
         self.updatedAt = updatedAt
         self.isActive = isActive
+    }
+
+    public var displayTitle: String {
+        displayTitleOverride ?? agent.displayName
     }
 }

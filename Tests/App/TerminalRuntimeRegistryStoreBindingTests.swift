@@ -873,6 +873,136 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenCommandClickMarkdownLineRevealQueuesPendingRevealForCreatedPanelRuntime() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        registry.bind(store: store)
+        registry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+        webPanelRuntimeRegistry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md:17")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: panelID)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 17)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickAbsoluteMarkdownLineRevealQueuesPendingRevealForCreatedPanelRuntime() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        registry.bind(store: store)
+        registry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+        webPanelRuntimeRegistry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "\(fixture.markdownPath):17")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: panelID)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 17)
+        try StateValidator.validate(store.state)
+    }
+
     func testOpenSearchSelectionURLAlwaysUsesToasttyNewTabPlacement() throws {
         let workspace = WorkspaceState.bootstrap(title: "One")
         let windowID = UUID()
@@ -1253,6 +1383,17 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         _ = kind
         _ = now
         return false
+    }
+
+    func handleCommandFinished(panelID: UUID, exitCode: Int?, at now: Date) -> Bool {
+        _ = now
+        stopActiveCalls.append(
+            .init(
+                panelID: panelID,
+                reason: .ghosttyCommandFinished(exitCode: exitCode)
+            )
+        )
+        return true
     }
 
     func stopSessionForPanelIfActive(

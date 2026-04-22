@@ -86,6 +86,51 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isClosePanelShortcut(repeatedEvent))
     }
 
+    func testFindShortcutMatchesPlainCommandFOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "f", modifiers: [.command], keyCode: 0x03)
+        let shiftedEvent = try makeKeyEvent(characters: "F", modifiers: [.command, .shift], keyCode: 0x03)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "f",
+            modifiers: [.command],
+            keyCode: 0x03,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isFindShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isFindShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isFindShortcut(repeatedEvent))
+    }
+
+    func testFindNextShortcutMatchesPlainCommandGOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "g", modifiers: [.command], keyCode: 0x05)
+        let shiftedEvent = try makeKeyEvent(characters: "G", modifiers: [.command, .shift], keyCode: 0x05)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "g",
+            modifiers: [.command],
+            keyCode: 0x05,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isFindNextShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isFindNextShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isFindNextShortcut(repeatedEvent))
+    }
+
+    func testFindPreviousShortcutMatchesCommandShiftGOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "G", modifiers: [.command, .shift], keyCode: 0x05)
+        let plainEvent = try makeKeyEvent(characters: "g", modifiers: [.command], keyCode: 0x05)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "G",
+            modifiers: [.command, .shift],
+            keyCode: 0x05,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isFindPreviousShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isFindPreviousShortcut(plainEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isFindPreviousShortcut(repeatedEvent))
+    }
+
     func testFocusNextUnreadOrActiveShortcutMatchesCommandShiftAOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "A", modifiers: [.command, .shift], keyCode: 0x00)
         let plainCommandEvent = try makeKeyEvent(characters: "a", modifiers: [.command], keyCode: 0x00)
@@ -114,6 +159,21 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertTrue(DisplayShortcutInterceptor.isToggleFocusedPanelShortcut(matchingEvent))
         XCTAssertFalse(DisplayShortcutInterceptor.isToggleFocusedPanelShortcut(plainCommandEvent))
         XCTAssertFalse(DisplayShortcutInterceptor.isToggleFocusedPanelShortcut(repeatedEvent))
+    }
+
+    func testWatchRunningCommandShortcutMatchesCommandShiftMOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "M", modifiers: [.command, .shift], keyCode: 0x2E)
+        let plainCommandEvent = try makeKeyEvent(characters: "m", modifiers: [.command], keyCode: 0x2E)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "M",
+            modifiers: [.command, .shift],
+            keyCode: 0x2E,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isWatchRunningCommandShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isWatchRunningCommandShortcut(plainCommandEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isWatchRunningCommandShortcut(repeatedEvent))
     }
 
     func testRenameTabShortcutMatchesOptionShiftPhysicalEOnly() throws {
@@ -567,6 +627,83 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         XCTAssertTrue(bootstrap.isEditing)
         XCTAssertNil(interceptor.shortcutAction(for: editEvent, appOwnedWindowID: windowID))
+    }
+
+    func testLocalDocumentFindShortcutsTargetFocusedPanelAndActiveSearch() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Toastty\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: windowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: fileURL.path,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        terminalRuntimeRegistry.bind(store: store)
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        webPanelRuntimeRegistry.bind(store: store)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let focusedPanelCommandController = FocusedPanelCommandController(
+            store: store,
+            runtimeRegistry: terminalRuntimeRegistry,
+            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+        )
+        let interceptor = DisplayShortcutInterceptor(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: focusedPanelCommandController,
+            installEventMonitor: false
+        )
+
+        let selection = try XCTUnwrap(store.focusedLocalDocumentPanelSelection(preferredWindowID: windowID))
+        let workspace = try XCTUnwrap(store.state.workspacesByID[selection.workspaceID])
+        guard case .web(let webState) = workspace.panels[selection.panelID] else {
+            XCTFail("expected focused local-document panel")
+            return
+        }
+
+        let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: selection.panelID)
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+
+        let findEvent = try makeKeyEvent(characters: "f", modifiers: [.command], keyCode: 0x03)
+        let findNextEvent = try makeKeyEvent(characters: "g", modifiers: [.command], keyCode: 0x05)
+        let findPreviousEvent = try makeKeyEvent(characters: "G", modifiers: [.command, .shift], keyCode: 0x05)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: findEvent, appOwnedWindowID: windowID),
+            .startLocalDocumentSearch
+        )
+        XCTAssertNil(interceptor.shortcutAction(for: findNextEvent, appOwnedWindowID: windowID))
+        XCTAssertNil(interceptor.shortcutAction(for: findPreviousEvent, appOwnedWindowID: windowID))
+
+        XCTAssertTrue(interceptor.handle(.startLocalDocumentSearch, appOwnedWindowID: windowID))
+        runtime.updateSearchQuery("toastty")
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: findNextEvent, appOwnedWindowID: windowID),
+            .findNextLocalDocumentSearch
+        )
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: findPreviousEvent, appOwnedWindowID: windowID),
+            .findPreviousLocalDocumentSearch
+        )
+        XCTAssertNil(interceptor.shortcutAction(for: findEvent, appOwnedWindowID: nil))
     }
 
     func testTextSizeShortcutTargetsFocusedTerminalMarkdownAndBrowser() throws {
@@ -1126,6 +1263,36 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
     }
 
+    func testClosePanelShortcutWindowIDAllowsLocalDocumentSearchFieldEditorResponder() throws {
+        let windowID = UUID()
+        let window = ShortcutTestWindow()
+        window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        let textField = LocalDocumentSearchTextField()
+        let fieldEditor = NSTextView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+        fieldEditor.delegate = textField
+        window.forcedFirstResponder = fieldEditor
+
+        let resolvedWindowID = DisplayShortcutInterceptor.closePanelShortcutWindowID(
+            keyWindow: window,
+            modalWindow: nil
+        )
+        XCTAssertEqual(resolvedWindowID, windowID)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let interceptor = makeInterceptor(store: store)
+        let focusPreviousEvent = try makeKeyEvent(characters: "[", modifiers: [.command], keyCode: 0x21)
+        let closeEvent = try makeKeyEvent(characters: "w", modifiers: [.command], keyCode: 0x0D)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: focusPreviousEvent, appOwnedWindowID: resolvedWindowID),
+            .focusSplit(.previous)
+        )
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: closeEvent, appOwnedWindowID: resolvedWindowID),
+            .closePanel
+        )
+    }
+
     func testClosePanelShortcutWindowIDRejectsModalWindow() {
         let keyWindow = ShortcutTestWindow()
         keyWindow.identifier = NSUserInterfaceItemIdentifier(UUID().uuidString)
@@ -1213,6 +1380,7 @@ private func waitUntil(
 @MainActor
 private func makeInterceptor(
     store: AppStore,
+    promptStateResolver: ((UUID) -> TerminalPromptState)? = nil,
     isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
     toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false }
 ) -> DisplayShortcutInterceptor {
@@ -1227,12 +1395,19 @@ private func makeInterceptor(
         runtimeRegistry: terminalRuntimeRegistry,
         slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
     )
+    let processWatchCommandController = ProcessWatchCommandController(
+        store: store,
+        terminalRuntimeRegistry: terminalRuntimeRegistry,
+        sessionRuntimeStore: sessionRuntimeStore,
+        promptStateResolver: promptStateResolver
+    )
     return DisplayShortcutInterceptor(
         store: store,
         terminalRuntimeRegistry: terminalRuntimeRegistry,
         webPanelRuntimeRegistry: webPanelRuntimeRegistry,
         sessionRuntimeStore: sessionRuntimeStore,
         focusedPanelCommandController: focusedPanelCommandController,
+        processWatchCommandController: processWatchCommandController,
         isCommandPalettePresented: isCommandPalettePresented,
         toggleCommandPalette: toggleCommandPalette,
         installEventMonitor: false

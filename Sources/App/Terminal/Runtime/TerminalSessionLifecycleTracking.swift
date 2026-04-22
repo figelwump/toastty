@@ -49,6 +49,7 @@ protocol TerminalSessionLifecycleTracking: AnyObject {
         kind: TerminalLocalInterruptKind,
         at now: Date
     ) -> Bool
+    func handleCommandFinished(panelID: UUID, exitCode: Int?, at now: Date) -> Bool
     func stopSessionForPanelIfActive(panelID: UUID, reason: ManagedSessionStopReason, at now: Date) -> Bool
     func stopSessionForPanelIfOlderThan(
         panelID: UUID,

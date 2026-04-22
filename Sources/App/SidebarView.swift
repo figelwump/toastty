@@ -475,7 +475,7 @@ struct SidebarView: View {
                 }
 
                 Self.styledSessionAgentText(
-                    workspaceSessionStatus.agent.displayName,
+                    workspaceSessionStatus.displayTitle,
                     statusKind: status.kind,
                     showsUnreadSessionAccent: showsUnreadSessionAccent
                 )

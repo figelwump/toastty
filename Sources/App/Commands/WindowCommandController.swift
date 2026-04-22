@@ -299,6 +299,7 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         static let renameWorkspace = ToasttyBuiltInCommand.renameWorkspace.title
         static let closeWorkspace = ToasttyBuiltInCommand.closeWorkspace.title
         static let closePanel = ToasttyBuiltInCommand.closePanel.title
+        static let watchRunningCommand = ToasttyBuiltInCommand.watchRunningCommand.title
         static let renameTab = ToasttyBuiltInCommand.renameTab.title
         static let selectPreviousTab = ToasttyBuiltInCommand.selectPreviousTab.title
         static let selectNextTab = ToasttyBuiltInCommand.selectNextTab.title
@@ -310,19 +311,22 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     private let renameWorkspaceCommandController: RenameWorkspaceCommandController
     private let closeWorkspaceCommandController: CloseWorkspaceCommandController
     private let workspaceTabCommandController: WorkspaceTabCommandController
+    private let processWatchCommandController: ProcessWatchCommandController
 
     init(
         windowCommandController: WindowCommandController,
         createWorkspaceCommandController: CreateWorkspaceCommandController,
         renameWorkspaceCommandController: RenameWorkspaceCommandController,
         closeWorkspaceCommandController: CloseWorkspaceCommandController,
-        workspaceTabCommandController: WorkspaceTabCommandController
+        workspaceTabCommandController: WorkspaceTabCommandController,
+        processWatchCommandController: ProcessWatchCommandController
     ) {
         self.windowCommandController = windowCommandController
         self.createWorkspaceCommandController = createWorkspaceCommandController
         self.renameWorkspaceCommandController = renameWorkspaceCommandController
         self.closeWorkspaceCommandController = closeWorkspaceCommandController
         self.workspaceTabCommandController = workspaceTabCommandController
+        self.processWatchCommandController = processWatchCommandController
     }
 
     func installIfNeeded() {
@@ -349,6 +353,11 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         configureItem(
             titled: ItemTitle.closePanel,
             action: #selector(closePanel(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.watchRunningCommand,
+            action: #selector(watchRunningCommand(_:)),
             in: workspaceMenu
         )
         configureItem(
@@ -400,6 +409,11 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     @objc
+    func watchRunningCommand(_: Any?) {
+        _ = processWatchCommandController.watchFocusedProcess()
+    }
+
+    @objc
     func renameSelectedTab(_: Any?) {
         _ = workspaceTabCommandController.renameSelectedTab()
     }
@@ -432,6 +446,9 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
 
         case #selector(closePanel(_:)):
             return windowCommandController.canCloseWindow()
+
+        case #selector(watchRunningCommand(_:)):
+            return processWatchCommandController.canWatchFocusedProcess()
 
         case #selector(renameSelectedTab(_:)):
             return workspaceTabCommandController.canRenameSelectedTab()

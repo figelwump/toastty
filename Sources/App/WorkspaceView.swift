@@ -2220,7 +2220,7 @@ private struct PanelCardView: View {
 
     private var panelHeader: some View {
         HStack(spacing: 8) {
-            if showsHeaderSearch {
+            if showsTerminalHeaderSearch {
                 panelHeaderLeadingItems
 
                 panelHeaderTitle
@@ -2236,7 +2236,25 @@ private struct PanelCardView: View {
                 .layoutPriority(1)
 
                 panelHeaderTrailingContent
-            } else if let shortcutLabel {
+            } else if let localDocumentRuntime {
+                panelHeaderLeadingItems
+
+                panelHeaderTitle
+                    .frame(minWidth: 0, alignment: .leading)
+
+                Spacer(minLength: 0)
+
+                LocalDocumentPanelHeaderSearchRegion(
+                    panelID: panelID,
+                    runtime: localDocumentRuntime,
+                    isActivePanel: isFocused,
+                    activatePanel: {
+                        _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                    }
+                )
+
+                panelHeaderTrailingContent
+            } else if shortcutLabel != nil {
                 panelHeaderLeadingItems
 
                 panelHeaderTitle
@@ -2303,7 +2321,7 @@ private struct PanelCardView: View {
         switch panelState {
         case .terminal(let terminal):
             if let panelSessionStatus, panelSessionStatus.isActive {
-                return panelSessionStatus.agent.displayName
+                return panelSessionStatus.displayTitle
             }
             return terminal.displayPanelLabel
         case .web(let webState):
@@ -2352,7 +2370,15 @@ private struct PanelCardView: View {
         return webPanelRuntimeRegistry.browserRuntime(for: panelID).faviconImage
     }
 
-    private var showsHeaderSearch: Bool {
+    private var localDocumentRuntime: LocalDocumentPanelRuntime? {
+        guard case .web(let webState) = panelState,
+              webState.definition == .localDocument else {
+            return nil
+        }
+        return webPanelRuntimeRegistry.localDocumentRuntime(for: panelID)
+    }
+
+    private var showsTerminalHeaderSearch: Bool {
         guard case .terminal = panelState else {
             return false
         }
@@ -2363,7 +2389,7 @@ private struct PanelCardView: View {
         guard terminalProfileBadge != nil else {
             return false
         }
-        return showsHeaderSearch == false
+        return showsTerminalHeaderSearch == false
     }
 
     private var panelTitleFont: Font {
@@ -2569,6 +2595,27 @@ private struct PanelCardView: View {
         isHovered = nextHoverState
         if nextHoverState == false {
             isCloseButtonHovered = false
+        }
+    }
+}
+
+private struct LocalDocumentPanelHeaderSearchRegion: View {
+    let panelID: UUID
+    @ObservedObject var runtime: LocalDocumentPanelRuntime
+    let isActivePanel: Bool
+    let activatePanel: () -> Void
+
+    var body: some View {
+        Group {
+            if runtime.searchState()?.isPresented == true {
+                LocalDocumentPanelHeaderSearchBar(
+                    panelID: panelID,
+                    runtime: runtime,
+                    isActivePanel: isActivePanel,
+                    activatePanel: activatePanel
+                )
+                .layoutPriority(1)
+            }
         }
     }
 }

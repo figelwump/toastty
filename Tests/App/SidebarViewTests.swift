@@ -350,6 +350,19 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("error"))
     }
 
+    func testProcessWatchRowUsesDisplayTitleOverride() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "watcher-row",
+            agent: .processWatch,
+            sessionStatus: SessionStatus(kind: .working, summary: "Working", detail: "Running"),
+            displayTitleOverride: "bundle exec rspec"
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains(where: { $0.contains("bundle exec rspec") }))
+        XCTAssertFalse(textValues.contains("Process Watch"))
+    }
+
     func testSidebarUnreadBackgroundUsesReadyGreenTint() throws {
         let unreadColor = try XCTUnwrap(
             NSColor(ToastyTheme.sidebarSessionUnreadBackground).usingColorSpace(.deviceRGB)
@@ -646,19 +659,25 @@ final class SidebarViewTests: XCTestCase {
 
     private func makeSidebarHostingView(
         sessionID: String,
+        agent: AgentKind = .codex,
         sessionStatus: SessionStatus,
+        displayTitleOverride: String? = nil,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> NSView {
         try makeSidebarHarness(
             sessionID: sessionID,
+            agent: agent,
             sessionStatus: sessionStatus,
+            displayTitleOverride: displayTitleOverride,
             sessionPanelPlacement: sessionPanelPlacement
         ).hostingView
     }
 
     private func makeSidebarHarness(
         sessionID: String,
+        agent: AgentKind = .codex,
         sessionStatus: SessionStatus,
+        displayTitleOverride: String? = nil,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
@@ -675,10 +694,11 @@ final class SidebarViewTests: XCTestCase {
         }
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
-            agent: .codex,
+            agent: agent,
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            displayTitleOverride: displayTitleOverride,
             cwd: "/repo/sidebar",
             repoRoot: "/repo",
             at: Date(timeIntervalSince1970: 1_700_000_000)

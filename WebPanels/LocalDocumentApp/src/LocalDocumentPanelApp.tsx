@@ -13,15 +13,21 @@ import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
 import {
   LocalDocumentHighlightState,
+  LocalDocumentLineRevealRequest,
   LocalDocumentPanelBootstrap,
   LocalDocumentSyntaxLanguage
 } from "./bootstrap";
+import {
+  clampRevealLineNumber,
+  computeRevealLayout
+} from "./lineReveal.mjs";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import {
   MARKDOWN_LINE_START_SELECTOR,
   normalizeMarkdownLineTopOffsets,
   renderPlainMarkdownSourceHtml,
 } from "./markdownSoftWrap.mjs";
+import { useLocalDocumentSearchController } from "./localDocumentSearch";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
 if (!hljs.getLanguage("yaml")) {
@@ -93,6 +99,10 @@ function computeLineCount(content: string): string {
   return contentLines(content).length.toLocaleString();
 }
 
+function assignObjectRef<T>(ref: React.RefObject<T | null>, value: T | null) {
+  ref.current = value;
+}
+
 function useBootstrap(): LocalDocumentPanelBootstrap | null {
   const [bootstrap, setBootstrap] = React.useState<LocalDocumentPanelBootstrap | null>(
     () => window.ToasttyLocalDocumentPanel?.getCurrentBootstrap() ?? null
@@ -107,6 +117,244 @@ function useBootstrap(): LocalDocumentPanelBootstrap | null {
   }, [bootstrap]);
 
   return bootstrap;
+}
+
+function useRevealRequest(): LocalDocumentLineRevealRequest | null {
+  const [revealRequest, setRevealRequest] = React.useState<LocalDocumentLineRevealRequest | null>(
+    () => window.ToasttyLocalDocumentPanel?.getCurrentRevealRequest() ?? null
+  );
+
+  React.useEffect(() => {
+    return window.ToasttyLocalDocumentPanel?.subscribeReveal(setRevealRequest);
+  }, []);
+
+  return revealRequest;
+}
+
+type ActiveReveal = {
+  lineNumber: number;
+  requestID: number;
+  filePath: string | null;
+  contentRevision: number;
+};
+
+type RevealLayout = {
+  contentTop: number;
+  gutterTop: number;
+  contentHeight: number;
+  gutterHeight: number;
+  targetScrollTop: number;
+};
+
+// Measure the rendered glyph box of the first line of `element` (top + height)
+// relative to viewport. Used as the anchor for empty-line fallback so the
+// content reveal (which often can't do a direct-range measurement on an empty
+// line) still lines up with the gutter reveal (which always can, because the
+// gutter always has a line number to measure).
+function measureFirstRenderedLineGlyph(element: HTMLElement): { top: number; height: number } | null {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const rects = range.getClientRects();
+  if (rects.length === 0) {
+    return null;
+  }
+  const rect = rects[0];
+  if (!Number.isFinite(rect.top) || rect.height <= 0) {
+    return null;
+  }
+  return { top: rect.top, height: rect.height };
+}
+
+// Directly measure the rendered top + glyph height of line `lineNumber` by
+// walking text nodes to the matching character offset and reading back a Range
+// over a character on that line. Returns `null` on empty lines or when the
+// element is not laid out yet. Two WebKit quirks drive the precise slice we
+// select:
+//
+//   1. When `localOffset` falls immediately after a `\n` (which always happens
+//      for the first char of every line), the range's start caret can be
+//      interpreted as "end of the previous visual line". Over an empty
+//      preceding line that makes the bounding rect span both lines, and
+//      `rect.top` lands on the previous line. Skipping one character forward
+//      so the range sits mid-line sidesteps the ambiguity.
+//   2. Even with the mid-line start, we prefer the last entry from
+//      `getClientRects()` over the bounding rect because `getBoundingClientRect`
+//      still unions any phantom zero-width start rect that WebKit emits.
+function measureDirectLineGlyph(element: HTMLElement, lineNumber: number): { top: number; height: number } | null {
+  const textContent = element.textContent;
+  if (textContent === null || textContent.length === 0) {
+    return null;
+  }
+  const lines = textContent.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length) {
+    return null;
+  }
+  const targetLineLength = lines[lineNumber - 1].length;
+  if (targetLineLength === 0) {
+    return null;
+  }
+
+  let charOffset = 0;
+  for (let i = 0; i < lineNumber - 1; i++) {
+    charOffset += lines[i].length + 1;
+  }
+
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let accumulated = 0;
+  let node = walker.nextNode();
+  while (node !== null) {
+    const nodeLength = node.textContent?.length ?? 0;
+    if (accumulated + nodeLength > charOffset) {
+      const localOffset = charOffset - accumulated;
+      // Default to the first char of the line.
+      let startOffset = localOffset;
+      let endOffset = Math.min(localOffset + 1, nodeLength);
+      // Prefer the second char when both it and its neighbor live in the same
+      // text node — that moves the start caret away from the post-newline
+      // boundary where WebKit is ambiguous.
+      if (targetLineLength >= 2 && localOffset + 2 <= nodeLength) {
+        startOffset = localOffset + 1;
+        endOffset = localOffset + 2;
+      }
+      if (endOffset <= startOffset) {
+        return null;
+      }
+
+      const range = document.createRange();
+      range.setStart(node, startOffset);
+      range.setEnd(node, endOffset);
+      const rects = range.getClientRects();
+      if (rects.length === 0) {
+        return null;
+      }
+      // Take the last rect: it's always on line N. `rects[0]` can belong to a
+      // zero-width phantom at the previous line-box boundary when the start
+      // caret is post-newline.
+      const rect = rects[rects.length - 1];
+      if (!Number.isFinite(rect.top) || rect.height <= 0) {
+        return null;
+      }
+      return { top: rect.top, height: rect.height };
+    }
+    accumulated += nodeLength;
+    node = walker.nextNode();
+  }
+  return null;
+}
+
+function resolveComputedLineHeight(element: HTMLElement): number | null {
+  const parsed = Number.parseFloat(window.getComputedStyle(element).lineHeight);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+// Compute the top of line N's highlight band relative to `frameElement`. The
+// band is `lineHeight` tall and we want the rendered glyph for that line
+// visually centered in it.
+//
+// Empty-line targets can't be measured directly (no glyph to put a Range
+// over), so we scan outward for the nearest non-empty line and extrapolate
+// by the line delta. Extrapolating off the target's own neighbor dodges an
+// observed WKWebView quirk where `rects[0]` from
+// `selectNodeContents(element).getClientRects()` on a very large decorated
+// code block doesn't correspond to line 1 — the first-line anchor produced
+// off-by-many-lines reveals in long files whose requested line happened to
+// be blank. Using a neighbor keeps the base measurement close to the real
+// target and makes the formula robust to whatever rects[0] is doing.
+function measureHighlightTopRelativeToFrame(args: {
+  element: HTMLElement;
+  frameElement: HTMLElement;
+  lineNumber: number;
+  lineHeight: number;
+}): number | null {
+  const frameTop = args.frameElement.getBoundingClientRect().top;
+
+  const direct = measureDirectLineGlyph(args.element, args.lineNumber);
+  if (direct !== null) {
+    const verticalPadding = Math.max(0, (args.lineHeight - direct.height) / 2);
+    return (direct.top - frameTop) - verticalPadding;
+  }
+
+  const textContent = args.element.textContent ?? "";
+  const lines = textContent.split("\n");
+  // Scan outward ±N lines for the closest non-empty neighbor and extrapolate.
+  for (let distance = 1; distance <= 32; distance++) {
+    for (const offset of [distance, -distance]) {
+      const candidateLineNumber = args.lineNumber + offset;
+      if (candidateLineNumber < 1 || candidateLineNumber > lines.length) {
+        continue;
+      }
+      if (lines[candidateLineNumber - 1].length === 0) {
+        continue;
+      }
+      const candidate = measureDirectLineGlyph(args.element, candidateLineNumber);
+      if (candidate === null) {
+        continue;
+      }
+      const verticalPadding = Math.max(0, (args.lineHeight - candidate.height) / 2);
+      return (candidate.top - frameTop) - offset * args.lineHeight - verticalPadding;
+    }
+  }
+
+  // Last resort: first-line anchor. This path is only reached when the entire
+  // file is blank within ±32 lines of the target, which should be rare enough
+  // that the remaining WKWebView rects[0] drift doesn't matter in practice.
+  const firstGlyph = measureFirstRenderedLineGlyph(args.element);
+  if (firstGlyph === null) {
+    return null;
+  }
+  const verticalPadding = Math.max(0, (args.lineHeight - firstGlyph.height) / 2);
+  return (firstGlyph.top - frameTop) + (args.lineNumber - 1) * args.lineHeight - verticalPadding;
+}
+
+function measureRevealLayout(args: {
+  lineNumber: number;
+  lineCount: number;
+  scrollElement: HTMLDivElement;
+  contentFrameElement: HTMLDivElement;
+  gutterFrameElement: HTMLDivElement;
+  contentElement: HTMLElement;
+  gutterElement: HTMLElement;
+}): RevealLayout | null {
+  const contentLineHeight = resolveComputedLineHeight(args.contentElement);
+  const gutterLineHeight = resolveComputedLineHeight(args.gutterElement);
+  if (contentLineHeight === null || gutterLineHeight === null) {
+    return null;
+  }
+
+  const contentTopBase = measureHighlightTopRelativeToFrame({
+    element: args.contentElement,
+    frameElement: args.contentFrameElement,
+    lineNumber: args.lineNumber,
+    lineHeight: contentLineHeight
+  });
+  const gutterTopBase = measureHighlightTopRelativeToFrame({
+    element: args.gutterElement,
+    frameElement: args.gutterFrameElement,
+    lineNumber: args.lineNumber,
+    lineHeight: gutterLineHeight
+  });
+  if (contentTopBase === null || gutterTopBase === null) {
+    return null;
+  }
+
+  // `computeRevealLayout` still takes a `contentTopBase`/`gutterTopBase` + a
+  // `(lineNumber - 1) * line-height` step, so to reuse it we pass the
+  // already-measured line-N top as the base and force `lineNumber: 1`. That
+  // keeps the pure helper and its test unchanged.
+  return computeRevealLayout({
+    lineNumber: 1,
+    lineCount: args.lineCount,
+    contentTopBase,
+    gutterTopBase,
+    contentLineHeight,
+    gutterLineHeight,
+    contentFrameOffsetTop: args.contentFrameElement.offsetTop,
+    scrollViewportHeight: args.scrollElement.clientHeight,
+    scrollContentHeight: args.scrollElement.scrollHeight
+  });
 }
 
 function useLocalDocumentPanelState(): {
@@ -337,12 +585,11 @@ function ExternalOpenIcon() {
 function LocalDocumentEditor(props: {
   bootstrap: LocalDocumentPanelBootstrap;
   draftContent: string;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   updateDraftContent: (nextContent: string) => void;
 }) {
-  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
-
   React.useLayoutEffect(() => {
-    const textarea = textareaRef.current;
+    const textarea = props.textareaRef.current;
     if (!textarea) {
       return;
     }
@@ -368,7 +615,7 @@ function LocalDocumentEditor(props: {
         </div>
       )}
       <textarea
-        ref={textareaRef}
+        ref={props.textareaRef}
         className="local-document-editor"
         value={props.draftContent}
         onChange={(event) => props.updateDraftContent(event.target.value)}
@@ -599,7 +846,12 @@ function MarkdownCodeDocumentView(props: {
   content: string;
   highlightedHTML: string | null;
   lines: string[];
+  previewRootRef: React.RefObject<HTMLElement | null>;
+  previewContentRef: React.RefObject<HTMLElement | null>;
 }) {
+  const markdownGutterStyle = {
+    "--local-document-code-gutter-digit-width": `${Math.max(String(props.lines.length).length, 2)}ch`
+  } as React.CSSProperties;
   const sourceHTML = React.useMemo(
     () => props.highlightedHTML ?? renderPlainMarkdownSourceHtml(props.content),
     [props.content, props.highlightedHTML]
@@ -608,15 +860,29 @@ function MarkdownCodeDocumentView(props: {
     props.lines.length,
     sourceHTML
   );
+  const handleScrollRef = React.useCallback((node: HTMLDivElement | null) => {
+    assignObjectRef(scrollRef, node);
+    assignObjectRef(props.previewRootRef, node);
+  }, [props.previewRootRef, scrollRef]);
+  const handlePreviewContentRef = React.useCallback((node: HTMLPreElement | null) => {
+    assignObjectRef(props.previewContentRef, node);
+  }, [props.previewContentRef]);
   const codeClassName = props.highlightedHTML
     ? "starry-night local-document-code-markdown"
     : "local-document-code-plain local-document-code-plain-markdown";
 
   return (
     <div className="local-document-code-frame local-document-code-frame-markdown">
-      <div className="local-document-code-scroll local-document-code-scroll-markdown" ref={scrollRef}>
+      <div
+        className="local-document-code-scroll local-document-code-scroll-markdown"
+        ref={handleScrollRef}
+      >
         <div className="local-document-code-markdown-grid">
-          <div className="local-document-code-markdown-gutter" aria-hidden="true">
+          <div
+            className="local-document-code-markdown-gutter"
+            aria-hidden="true"
+            style={markdownGutterStyle}
+          >
             <div
               className="local-document-code-markdown-gutter-inner"
               style={{ height: `${lineLayout.contentHeight}px` }}
@@ -634,7 +900,7 @@ function MarkdownCodeDocumentView(props: {
               ))}
             </div>
           </div>
-          <pre className="local-document-code-markdown-surface">
+          <pre className="local-document-code-markdown-surface" ref={handlePreviewContentRef}>
             <code
               ref={contentRef}
               className={codeClassName}
@@ -647,9 +913,27 @@ function MarkdownCodeDocumentView(props: {
   );
 }
 
-function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; content: string }) {
+function CodeDocumentView(props: {
+  bootstrap: LocalDocumentPanelBootstrap;
+  content: string;
+  previewRootRef: React.RefObject<HTMLElement | null>;
+  previewContentRef: React.RefObject<HTMLElement | null>;
+}) {
   const lines = React.useMemo(() => contentLines(props.content), [props.content]);
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
+  const revealRequest = useRevealRequest();
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const gutterFrameRef = React.useRef<HTMLDivElement | null>(null);
+  const gutterPreRef = React.useRef<HTMLPreElement | null>(null);
+  const contentFrameRef = React.useRef<HTMLDivElement | null>(null);
+  const contentCodeRef = React.useRef<HTMLElement | null>(null);
+  const revealScrollFrameRef = React.useRef<{
+    outer: number | null;
+    inner: number | null;
+  }>({ outer: null, inner: null });
+  const revealScrollSequenceRef = React.useRef(0);
+  const [activeReveal, setActiveReveal] = React.useState<ActiveReveal | null>(null);
+  const [revealLayout, setRevealLayout] = React.useState<RevealLayout | null>(null);
   const language = props.bootstrap.syntaxLanguage;
   const statusMessage = highlightStatusMessage(
     props.bootstrap.highlightState,
@@ -660,7 +944,175 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
     : language
       ? `hljs language-${language}`
       : "hljs";
+  const handleScrollRef = React.useCallback((node: HTMLDivElement | null) => {
+    assignObjectRef(scrollRef, node);
+    assignObjectRef(props.previewRootRef, node);
+  }, [props.previewRootRef, scrollRef]);
+  const handlePreviewContentRef = React.useCallback((node: HTMLPreElement | null) => {
+    assignObjectRef(props.previewContentRef, node);
+  }, [props.previewContentRef]);
 
+  const cancelScheduledRevealScroll = React.useCallback(() => {
+    revealScrollSequenceRef.current += 1;
+    if (revealScrollFrameRef.current.outer !== null) {
+      window.cancelAnimationFrame(revealScrollFrameRef.current.outer);
+      revealScrollFrameRef.current.outer = null;
+    }
+    if (revealScrollFrameRef.current.inner !== null) {
+      window.cancelAnimationFrame(revealScrollFrameRef.current.inner);
+      revealScrollFrameRef.current.inner = null;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      cancelScheduledRevealScroll();
+    };
+  }, [cancelScheduledRevealScroll]);
+
+  React.useEffect(() => {
+    if (!revealRequest) {
+      return;
+    }
+
+    if (props.bootstrap.isEditing) {
+      return;
+    }
+
+    const targetLineNumber = clampRevealLineNumber(revealRequest.lineNumber, lines.length);
+    setRevealLayout(null);
+    setActiveReveal({
+      lineNumber: targetLineNumber,
+      requestID: revealRequest.requestID,
+      filePath: props.bootstrap.filePath,
+      contentRevision: props.bootstrap.contentRevision
+    });
+    window.ToasttyLocalDocumentPanel?.consumeRevealRequest(revealRequest.requestID);
+  }, [props.bootstrap.contentRevision, props.bootstrap.filePath, props.bootstrap.isEditing, revealRequest, lines.length]);
+
+  React.useLayoutEffect(() => {
+    if (!activeReveal || props.bootstrap.isEditing) {
+      setRevealLayout(null);
+      return;
+    }
+
+    const scrollElement = scrollRef.current;
+    const gutterFrameElement = gutterFrameRef.current;
+    const gutterPreElement = gutterPreRef.current;
+    const contentFrameElement = contentFrameRef.current;
+    const contentCodeElement = contentCodeRef.current;
+    if (!scrollElement ||
+        !gutterFrameElement ||
+        !gutterPreElement ||
+        !contentFrameElement ||
+        !contentCodeElement) {
+      return;
+    }
+
+    setRevealLayout(
+      measureRevealLayout({
+        lineNumber: activeReveal.lineNumber,
+        lineCount: lines.length,
+        scrollElement,
+        gutterFrameElement,
+        gutterElement: gutterPreElement,
+        contentFrameElement,
+        contentElement: contentCodeElement
+      })
+    );
+  }, [
+    activeReveal?.lineNumber,
+    activeReveal?.requestID,
+    // `highlightedHTML` stays in the dep list so the measurement re-runs once
+    // the content code element is swapped out by the async markdown highlighter
+    // — `contentCodeRef` gets re-attached and our Range-based anchor needs to
+    // re-read geometry against the new node.
+    highlightedHTML,
+    lines.length,
+    props.bootstrap.isEditing,
+    props.bootstrap.textScale
+  ]);
+
+  React.useLayoutEffect(() => {
+    if (!activeReveal || !revealLayout) {
+      return;
+    }
+
+    cancelScheduledRevealScroll();
+    const revealScrollSequence = revealScrollSequenceRef.current;
+    revealScrollFrameRef.current.outer = window.requestAnimationFrame(() => {
+      revealScrollFrameRef.current.outer = null;
+      if (revealScrollSequence !== revealScrollSequenceRef.current) {
+        return;
+      }
+
+      // WKWebView has been unreliable about applying immediate overflow
+      // scroll jumps during the same layout pass, so defer once for the new
+      // reveal render and once more for the settled layout before assigning.
+      revealScrollFrameRef.current.inner = window.requestAnimationFrame(() => {
+        revealScrollFrameRef.current.inner = null;
+        if (revealScrollSequence !== revealScrollSequenceRef.current) {
+          return;
+        }
+
+        const scrollElement = scrollRef.current;
+        if (!scrollElement) {
+          return;
+        }
+        scrollElement.scrollTop = revealLayout.targetScrollTop;
+      });
+    });
+
+    return () => {
+      cancelScheduledRevealScroll();
+    };
+  }, [activeReveal?.requestID, cancelScheduledRevealScroll, revealLayout?.targetScrollTop]);
+
+  React.useEffect(() => {
+    if (!activeReveal) {
+      return;
+    }
+
+    if (props.bootstrap.isEditing ||
+        props.bootstrap.filePath !== activeReveal.filePath ||
+        props.bootstrap.contentRevision !== activeReveal.contentRevision) {
+      cancelScheduledRevealScroll();
+      setRevealLayout(null);
+      setActiveReveal(null);
+    }
+  }, [
+    activeReveal,
+    cancelScheduledRevealScroll,
+    props.bootstrap.contentRevision,
+    props.bootstrap.filePath,
+    props.bootstrap.isEditing
+  ]);
+
+  React.useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" ||
+          activeReveal == null ||
+          props.bootstrap.isEditing) {
+        return;
+      }
+
+      cancelScheduledRevealScroll();
+      setRevealLayout(null);
+      setActiveReveal(null);
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activeReveal, cancelScheduledRevealScroll, props.bootstrap.isEditing]);
+
+  // Markdown delegates to a soft-wrap-aware view with its own gutter layout.
+  // The reveal hooks above stay declared unconditionally (React rules of
+  // hooks); their refs just don't get attached on this branch so the
+  // measurement effect is a no-op for markdown.
   if (props.bootstrap.format === "markdown") {
     return (
       <section className="local-document-code-shell">
@@ -675,6 +1127,8 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
           content={props.content}
           highlightedHTML={highlightedHTML}
           lines={lines}
+          previewRootRef={props.previewRootRef}
+          previewContentRef={props.previewContentRef}
         />
       </section>
     );
@@ -690,16 +1144,48 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
         </div>
       )}
       <div className="local-document-code-frame">
-        <pre className="local-document-code-gutter" aria-hidden="true">
-          {lines.map((_, index) => String(index + 1)).join("\n")}
-        </pre>
-        <pre className="local-document-code-scroll">
-          {highlightedHTML ? (
-            <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
-          ) : (
-            <code className="local-document-code-plain">{props.content}</code>
-          )}
-        </pre>
+        <div className="local-document-code-scroll" ref={handleScrollRef}>
+          <div className="local-document-code-scroll-inner">
+            <div className="local-document-code-gutter-frame" ref={gutterFrameRef}>
+              {revealLayout ? (
+                <div
+                  aria-hidden="true"
+                  className="local-document-code-gutter-reveal"
+                  style={{
+                    top: `${revealLayout.gutterTop}px`,
+                    height: `${revealLayout.gutterHeight}px`
+                  }}
+                />
+              ) : null}
+              <pre className="local-document-code-gutter" aria-hidden="true" ref={gutterPreRef}>
+                {lines.map((_, index) => String(index + 1)).join("\n")}
+              </pre>
+            </div>
+            <div className="local-document-code-content-frame" ref={contentFrameRef}>
+              {revealLayout ? (
+                <div
+                  aria-hidden="true"
+                  className="local-document-code-line-reveal"
+                  style={{
+                    top: `${revealLayout.contentTop}px`,
+                    height: `${revealLayout.contentHeight}px`
+                  }}
+                />
+              ) : null}
+              <pre className="local-document-code-content" ref={handlePreviewContentRef}>
+                {highlightedHTML ? (
+                  <code
+                    ref={contentCodeRef}
+                    className={codeClassName}
+                    dangerouslySetInnerHTML={{ __html: highlightedHTML }}
+                  />
+                ) : (
+                  <code ref={contentCodeRef} className="local-document-code-plain">{props.content}</code>
+                )}
+              </pre>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -732,6 +1218,17 @@ export function LocalDocumentPanelApp() {
   }
 
   const renderedContent = bootstrap.isEditing ? draftContent : bootstrap.content;
+  const previewRootRef = React.useRef<HTMLElement | null>(null);
+  const previewContentRef = React.useRef<HTMLElement | null>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  useLocalDocumentSearchController({
+    content: renderedContent,
+    isEditing: bootstrap.isEditing,
+    previewRootRef,
+    previewContentRef,
+    textareaRef
+  });
 
   return (
     <main className="local-document-shell">
@@ -751,10 +1248,16 @@ export function LocalDocumentPanelApp() {
         <LocalDocumentEditor
           bootstrap={bootstrap}
           draftContent={draftContent}
+          textareaRef={textareaRef}
           updateDraftContent={updateDraftContent}
         />
       ) : (
-        <CodeDocumentView bootstrap={bootstrap} content={renderedContent} />
+        <CodeDocumentView
+          bootstrap={bootstrap}
+          content={renderedContent}
+          previewRootRef={previewRootRef}
+          previewContentRef={previewContentRef}
+        />
       )}
     </main>
   );

@@ -187,6 +187,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -223,6 +224,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -260,6 +262,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -299,6 +302,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -327,6 +331,245 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(bootstrap.isDirty)
         XCTAssertEqual(bootstrap.content, "# Original")
         XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+    }
+
+    func testRequestRevealQueuesPendingLineBeforeBootstrapIsReady() {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            }
+        )
+
+        runtime.requestReveal(lineNumber: 12)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+    }
+
+    func testRequestRevealSkipsEditingMode() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Draft",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+
+        runtime.requestReveal(lineNumber: 7)
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+    }
+
+    func testPendingRevealSurvivesReloadWhilePanelAppIsUnavailable() async throws {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: webState.title,
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let originalState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+        let refreshedState = WebPanelState(
+            definition: .localDocument,
+            title: "README copy.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: originalState)
+        try await waitUntil { runtime.automationState().currentBootstrap?.displayName == "README.md" }
+        runtime.requestReveal(lineNumber: 5)
+
+        runtime.apply(webState: refreshedState)
+        try await waitUntil { runtime.automationState().currentBootstrap?.displayName == "README copy.md" }
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 5)
+    }
+
+    func testTextScaleBridgeUnavailableStagesBootstrapRetryWithUpdatedScale() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(
+            responses: [.bridgeUnavailable, .delivered]
+        )
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.applyTextScale(1.25)
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        let textScale = try XCTUnwrap(runtime.automationState().currentBootstrap?.textScale)
+        XCTAssertEqual(textScale, 1.25, accuracy: 0.0001)
+        XCTAssertEqual(evaluator.scripts.count, 2)
+        XCTAssertTrue(evaluator.scripts[0].contains("bridge.setTextScale(1.2500);"))
+        XCTAssertTrue(evaluator.scripts[1].contains("\"textScale\":1.25"))
+    }
+
+    func testDidFinishRetriesBootstrapUntilPageBridgeIsAvailable() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(responses: [.bridgeUnavailable, .delivered])
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.simulateBridgeReadyForTesting()
+        XCTAssertTrue(runtime.automationState().hasPendingBootstrapScript)
+
+        runtime.webView(WKWebView(), didFinish: nil)
+
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 2)
+        XCTAssertTrue(evaluator.scripts.allSatisfy { $0.contains("bridge.receiveBootstrap(") })
+    }
+
+    func testDidFinishRetriesPendingRevealAfterBridgeBecomesAvailable() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(
+            responses: [.bridgeUnavailable, .delivered, .delivered]
+        )
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.requestReveal(lineNumber: 12)
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertEqual(evaluator.scripts.count, 1)
+        XCTAssertTrue(evaluator.scripts[0].contains("bridge.revealLine(12);"))
+
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 3)
+        XCTAssertTrue(evaluator.scripts[1].contains("bridge.receiveBootstrap("))
+        XCTAssertTrue(evaluator.scripts[2].contains("bridge.revealLine(12);"))
     }
 
     func testCancelEditModeRestoresPreviewAndAdvancesRevision() async throws {
@@ -453,6 +696,295 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.content, "# Original")
         XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
         XCTAssertFalse(runtime.canCancelEditFromCommand())
+    }
+
+    func testStartAndEndSearchPreserveActiveEditSession() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
+
+        XCTAssertNil(runtime.automationState().searchState)
+        XCTAssertFalse(runtime.automationState().isSearchFieldFocused)
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(
+            runtime.searchState(),
+            LocalDocumentSearchState(
+                isPresented: true,
+                query: "",
+                lastMatchFound: nil,
+                focusRequestID: try XCTUnwrap(runtime.searchState()?.focusRequestID)
+            )
+        )
+        XCTAssertEqual(runtime.automationState().searchState, runtime.searchState())
+        runtime.setSearchFieldFocused(true)
+        XCTAssertTrue(runtime.automationState().isSearchFieldFocused)
+        XCTAssertTrue(runtime.endSearch())
+        XCTAssertNil(runtime.searchState())
+        XCTAssertNil(runtime.automationState().searchState)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertTrue(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "## Changed")
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+    }
+
+    func testSearchQueryUpdatesIgnoreStaleFindCompletions() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertTrue(runtime.startSearch())
+
+        runtime.updateSearchQuery("toast")
+        runtime.updateSearchQuery("toastty")
+
+        XCTAssertEqual(searchSpy.queries, ["toast", "toastty"])
+
+        searchSpy.completeCall(at: 0, matchFound: false)
+        XCTAssertNil(runtime.searchState()?.lastMatchFound)
+
+        searchSpy.completeCall(at: 1, matchFound: true)
+        XCTAssertEqual(runtime.searchState()?.query, "toastty")
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, true)
+    }
+
+    func testSearchExecutionResultAcceptsNSNumberMatchFoundValues() {
+        XCTAssertEqual(
+            LocalDocumentPanelRuntime.searchExecutionResult(
+                from: ["matchFound": NSNumber(value: true)]
+            ),
+            true
+        )
+        XCTAssertEqual(
+            LocalDocumentPanelRuntime.searchExecutionResult(
+                from: ["matchFound": NSNumber(value: false)]
+            ),
+            false
+        )
+        XCTAssertEqual(
+            LocalDocumentPanelRuntime.searchExecutionResult(from: NSNumber(value: true)),
+            true
+        )
+    }
+
+    func testStartSearchResetsWebSearchSessionOnlyForNewSessions() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let resetSpy = SearchSessionResetterSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchSessionResetter: resetSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 1)
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 1)
+
+        XCTAssertTrue(runtime.endSearch())
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 2)
+    }
+
+    func testFindNextAndPreviousRequireActiveNonEmptyQuery() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertFalse(runtime.findNext())
+        XCTAssertFalse(runtime.findPrevious())
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertFalse(runtime.findNext())
+        XCTAssertFalse(runtime.findPrevious())
+
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        XCTAssertTrue(runtime.findNext())
+        XCTAssertTrue(runtime.findPrevious())
+        XCTAssertEqual(searchSpy.queries, ["toast", "toast"])
+        XCTAssertEqual(searchSpy.backwardsFlags, [false, true])
+    }
+
+    func testEndSearchClearsActiveSearchHighlights() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        XCTAssertTrue(runtime.endSearch())
+
+        XCTAssertEqual(searchSpy.commands, [.clear])
+    }
+
+    func testDraftUpdatesRefreshActiveSearch() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Toastty refreshed", baseContentRevision: baseRevision)
+
+        XCTAssertEqual(searchSpy.commands, [.setQuery("toast")])
     }
 
     func testSaveFailureKeepsEditingDraftAndSurfacesError() async throws {
@@ -1263,7 +1795,9 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         let script = try XCTUnwrap(LocalDocumentPanelRuntime.bootstrapJavaScript(for: bootstrap))
 
-        XCTAssertTrue(script.contains("window.ToasttyLocalDocumentPanel?.receiveBootstrap("))
+        XCTAssertTrue(script.contains("const bridge = window.ToasttyLocalDocumentPanel;"))
+        XCTAssertTrue(script.contains("if (!bridge) {"))
+        XCTAssertTrue(script.contains("bridge.receiveBootstrap("))
         XCTAssertTrue(script.contains("\"contractVersion\":6"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
         XCTAssertTrue(script.contains("\"format\":\"markdown\""))
@@ -1278,6 +1812,20 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(script.contains("\"saveErrorMessage\":\"Could not save\""))
         XCTAssertTrue(script.contains("\"theme\":\"dark\""))
         XCTAssertTrue(script.contains("\"textScale\":1.3"))
+    }
+
+    func testRevealLineJavaScriptChecksBridgeAvailability() {
+        let script = LocalDocumentPanelRuntime.revealLineJavaScript(for: 42)
+
+        XCTAssertTrue(script.contains("const bridge = window.ToasttyLocalDocumentPanel;"))
+        XCTAssertTrue(script.contains("if (!bridge) {"))
+        XCTAssertTrue(script.contains("bridge.revealLine(42);"))
+    }
+
+    func testBridgeCommandWasDeliveredAcceptsNSNumberBooleans() {
+        XCTAssertTrue(LocalDocumentPanelRuntime.bridgeCommandWasDelivered(NSNumber(value: true)))
+        XCTAssertFalse(LocalDocumentPanelRuntime.bridgeCommandWasDelivered(NSNumber(value: false)))
+        XCTAssertFalse(LocalDocumentPanelRuntime.bridgeCommandWasDelivered(nil))
     }
 
     func testThemeResolvesFromEffectiveAppearance() {
@@ -1671,6 +2219,65 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class LocalDocumentSearchExecutorSpy {
+    private struct Call {
+        let command: LocalDocumentSearchCommand
+        let completion: (Bool?) -> Void
+    }
+
+    private var calls: [Call] = []
+
+    func record(
+        _ webView: FocusAwareWKWebView,
+        command: LocalDocumentSearchCommand,
+        completion: @escaping (Bool?) -> Void
+    ) {
+        _ = webView
+        calls.append(
+            Call(
+                command: command,
+                completion: completion
+            )
+        )
+    }
+
+    var queries: [String] {
+        calls.compactMap(\.command.query)
+    }
+
+    var backwardsFlags: [Bool] {
+        calls.map { call in
+            if case .findPrevious = call.command {
+                return true
+            }
+            return false
+        }
+    }
+
+    var commands: [LocalDocumentSearchCommand] {
+        calls.map(\.command)
+    }
+
+    func completeCall(at index: Int, matchFound: Bool) {
+        calls[index].completion(matchFound)
+    }
+
+    func removeAllCalls() {
+        calls.removeAll()
+    }
+}
+
+@MainActor
+private final class SearchSessionResetterSpy {
+    private(set) var callCount = 0
+
+    func record(_ webView: FocusAwareWKWebView) {
+        _ = webView
+        callCount += 1
+    }
+}
+
 private actor BootstrapRecorder {
     private var callCount = 0
 
@@ -1680,6 +2287,61 @@ private actor BootstrapRecorder {
 
     func snapshot() -> Int {
         callCount
+    }
+}
+
+@MainActor
+private func makePanelEntryURL() throws -> URL {
+    let tempDirectoryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let panelDirectoryURL = tempDirectoryURL.appendingPathComponent("local-document-panel", isDirectory: true)
+    let entryURL = panelDirectoryURL.appendingPathComponent("index.html")
+
+    try FileManager.default.createDirectory(at: panelDirectoryURL, withIntermediateDirectories: true)
+    try Data("<!doctype html>".utf8).write(to: entryURL)
+
+    return entryURL
+}
+
+@MainActor
+private final class BridgeScriptEvaluatorSpy {
+    enum Response {
+        case delivered
+        case bridgeUnavailable
+
+        var result: Any? {
+            switch self {
+            case .delivered:
+                NSNumber(value: true)
+            case .bridgeUnavailable:
+                NSNumber(value: false)
+            }
+        }
+    }
+
+    private var responses: [Response]
+    private(set) var scripts: [String] = []
+
+    init(responses: [Response]) {
+        self.responses = responses
+    }
+
+    func evaluate(
+        _ script: String,
+        completion: @escaping @MainActor @Sendable (Any?, Error?) -> Void
+    ) {
+        scripts.append(script)
+        let response = responses.isEmpty ? .delivered : responses.removeFirst()
+        completion(response.result, nil)
+    }
+
+    func assertNoRemainingResponses(file: StaticString, line: UInt) {
+        XCTAssertTrue(
+            responses.isEmpty,
+            "Unused bridge responses remained: \(responses.count)",
+            file: file,
+            line: line
+        )
     }
 }
 
