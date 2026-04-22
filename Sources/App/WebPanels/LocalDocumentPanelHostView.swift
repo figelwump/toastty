@@ -18,6 +18,8 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
         let containerCoordinator = PanelHostContainerCoordinator()
         var lastAppliedWebState: WebPanelState?
         var lastIsActivePanel = false
+        private var pendingWebState: WebPanelState?
+        private var pendingApplyRequestID: UUID?
         private var pendingFocusRequestID: UUID?
         private var pendingFocusAttempt = 0
         private let scheduleOnMainActor: MainActorScheduler
@@ -30,6 +32,33 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
             }
         ) {
             self.scheduleOnMainActor = scheduleOnMainActor
+        }
+
+        func scheduleApply(webState: WebPanelState, runtime: LocalDocumentPanelRuntime) {
+            guard lastAppliedWebState != webState,
+                  pendingWebState != webState else {
+                return
+            }
+
+            pendingWebState = webState
+            let requestID = UUID()
+            pendingApplyRequestID = requestID
+
+            // Hop off updateNSView so local-document reload/bootstrap work only
+            // starts after AppKit has had a chance to finish attaching the
+            // WKWebView host hierarchy for this update pass.
+            scheduleOnMainActor { [weak self, weak runtime] in
+                guard let self,
+                      self.pendingApplyRequestID == requestID,
+                      self.pendingWebState == webState else {
+                    return
+                }
+
+                self.pendingApplyRequestID = nil
+                self.pendingWebState = nil
+                self.lastAppliedWebState = webState
+                runtime?.apply(webState: webState)
+            }
         }
 
         func requestFocusIfNeeded(
@@ -146,6 +175,8 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
             containerCoordinator.reset()
             lastAppliedWebState = nil
             lastIsActivePanel = false
+            pendingWebState = nil
+            pendingApplyRequestID = nil
             resetPendingFocusRequest()
         }
     }
@@ -181,10 +212,7 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
         runtime.setEffectivelyVisible(isEffectivelyVisible)
         runtime.applyEffectiveAppearance(containerView.effectiveAppearance)
 
-        if context.coordinator.lastAppliedWebState != webState {
-            runtime.apply(webState: webState)
-            context.coordinator.lastAppliedWebState = webState
-        }
+        context.coordinator.scheduleApply(webState: webState, runtime: runtime)
         runtime.applyTextScale(textScale)
         context.coordinator.requestFocusIfNeeded(
             isActivePanel: isActivePanel,

@@ -6,8 +6,212 @@ import XCTest
 
 @MainActor
 final class LocalDocumentPanelHostViewTests: XCTestCase {
+    func testCoordinatorDefersLocalDocumentStateApplyUntilScheduledCallbackRuns() async {
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
+        let metadataExpectation = expectation(description: "Local document metadata update arrives")
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    format: .toml,
+                    content: "title = 'Toastty'\n",
+                    diskRevision: nil
+                )
+            }
+        )
+        let coordinator = LocalDocumentPanelHostView.Coordinator(
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "terminal-profiles.toml",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/toastty/terminal-profiles.toml",
+                format: .toml
+            )
+        )
+
+        coordinator.scheduleApply(webState: webState, runtime: runtime)
+
+        XCTAssertEqual(recorder.callbacks.count, 1)
+        XCTAssertNil(runtime.automationState().currentBootstrap)
+
+        recorder.callbacks.removeFirst()()
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.displayName, "terminal-profiles.toml")
+        XCTAssertEqual(coordinator.lastAppliedWebState, webState)
+    }
+
+    func testCoordinatorIgnoresStaleScheduledLocalDocumentStateApply() async {
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
+        let metadataExpectation = expectation(description: "Only latest local document metadata update arrives")
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, title, _ in
+                if title == "second.toml" {
+                    metadataExpectation.fulfill()
+                }
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    format: .toml,
+                    content: "key = 'value'\n",
+                    diskRevision: nil
+                )
+            }
+        )
+        let coordinator = LocalDocumentPanelHostView.Coordinator(
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let firstState = WebPanelState(
+            definition: .localDocument,
+            title: "first.toml",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/toastty/first.toml",
+                format: .toml
+            )
+        )
+        let secondState = WebPanelState(
+            definition: .localDocument,
+            title: "second.toml",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/toastty/second.toml",
+                format: .toml
+            )
+        )
+
+        coordinator.scheduleApply(webState: firstState, runtime: runtime)
+        coordinator.scheduleApply(webState: secondState, runtime: runtime)
+
+        XCTAssertEqual(recorder.callbacks.count, 2)
+
+        recorder.callbacks.removeFirst()()
+        XCTAssertNil(runtime.automationState().currentBootstrap)
+
+        recorder.callbacks.removeFirst()()
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.displayName, "second.toml")
+        XCTAssertEqual(coordinator.lastAppliedWebState, secondState)
+    }
+
+    func testCoordinatorDoesNotReschedulePendingLocalDocumentState() {
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let coordinator = LocalDocumentPanelHostView.Coordinator(
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/toastty/README.md",
+                format: .markdown
+            )
+        )
+
+        coordinator.scheduleApply(webState: webState, runtime: runtime)
+        coordinator.scheduleApply(webState: webState, runtime: runtime)
+
+        XCTAssertEqual(recorder.callbacks.count, 1)
+    }
+
+    func testCoordinatorDoesNotRescheduleAppliedLocalDocumentState() async {
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
+        let metadataExpectation = expectation(description: "Initial local document metadata update arrives")
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    format: .markdown,
+                    content: "# Toastty\n",
+                    diskRevision: nil
+                )
+            }
+        )
+        let coordinator = LocalDocumentPanelHostView.Coordinator(
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/toastty/README.md",
+                format: .markdown
+            )
+        )
+
+        coordinator.scheduleApply(webState: webState, runtime: runtime)
+        recorder.callbacks.removeFirst()()
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        coordinator.scheduleApply(webState: webState, runtime: runtime)
+
+        XCTAssertTrue(recorder.callbacks.isEmpty)
+    }
+
+    func testCoordinatorResetPreventsPendingLocalDocumentStateApply() {
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                XCTFail("Reset should cancel pending local-document applies")
+            },
+            interactionDidRequestFocus: { _ in }
+        )
+        let coordinator = LocalDocumentPanelHostView.Coordinator(
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/toastty/README.md",
+                format: .markdown
+            )
+        )
+
+        coordinator.scheduleApply(webState: webState, runtime: runtime)
+        coordinator.reset()
+
+        recorder.callbacks.removeFirst()()
+
+        XCTAssertNil(runtime.automationState().currentBootstrap)
+        XCTAssertNil(coordinator.lastAppliedWebState)
+    }
+
     func testCoordinatorRequestsFocusOnlyWhenPanelBecomesActive() {
-        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
         let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
@@ -32,7 +236,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
     }
 
     func testCoordinatorDeferredFocusTargetsWebViewAfterAttachment() throws {
-        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
         let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
@@ -61,7 +265,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
     }
 
     func testCoordinatorDeferredFocusRetriesUntilAttachmentSucceeds() throws {
-        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
         let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
@@ -94,7 +298,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
     }
 
     func testCoordinatorDoesNotRefocusWebViewWhilePanelRemainsActive() {
-        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
         let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
@@ -123,7 +327,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
     }
 
     func testCoordinatorDoesNotStealFocusFromSearchField() {
-        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
         let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
@@ -149,7 +353,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
     }
 
     func testCoordinatorDeferredFocusCancelsWhenSearchFieldTakesFocus() throws {
-        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
         let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
@@ -180,7 +384,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
     }
 
     func testCoordinatorResetCancelsPendingDeferredFocus() throws {
-        let recorder = ScheduledLocalDocumentFocusRecorder()
+        let recorder = ScheduledLocalDocumentMainActorRecorder()
         let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
@@ -237,7 +441,7 @@ final class LocalDocumentPanelHostViewTests: XCTestCase {
     }
 }
 
-private final class ScheduledLocalDocumentFocusRecorder: @unchecked Sendable {
+private final class ScheduledLocalDocumentMainActorRecorder: @unchecked Sendable {
     var callbacks: [@MainActor @Sendable () -> Void] = []
 }
 
