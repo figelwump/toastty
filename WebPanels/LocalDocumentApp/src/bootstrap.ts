@@ -77,6 +77,7 @@ interface LocalDocumentPanelSearchController {
 
 declare global {
   interface Window {
+    __toasttyLocalDocumentDiagnosticsInstalled?: boolean;
     ToasttyLocalDocumentPanel?: {
       receiveBootstrap: (bootstrap: LocalDocumentPanelBootstrap) => void;
       setTextScale: (textScale: number) => void;
@@ -104,6 +105,7 @@ let currentRevealRequest: LocalDocumentLineRevealRequest | null = null;
 let revealRequestID = 0;
 let currentSearchState: LocalDocumentPanelSearchState = emptySearchState();
 let currentSearchController: LocalDocumentPanelSearchController | null = null;
+const diagnosticStringLimit = 2_000;
 
 function emptySearchState(query = ""): LocalDocumentPanelSearchState {
   return {
@@ -136,6 +138,130 @@ function warnOnContractMismatch(bootstrap: LocalDocumentPanelBootstrap) {
   }
 }
 
+function truncateDiagnosticString(value: string): string {
+  if (value.length <= diagnosticStringLimit) {
+    return value;
+  }
+  return `${value.slice(0, diagnosticStringLimit - 1)}…`;
+}
+
+function describeDiagnosticValue(
+  value: unknown,
+  seen = new WeakSet<object>()
+): { message: string; stack: string | null } {
+  if (value instanceof Error) {
+    return {
+      message: value.message || value.name || "Error",
+      stack: value.stack ? truncateDiagnosticString(value.stack) : null
+    };
+  }
+
+  if (typeof value === "string") {
+    return {
+      message: truncateDiagnosticString(value),
+      stack: null
+    };
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return {
+      message: String(value),
+      stack: null
+    };
+  }
+
+  if (value == null) {
+    return {
+      message: String(value),
+      stack: null
+    };
+  }
+
+  if (typeof value === "object") {
+    if (seen.has(value)) {
+      return {
+        message: "[Circular]",
+        stack: null
+      };
+    }
+    seen.add(value);
+
+    const stack = "stack" in value && typeof value.stack === "string"
+      ? truncateDiagnosticString(value.stack)
+      : null;
+
+    try {
+      return {
+        message: truncateDiagnosticString(JSON.stringify(value)),
+        stack
+      };
+    } catch {
+      return {
+        message: truncateDiagnosticString(Object.prototype.toString.call(value)),
+        stack
+      };
+    }
+  }
+
+  return {
+    message: truncateDiagnosticString(String(value)),
+    stack: null
+  };
+}
+
+function describeConsoleArguments(args: unknown[]): string {
+  if (args.length === 0) {
+    return "";
+  }
+
+  return truncateDiagnosticString(
+    args
+      .map((value) => describeDiagnosticValue(value).message)
+      .join(" ")
+  );
+}
+
+function installDiagnosticsBridge() {
+  if (window.__toasttyLocalDocumentDiagnosticsInstalled) {
+    return;
+  }
+  window.__toasttyLocalDocumentDiagnosticsInstalled = true;
+
+  const originalWarn = console.warn.bind(console);
+  const originalError = console.error.bind(console);
+
+  console.warn = (...args: unknown[]) => {
+    localDocumentNativeBridge.consoleMessage("warn", describeConsoleArguments(args));
+    originalWarn(...args);
+  };
+
+  console.error = (...args: unknown[]) => {
+    localDocumentNativeBridge.consoleMessage("error", describeConsoleArguments(args));
+    originalError(...args);
+  };
+
+  window.addEventListener("error", (event) => {
+    const diagnostic = describeDiagnosticValue(event.error ?? event.message ?? "Unknown error");
+    localDocumentNativeBridge.javascriptError(
+      truncateDiagnosticString(event.message || diagnostic.message),
+      event.filename || null,
+      Number.isFinite(event.lineno) ? event.lineno : null,
+      Number.isFinite(event.colno) ? event.colno : null,
+      diagnostic.stack
+    );
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    const diagnostic = describeDiagnosticValue(event.reason);
+    localDocumentNativeBridge.unhandledRejection(diagnostic.message, diagnostic.stack);
+  });
+}
+
 function notifyListeners() {
   for (const listener of listeners) {
     listener(currentBootstrap);
@@ -155,6 +281,8 @@ function notifyRevealListeners() {
     listener(currentRevealRequest);
   }
 }
+
+installDiagnosticsBridge();
 
 window.ToasttyLocalDocumentPanel = {
   receiveBootstrap(bootstrap) {

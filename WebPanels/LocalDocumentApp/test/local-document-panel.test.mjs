@@ -163,6 +163,53 @@ test("read mode exposes an Open in Default App action through the native bridge"
   assert.match(bridgeSource, /openInDefaultApp\(\)/);
 });
 
+test("native bridge forwards local-document diagnostics and render lifecycle events", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/nativeBridge.ts"),
+    "utf8"
+  );
+
+  assert.match(source, /type: "consoleMessage"/);
+  assert.match(source, /type: "javascriptError"/);
+  assert.match(source, /type: "unhandledRejection"/);
+  assert.match(source, /type: "renderReady"/);
+  assert.match(source, /consoleMessage\(level: "warn" \| "error", message: string\)/);
+  assert.match(source, /javascriptError\(/);
+  assert.match(source, /unhandledRejection\(reason: string, stack: string \| null\)/);
+  assert.match(source, /renderReady\(displayName: string, contentRevision: number, isEditing: boolean\)/);
+});
+
+test("bootstrap installs diagnostic forwarding for console and unhandled page failures", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/bootstrap.ts"),
+    "utf8"
+  );
+
+  assert.match(source, /window\.__toasttyLocalDocumentDiagnosticsInstalled/);
+  assert.match(source, /console\.warn = \(...args: unknown\[\]\) => \{/);
+  assert.match(source, /console\.error = \(...args: unknown\[\]\) => \{/);
+  assert.match(source, /window\.addEventListener\("error",/);
+  assert.match(source, /window\.addEventListener\("unhandledrejection",/);
+  assert.match(source, /localDocumentNativeBridge\.consoleMessage\("warn"/);
+  assert.match(source, /localDocumentNativeBridge\.consoleMessage\("error"/);
+  assert.match(source, /localDocumentNativeBridge\.javascriptError\(/);
+  assert.match(source, /localDocumentNativeBridge\.unhandledRejection\(/);
+});
+
+test("panel app reports render readiness once bootstrap-backed content is mounted", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /React\.useEffect\(\(\) => \{/);
+  assert.match(source, /if \(!bootstrap\) \{/);
+  assert.match(source, /localDocumentNativeBridge\.renderReady\(/);
+  assert.match(source, /bootstrap\.displayName/);
+  assert.match(source, /bootstrap\.contentRevision/);
+  assert.match(source, /bootstrap\.isEditing/);
+});
+
 test("highlight.js registers the first-slice source-code grammars", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),

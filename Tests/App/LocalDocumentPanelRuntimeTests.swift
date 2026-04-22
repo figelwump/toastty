@@ -692,6 +692,96 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(evaluator.scripts[2].contains("bridge.revealLine(12);"))
     }
 
+    func testBridgeDiagnosticsLogJavaScriptFailuresAndRenderEvents() {
+        let logSpy = DiagnosticLogSpy()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            diagnosticLogger: logSpy.record
+        )
+
+        runtime.simulateBridgeMessageForTesting([
+            "type": "consoleMessage",
+            "level": "warn",
+            "message": "Markdown highlighting failed"
+        ])
+        runtime.simulateBridgeMessageForTesting([
+            "type": "javascriptError",
+            "message": "ReferenceError: missingRoot is not defined",
+            "source": "LocalDocumentPanelApp.js",
+            "line": 88,
+            "column": 14,
+            "stack": "ReferenceError: missingRoot is not defined\n    at render"
+        ])
+        runtime.simulateBridgeMessageForTesting([
+            "type": "unhandledRejection",
+            "reason": "Render promise failed",
+            "stack": "Error: Render promise failed"
+        ])
+        runtime.simulateBridgeMessageForTesting([
+            "type": "renderReady",
+            "displayName": "agents.toml",
+            "contentRevision": 3,
+            "isEditing": false
+        ])
+
+        XCTAssertEqual(
+            logSpy.entries.map(\.message),
+            [
+                "Local document JavaScript console warning",
+                "Local document JavaScript error",
+                "Local document JavaScript unhandled rejection",
+                "Local document render ready",
+            ]
+        )
+        XCTAssertEqual(logSpy.entries[0].level, .warning)
+        XCTAssertEqual(logSpy.entries[0].metadata["console_level"], "warn")
+        XCTAssertEqual(logSpy.entries[0].metadata["console_message"], "Markdown highlighting failed")
+        XCTAssertEqual(logSpy.entries[1].level, .error)
+        XCTAssertEqual(logSpy.entries[1].metadata["javascript_source"], "LocalDocumentPanelApp.js")
+        XCTAssertEqual(logSpy.entries[1].metadata["javascript_line"], "88")
+        XCTAssertEqual(logSpy.entries[1].metadata["javascript_column"], "14")
+        XCTAssertEqual(logSpy.entries[2].level, .error)
+        XCTAssertEqual(logSpy.entries[2].metadata["javascript_reason"], "Render promise failed")
+        XCTAssertEqual(logSpy.entries[3].level, .debug)
+        XCTAssertEqual(logSpy.entries[3].metadata["render_display_name"], "agents.toml")
+        XCTAssertEqual(logSpy.entries[3].metadata["render_content_revision"], "3")
+        XCTAssertEqual(logSpy.entries[3].metadata["render_is_editing"], "false")
+    }
+
+    func testNavigationFailuresAndProcessTerminationEmitDiagnostics() {
+        let logSpy = DiagnosticLogSpy()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            diagnosticLogger: logSpy.record
+        )
+        let webView = WKWebView()
+        webView.loadHTMLString("<!doctype html><title>Local Document</title>", baseURL: nil)
+
+        runtime.webView(webView, didFail: nil, withError: NSError(domain: NSURLErrorDomain, code: -1100))
+        runtime.webView(
+            webView,
+            didFailProvisionalNavigation: nil,
+            withError: NSError(domain: NSURLErrorDomain, code: -1003)
+        )
+        runtime.webViewWebContentProcessDidTerminate(webView)
+
+        XCTAssertEqual(
+            logSpy.entries.map(\.message),
+            [
+                "Local document web view navigation failed",
+                "Local document web view provisional navigation failed",
+                "Local document web content process terminated",
+            ]
+        )
+        XCTAssertTrue(logSpy.entries.allSatisfy { $0.level == .warning })
+        XCTAssertTrue(logSpy.entries[0].metadata["error"]?.isEmpty == false)
+        XCTAssertTrue(logSpy.entries[1].metadata["error"]?.isEmpty == false)
+    }
+
     func testCancelEditModeRestoresPreviewAndAdvancesRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 
@@ -2461,6 +2551,27 @@ private final class BridgeScriptEvaluatorSpy {
             "Unused bridge responses remained: \(responses.count)",
             file: file,
             line: line
+        )
+    }
+}
+
+@MainActor
+private final class DiagnosticLogSpy {
+    struct Entry: Equatable {
+        let level: ToasttyLogLevel
+        let message: String
+        let metadata: [String: String]
+    }
+
+    private(set) var entries: [Entry] = []
+
+    func record(_ level: ToasttyLogLevel, _ message: String, _ metadata: [String: String]) {
+        entries.append(
+            Entry(
+                level: level,
+                message: message,
+                metadata: metadata
+            )
         )
     }
 }

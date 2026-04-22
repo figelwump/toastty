@@ -312,6 +312,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     typealias BridgeScriptEvaluator = @MainActor (String, @escaping BridgeScriptCompletion) -> Void
     typealias SearchExecutor = @MainActor (FocusAwareWKWebView, LocalDocumentSearchCommand, @escaping (Bool?) -> Void) -> Void
     typealias SearchSessionResetter = @MainActor (FocusAwareWKWebView) -> Void
+    typealias DiagnosticLogger = @MainActor @Sendable (ToasttyLogLevel, String, [String: String]) -> Void
     private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
     nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
@@ -327,6 +328,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private let bridgeScriptEvaluator: BridgeScriptEvaluator
     private let searchExecutor: SearchExecutor
     private let searchSessionResetter: SearchSessionResetter
+    private let diagnosticLogger: DiagnosticLogger
     private let reloadDebounceNanoseconds: UInt64
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
@@ -380,6 +382,18 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         searchSessionResetter: @escaping SearchSessionResetter = { webView in
             LocalDocumentPanelRuntime.resetSearchSession(in: webView)
         },
+        diagnosticLogger: @escaping DiagnosticLogger = { level, message, metadata in
+            switch level {
+            case .debug:
+                ToasttyLog.debug(message, category: .state, metadata: metadata)
+            case .info:
+                ToasttyLog.info(message, category: .state, metadata: metadata)
+            case .warning:
+                ToasttyLog.warning(message, category: .state, metadata: metadata)
+            case .error:
+                ToasttyLog.error(message, category: .state, metadata: metadata)
+            }
+        },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
@@ -392,6 +406,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.externalFileOpener = externalFileOpener
         self.searchExecutor = searchExecutor
         self.searchSessionResetter = searchSessionResetter
+        self.diagnosticLogger = diagnosticLogger
 
         let configuration = Self.makeWebViewConfiguration(
             for: WebPanelDefinition.localDocument.capabilityProfile
@@ -458,9 +473,70 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         )
     }
 
+    private func diagnosticMetadata(extra: [String: String] = [:]) -> [String: String] {
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "host_lifecycle_state": String(describing: lifecycleState),
+            "bridge_ready": isPanelBridgeReady ? "true" : "false",
+            "search_controller_ready": isSearchControllerReady ? "true" : "false",
+            "has_bootstrap": currentBootstrap != nil ? "true" : "false",
+            "has_pending_bootstrap_script": pendingBootstrapScript != nil ? "true" : "false",
+        ]
+
+        if let filePath = currentBootstrap?.filePath ?? session?.filePath ?? currentWebState?.filePath,
+           filePath.isEmpty == false {
+            metadata["file_path"] = filePath
+        }
+
+        let displayName = currentBootstrap?.displayName ?? session?.displayName ?? currentWebState?.title
+        if let displayName, displayName.isEmpty == false {
+            metadata["display_name"] = displayName
+        }
+
+        if let currentAssetPath = currentAssetURL?.path, currentAssetPath.isEmpty == false {
+            metadata["asset_path"] = currentAssetPath
+        }
+
+        if let pendingRevealLine {
+            metadata["pending_reveal_line"] = String(pendingRevealLine)
+        }
+
+        for (key, value) in extra where value.isEmpty == false {
+            metadata[key] = value
+        }
+
+        return metadata
+    }
+
+    private func logDiagnostic(
+        _ level: ToasttyLogLevel,
+        _ message: String,
+        metadata: [String: String] = [:]
+    ) {
+        diagnosticLogger(level, message, diagnosticMetadata(extra: metadata))
+    }
+
+    private func clampedDiagnosticValue(_ value: String?, limit: Int = 2_000) -> String? {
+        guard let value, value.isEmpty == false else {
+            return nil
+        }
+        guard value.count > limit else {
+            return value
+        }
+        let endIndex = value.index(value.startIndex, offsetBy: limit - 1)
+        return "\(value[..<endIndex])…"
+    }
+
     #if DEBUG
     func simulateBridgeReadyForTesting() {
         handleBridgeEvent(.bridgeReady)
+    }
+
+    func simulateBridgeMessageForTesting(_ body: [String: Any]) {
+        guard let event = BridgeEvent(messageBody: body) else {
+            return
+        }
+        handleBridgeEvent(event)
     }
     #endif
 
@@ -1085,6 +1161,11 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
 }
 
 private extension LocalDocumentPanelRuntime {
+    enum JavaScriptConsoleLevel: String {
+        case warn
+        case error
+    }
+
     enum BridgeEvent {
         case enterEdit
         case openInDefaultApp
@@ -1093,6 +1174,16 @@ private extension LocalDocumentPanelRuntime {
         case cancelEdit(baseContentRevision: Int)
         case overwriteAfterConflict(baseContentRevision: Int)
         case bridgeReady
+        case consoleMessage(level: JavaScriptConsoleLevel, message: String)
+        case javascriptError(
+            message: String,
+            source: String?,
+            line: Int?,
+            column: Int?,
+            stack: String?
+        )
+        case unhandledRejection(reason: String, stack: String?)
+        case renderReady(displayName: String, contentRevision: Int, isEditing: Bool)
         case searchControllerReady
         case searchControllerUnavailable
 
@@ -1100,6 +1191,24 @@ private extension LocalDocumentPanelRuntime {
             guard let body = messageBody as? [String: Any],
                   let type = body["type"] as? String else {
                 return nil
+            }
+
+            func optionalString(_ key: String) -> String? {
+                body[key] as? String
+            }
+
+            func optionalInt(_ key: String) -> Int? {
+                if let intValue = body[key] as? Int {
+                    return intValue
+                }
+                return (body[key] as? NSNumber)?.intValue
+            }
+
+            func boolValue(_ key: String) -> Bool? {
+                if let boolValue = body[key] as? Bool {
+                    return boolValue
+                }
+                return (body[key] as? NSNumber)?.boolValue
             }
 
             switch type {
@@ -1130,6 +1239,40 @@ private extension LocalDocumentPanelRuntime {
                 self = .overwriteAfterConflict(baseContentRevision: baseContentRevision)
             case "bridgeReady":
                 self = .bridgeReady
+            case "consoleMessage":
+                guard let rawLevel = body["level"] as? String,
+                      let level = JavaScriptConsoleLevel(rawValue: rawLevel),
+                      let message = body["message"] as? String else {
+                    return nil
+                }
+                self = .consoleMessage(level: level, message: message)
+            case "javascriptError":
+                guard let message = body["message"] as? String else {
+                    return nil
+                }
+                self = .javascriptError(
+                    message: message,
+                    source: optionalString("source"),
+                    line: optionalInt("line"),
+                    column: optionalInt("column"),
+                    stack: optionalString("stack")
+                )
+            case "unhandledRejection":
+                guard let reason = body["reason"] as? String else {
+                    return nil
+                }
+                self = .unhandledRejection(reason: reason, stack: optionalString("stack"))
+            case "renderReady":
+                guard let displayName = body["displayName"] as? String,
+                      let contentRevision = optionalInt("contentRevision"),
+                      let isEditing = boolValue("isEditing") else {
+                    return nil
+                }
+                self = .renderReady(
+                    displayName: displayName,
+                    contentRevision: contentRevision,
+                    isEditing: isEditing
+                )
             case "searchControllerReady":
                 self = .searchControllerReady
             case "searchControllerUnavailable":
@@ -1155,8 +1298,55 @@ private extension LocalDocumentPanelRuntime {
         case .overwriteAfterConflict(let baseContentRevision):
             overwriteAfterConflict(baseContentRevision: baseContentRevision)
         case .bridgeReady:
+            logDiagnostic(.debug, "Local document bridge ready")
             isPanelBridgeReady = true
             pushPendingBootstrapIfPossible()
+        case .consoleMessage(let level, let message):
+            let metadata = [
+                "console_level": level.rawValue,
+                "console_message": clampedDiagnosticValue(message) ?? "<empty>",
+            ]
+            switch level {
+            case .warn:
+                logDiagnostic(.warning, "Local document JavaScript console warning", metadata: metadata)
+            case .error:
+                logDiagnostic(.error, "Local document JavaScript console error", metadata: metadata)
+            }
+        case .javascriptError(let message, let source, let line, let column, let stack):
+            var metadata = [
+                "javascript_message": clampedDiagnosticValue(message) ?? "<empty>",
+            ]
+            if let source = clampedDiagnosticValue(source) {
+                metadata["javascript_source"] = source
+            }
+            if let line {
+                metadata["javascript_line"] = String(line)
+            }
+            if let column {
+                metadata["javascript_column"] = String(column)
+            }
+            if let stack = clampedDiagnosticValue(stack) {
+                metadata["javascript_stack"] = stack
+            }
+            logDiagnostic(.error, "Local document JavaScript error", metadata: metadata)
+        case .unhandledRejection(let reason, let stack):
+            var metadata = [
+                "javascript_reason": clampedDiagnosticValue(reason) ?? "<empty>",
+            ]
+            if let stack = clampedDiagnosticValue(stack) {
+                metadata["javascript_stack"] = stack
+            }
+            logDiagnostic(.error, "Local document JavaScript unhandled rejection", metadata: metadata)
+        case .renderReady(let displayName, let contentRevision, let isEditing):
+            logDiagnostic(
+                .debug,
+                "Local document render ready",
+                metadata: [
+                    "render_display_name": clampedDiagnosticValue(displayName) ?? "<empty>",
+                    "render_content_revision": String(contentRevision),
+                    "render_is_editing": isEditing ? "true" : "false",
+                ]
+            )
         case .searchControllerReady:
             isSearchControllerReady = true
             refreshSearchAfterBootstrapIfNeeded()
@@ -1352,6 +1542,7 @@ private extension LocalDocumentPanelRuntime {
                 title: "Local document assets unavailable",
                 detail: "Toastty could not load the bundled local document panel resources."
             )
+            logDiagnostic(.error, "Local document assets unavailable")
             isPanelBridgeReady = false
             isSearchControllerReady = false
             webView.loadHTMLString(fallbackHTML, baseURL: nil)
@@ -1367,6 +1558,14 @@ private extension LocalDocumentPanelRuntime {
         isPanelBridgeReady = false
         isSearchControllerReady = false
         currentAssetURL = entryURL
+        logDiagnostic(
+            .debug,
+            "Loading local document panel app",
+            metadata: [
+                "entry_path": entryURL.path,
+                "read_access_path": assetDirectoryURL.path,
+            ]
+        )
         webView.loadFileURL(entryURL, allowingReadAccessTo: assetDirectoryURL)
     }
 
@@ -1395,7 +1594,20 @@ private extension LocalDocumentPanelRuntime {
                 self.pendingBootstrapScript = nil
                 self.pushPendingRevealIfPossible()
                 self.refreshSearchAfterBootstrapIfNeeded()
+                self.logDiagnostic(.debug, "Delivered local document bootstrap to page")
+                return
             }
+            var metadata: [String: String] = [:]
+            if let error {
+                metadata["error"] = self.clampedDiagnosticValue(error.localizedDescription) ?? "unknown"
+            } else {
+                metadata["delivery_result"] = String(describing: result)
+            }
+            self.logDiagnostic(
+                .debug,
+                "Local document bootstrap delivery deferred",
+                metadata: metadata
+            )
         }
     }
 
@@ -1445,9 +1657,25 @@ private extension LocalDocumentPanelRuntime {
             guard let self else { return }
             guard error == nil, Self.bridgeCommandWasDelivered(result) else {
                 self.pendingBootstrapScript = nil
+                var metadata: [String: String] = [:]
+                if let error {
+                    metadata["error"] = self.clampedDiagnosticValue(error.localizedDescription) ?? "unknown"
+                } else {
+                    metadata["delivery_result"] = String(describing: result)
+                }
+                self.logDiagnostic(
+                    .debug,
+                    "Local document text scale update deferred",
+                    metadata: metadata
+                )
                 self.pushPendingBootstrapIfPossible()
                 return
             }
+            self.logDiagnostic(
+                .debug,
+                "Delivered local document text scale update",
+                metadata: ["text_scale": String(format: "%.4f", self.currentTextScale)]
+            )
         }
     }
 
@@ -1494,11 +1722,33 @@ private extension LocalDocumentPanelRuntime {
             guard let self else { return }
             if error == nil, Self.bridgeCommandWasDelivered(result) {
                 self.pendingRevealLine = nil
+                self.logDiagnostic(
+                    .debug,
+                    "Delivered local document line reveal",
+                    metadata: ["revealed_line": String(pendingRevealLine)]
+                )
                 return
             }
             if error != nil {
+                self.logDiagnostic(
+                    .debug,
+                    "Local document line reveal deferred",
+                    metadata: [
+                        "revealed_line": String(pendingRevealLine),
+                        "error": self.clampedDiagnosticValue(error?.localizedDescription) ?? "unknown",
+                    ]
+                )
                 self.pushPendingBootstrapIfPossible()
+                return
             }
+            self.logDiagnostic(
+                .debug,
+                "Local document line reveal bridge unavailable",
+                metadata: [
+                    "revealed_line": String(pendingRevealLine),
+                    "delivery_result": String(describing: result),
+                ]
+            )
         }
     }
 
@@ -1791,8 +2041,57 @@ private extension LocalDocumentPanelRuntime {
 
 extension LocalDocumentPanelRuntime: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        logDiagnostic(
+            .debug,
+            "Local document web view finished navigation",
+            metadata: [
+                "navigated_url": webView.url?.absoluteString ?? "<none>",
+            ]
+        )
         pushPendingBootstrapIfPossible()
         pushPendingRevealIfPossible()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        _ = navigation
+        logDiagnostic(
+            .warning,
+            "Local document web view navigation failed",
+            metadata: [
+                "navigated_url": webView.url?.absoluteString ?? "<none>",
+                "error": clampedDiagnosticValue(error.localizedDescription) ?? "unknown",
+            ]
+        )
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        _ = navigation
+        logDiagnostic(
+            .warning,
+            "Local document web view provisional navigation failed",
+            metadata: [
+                "navigated_url": webView.url?.absoluteString ?? "<none>",
+                "error": clampedDiagnosticValue(error.localizedDescription) ?? "unknown",
+            ]
+        )
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        logDiagnostic(
+            .warning,
+            "Local document web content process terminated",
+            metadata: [
+                "navigated_url": webView.url?.absoluteString ?? "<none>",
+            ]
+        )
     }
 
     func webView(

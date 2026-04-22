@@ -1352,6 +1352,18 @@ export function LocalDocumentPanelApp() {
     updateDraftContent
   } = useLocalDocumentPanelState();
 
+  React.useEffect(() => {
+    if (!bootstrap) {
+      return;
+    }
+
+    localDocumentNativeBridge.renderReady(
+      bootstrap.displayName,
+      bootstrap.contentRevision,
+      bootstrap.isEditing
+    );
+  }, [bootstrap?.displayName, bootstrap?.contentRevision, bootstrap?.isEditing]);
+
   if (!bootstrap) {
     return (
       <main className="local-document-shell local-document-shell-loading">
