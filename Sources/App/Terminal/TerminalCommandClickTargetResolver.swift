@@ -4,6 +4,7 @@ import Foundation
 enum TerminalCommandClickTarget: Equatable, Sendable {
     case localDocumentFile(path: String, lineNumber: Int?, placement: WebPanelPlacement)
     case localDirectory(path: String)
+    case unresolvedLocalDocument(URL)
     case passthrough(URL)
 }
 
@@ -33,6 +34,10 @@ enum TerminalCommandClickTargetResolver {
             fileManager: fileManager
         ) {
             return .localDirectory(path: localDirectoryPath)
+        }
+
+        if LocalFileLinkResolver.looksLikeSupportedLocalDocumentTarget(for: hoveredURL, cwd: cwd) {
+            return .unresolvedLocalDocument(hoveredURL)
         }
 
         return .passthrough(hoveredURL)

@@ -973,6 +973,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 direction: direction,
                 workingDirectory: path
             )
+        case .unresolvedLocalDocument:
+            result = false
         case .passthrough(let passthroughURL):
             result = AppURLRouter.open(
                 passthroughURL,
@@ -997,6 +999,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             targetMetadata = [
                 "resolved_path": path,
                 "split_direction": useAlternatePlacement ? SlotSplitDirection.down.rawValue : SlotSplitDirection.right.rawValue,
+            ]
+        case .unresolvedLocalDocument(let unresolvedURL):
+            targetKind = "unresolved_local_document"
+            targetMetadata = [
+                "resolved_url": unresolvedURL.absoluteString,
             ]
         case .passthrough(let passthroughURL):
             targetKind = "passthrough"

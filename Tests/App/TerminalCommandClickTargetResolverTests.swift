@@ -43,7 +43,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(url))
+        XCTAssertEqual(target, .unresolvedLocalDocument(url))
     }
 
     func testResolveMatchesUppercaseMarkdownExtension() throws {
@@ -313,6 +313,34 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    func testResolveRecoversUniqueNestedRelativeChildPathWithLineNumber() throws {
+        let fixture = try makeNestedChildDocumentFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "Sources/App/TerminalHostView.swift:89")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.documentPath, lineNumber: 89, placement: .newTab)
+        )
+    }
+
+    func testResolveDoesNotGuessAmbiguousNestedRelativeChildPath() throws {
+        let rootPath = try makeAmbiguousNestedChildDocumentFixture()
+        let url = try XCTUnwrap(URL(string: "Sources/App/TerminalHostView.swift:89"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .unresolvedLocalDocument(url))
+    }
+
     func testResolveRecoversTrailingPunctuationAfterLineNumberRevealTarget() throws {
         let fixture = try makeFixture()
 
@@ -369,7 +397,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(url))
+        XCTAssertEqual(target, .unresolvedLocalDocument(url))
     }
 
     func testResolveDoesNotTreatUnsupportedFileNumericSuffixAsLocalDocumentReveal() throws {
@@ -560,6 +588,54 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             symlinkPath: symlinkURL.standardizedFileURL.path,
             symlinkURL: symlinkURL
         )
+    }
+
+    private func makeNestedChildDocumentFixture() throws -> (rootPath: String, documentPath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-nested-child-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let documentURL = rootURL
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("App", isDirectory: true)
+            .appendingPathComponent("Terminal", isDirectory: true)
+            .appendingPathComponent("TerminalHostView.swift", isDirectory: false)
+
+        try fileManager.createDirectory(at: documentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("struct TerminalHostView {}\n".utf8).write(to: documentURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            documentPath: documentURL.standardizedFileURL.resolvingSymlinksInPath().path
+        )
+    }
+
+    private func makeAmbiguousNestedChildDocumentFixture() throws -> String {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-ambiguous-child-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let terminalURL = rootURL
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("App", isDirectory: true)
+            .appendingPathComponent("Terminal", isDirectory: true)
+            .appendingPathComponent("TerminalHostView.swift", isDirectory: false)
+        let legacyURL = rootURL
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("App", isDirectory: true)
+            .appendingPathComponent("Legacy", isDirectory: true)
+            .appendingPathComponent("TerminalHostView.swift", isDirectory: false)
+
+        try fileManager.createDirectory(at: terminalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: legacyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("struct TerminalHostView {}\n".utf8).write(to: terminalURL)
+        try Data("struct TerminalHostViewLegacy {}\n".utf8).write(to: legacyURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return rootURL.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     private func expectedLocalDocumentTarget(

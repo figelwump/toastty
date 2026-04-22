@@ -1003,6 +1003,136 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenCommandClickRecoversNestedRelativeChildPathForLocalDocumentReveal() throws {
+        let fixture = try makeNestedChildDocumentFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        registry.bind(store: store)
+        registry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+        webPanelRuntimeRegistry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "Sources/App/TerminalHostView.swift:89")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected recovered nested-child link to open a local document panel")
+            return
+        }
+
+        XCTAssertEqual(webState.filePath, fixture.documentPath)
+        XCTAssertEqual(
+            webPanelRuntimeRegistry.localDocumentRuntime(for: panelID).automationState().pendingRevealLine,
+            89
+        )
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickUnresolvedRelativeLocalDocumentPathDoesNotCreatePanel() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertFalse(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/missing-plan.md:17")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.focusedPanelID, sourcePanelID)
+        try StateValidator.validate(store.state)
+    }
+
     func testOpenSearchSelectionURLAlwaysUsesToasttyNewTabPlacement() throws {
         let workspace = WorkspaceState.bootstrap(title: "One")
         let windowID = UUID()
@@ -1323,6 +1453,28 @@ private extension TerminalRuntimeRegistryStoreBindingTests {
             rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
             markdownPath: markdownURL.standardizedFileURL.resolvingSymlinksInPath().path,
             markdownURL: markdownURL
+        )
+    }
+
+    func makeNestedChildDocumentFixture() throws -> (rootPath: String, documentPath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-registry-nested-child-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let documentURL = rootURL
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("App", isDirectory: true)
+            .appendingPathComponent("Terminal", isDirectory: true)
+            .appendingPathComponent("TerminalHostView.swift", isDirectory: false)
+
+        try fileManager.createDirectory(at: documentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("struct TerminalHostView {}\n".utf8).write(to: documentURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            documentPath: documentURL.standardizedFileURL.resolvingSymlinksInPath().path
         )
     }
 
