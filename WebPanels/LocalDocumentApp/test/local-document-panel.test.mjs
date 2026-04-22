@@ -85,6 +85,14 @@ test("markdown gutter stays non-selectable while wrapped content stays continuou
     /\.local-document-code-markdown-gutter\s*\{[^}]*display: flex/
   );
   assert.match(styles, /\.local-document-code-markdown-surface/);
+  assert.match(
+    styles,
+    /\.local-document-code-plain,\s*\.local-document-code-markdown\s*\{[^}]*font-size: calc\(13px \* var\(--toastty-markdown-text-scale\)\)/
+  );
+  assert.match(
+    styles,
+    /\.local-document-code-plain,\s*\.local-document-code-markdown\s*\{[^}]*line-height: var\(--local-document-code-line-height\)/
+  );
 });
 
 test("plain-code formats guard null highlight languages before touching highlight.js", async () => {

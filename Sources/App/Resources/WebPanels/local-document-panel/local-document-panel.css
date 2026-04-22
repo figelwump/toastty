@@ -333,7 +333,8 @@ body {
 }
 
 .local-document-code-content code,
-.local-document-code-plain {
+.local-document-code-plain,
+.local-document-code-markdown {
   display: block;
   min-width: max-content;
   font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
