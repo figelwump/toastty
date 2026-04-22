@@ -360,6 +360,8 @@ test("styles keep the gutter sticky and use flat reveal highlights for both the 
   assert.match(source, /\.local-document-code-gutter-frame \{\s*position: sticky;/);
   assert.match(source, /\.local-document-code-gutter-frame \{[^}]*background: var\(--pre-bg\);/);
   assert.match(source, /\.local-document-code-gutter-reveal \{/);
+  assert.match(source, /\.local-document-code-gutter-reveal \{[^}]*linear-gradient\(var\(--pre-bg\), var\(--pre-bg\)\)/);
+  assert.match(source, /\.local-document-code-gutter-reveal \{[^}]*background-size: 100% 100%, var\(--local-document-code-gutter-divider-width\) 100%/);
   assert.match(source, /\.local-document-code-line-reveal,\s*\.local-document-code-gutter-reveal \{/);
   assert.doesNotMatch(source, /animation: local-document-line-reveal/);
   assert.doesNotMatch(source, /border-radius: 8px/);

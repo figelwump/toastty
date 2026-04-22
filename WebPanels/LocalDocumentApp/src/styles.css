@@ -258,6 +258,7 @@ body {
   --local-document-code-gutter-padding-left: 18px;
   --local-document-code-gutter-padding-right: 10px;
   --local-document-code-gutter-digit-width: 3ch;
+  --local-document-code-gutter-divider-width: 1px;
   flex: 1;
   min-height: 0;
   background: var(--pre-bg);
@@ -284,7 +285,7 @@ body {
   z-index: 2;
   flex: 0 0 auto;
   background: var(--pre-bg);
-  border-right: 1px solid rgba(255, 224, 191, 0.08);
+  border-right: var(--local-document-code-gutter-divider-width) solid rgba(255, 224, 191, 0.08);
 }
 
 .local-document-code-gutter {
@@ -329,6 +330,14 @@ body {
 }
 
 .local-document-code-gutter-reveal {
+  /* Neutralize the divider under the translucent reveal so the band reads as continuous. */
+  right: calc(-1 * var(--local-document-code-gutter-divider-width));
+  background:
+    linear-gradient(var(--code-line-reveal), var(--code-line-reveal)),
+    linear-gradient(var(--pre-bg), var(--pre-bg));
+  background-size: 100% 100%, var(--local-document-code-gutter-divider-width) 100%;
+  background-position: 0 0, 100% 0;
+  background-repeat: no-repeat;
   z-index: 0;
 }
 
@@ -367,7 +376,7 @@ body {
     var(--local-document-code-gutter-digit-width)
   );
   padding: 20px 0 28px;
-  border-right: 1px solid rgba(255, 224, 191, 0.08);
+  border-right: var(--local-document-code-gutter-divider-width) solid rgba(255, 224, 191, 0.08);
   background: rgba(255, 224, 191, 0.03);
   align-self: start;
 }
