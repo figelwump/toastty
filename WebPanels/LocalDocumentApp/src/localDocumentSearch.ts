@@ -7,6 +7,8 @@ import { localDocumentNativeBridge } from "./nativeBridge";
 
 const MATCH_HIGHLIGHT_NAME = "toastty-local-document-find-match";
 const ACTIVE_HIGHLIGHT_NAME = "toastty-local-document-find-active";
+const FALLBACK_MATCH_CLASS = "toastty-local-document-find-match-fallback";
+const FALLBACK_ACTIVE_CLASS = "toastty-local-document-find-active-fallback";
 
 interface TextMatch {
   start: number;
@@ -65,10 +67,40 @@ function highlightConstructor(): HighlightConstructor | null {
   return constructor ?? null;
 }
 
-function clearPreviewHighlights() {
+function unwrapElement(element: Element) {
+  const parent = element.parentNode;
+  if (!parent) {
+    return;
+  }
+
+  while (element.firstChild) {
+    parent.insertBefore(element.firstChild, element);
+  }
+  parent.removeChild(element);
+}
+
+function clearPreviewFallbackHighlights(root: ParentNode | null) {
+  if (root === null || !("querySelectorAll" in root)) {
+    return;
+  }
+
+  const wrappers = Array.from(
+    root.querySelectorAll(`.${FALLBACK_MATCH_CLASS}, .${FALLBACK_ACTIVE_CLASS}`)
+  );
+  for (const wrapper of wrappers) {
+    unwrapElement(wrapper);
+  }
+
+  if (root instanceof Node) {
+    root.normalize();
+  }
+}
+
+function clearPreviewHighlights(root: ParentNode | null = document) {
   highlightRegistry()?.delete(MATCH_HIGHLIGHT_NAME);
   highlightRegistry()?.delete(ACTIVE_HIGHLIGHT_NAME);
   window.getSelection()?.removeAllRanges();
+  clearPreviewFallbackHighlights(root);
 }
 
 function searchQueryForCommand(
@@ -269,6 +301,20 @@ function previewRectForRange(range: Range): PreviewRevealRect | null {
   return null;
 }
 
+function previewRectForElement(element: Element): PreviewRevealRect | null {
+  const rect = element.getBoundingClientRect();
+  if (rect.width > 0 || rect.height > 0) {
+    return {
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+
+  return null;
+}
+
 function scrollPreviewRectIntoView(root: HTMLElement, rect: PreviewRevealRect): boolean {
   if (root.clientHeight === 0 || root.clientWidth === 0) {
     return false;
@@ -336,13 +382,45 @@ function scrollPreviewMatchIntoView(
   });
 }
 
+function wrapRangeInHighlightSpan(range: Range, className: string): HTMLSpanElement | null {
+  const wrapper = document.createElement("span");
+  wrapper.className = className;
+  const contents = range.extractContents();
+  if (contents.childNodes.length === 0) {
+    return null;
+  }
+  wrapper.append(contents);
+  range.insertNode(wrapper);
+  return wrapper;
+}
+
+function applyPreviewFallbackHighlights(
+  rangedMatches: Array<{ match: TextMatch; range: Range }>,
+  activeMatchIndex: number
+): HTMLSpanElement | null {
+  let activeWrapper: HTMLSpanElement | null = null;
+
+  for (let originalIndex = rangedMatches.length - 1; originalIndex >= 0; originalIndex -= 1) {
+    const entry = rangedMatches[originalIndex];
+    const className = originalIndex === activeMatchIndex
+      ? `${FALLBACK_MATCH_CLASS} ${FALLBACK_ACTIVE_CLASS}`
+      : FALLBACK_MATCH_CLASS;
+    const wrapper = wrapRangeInHighlightSpan(entry.range, className);
+    if (originalIndex === activeMatchIndex && wrapper) {
+      activeWrapper = wrapper;
+    }
+  }
+
+  return activeWrapper;
+}
+
 function applyPreviewSearch(
   root: HTMLElement | null,
   contentRoot: HTMLElement | null,
   command: LocalDocumentPanelSearchCommand,
   currentState: LocalDocumentPanelSearchState
 ): LocalDocumentPanelSearchState {
-  clearPreviewHighlights();
+  clearPreviewHighlights(contentRoot);
 
   const query = searchQueryForCommand(command, currentState);
   if (query.length === 0 || root === null || contentRoot === null) {
@@ -377,13 +455,27 @@ function applyPreviewSearch(
 
   const registry = highlightRegistry();
   const Highlight = highlightConstructor();
+  let activeFallbackHighlight: HTMLSpanElement | null = null;
   if (registry && Highlight) {
     registry.set(MATCH_HIGHLIGHT_NAME, new Highlight(...ranges));
     registry.set(ACTIVE_HIGHLIGHT_NAME, new Highlight(ranges[resolvedActiveIndex]));
   } else {
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(ranges[resolvedActiveIndex]);
+    activeFallbackHighlight = applyPreviewFallbackHighlights(
+      rangedMatches,
+      resolvedActiveIndex
+    );
+  }
+
+  if (activeFallbackHighlight) {
+    const previewRect = previewRectForElement(activeFallbackHighlight);
+    if (previewRect && scrollPreviewRectIntoView(root, previewRect)) {
+      return {
+        query,
+        matchCount: ranges.length,
+        activeMatchIndex: resolvedActiveIndex,
+        matchFound: true
+      };
+    }
   }
 
   scrollPreviewMatchIntoView(root, contentRoot, textContent, rangedMatches[resolvedActiveIndex]);
@@ -536,7 +628,7 @@ export function useLocalDocumentSearchController(options: {
     const currentQuery = searchStateRef.current.query;
     if (currentQuery.length === 0) {
       if (isEditing === false) {
-        clearPreviewHighlights();
+        clearPreviewHighlights(previewContentRef.current);
       }
       return;
     }

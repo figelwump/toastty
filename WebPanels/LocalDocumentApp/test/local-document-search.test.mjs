@@ -74,8 +74,12 @@ test("local-document search keeps preview highlights in the DOM layer and editor
 
   assert.match(source, /MATCH_HIGHLIGHT_NAME/);
   assert.match(source, /ACTIVE_HIGHLIGHT_NAME/);
+  assert.match(source, /FALLBACK_MATCH_CLASS/);
+  assert.match(source, /FALLBACK_ACTIVE_CLASS/);
   assert.match(source, /registry\.set\(MATCH_HIGHLIGHT_NAME/);
   assert.match(source, /registry\.set\(ACTIVE_HIGHLIGHT_NAME/);
+  assert.match(source, /wrapRangeInHighlightSpan/);
+  assert.match(source, /extractContents\(\)/);
   assert.match(source, /textarea\.setSelectionRange/);
   assert.match(source, /scrollEditorMatchIntoView/);
   assert.match(source, /previewLineIndexForOffset/);
@@ -85,6 +89,7 @@ test("local-document search keeps preview highlights in the DOM layer and editor
   assert.match(source, /MutationObserver/);
   assert.match(source, /localDocumentNativeBridge\.searchControllerReady\(\)/);
   assert.match(source, /localDocumentNativeBridge\.searchControllerUnavailable\(\)/);
+  assert.doesNotMatch(source, /addRange\(/);
 });
 
 test("preview search keeps separate scroll and content refs for the preview surface", async () => {
@@ -199,4 +204,6 @@ test("search styles define distinct preview match and active-match highlights", 
   assert.match(source, /--find-active-bg/);
   assert.match(source, /::highlight\(toastty-local-document-find-match\)/);
   assert.match(source, /::highlight\(toastty-local-document-find-active\)/);
+  assert.match(source, /\.toastty-local-document-find-match-fallback/);
+  assert.match(source, /\.toastty-local-document-find-active-fallback/);
 });

@@ -436,6 +436,16 @@ body {
   color: inherit;
 }
 
+.toastty-local-document-find-match-fallback {
+  background: var(--find-match-bg);
+  color: inherit;
+}
+
+.toastty-local-document-find-active-fallback {
+  background: var(--find-active-bg);
+  color: inherit;
+}
+
 .local-document-editor-shell {
   flex: 1;
   min-height: 0;
