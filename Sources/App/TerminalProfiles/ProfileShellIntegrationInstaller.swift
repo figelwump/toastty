@@ -425,7 +425,9 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             _toastty_sanitize_debug_value() {
             \tlocal value="$1"
-            \tvalue="${value//$'\\0'/ }"
+            \t# Bash shell variables cannot carry NUL bytes, so there is nothing
+            \t# to sanitize there. Trying to replace a literal NUL breaks the
+            \t# function body on macOS /bin/bash 3.2 interactive shells.
             \tvalue="${value//$'\\n'/ }"
             \tvalue="${value//$'\\r'/ }"
             \tvalue="${value//$'\\t'/ }"

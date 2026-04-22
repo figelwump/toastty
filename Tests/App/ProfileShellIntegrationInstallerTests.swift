@@ -416,6 +416,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
 
         let bashSnippetContents = try String(contentsOf: bashSnippetURL, encoding: .utf8)
         XCTAssertTrue(bashSnippetContents.contains("_toastty_initialize_pane_journal"))
+        XCTAssertTrue(bashSnippetContents.contains("_toastty_load_shared_history_if_needed"))
 
         let fishSnippetContents = try String(contentsOf: fishSnippetURL, encoding: .utf8)
         XCTAssertTrue(fishSnippetContents.contains("_toastty_initialize_pane_journal"))
@@ -1656,6 +1657,58 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             output.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
             "echo toastty-bash"
         )
+    }
+
+    func testManagedBashSnippetWritesPaneHistoryDebugRecordsInInteractiveShell() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let panelID = "00000000-0000-0000-0000-000000000001"
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/\(panelID).journal")
+        let sharedHistoryFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/bash.history")
+        let debugLogFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("logs/pane-history-debug/bash-debug.log")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "".write(to: sharedHistoryFile, atomically: true, encoding: .utf8)
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; test -f \"$2\"; cat \"$2\"",
+                "toastty-bash-test",
+                snippetURL.path,
+                debugLogFile.path,
+            ],
+            environment: [
+                "HISTFILE": sharedHistoryFile.path,
+                ToasttyLaunchContextEnvironment.panelIDKey: panelID,
+                ToasttyLaunchContextEnvironment.paneHistoryDebugLogFileKey: debugLogFile.path,
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+            ]
+        )
+
+        XCTAssertTrue(output.contains("event=initialize"))
+        XCTAssertTrue(output.contains("shell=bash"))
+        XCTAssertTrue(output.contains("panel_id=\(panelID)"))
+        XCTAssertTrue(output.contains("launch_reason=restore"))
+        XCTAssertTrue(output.contains("pane_journal_file=\(journalFileURL.path)"))
+        XCTAssertTrue(output.contains("histfile=\(sharedHistoryFile.path)"))
     }
 
     func testManagedBashSnippetAvoidsDuplicateJournalWritesForSameHistoryEntry() throws {
