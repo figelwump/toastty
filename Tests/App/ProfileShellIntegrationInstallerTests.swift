@@ -1273,7 +1273,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
     }
 
-    func testManagedBashSnippetLoadsSharedHistoryOnStartup() throws {
+    func testManagedBashSnippetLoadsSharedHistoryOnFirstPrompt() throws {
         let snippetURL = try writeStandaloneSnippet(
             ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
             fileName: "toastty-profile-shell-integration.bash"
@@ -1300,7 +1300,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; history | tail -n 1 | sed -E 's/^ *[0-9]+ +//'",
+                "source \"$1\"; _toastty_prompt_command; history | tail -n 1 | sed -E 's/^ *[0-9]+ +//'",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
@@ -1343,7 +1343,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "history -s -- 'echo live-entry-one'; history -s -- 'echo live-entry-two'; source \"$1\"; history | tail -n 3 | sed -E 's/^ *[0-9]+ +//'",
+                "history -s -- 'echo live-entry-one'; history -s -- 'echo live-entry-two'; source \"$1\"; _toastty_prompt_command; history | tail -n 3 | sed -E 's/^ *[0-9]+ +//'",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
@@ -1391,7 +1391,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; history | tail -n 3 | sed -E 's/^ *[0-9]+ +//'",
+                "source \"$1\"; _toastty_prompt_command; history | tail -n 3 | sed -E 's/^ *[0-9]+ +//'",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
@@ -1435,7 +1435,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; history",
+                "source \"$1\"; _toastty_prompt_command; history",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
@@ -1505,7 +1505,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; TOASTTY_TEST_SNIPPET=\"$1\" bash --noprofile --norc -ic 'source \"$TOASTTY_TEST_SNIPPET\"; history'",
+                "source \"$1\"; TOASTTY_TEST_SNIPPET=\"$1\" bash --noprofile --norc -ic 'source \"$TOASTTY_TEST_SNIPPET\"; _toastty_prompt_command; history'",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
@@ -1517,6 +1517,55 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
 
         XCTAssertFalse(output.contains("echo toastty-bash"))
+    }
+
+    func testManagedBashSnippetDoesNotDuplicatePaneJournalImportAcrossRepeatedPromptCommands() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let sharedHistoryFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/bash.history")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "echo shared-history\n".write(
+            to: sharedHistoryFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        try paneJournalData(entries: ["echo toastty-bash"]).write(to: journalFileURL, options: .atomic)
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; _toastty_prompt_command; _toastty_prompt_command; history | tail -n 2 | sed -E 's/^ *[0-9]+ +//'",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "HISTFILE": sharedHistoryFile.path,
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+            ]
+        )
+
+        XCTAssertEqual(
+            output.split(separator: "\n").map(String.init),
+            ["echo shared-history", "echo toastty-bash"]
+        )
     }
 
     func testManagedBashSnippetSkipsIncompleteTrailingPaneJournalEntry() throws {
@@ -1547,7 +1596,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; history",
+                "source \"$1\"; _toastty_prompt_command; history",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
@@ -1697,7 +1746,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; test -f \"$2\"; cat \"$2\"",
+                "source \"$1\"; _toastty_prompt_command; test -f \"$2\"; cat \"$2\"",
                 "toastty-bash-test",
                 snippetURL.path,
                 debugLogFile.path,

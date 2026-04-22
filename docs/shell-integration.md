@@ -202,6 +202,20 @@ _toastty_ensure_pane_journal_directory() {
 	return 0
 }
 
+_toastty_schedule_shared_history_import_if_needed() {
+	[[ -z "${_TOASTTY_SHARED_HISTORY_IMPORTED:-}" ]] || return
+	_TOASTTY_SHARED_HISTORY_IMPORT_PENDING=1
+}
+
+_toastty_schedule_pane_journal_import_if_needed() {
+	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+	[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+	[[ "${TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED:-}" == "1" ]] && return
+
+	_TOASTTY_PANE_JOURNAL_IMPORT_PENDING=1
+	export TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED=1
+}
+
 _toastty_load_shared_history_if_needed() {
 	[[ -z "${_TOASTTY_SHARED_HISTORY_IMPORTED:-}" ]] || return
 
@@ -212,28 +226,47 @@ _toastty_load_shared_history_if_needed() {
 	_TOASTTY_SHARED_HISTORY_IMPORTED=1
 }
 
-_toastty_import_pane_journal_if_needed() {
-	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+_toastty_import_startup_history_if_needed() {
+	[[ -n "${_TOASTTY_SHARED_HISTORY_IMPORT_PENDING:-}" || -n "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" ]] || return
 
+	unset _TOASTTY_SHARED_HISTORY_IMPORT_PENDING
+	_toastty_load_shared_history_if_needed
+
+	[[ -n "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" ]] || return
 	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
-	[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+	if [[ -z "$pane_journal_file" || ! -r "$pane_journal_file" ]]; then
+		unset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+		unset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+		export TOASTTY_PANE_JOURNAL_IMPORTED=1
+		return
+	fi
 
 	local entry=""
 	while IFS= read -r -d '' entry; do
 		builtin history -s -- "$entry"
 	done < "$pane_journal_file"
+
+	unset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+	unset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+	export TOASTTY_PANE_JOURNAL_IMPORTED=1
+}
+
+_toastty_prepare_history_for_prompt_if_needed() {
+	[[ -z "${_TOASTTY_PROMPT_HISTORY_READY:-}" ]] || return
+
+	_toastty_import_startup_history_if_needed
+	_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+	_TOASTTY_PROMPT_HISTORY_READY=1
 }
 
 _toastty_initialize_pane_journal() {
 	[[ -z "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]] || return
 
 	if _toastty_ensure_pane_journal_directory; then
-		_toastty_load_shared_history_if_needed
-		_toastty_import_pane_journal_if_needed
-		_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+		_toastty_schedule_shared_history_import_if_needed
+		_toastty_schedule_pane_journal_import_if_needed
 	fi
 
-	unset TOASTTY_LAUNCH_REASON
 	_TOASTTY_PANE_JOURNAL_INITIALIZED=1
 }
 
@@ -272,6 +305,7 @@ _toastty_emit_title() {
 
 _toastty_prompt_command() {
 	if [[ -n "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]]; then
+		_toastty_prepare_history_for_prompt_if_needed
 		_toastty_append_last_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"

@@ -478,45 +478,48 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t[[ -n "$debug_log_file" ]] || return
 
             \tlocal history_output=""
-            \thistory_output=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 2>/dev/null)
+            \thistory_output=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 3 2>/dev/null)
             \t[[ -n "$history_output" ]] || return
 
             \tlocal line=""
             \tlocal entry=""
             \tlocal history_number=""
-            \tlocal third_to_last_entry=""
-            \tlocal previous_entry=""
-            \tlocal last_entry=""
+            \tlocal last_history_number=""
+            \tlocal -a tail_entries=()
             \twhile IFS= read -r line; do
             \t\tentry="${line#"${line%%[![:space:]]*}"}"
             \t\thistory_number="${entry%%[!0-9]*}"
             \t\tif [[ -n "$history_number" ]]; then
+            \t\t\tlast_history_number="$history_number"
             \t\t\tentry="${entry#"$history_number"}"
             \t\t\tentry="${entry#"${entry%%[![:space:]]*}"}"
             \t\tfi
 
-            \t\tthird_to_last_entry="$previous_entry"
-            \t\tprevious_entry="$last_entry"
-            \t\tlast_entry="$entry"
-            \t\t_TOASTTY_HISTORY_ENTRY_COUNT="$(( ${_TOASTTY_HISTORY_ENTRY_COUNT:-0} + 1 ))"
+            \t\ttail_entries+=("$entry")
             \tdone <<< "$history_output"
 
-            \t_TOASTTY_HISTORY_LAST_ENTRY="$last_entry"
-            \t_TOASTTY_HISTORY_PREVIOUS_ENTRY="$previous_entry"
-            \tif [[ -n "$third_to_last_entry" ]]; then
-            \t\t_TOASTTY_HISTORY_TAIL_SUMMARY="$third_to_last_entry"
+            \tlocal entry_count="${#tail_entries[@]}"
+            \t_TOASTTY_HISTORY_ENTRY_COUNT="${last_history_number:-0}"
+            \tif (( entry_count >= 1 )); then
+            \t\t_TOASTTY_HISTORY_LAST_ENTRY="${tail_entries[$(( entry_count - 1 ))]}"
             \tfi
-            \tif [[ -n "$previous_entry" ]]; then
+            \tif (( entry_count >= 2 )); then
+            \t\t_TOASTTY_HISTORY_PREVIOUS_ENTRY="${tail_entries[$(( entry_count - 2 ))]}"
+            \tfi
+            \tif (( entry_count >= 3 )); then
+            \t\t_TOASTTY_HISTORY_TAIL_SUMMARY="${tail_entries[$(( entry_count - 3 ))]}"
+            \tfi
+            \tif (( entry_count >= 2 )); then
             \t\tif [[ -n "${_TOASTTY_HISTORY_TAIL_SUMMARY:-}" ]]; then
             \t\t\t_TOASTTY_HISTORY_TAIL_SUMMARY+=" || "
             \t\tfi
-            \t\t_TOASTTY_HISTORY_TAIL_SUMMARY+="$previous_entry"
+            \t\t_TOASTTY_HISTORY_TAIL_SUMMARY+="${tail_entries[$(( entry_count - 2 ))]}"
             \tfi
-            \tif [[ -n "$last_entry" ]]; then
+            \tif (( entry_count >= 1 )); then
             \t\tif [[ -n "${_TOASTTY_HISTORY_TAIL_SUMMARY:-}" ]]; then
             \t\t\t_TOASTTY_HISTORY_TAIL_SUMMARY+=" || "
             \t\tfi
-            \t\t_TOASTTY_HISTORY_TAIL_SUMMARY+="$last_entry"
+            \t\t_TOASTTY_HISTORY_TAIL_SUMMARY+="${tail_entries[$(( entry_count - 1 ))]}"
             \tfi
             }
 
@@ -575,6 +578,22 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t/bin/mv -f -- "$temp_file" "$pane_journal_file" 2>/dev/null || /bin/rm -f -- "$temp_file"
             }
 
+            _toastty_schedule_shared_history_import_if_needed() {
+            \t[[ -z "${_TOASTTY_SHARED_HISTORY_IMPORTED:-}" ]] || return
+            \t_TOASTTY_SHARED_HISTORY_IMPORT_PENDING=1
+            }
+
+            _toastty_schedule_pane_journal_import_if_needed() {
+            \t[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+            \t[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+            \t[[ "${TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED:-}" == "1" ]] && return
+
+            \t_TOASTTY_PANE_JOURNAL_IMPORT_PENDING=1
+            \t# Export the scheduled state so nested restore shells spawned before the first
+            \t# prompt do not re-import the same pane journal ahead of the parent shell.
+            \texport TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED=1
+            }
+
             _toastty_load_shared_history_if_needed() {
             \t[[ -z "${_TOASTTY_SHARED_HISTORY_IMPORTED:-}" ]] || return
 
@@ -585,12 +604,20 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t_TOASTTY_SHARED_HISTORY_IMPORTED=1
             }
 
-            _toastty_import_pane_journal_if_needed() {
-            \t[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
-            \t[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+            _toastty_import_startup_history_if_needed() {
+            \t[[ -n "${_TOASTTY_SHARED_HISTORY_IMPORT_PENDING:-}" || -n "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" ]] || return
 
+            \tunset _TOASTTY_SHARED_HISTORY_IMPORT_PENDING
+            \t_toastty_load_shared_history_if_needed
+
+            \t[[ -n "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" ]] || return
             \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
-            \t[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+            \tif [[ -z "$pane_journal_file" || ! -r "$pane_journal_file" ]]; then
+            \t\tunset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+            \t\tunset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+            \t\texport TOASTTY_PANE_JOURNAL_IMPORTED=1
+            \t\treturn
+            \tfi
 
             \tlocal entry=""
             \tlocal imported_count=0
@@ -601,10 +628,25 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\tlast_imported_entry="$entry"
             \tdone < "$pane_journal_file"
 
+            \tunset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+            \tunset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+            \texport TOASTTY_PANE_JOURNAL_IMPORTED=1
             \t_toastty_log_pane_history_debug_with_snapshot \
             \t\timport \
             \t\timported_entry_count "$imported_count" \
             \t\tlast_imported_entry "$last_imported_entry"
+            }
+
+            _toastty_prepare_history_for_prompt_if_needed() {
+            \t[[ -z "${_TOASTTY_PROMPT_HISTORY_READY:-}" ]] || return
+
+            \t_toastty_import_startup_history_if_needed
+            \t_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+            \t_TOASTTY_PROMPT_HISTORY_READY=1
+            \t_toastty_log_pane_history_debug_with_snapshot \
+            \t\tinitialize \
+            \t\tcurrent_histcmd "${HISTCMD:-0}" \
+            \t\tlast_histcmd "${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
             }
 
             _toastty_initialize_pane_journal() {
@@ -612,17 +654,8 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             \tif _toastty_ensure_pane_journal_directory; then
             \t\t_toastty_compact_pane_journal
-            \t\t_toastty_load_shared_history_if_needed
-            \t\t_toastty_import_pane_journal_if_needed
-            \t\t_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
-            \t\t_toastty_log_pane_history_debug_with_snapshot \
-            \t\t\tinitialize \
-            \t\t\tcurrent_histcmd "${HISTCMD:-0}" \
-            \t\t\tlast_histcmd "${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
-            \tfi
-
-            \tif [[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]]; then
-            \t\texport TOASTTY_PANE_JOURNAL_IMPORTED=1
+            \t\t_toastty_schedule_shared_history_import_if_needed
+            \t\t_toastty_schedule_pane_journal_import_if_needed
             \tfi
             \t_TOASTTY_PANE_JOURNAL_INITIALIZED=1
             }
@@ -701,6 +734,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             _toastty_prompt_command() {
             \tif [[ -n "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]]; then
+            \t\t_toastty_prepare_history_for_prompt_if_needed
             \t\t_toastty_append_last_history_entry_to_journal
             \tfi
             \tlocal cwd="${PWD/#$HOME/~}"
