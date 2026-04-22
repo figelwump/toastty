@@ -7,9 +7,22 @@ enum LocalFileLinkResolver {
         let lineNumber: Int?
     }
 
+    enum UnresolvedLocalDocumentIssue: String, Equatable, Sendable {
+        case fileNotFound
+        case invalidLineNumber
+        case couldNotResolve
+    }
+
     private struct ParsedTrailingLineNumberPath: Equatable {
         let path: String
         let lineNumber: Int
+    }
+
+    private enum NestedRelativeChildResolution: Equatable {
+        case recovered(String)
+        case notFound
+        case ambiguous
+        case notApplicable
     }
 
     private static let minimumRecoveredMalformedComponentLength = 3
@@ -74,34 +87,38 @@ enum LocalFileLinkResolver {
         return nil
     }
 
-    static func looksLikeSupportedLocalDocumentTarget(
+    static func unresolvedLocalDocumentIssue(
         for url: URL,
         cwd: String? = nil,
         fileManager: FileManager = .default
-    ) -> Bool {
+    ) -> UnresolvedLocalDocumentIssue? {
         if let scheme = url.scheme?.lowercased(),
            scheme != "file" {
-            return false
+            return nil
         }
 
         guard let path = rawPath(for: url),
               let normalizedPath = WebPanelState.normalizedFilePath(path) else {
-            return false
+            return nil
         }
 
         let expandedPath = (normalizedPath as NSString).expandingTildeInPath
         guard expandedPath.isEmpty == false else {
-            return false
+            return nil
         }
 
         let localFilePath = resolvedLocalFilePath(for: url, cwd: cwd) ?? expandedPath
         for candidate in recoveredPathCandidates(for: localFilePath, fileManager: fileManager) {
-            if isSupportedLocalDocumentIntent(forCandidatePath: candidate, fileManager: fileManager) {
-                return true
+            if let issue = unresolvedLocalDocumentIssue(
+                forCandidatePath: candidate,
+                cwd: cwd,
+                fileManager: fileManager
+            ) {
+                return issue
             }
         }
 
-        return false
+        return nil
     }
 
     static func normalizedLocalDirectoryPath(
@@ -329,37 +346,70 @@ enum LocalFileLinkResolver {
         return basePath
     }
 
-    private static func isSupportedLocalDocumentIntent(
+    private static func invalidTrailingLineNumberBasePath(_ path: String) -> String? {
+        guard let separatorIndex = path.lastIndex(of: ":") else {
+            return nil
+        }
+
+        let basePath = String(path[..<separatorIndex])
+        let suffix = String(path[path.index(after: separatorIndex)...])
+        guard basePath.isEmpty == false,
+              suffix.isEmpty == false,
+              suffix.allSatisfy(\.isNumber),
+              parsedTrailingLineNumberPath(path) == nil else {
+            return nil
+        }
+
+        return basePath
+    }
+
+    private static func unresolvedLocalDocumentIssue(
         forCandidatePath candidatePath: String,
+        cwd: String?,
         fileManager: FileManager
-    ) -> Bool {
+    ) -> UnresolvedLocalDocumentIssue? {
         let basePath: String
-        if LocalDocumentClassifier.format(forFilePath: candidatePath) != nil {
+        let hasInvalidLineNumber: Bool
+
+        if let parsedPath = parsedTrailingLineNumberPath(candidatePath),
+                  LocalDocumentClassifier.format(forFilePath: parsedPath.path) != nil {
+            basePath = parsedPath.path
+            hasInvalidLineNumber = false
+        } else if let invalidBasePath = invalidTrailingLineNumberBasePath(candidatePath),
+                  LocalDocumentClassifier.format(forFilePath: invalidBasePath) != nil {
+            basePath = invalidBasePath
+            hasInvalidLineNumber = true
+        } else if LocalDocumentClassifier.format(forFilePath: candidatePath) != nil {
             basePath = candidatePath
-        } else if let parsedBasePath = trailingNumericSuffixBasePath(candidatePath),
-                  LocalDocumentClassifier.format(forFilePath: parsedBasePath) != nil {
-            basePath = parsedBasePath
+            hasInvalidLineNumber = false
         } else {
-            return false
+            return nil
         }
 
         guard basePath.hasPrefix("/") else {
-            return true
+            return .couldNotResolve
         }
 
         if normalizedExistingLocalDirectoryPath(basePath, fileManager: fileManager) != nil {
-            return false
+            return nil
         }
 
         if normalizedExistingLocalDocumentFilePath(basePath, fileManager: fileManager) != nil {
-            return true
+            return hasInvalidLineNumber ? .invalidLineNumber : nil
         }
 
         if existingNonDirectoryPath(basePath, fileManager: fileManager) {
-            return false
+            return nil
         }
 
-        return true
+        switch nestedRelativeChildResolution(for: basePath, cwd: cwd, fileManager: fileManager) {
+        case .recovered:
+            return hasInvalidLineNumber ? .invalidLineNumber : nil
+        case .ambiguous:
+            return .couldNotResolve
+        case .notFound, .notApplicable:
+            return .fileNotFound
+        }
     }
 
     private static func nestedRelativeChildLocalDocumentFilePath(
@@ -367,13 +417,26 @@ enum LocalFileLinkResolver {
         cwd: String?,
         fileManager: FileManager
     ) -> String? {
-        guard let normalizedCWD = WebPanelState.normalizedFilePath(cwd) else {
+        switch nestedRelativeChildResolution(for: candidatePath, cwd: cwd, fileManager: fileManager) {
+        case .recovered(let path):
+            return path
+        case .notFound, .ambiguous, .notApplicable:
             return nil
+        }
+    }
+
+    private static func nestedRelativeChildResolution(
+        for candidatePath: String,
+        cwd: String?,
+        fileManager: FileManager
+    ) -> NestedRelativeChildResolution {
+        guard let normalizedCWD = WebPanelState.normalizedFilePath(cwd) else {
+            return .notApplicable
         }
 
         let standardizedPath = URL(fileURLWithPath: candidatePath).standardizedFileURL.path
         guard isPath(standardizedPath, within: normalizedCWD) else {
-            return nil
+            return .notApplicable
         }
 
         let parentURL = URL(fileURLWithPath: standardizedPath)
@@ -381,18 +444,18 @@ enum LocalFileLinkResolver {
             .standardizedFileURL
         let parentPath = parentURL.path
         guard isPath(parentPath, within: normalizedCWD) else {
-            return nil
+            return .notApplicable
         }
 
         var parentIsDirectory = ObjCBool(false)
         guard fileManager.fileExists(atPath: parentPath, isDirectory: &parentIsDirectory),
               parentIsDirectory.boolValue else {
-            return nil
+            return .notApplicable
         }
 
         let targetBasename = URL(fileURLWithPath: standardizedPath).lastPathComponent
         guard targetBasename.isEmpty == false else {
-            return nil
+            return .notApplicable
         }
 
         guard let enumerator = fileManager.enumerator(
@@ -400,7 +463,7 @@ enum LocalFileLinkResolver {
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ) else {
-            return nil
+            return .notApplicable
         }
 
         var visitedEntryCount = 0
@@ -409,7 +472,7 @@ enum LocalFileLinkResolver {
         for case let candidateURL as URL in enumerator {
             visitedEntryCount += 1
             guard visitedEntryCount <= maximumNestedRelativeChildRecoveryEntries else {
-                return nil
+                return .ambiguous
             }
 
             guard candidateURL.lastPathComponent == targetBasename else {
@@ -424,12 +487,16 @@ enum LocalFileLinkResolver {
             }
 
             if let matchedPath, matchedPath != normalizedCandidatePath {
-                return nil
+                return .ambiguous
             }
             matchedPath = normalizedCandidatePath
         }
 
-        return matchedPath
+        if let matchedPath {
+            return .recovered(matchedPath)
+        }
+
+        return .notFound
     }
 
     private static func isPath(_ path: String, within root: String) -> Bool {

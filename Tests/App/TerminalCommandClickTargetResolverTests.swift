@@ -43,7 +43,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .unresolvedLocalDocument(url))
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .couldNotResolve))
     }
 
     func testResolveMatchesUppercaseMarkdownExtension() throws {
@@ -338,7 +338,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .unresolvedLocalDocument(url))
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .couldNotResolve))
     }
 
     func testResolveRecoversTrailingPunctuationAfterLineNumberRevealTarget() throws {
@@ -397,7 +397,20 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .unresolvedLocalDocument(url))
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .invalidLineNumber))
+    }
+
+    func testResolveClassifiesMissingRelativeLocalDocumentPathAsFileNotFound() throws {
+        let fixture = try makeFixture()
+        let url = try XCTUnwrap(URL(string: "docs/missing-plan.md:17"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .fileNotFound))
     }
 
     func testResolveDoesNotTreatUnsupportedFileNumericSuffixAsLocalDocumentReveal() throws {

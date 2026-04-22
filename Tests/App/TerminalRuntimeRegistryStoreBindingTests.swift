@@ -1116,12 +1116,23 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             ),
             persistTerminalFontPreference: false
         )
-        let registry = TerminalRuntimeRegistry()
+        var presentedAlert: (
+            windowID: UUID?,
+            url: URL,
+            issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+        )?
+        let registry = TerminalRuntimeRegistry(
+            presentLocalDocumentLinkAlert: { windowID, url, issue in
+                presentedAlert = (windowID, url, issue)
+            }
+        )
         registry.bind(store: store)
+
+        let missingURL = try XCTUnwrap(URL(string: "docs/missing-plan.md:17"))
 
         XCTAssertFalse(
             registry.openCommandClickLink(
-                try XCTUnwrap(URL(string: "docs/missing-plan.md:17")),
+                missingURL,
                 useAlternatePlacement: false,
                 from: sourcePanelID
             )
@@ -1130,6 +1141,80 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
         XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
         XCTAssertEqual(workspaceAfter.focusedPanelID, sourcePanelID)
+        XCTAssertEqual(presentedAlert?.windowID, windowID)
+        XCTAssertEqual(presentedAlert?.url, missingURL)
+        XCTAssertEqual(presentedAlert?.issue, .fileNotFound)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickInvalidLineNumberShowsAlertWithoutCreatingPanel() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        var presentedAlert: (
+            windowID: UUID?,
+            url: URL,
+            issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+        )?
+        let registry = TerminalRuntimeRegistry(
+            presentLocalDocumentLinkAlert: { windowID, url, issue in
+                presentedAlert = (windowID, url, issue)
+            }
+        )
+        registry.bind(store: store)
+        let invalidLineURL = try XCTUnwrap(URL(string: "docs/command-palette.md:0"))
+
+        XCTAssertFalse(
+            registry.openCommandClickLink(
+                invalidLineURL,
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.focusedPanelID, sourcePanelID)
+        XCTAssertEqual(presentedAlert?.windowID, windowID)
+        XCTAssertEqual(presentedAlert?.url, invalidLineURL)
+        XCTAssertEqual(presentedAlert?.issue, .invalidLineNumber)
         try StateValidator.validate(store.state)
     }
 

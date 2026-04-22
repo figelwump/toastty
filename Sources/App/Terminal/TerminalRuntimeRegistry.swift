@@ -55,8 +55,15 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
+    typealias LocalDocumentLinkAlertPresenter = @MainActor (
+        UUID?,
+        URL,
+        LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+    ) -> Void
+
     private let focusCoordinator: TerminalFocusCoordinator
     private let activateApp: @MainActor () -> Void
+    private let presentLocalDocumentLinkAlert: LocalDocumentLinkAlertPresenter
     private let runtimeStore = TerminalWindowRuntimeStore()
     private weak var store: AppStore?
     private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
@@ -461,16 +468,29 @@ final class TerminalRuntimeRegistry: ObservableObject {
     convenience init() {
         self.init(
             focusCoordinator: TerminalFocusCoordinator(),
-            activateApp: { NSApp.activate(ignoringOtherApps: true) }
+            activateApp: { NSApp.activate(ignoringOtherApps: true) },
+            presentLocalDocumentLinkAlert: TerminalRuntimeRegistry.presentLocalDocumentLinkAlert
+        )
+    }
+
+    convenience init(
+        presentLocalDocumentLinkAlert: @escaping LocalDocumentLinkAlertPresenter
+    ) {
+        self.init(
+            focusCoordinator: TerminalFocusCoordinator(),
+            activateApp: { NSApp.activate(ignoringOtherApps: true) },
+            presentLocalDocumentLinkAlert: presentLocalDocumentLinkAlert
         )
     }
 
     init(
         focusCoordinator: TerminalFocusCoordinator,
-        activateApp: @escaping @MainActor () -> Void
+        activateApp: @escaping @MainActor () -> Void,
+        presentLocalDocumentLinkAlert: @escaping LocalDocumentLinkAlertPresenter = TerminalRuntimeRegistry.presentLocalDocumentLinkAlert
     ) {
         self.focusCoordinator = focusCoordinator
         self.activateApp = activateApp
+        self.presentLocalDocumentLinkAlert = presentLocalDocumentLinkAlert
     }
 
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
@@ -762,6 +782,64 @@ final class TerminalRuntimeRegistry: ObservableObject {
 }
 
 private extension TerminalRuntimeRegistry {
+    static func presentLocalDocumentLinkAlert(
+        preferredWindowID: UUID?,
+        url: URL,
+        issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+    ) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localDocumentLinkAlertTitle(for: issue)
+        alert.informativeText = localDocumentLinkAlertMessage(for: url, issue: issue)
+        alert.addConfiguredButton(withTitle: "OK", behavior: .defaultAction)
+
+        if let window = resolveWindow(id: preferredWindowID) {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    static func localDocumentLinkAlertTitle(
+        for issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+    ) -> String {
+        switch issue {
+        case .fileNotFound:
+            return "File not found"
+        case .invalidLineNumber:
+            return "Invalid line number"
+        case .couldNotResolve:
+            return "Couldn't resolve file link"
+        }
+    }
+
+    static func localDocumentLinkAlertMessage(
+        for url: URL,
+        issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+    ) -> String {
+        let pathDescription = rawLocalDocumentLinkDescription(for: url)
+        switch issue {
+        case .fileNotFound:
+            return "Toastty couldn't find \(pathDescription)."
+        case .invalidLineNumber:
+            return "\(pathDescription) uses an invalid line number."
+        case .couldNotResolve:
+            return "Toastty couldn't resolve \(pathDescription)."
+        }
+    }
+
+    static func rawLocalDocumentLinkDescription(for url: URL) -> String {
+        let rawPath = url.path.isEmpty ? url.absoluteString : url.path
+        return "“\(rawPath)”"
+    }
+
+    static func resolveWindow(id windowID: UUID?) -> NSWindow? {
+        guard let windowID else {
+            return nil
+        }
+        return NSApp.windows.first(where: { $0.identifier?.rawValue == windowID.uuidString })
+    }
+
     func bindStateObservation(to store: AppStore) {
         stateObservation?.cancel()
         observedWindowFontPointsByID = effectiveWindowFontPointsByID(in: store.state)
@@ -973,7 +1051,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 direction: direction,
                 workingDirectory: path
             )
-        case .unresolvedLocalDocument:
+        case .unresolvedLocalDocument(let unresolvedURL, let issue):
+            presentLocalDocumentLinkAlert(preferredWindowID, unresolvedURL, issue)
             result = false
         case .passthrough(let passthroughURL):
             result = AppURLRouter.open(
@@ -1000,10 +1079,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 "resolved_path": path,
                 "split_direction": useAlternatePlacement ? SlotSplitDirection.down.rawValue : SlotSplitDirection.right.rawValue,
             ]
-        case .unresolvedLocalDocument(let unresolvedURL):
+        case .unresolvedLocalDocument(let unresolvedURL, let issue):
             targetKind = "unresolved_local_document"
             targetMetadata = [
                 "resolved_url": unresolvedURL.absoluteString,
+                "issue": issue.rawValue,
             ]
         case .passthrough(let passthroughURL):
             targetKind = "passthrough"
