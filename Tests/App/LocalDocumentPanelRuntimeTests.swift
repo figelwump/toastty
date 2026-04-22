@@ -425,6 +425,61 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 5)
     }
 
+    func testRequestRevealBeforeApplyKeepsPanelUnloadedUntilStateArrives() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(responses: [.delivered, .delivered])
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.requestReveal(lineNumber: 12)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertNil(runtime.automationState().currentAssetPath)
+        XCTAssertEqual(evaluator.scripts.count, 0)
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertEqual(runtime.automationState().currentAssetPath, entryURL.path)
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertEqual(evaluator.scripts.count, 0)
+
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 2)
+        XCTAssertTrue(evaluator.scripts[0].contains("bridge.receiveBootstrap("))
+        XCTAssertTrue(evaluator.scripts[1].contains("bridge.revealLine(12);"))
+    }
+
     func testTextScaleBridgeUnavailableStagesBootstrapRetryWithUpdatedScale() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
         let entryURL = try makePanelEntryURL()

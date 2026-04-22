@@ -1459,6 +1459,14 @@ private extension LocalDocumentPanelRuntime {
             return
         }
 
+        // Header-driven runtime creation can queue a line reveal before the
+        // panel body has applied its WebPanelState. Keep that reveal pending
+        // instead of preloading the web app without document state, which can
+        // leave the panel stranded in its blank loading shell.
+        guard currentWebState != nil else {
+            return
+        }
+
         guard let entryURL else {
             ensurePanelAppLoaded()
             return
