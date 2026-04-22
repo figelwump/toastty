@@ -92,6 +92,31 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func laterFlagMutatorsAreNoOpForProcessWatchSessions() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 1_200)
+
+        registry.startSession(
+            sessionID: "watched",
+            agent: .processWatch,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        registry.setLaterFlag(sessionID: "watched", isFlagged: true)
+        #expect(registry.isLaterFlagged(sessionID: "watched") == false)
+        #expect(try #require(registry.activeSession(for: panelID)).isFlaggedForLater == false)
+
+        registry.toggleLaterFlag(sessionID: "watched")
+        #expect(registry.isLaterFlagged(sessionID: "watched") == false)
+    }
+
+    @Test
     func laterFlagMutatorsOnlyAffectActiveSessions() throws {
         var registry = SessionRegistry()
         let panelID = UUID()

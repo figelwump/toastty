@@ -101,6 +101,10 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
 
     public mutating func setLaterFlag(sessionID: String, isFlagged: Bool) {
         guard var record = sessionsByID[sessionID], record.isActive else { return }
+        // Watched processes already act as their own "remind me later" signal via the
+        // sidebar bell, so flagging them would be redundant. Silently no-op instead
+        // of mutating state; the sidebar also hides the menu affordance for them.
+        guard record.agent != .processWatch else { return }
         guard record.isFlaggedForLater != isFlagged else { return }
         record.isFlaggedForLater = isFlagged
         sessionsByID[sessionID] = record

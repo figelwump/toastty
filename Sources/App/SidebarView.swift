@@ -484,15 +484,17 @@ struct SidebarView: View {
             }
         }
         .contextMenu {
-            Button(
-                ToasttyKeyboardShortcuts.toggleLaterFlag.menuTitle(
-                    Self.laterFlagActionTitle(isFlaggedForLater: isLaterFlagged)
-                )
-            ) {
-                sessionRuntimeStore.setLaterFlag(
-                    sessionID: workspaceSessionStatus.sessionID,
-                    isFlagged: !isLaterFlagged
-                )
+            if workspaceSessionStatus.agent != .processWatch {
+                Button(
+                    ToasttyKeyboardShortcuts.toggleLaterFlag.menuTitle(
+                        Self.laterFlagActionTitle(isFlaggedForLater: isLaterFlagged)
+                    )
+                ) {
+                    sessionRuntimeStore.setLaterFlag(
+                        sessionID: workspaceSessionStatus.sessionID,
+                        isFlagged: !isLaterFlagged
+                    )
+                }
             }
         }
         .accessibilityElement(children: .ignore)
@@ -552,6 +554,15 @@ struct SidebarView: View {
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(
                             ToastyTheme.accent.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
+                        )
+                        .accessibilityHidden(true)
+                } else if workspaceSessionStatus.agent == .processWatch {
+                    // Watched processes cannot be flagged (see SessionRegistry.setLaterFlag),
+                    // so this slot is mutually exclusive with the flag icon above.
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(
+                            ToastyTheme.sidebarSessionWatchIcon.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
                         )
                         .accessibilityHidden(true)
                 }
