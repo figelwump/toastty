@@ -226,6 +226,26 @@ _toastty_load_shared_history_if_needed() {
 	_TOASTTY_SHARED_HISTORY_IMPORTED=1
 }
 
+_toastty_read_last_history_line() {
+	_TOASTTY_LAST_HISTORY_NUMBER=0
+	_TOASTTY_LAST_HISTORY_ENTRY=""
+
+	local history_output=""
+	history_output=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 1 2>/dev/null)
+	[[ -n "$history_output" ]] || return
+
+	local entry="$history_output"
+	entry="${entry#"${entry%%[![:space:]]*}"}"
+	local history_number="${entry%%[!0-9]*}"
+	if [[ -n "$history_number" ]]; then
+		entry="${entry#"$history_number"}"
+		entry="${entry#"${entry%%[![:space:]]*}"}"
+	fi
+
+	_TOASTTY_LAST_HISTORY_NUMBER="${history_number:-0}"
+	_TOASTTY_LAST_HISTORY_ENTRY="$entry"
+}
+
 _toastty_import_startup_history_if_needed() {
 	[[ -n "${_TOASTTY_SHARED_HISTORY_IMPORT_PENDING:-}" || -n "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" ]] || return
 
@@ -255,7 +275,9 @@ _toastty_prepare_history_for_prompt_if_needed() {
 	[[ -z "${_TOASTTY_PROMPT_HISTORY_READY:-}" ]] || return
 
 	_toastty_import_startup_history_if_needed
-	_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+	_toastty_read_last_history_line
+	_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER="${_TOASTTY_LAST_HISTORY_NUMBER:-0}"
+	_TOASTTY_JOURNAL_LAST_HISTORY_ENTRY="${_TOASTTY_LAST_HISTORY_ENTRY:-}"
 	_TOASTTY_PROMPT_HISTORY_READY=1
 }
 
@@ -274,17 +296,19 @@ _toastty_append_last_history_entry_to_journal() {
 	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
 	[[ -n "$pane_journal_file" ]] || return
 
-	local current_histcmd="${HISTCMD:-0}"
-	[[ "$current_histcmd" =~ ^[0-9]+$ ]] || return
-	local last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
-	[[ "$last_histcmd" =~ ^[0-9]+$ ]] || last_histcmd=0
-	(( current_histcmd > last_histcmd )) || return
+	# Bash's HISTCMD can stay pinned at 1 in the restored interactive shells
+	# Toastty launches on macOS, even while the visible history tail advances.
+	_toastty_read_last_history_line
+	local current_history_number="${_TOASTTY_LAST_HISTORY_NUMBER:-0}"
+	[[ "$current_history_number" =~ ^[0-9]+$ ]] || return
+	local last_history_number="${_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER:-0}"
+	[[ "$last_history_number" =~ ^[0-9]+$ ]] || last_history_number=0
+	(( current_history_number > last_history_number )) || return
 
-	local entry=""
-	entry=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 1)
-	entry="${entry#*[[:digit:]][* ] }"
-	_TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
+	local entry="${_TOASTTY_LAST_HISTORY_ENTRY:-}"
 	[[ -n "$entry" ]] || return
+	_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER="$current_history_number"
+	_TOASTTY_JOURNAL_LAST_HISTORY_ENTRY="$entry"
 
 	printf '%s\0' "$entry" >> "$pane_journal_file" 2>/dev/null || return
 }

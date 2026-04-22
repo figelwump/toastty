@@ -604,6 +604,26 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t_TOASTTY_SHARED_HISTORY_IMPORTED=1
             }
 
+            _toastty_read_last_history_line() {
+            \t_TOASTTY_LAST_HISTORY_NUMBER=0
+            \t_TOASTTY_LAST_HISTORY_ENTRY=""
+
+            \tlocal history_output=""
+            \thistory_output=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 1 2>/dev/null)
+            \t[[ -n "$history_output" ]] || return
+
+            \tlocal entry="$history_output"
+            \tentry="${entry#"${entry%%[![:space:]]*}"}"
+            \tlocal history_number="${entry%%[!0-9]*}"
+            \tif [[ -n "$history_number" ]]; then
+            \t\tentry="${entry#"$history_number"}"
+            \t\tentry="${entry#"${entry%%[![:space:]]*}"}"
+            \tfi
+
+            \t_TOASTTY_LAST_HISTORY_NUMBER="${history_number:-0}"
+            \t_TOASTTY_LAST_HISTORY_ENTRY="$entry"
+            }
+
             _toastty_import_startup_history_if_needed() {
             \t[[ -n "${_TOASTTY_SHARED_HISTORY_IMPORT_PENDING:-}" || -n "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" ]] || return
 
@@ -641,12 +661,15 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t[[ -z "${_TOASTTY_PROMPT_HISTORY_READY:-}" ]] || return
 
             \t_toastty_import_startup_history_if_needed
-            \t_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+            \t_toastty_read_last_history_line
+            \t_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER="${_TOASTTY_LAST_HISTORY_NUMBER:-0}"
+            \t_TOASTTY_JOURNAL_LAST_HISTORY_ENTRY="${_TOASTTY_LAST_HISTORY_ENTRY:-}"
             \t_TOASTTY_PROMPT_HISTORY_READY=1
             \t_toastty_log_pane_history_debug_with_snapshot \
             \t\tinitialize \
             \t\tcurrent_histcmd "${HISTCMD:-0}" \
-            \t\tlast_histcmd "${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
+            \t\tcurrent_history_number "${_TOASTTY_LAST_HISTORY_NUMBER:-0}" \
+            \t\tlast_history_number "${_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER:-0}"
             }
 
             _toastty_initialize_pane_journal() {
@@ -667,41 +690,53 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\treturn
             \tfi
 
-            \tlocal current_histcmd="${HISTCMD:-0}"
-            \tif [[ ! "$current_histcmd" =~ ^[0-9]+$ ]]; then
-            \t\t_toastty_log_pane_history_debug_with_snapshot append_skip reason "non_numeric_histcmd" current_histcmd "$current_histcmd"
-            \t\treturn
-            \tfi
-            \tlocal last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
-            \t[[ "$last_histcmd" =~ ^[0-9]+$ ]] || last_histcmd=0
-            \tif (( current_histcmd <= last_histcmd )); then
+            \t# Bash's HISTCMD can remain pinned at 1 in the restored interactive shells
+            \t# Toastty launches on macOS, even when the visible history tail advances.
+            \t# Use the actual history line number from `history 1` as the append gate.
+            \t_toastty_read_last_history_line
+            \tlocal current_history_number="${_TOASTTY_LAST_HISTORY_NUMBER:-0}"
+            \tif [[ ! "$current_history_number" =~ ^[0-9]+$ ]]; then
             \t\t_toastty_log_pane_history_debug_with_snapshot \
             \t\t\tappend_skip \
-            \t\t\treason "histcmd_not_advanced" \
-            \t\t\tcurrent_histcmd "$current_histcmd" \
-            \t\t\tlast_histcmd "$last_histcmd"
+            \t\t\treason "non_numeric_history_number" \
+            \t\t\tcurrent_histcmd "${HISTCMD:-0}" \
+            \t\t\tcurrent_history_number "$current_history_number"
+            \t\treturn
+            \tfi
+            \tlocal last_history_number="${_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER:-0}"
+            \t[[ "$last_history_number" =~ ^[0-9]+$ ]] || last_history_number=0
+            \tif (( current_history_number <= last_history_number )); then
+            \t\t_toastty_log_pane_history_debug_with_snapshot \
+            \t\t\tappend_skip \
+            \t\t\treason "history_number_not_advanced" \
+            \t\t\tcurrent_histcmd "${HISTCMD:-0}" \
+            \t\t\tcurrent_history_number "$current_history_number" \
+            \t\t\tlast_history_number "$last_history_number"
             \t\treturn
             \tfi
 
-            \tlocal entry=""
-            \tentry=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 1)
-            \tentry="${entry#*[[:digit:]][* ] }"
-            \t_TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
+            \tlocal entry="${_TOASTTY_LAST_HISTORY_ENTRY:-}"
             \tif [[ -z "$entry" ]]; then
             \t\t_toastty_log_pane_history_debug_with_snapshot \
             \t\t\tappend_skip \
             \t\t\treason "empty_history_entry" \
-            \t\t\tcurrent_histcmd "$current_histcmd" \
-            \t\t\tlast_histcmd "$last_histcmd"
+            \t\t\tcurrent_histcmd "${HISTCMD:-0}" \
+            \t\t\tcurrent_history_number "$current_history_number" \
+            \t\t\tlast_history_number "$last_history_number"
             \t\treturn
             \tfi
+
+            \t_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER="$current_history_number"
+            \t_TOASTTY_JOURNAL_LAST_HISTORY_ENTRY="$entry"
 
             \tif ! printf '%s\\0' "$entry" >> "$pane_journal_file" 2>/dev/null; then
             \t\t_toastty_log_pane_history_debug_with_snapshot \
             \t\t\tappend_skip \
             \t\t\treason "write_failed" \
-            \t\t\tcurrent_histcmd "$current_histcmd" \
-            \t\t\tlast_histcmd "$last_histcmd" \
+            \t\t\tcurrent_histcmd "${HISTCMD:-0}" \
+            \t\t\tcurrent_history_number "$current_history_number" \
+            \t\t\tlast_history_number "$last_history_number" \
+            \t\t\tselected_history_number "$current_history_number" \
             \t\t\tselected_history_entry "$entry"
             \t\treturn
             \tfi
@@ -709,8 +744,10 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t_TOASTTY_PANE_JOURNAL_WRITE_COUNT="$(( ${_TOASTTY_PANE_JOURNAL_WRITE_COUNT:-0} + 1 ))"
             \t_toastty_log_pane_history_debug_with_snapshot \
             \t\tappend \
-            \t\tcurrent_histcmd "$current_histcmd" \
-            \t\tlast_histcmd "$last_histcmd" \
+            \t\tcurrent_histcmd "${HISTCMD:-0}" \
+            \t\tcurrent_history_number "$current_history_number" \
+            \t\tlast_history_number "$last_history_number" \
+            \t\tselected_history_number "$current_history_number" \
             \t\tselected_history_entry "$entry" \
             \t\twrite_count "${_TOASTTY_PANE_JOURNAL_WRITE_COUNT:-0}"
             \tif (( _TOASTTY_PANE_JOURNAL_WRITE_COUNT % \(Self.paneJournalCompactionInterval) == 0 )); then

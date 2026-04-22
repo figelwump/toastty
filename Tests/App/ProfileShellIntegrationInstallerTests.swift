@@ -1626,7 +1626,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; _TOASTTY_JOURNAL_LAST_HISTCMD=0; HISTTIMEFORMAT='[%F %T] '; history -s -- '123toastty'; _toastty_append_last_history_entry_to_journal; while IFS= read -r -d '' entry; do printf '%s\\n' \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "source \"$1\"; _TOASTTY_JOURNAL_LAST_HISTORY_NUMBER=0; HISTTIMEFORMAT='[%F %T] '; history -s -- '123toastty'; _toastty_append_last_history_entry_to_journal; while IFS= read -r -d '' entry; do printf '%s\\n' \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
@@ -1693,7 +1693,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; _TOASTTY_JOURNAL_LAST_HISTCMD=0; history -s -- \"echo toastty-bash\"; _toastty_append_last_history_entry_to_journal; while IFS= read -r -d '' entry; do printf '%s\\n' \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "source \"$1\"; _TOASTTY_JOURNAL_LAST_HISTORY_NUMBER=0; history -s -- \"echo toastty-bash\"; _toastty_append_last_history_entry_to_journal; while IFS= read -r -d '' entry; do printf '%s\\n' \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
@@ -1706,6 +1706,61 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             output.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
             "echo toastty-bash"
         )
+    }
+
+    func testManagedBashSnippetPromptCommandAppendsNewHistoryEntryWhenHistcmdStaysPinned() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; _toastty_prompt_command; history -s -- \"echo toastty-bash\"; printf 'histcmd=%s\\n' \"$HISTCMD\"; _toastty_prompt_command; while IFS= read -r -d '' entry; do printf '%s\\n' \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+            ]
+        )
+
+        XCTAssertTrue(output.contains("histcmd=1"))
+        XCTAssertTrue(output.contains("echo toastty-bash"))
+    }
+
+    func testManagedBashSnippetPreservesRepeatedCommandsAcrossPromptWrites() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; _toastty_prompt_command; history -s -- \"echo repeat\"; _toastty_prompt_command; history -s -- \"echo repeat\"; _toastty_prompt_command; while IFS= read -r -d '' entry; do printf '%s\\n' \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+            ]
+        )
+
+        XCTAssertEqual(output.split(separator: "\n").map(String.init), ["echo repeat", "echo repeat"])
     }
 
     func testManagedBashSnippetWritesPaneHistoryDebugRecordsInInteractiveShell() throws {
@@ -1792,7 +1847,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; _TOASTTY_JOURNAL_LAST_HISTCMD=0; history -s -- \"echo toastty-bash\"; _toastty_append_last_history_entry_to_journal; _toastty_append_last_history_entry_to_journal; while IFS= read -r -d '' entry; do printf '%s\\n' \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "source \"$1\"; _TOASTTY_JOURNAL_LAST_HISTORY_NUMBER=0; history -s -- \"echo toastty-bash\"; _toastty_append_last_history_entry_to_journal; _toastty_append_last_history_entry_to_journal; while IFS= read -r -d '' entry; do printf '%s\\n' \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
