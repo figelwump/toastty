@@ -1467,6 +1467,14 @@ private extension LocalDocumentPanelRuntime {
             return
         }
 
+        // Keep first-load ownership on the bootstrap path. Loading the panel
+        // shell from a queued reveal before document bootstrap exists can
+        // leave the newly opened panel showing its blank waiting state until a
+        // later interaction retries the reveal.
+        guard currentBootstrap != nil else {
+            return
+        }
+
         guard let entryURL else {
             ensurePanelAppLoaded()
             return
@@ -1477,8 +1485,7 @@ private extension LocalDocumentPanelRuntime {
             return
         }
 
-        guard currentBootstrap != nil,
-              pendingBootstrapScript == nil else {
+        guard pendingBootstrapScript == nil else {
             return
         }
 

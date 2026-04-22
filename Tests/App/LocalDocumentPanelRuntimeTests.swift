@@ -480,6 +480,71 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(evaluator.scripts[1].contains("bridge.revealLine(12);"))
     }
 
+    func testRequestRevealAfterApplyKeepsPanelUnloadedUntilBootstrapArrives() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let loaderExpectation = expectation(description: "Document loader starts")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(responses: [.delivered, .delivered])
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+        let loader = ControlledDocumentLoader()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                loaderExpectation.fulfill()
+                return await loader.load(webState)
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        runtime.requestReveal(lineNumber: 12)
+        await fulfillment(of: [loaderExpectation], timeout: 1)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertNil(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertNil(runtime.automationState().currentAssetPath)
+        XCTAssertEqual(evaluator.scripts.count, 0)
+
+        await loader.resume(
+            with: LocalDocumentPanelDocumentSnapshot(
+                filePath: webState.filePath,
+                displayName: webState.title,
+                content: "# Docs",
+                diskRevision: nil
+            )
+        )
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertEqual(runtime.automationState().currentAssetPath, entryURL.path)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 0)
+
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 2)
+        XCTAssertTrue(evaluator.scripts[0].contains("bridge.receiveBootstrap("))
+        XCTAssertTrue(evaluator.scripts[1].contains("bridge.revealLine(12);"))
+    }
+
     func testTextScaleBridgeUnavailableStagesBootstrapRetryWithUpdatedScale() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
         let entryURL = try makePanelEntryURL()
@@ -2434,6 +2499,21 @@ private actor ControlledDocumentSaver {
 
     func resume() {
         continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor ControlledDocumentLoader {
+    private var continuation: CheckedContinuation<LocalDocumentPanelDocumentSnapshot, Never>?
+
+    func load(_: WebPanelState) async -> LocalDocumentPanelDocumentSnapshot {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func resume(with document: LocalDocumentPanelDocumentSnapshot) {
+        continuation?.resume(returning: document)
         continuation = nil
     }
 }
