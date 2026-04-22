@@ -402,6 +402,7 @@ body {
   min-width: 0;
   margin: 0;
   padding: 20px 28px 28px;
+  position: relative;
   background: transparent;
   border: 0;
 }

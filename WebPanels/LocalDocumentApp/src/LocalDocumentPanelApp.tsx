@@ -19,6 +19,7 @@ import {
 } from "./bootstrap";
 import {
   clampRevealLineNumber,
+  computeOffsetRevealLayout,
   computeRevealLayout
 } from "./lineReveal.mjs";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
@@ -842,13 +843,126 @@ function useMarkdownLogicalLineLayout(
   return { contentRef, scrollRef, lineLayout };
 }
 
+function useMarkdownRevealLayout(args: {
+  activeReveal: ActiveReveal | null;
+  lineCount: number;
+  lineLayout: MarkdownLineLayout;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  gutterInnerRef: React.RefObject<HTMLDivElement | null>;
+  contentSurfaceRef: React.RefObject<HTMLPreElement | null>;
+  contentRef: React.RefObject<HTMLElement | null>;
+}): RevealLayout | null {
+  const revealScrollFrameRef = React.useRef<{
+    outer: number | null;
+    inner: number | null;
+  }>({ outer: null, inner: null });
+  const revealScrollSequenceRef = React.useRef(0);
+  const [revealLayout, setRevealLayout] = React.useState<RevealLayout | null>(null);
+
+  const cancelScheduledRevealScroll = React.useCallback(() => {
+    revealScrollSequenceRef.current += 1;
+    if (revealScrollFrameRef.current.outer !== null) {
+      window.cancelAnimationFrame(revealScrollFrameRef.current.outer);
+      revealScrollFrameRef.current.outer = null;
+    }
+    if (revealScrollFrameRef.current.inner !== null) {
+      window.cancelAnimationFrame(revealScrollFrameRef.current.inner);
+      revealScrollFrameRef.current.inner = null;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      cancelScheduledRevealScroll();
+    };
+  }, [cancelScheduledRevealScroll]);
+
+  React.useLayoutEffect(() => {
+    if (!args.activeReveal) {
+      setRevealLayout(null);
+      return;
+    }
+
+    const scrollElement = args.scrollRef.current;
+    const contentSurfaceElement = args.contentSurfaceRef.current;
+    const contentElement = args.contentRef.current;
+    if (!scrollElement ||
+        !contentSurfaceElement ||
+        !contentElement ||
+        !args.gutterInnerRef.current) {
+      return;
+    }
+
+    const lineHeight = resolveComputedLineHeight(contentElement) ?? DEFAULT_MARKDOWN_LINE_HEIGHT;
+    setRevealLayout(
+      computeOffsetRevealLayout({
+        lineNumber: args.activeReveal.lineNumber,
+        lineCount: args.lineCount,
+        lineOffsets: args.lineLayout.lineOffsets,
+        contentTopInset: contentElement.offsetTop,
+        gutterTopInset: 0,
+        scrollContentOffsetTop: contentSurfaceElement.offsetTop,
+        lineHeight,
+        scrollViewportHeight: scrollElement.clientHeight,
+        scrollContentHeight: scrollElement.scrollHeight
+      })
+    );
+  }, [
+    args.activeReveal?.lineNumber,
+    args.activeReveal?.requestID,
+    args.contentRef,
+    args.contentSurfaceRef,
+    args.gutterInnerRef,
+    args.lineCount,
+    args.lineLayout,
+    args.scrollRef
+  ]);
+
+  React.useLayoutEffect(() => {
+    if (!args.activeReveal || !revealLayout) {
+      return;
+    }
+
+    cancelScheduledRevealScroll();
+    const revealScrollSequence = revealScrollSequenceRef.current;
+    revealScrollFrameRef.current.outer = window.requestAnimationFrame(() => {
+      revealScrollFrameRef.current.outer = null;
+      if (revealScrollSequence !== revealScrollSequenceRef.current) {
+        return;
+      }
+
+      revealScrollFrameRef.current.inner = window.requestAnimationFrame(() => {
+        revealScrollFrameRef.current.inner = null;
+        if (revealScrollSequence !== revealScrollSequenceRef.current) {
+          return;
+        }
+
+        const scrollElement = args.scrollRef.current;
+        if (!scrollElement) {
+          return;
+        }
+        scrollElement.scrollTop = revealLayout.targetScrollTop;
+      });
+    });
+
+    return () => {
+      cancelScheduledRevealScroll();
+    };
+  }, [args.activeReveal?.requestID, args.scrollRef, cancelScheduledRevealScroll, revealLayout?.targetScrollTop]);
+
+  return revealLayout;
+}
+
 function MarkdownCodeDocumentView(props: {
   content: string;
   highlightedHTML: string | null;
   lines: string[];
+  activeReveal: ActiveReveal | null;
   previewRootRef: React.RefObject<HTMLElement | null>;
   previewContentRef: React.RefObject<HTMLElement | null>;
 }) {
+  const contentSurfaceRef = React.useRef<HTMLPreElement | null>(null);
+  const gutterInnerRef = React.useRef<HTMLDivElement | null>(null);
   const markdownGutterStyle = {
     "--local-document-code-gutter-digit-width": `${Math.max(String(props.lines.length).length, 2)}ch`
   } as React.CSSProperties;
@@ -865,11 +979,21 @@ function MarkdownCodeDocumentView(props: {
     assignObjectRef(props.previewRootRef, node);
   }, [props.previewRootRef, scrollRef]);
   const handlePreviewContentRef = React.useCallback((node: HTMLPreElement | null) => {
+    assignObjectRef(contentSurfaceRef, node);
     assignObjectRef(props.previewContentRef, node);
-  }, [props.previewContentRef]);
+  }, [contentSurfaceRef, props.previewContentRef]);
   const codeClassName = props.highlightedHTML
     ? "starry-night local-document-code-markdown"
     : "local-document-code-plain local-document-code-plain-markdown";
+  const revealLayout = useMarkdownRevealLayout({
+    activeReveal: props.activeReveal,
+    lineCount: props.lines.length,
+    lineLayout,
+    scrollRef,
+    gutterInnerRef,
+    contentSurfaceRef,
+    contentRef
+  });
 
   return (
     <div className="local-document-code-frame local-document-code-frame-markdown">
@@ -885,8 +1009,19 @@ function MarkdownCodeDocumentView(props: {
           >
             <div
               className="local-document-code-markdown-gutter-inner"
+              ref={gutterInnerRef}
               style={{ height: `${lineLayout.contentHeight}px` }}
             >
+              {revealLayout ? (
+                <div
+                  aria-hidden="true"
+                  className="local-document-code-gutter-reveal"
+                  style={{
+                    top: `${revealLayout.gutterTop}px`,
+                    height: `${revealLayout.gutterHeight}px`
+                  }}
+                />
+              ) : null}
               {props.lines.map((_, index) => (
                 <div
                   key={index}
@@ -901,6 +1036,16 @@ function MarkdownCodeDocumentView(props: {
             </div>
           </div>
           <pre className="local-document-code-markdown-surface" ref={handlePreviewContentRef}>
+            {revealLayout ? (
+              <div
+                aria-hidden="true"
+                className="local-document-code-line-reveal"
+                style={{
+                  top: `${revealLayout.contentTop}px`,
+                  height: `${revealLayout.contentHeight}px`
+                }}
+              />
+            ) : null}
             <code
               ref={contentRef}
               className={codeClassName}
@@ -1127,6 +1272,7 @@ function CodeDocumentView(props: {
           content={props.content}
           highlightedHTML={highlightedHTML}
           lines={lines}
+          activeReveal={activeReveal}
           previewRootRef={props.previewRootRef}
           previewContentRef={props.previewContentRef}
         />

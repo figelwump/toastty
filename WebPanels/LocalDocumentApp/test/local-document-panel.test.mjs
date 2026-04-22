@@ -85,6 +85,7 @@ test("markdown gutter stays non-selectable while wrapped content stays continuou
     /\.local-document-code-markdown-gutter\s*\{[^}]*display: flex/
   );
   assert.match(styles, /\.local-document-code-markdown-surface/);
+  assert.match(styles, /\.local-document-code-markdown-surface\s*\{[^}]*position: relative/);
   assert.match(
     styles,
     /\.local-document-code-plain,\s*\.local-document-code-markdown\s*\{[^}]*font-size: calc\(13px \* var\(--toastty-markdown-text-scale\)\)/
@@ -180,7 +181,12 @@ test("line reveal helpers clamp requests and compute layout from measured base o
   const lineRevealModule = await import(
     new URL("../src/lineReveal.mjs", import.meta.url).href
   );
-  const { clampRevealLineNumber, clampScrollTop, computeRevealLayout } = lineRevealModule;
+  const {
+    clampRevealLineNumber,
+    clampScrollTop,
+    computeOffsetRevealLayout,
+    computeRevealLayout
+  } = lineRevealModule;
 
   assert.equal(clampRevealLineNumber(42, 12), 12);
   assert.equal(clampRevealLineNumber(0, 12), 1);
@@ -210,6 +216,29 @@ test("line reveal helpers clamp requests and compute layout from measured base o
       contentHeight: 22,
       gutterHeight: 22,
       targetScrollTop: 2509
+    }
+  );
+  assert.deepEqual(
+    computeOffsetRevealLayout({
+      lineNumber: 47,
+      lineCount: 80,
+      lineOffsets: Array.from({ length: 80 }, (_, index) => index * 22).map((offset, index) => (
+        index === 46 ? 1240 : index === 47 ? 1286 : offset
+      )),
+      contentTopInset: 20,
+      gutterTopInset: 0,
+      scrollContentOffsetTop: 0,
+      lineHeight: 22,
+      scrollViewportHeight: 400,
+      scrollContentHeight: 2200
+    }),
+    {
+      lineNumber: 47,
+      contentTop: 1260,
+      gutterTop: 1240,
+      contentHeight: 46,
+      gutterHeight: 46,
+      targetScrollTop: 1131
     }
   );
 });
@@ -270,6 +299,22 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
   assert.match(source, /height: `\$\{revealLayout\.gutterHeight}px`/);
   assert.match(source, /className="local-document-code-line-reveal"/);
   assert.match(source, /className="local-document-code-gutter-reveal"/);
+});
+
+test("markdown code view measures reveal layout from logical line offsets and renders the same reveal bands", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /function useMarkdownRevealLayout\(args: \{/);
+  assert.match(source, /computeOffsetRevealLayout\(\{/);
+  assert.match(source, /contentTopInset: contentElement\.offsetTop/);
+  assert.match(source, /scrollContentOffsetTop: contentSurfaceElement\.offsetTop/);
+  assert.match(source, /activeReveal: ActiveReveal \| null;/);
+  assert.match(source, /const revealLayout = useMarkdownRevealLayout\(\{/);
+  assert.match(source, /activeReveal: props\.activeReveal/);
+  assert.match(source, /activeReveal=\{activeReveal\}/);
 });
 
 test("build script copies onig.wasm into the panel output bundle", async () => {
