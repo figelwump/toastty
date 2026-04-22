@@ -1162,6 +1162,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
 
 private extension LocalDocumentPanelRuntime {
     enum JavaScriptConsoleLevel: String {
+        case info
         case warn
         case error
     }
@@ -1307,6 +1308,8 @@ private extension LocalDocumentPanelRuntime {
                 "console_message": clampedDiagnosticValue(message) ?? "<empty>",
             ]
             switch level {
+            case .info:
+                logDiagnostic(.info, "Local document JavaScript console info", metadata: metadata)
             case .warn:
                 logDiagnostic(.warning, "Local document JavaScript console warning", metadata: metadata)
             case .error:

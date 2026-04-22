@@ -703,6 +703,11 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         runtime.simulateBridgeMessageForTesting([
             "type": "consoleMessage",
+            "level": "info",
+            "message": "[main] createRoot render starting"
+        ])
+        runtime.simulateBridgeMessageForTesting([
+            "type": "consoleMessage",
             "level": "warn",
             "message": "Markdown highlighting failed"
         ])
@@ -729,25 +734,29 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(
             logSpy.entries.map(\.message),
             [
+                "Local document JavaScript console info",
                 "Local document JavaScript console warning",
                 "Local document JavaScript error",
                 "Local document JavaScript unhandled rejection",
                 "Local document render ready",
             ]
         )
-        XCTAssertEqual(logSpy.entries[0].level, .warning)
-        XCTAssertEqual(logSpy.entries[0].metadata["console_level"], "warn")
-        XCTAssertEqual(logSpy.entries[0].metadata["console_message"], "Markdown highlighting failed")
-        XCTAssertEqual(logSpy.entries[1].level, .error)
-        XCTAssertEqual(logSpy.entries[1].metadata["javascript_source"], "LocalDocumentPanelApp.js")
-        XCTAssertEqual(logSpy.entries[1].metadata["javascript_line"], "88")
-        XCTAssertEqual(logSpy.entries[1].metadata["javascript_column"], "14")
+        XCTAssertEqual(logSpy.entries[0].level, .info)
+        XCTAssertEqual(logSpy.entries[0].metadata["console_level"], "info")
+        XCTAssertEqual(logSpy.entries[0].metadata["console_message"], "[main] createRoot render starting")
+        XCTAssertEqual(logSpy.entries[1].level, .warning)
+        XCTAssertEqual(logSpy.entries[1].metadata["console_level"], "warn")
+        XCTAssertEqual(logSpy.entries[1].metadata["console_message"], "Markdown highlighting failed")
         XCTAssertEqual(logSpy.entries[2].level, .error)
-        XCTAssertEqual(logSpy.entries[2].metadata["javascript_reason"], "Render promise failed")
-        XCTAssertEqual(logSpy.entries[3].level, .debug)
-        XCTAssertEqual(logSpy.entries[3].metadata["render_display_name"], "agents.toml")
-        XCTAssertEqual(logSpy.entries[3].metadata["render_content_revision"], "3")
-        XCTAssertEqual(logSpy.entries[3].metadata["render_is_editing"], "false")
+        XCTAssertEqual(logSpy.entries[2].metadata["javascript_source"], "LocalDocumentPanelApp.js")
+        XCTAssertEqual(logSpy.entries[2].metadata["javascript_line"], "88")
+        XCTAssertEqual(logSpy.entries[2].metadata["javascript_column"], "14")
+        XCTAssertEqual(logSpy.entries[3].level, .error)
+        XCTAssertEqual(logSpy.entries[3].metadata["javascript_reason"], "Render promise failed")
+        XCTAssertEqual(logSpy.entries[4].level, .debug)
+        XCTAssertEqual(logSpy.entries[4].metadata["render_display_name"], "agents.toml")
+        XCTAssertEqual(logSpy.entries[4].metadata["render_content_revision"], "3")
+        XCTAssertEqual(logSpy.entries[4].metadata["render_is_editing"], "false")
     }
 
     func testNavigationFailuresAndProcessTerminationEmitDiagnostics() {

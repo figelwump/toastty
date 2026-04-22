@@ -173,7 +173,7 @@ test("native bridge forwards local-document diagnostics and render lifecycle eve
   assert.match(source, /type: "javascriptError"/);
   assert.match(source, /type: "unhandledRejection"/);
   assert.match(source, /type: "renderReady"/);
-  assert.match(source, /consoleMessage\(level: "warn" \| "error", message: string\)/);
+  assert.match(source, /consoleMessage\(level: "info" \| "warn" \| "error", message: string\)/);
   assert.match(source, /javascriptError\(/);
   assert.match(source, /unhandledRejection\(reason: string, stack: string \| null\)/);
   assert.match(source, /renderReady\(displayName: string, contentRevision: number, isEditing: boolean\)/);
@@ -208,6 +208,25 @@ test("panel app reports render readiness once bootstrap-backed content is mounte
   assert.match(source, /bootstrap\.displayName/);
   assert.match(source, /bootstrap\.contentRevision/);
   assert.match(source, /bootstrap\.isEditing/);
+});
+
+test("main module reports root lifecycle and React root errors through the native bridge", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/main.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /localDocumentNativeBridge\.consoleMessage\("info", "\[main\] local-document module executing"\)/);
+  assert.match(source, /localDocumentNativeBridge\.consoleMessage\("info", "\[main\] createRoot render starting"\)/);
+  assert.match(source, /localDocumentNativeBridge\.javascriptError\(\s*"Missing local document panel root container"/);
+  assert.match(source, /createRoot\(container,\s*\{/);
+  assert.match(source, /onCaughtError\(error, info\)/);
+  assert.match(source, /onUncaughtError\(error, info\)/);
+  assert.match(source, /onRecoverableError\(error, info\)/);
+  assert.match(source, /reportRootError\("caught", error, info\)/);
+  assert.match(source, /reportRootError\("uncaught", error, info\)/);
+  assert.match(source, /reportRootError\("recoverable", error, info\)/);
+  assert.match(source, /\[react-root:\$\{phase\}\]/);
 });
 
 test("highlight.js registers the first-slice source-code grammars", async () => {

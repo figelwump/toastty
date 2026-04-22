@@ -1,6 +1,6 @@
 export type LocalDocumentPanelEvent =
   | { type: "bridgeReady" }
-  | { type: "consoleMessage"; level: "warn" | "error"; message: string }
+  | { type: "consoleMessage"; level: "info" | "warn" | "error"; message: string }
   | {
       type: "javascriptError";
       message: string;
@@ -51,7 +51,7 @@ export const localDocumentNativeBridge = {
   bridgeReady() {
     postEvent({ type: "bridgeReady" });
   },
-  consoleMessage(level: "warn" | "error", message: string) {
+  consoleMessage(level: "info" | "warn" | "error", message: string) {
     postEvent({ type: "consoleMessage", level, message });
   },
   javascriptError(
