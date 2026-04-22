@@ -53,6 +53,7 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
                 ".git/ignored.md": "# ignored\n",
                 "Derived-tests/cache.json": "{\n  \"ignored\": true\n}\n",
                 "DerivedData/build-log.md": "# ignored\n",
+                "artifacts/test-runs/example/Derived/cache.json": "{\n  \"ignored\": true\n}\n",
                 "DerivedState/model.md": "# keep\n",
                 ".yarn/cache/dep.md": "# ignored\n",
                 ".yarn/unplugged/dep.md": "# ignored\n",
@@ -75,6 +76,7 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
         XCTAssertFalse(relativePaths.contains(".git/ignored.md"))
         XCTAssertFalse(relativePaths.contains("Derived-tests/cache.json"))
         XCTAssertFalse(relativePaths.contains("DerivedData/build-log.md"))
+        XCTAssertFalse(relativePaths.contains("artifacts/test-runs/example/Derived/cache.json"))
         XCTAssertFalse(relativePaths.contains(".yarn/cache/dep.md"))
         XCTAssertFalse(relativePaths.contains(".yarn/unplugged/dep.md"))
     }

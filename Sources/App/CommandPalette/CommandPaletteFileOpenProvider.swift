@@ -62,11 +62,11 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
         ".parcel-cache",
     ]
 
-    private static let skippedTopLevelDirectoryNames: Set<String> = [
+    private static let skippedGeneratedDirectoryNames: Set<String> = [
         "Derived",
     ]
 
-    private static let skippedTopLevelDirectoryPrefixes: [String] = [
+    private static let skippedGeneratedDirectoryPrefixes: [String] = [
         "Derived-",
         "DerivedData",
     ]
@@ -281,11 +281,8 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
             return true
         }
 
-        if pathComponents.count == 1,
-           (
-               skippedTopLevelDirectoryNames.contains(directoryName) ||
-                   skippedTopLevelDirectoryPrefixes.contains(where: { directoryName.hasPrefix($0) })
-           ) {
+        if skippedGeneratedDirectoryNames.contains(directoryName) ||
+            skippedGeneratedDirectoryPrefixes.contains(where: { directoryName.hasPrefix($0) }) {
             return true
         }
 
