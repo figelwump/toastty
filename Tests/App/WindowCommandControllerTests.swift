@@ -1883,36 +1883,7 @@ final class WindowCommandControllerTests: XCTestCase {
         if modifiers.contains(.command) {
             label += "⌘"
         }
-        return label + menuDisplaySymbol(for: item.keyEquivalent)
-    }
-
-    private func menuDisplaySymbol(for keyEquivalent: String) -> String {
-        guard let character = keyEquivalent.first else {
-            return ""
-        }
-
-        switch character {
-        case KeyEquivalent.leftArrow.character:
-            return "←"
-        case KeyEquivalent.rightArrow.character:
-            return "→"
-        case KeyEquivalent.upArrow.character:
-            return "↑"
-        case KeyEquivalent.downArrow.character:
-            return "↓"
-        case KeyEquivalent.escape.character:
-            return "⎋"
-        case KeyEquivalent.return.character:
-            return "↩"
-        case KeyEquivalent.tab.character:
-            return "⇥"
-        case KeyEquivalent.space.character:
-            return "␣"
-        case KeyEquivalent.delete.character:
-            return "⌫"
-        default:
-            return String(character).uppercased()
-        }
+        return label + ToasttyKeyboardShortcut.displaySymbol(forMenuKeyEquivalent: item.keyEquivalent)
     }
 }
 
