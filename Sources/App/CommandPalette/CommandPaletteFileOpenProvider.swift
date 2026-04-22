@@ -191,8 +191,7 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
                 return []
             }
 
-            let normalizedCandidatePath = normalizedFilePath(candidate.path)
-            let candidateRelativePath = relativePath(for: normalizedCandidatePath, rootPath: rootPath)
+            let candidatePath = candidate.path
             let resourceValues = try? candidate.resourceValues(forKeys: [
                 .isDirectoryKey,
                 .isRegularFileKey,
@@ -200,9 +199,16 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
             ])
 
             if resourceValues?.isDirectory == true {
+                guard let resolvedCandidate = resolvedRelativePath(
+                    for: candidatePath,
+                    rootPath: rootPath
+                ) else {
+                    continue
+                }
+
                 if shouldSkipDescendants(
                     of: candidate,
-                    relativePath: candidateRelativePath,
+                    relativePath: resolvedCandidate.relativePath,
                     resourceValues: resourceValues
                 ) {
                     enumerator.skipDescendants()
@@ -215,7 +221,8 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
             }
 
             let fileName = candidate.lastPathComponent
-            if shouldSkipFile(fileName: fileName, relativePath: candidateRelativePath) {
+            if fileName.hasPrefix("."),
+               supportedExactFileNames.contains(fileName) == false {
                 continue
             }
 
@@ -224,18 +231,22 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
                 continue
             }
 
-            guard isDescendant(normalizedCandidatePath, of: rootPath),
+            guard let resolvedCandidate = resolvedRelativePath(
+                for: candidatePath,
+                rootPath: rootPath
+            ),
+                  shouldSkipFile(relativePath: resolvedCandidate.relativePath) == false,
                   let destination = CommandPaletteFileOpenRouting.destination(
-                      forNormalizedFilePath: normalizedCandidatePath
+                      forNormalizedFilePath: resolvedCandidate.filePath
                   ) else {
                 continue
             }
 
             results.append(
                 PaletteFileResult(
-                    filePath: normalizedCandidatePath,
+                    filePath: resolvedCandidate.filePath,
                     fileName: candidate.lastPathComponent,
-                    relativePath: relativePath(for: normalizedCandidatePath, rootPath: rootPath),
+                    relativePath: resolvedCandidate.relativePath,
                     destination: destination
                 )
             )
@@ -281,12 +292,7 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
         return false
     }
 
-    private static func shouldSkipFile(fileName: String, relativePath: String) -> Bool {
-        if fileName.hasPrefix("."),
-           CommandPaletteFileOpenRouting.supportedExactFileNames.contains(fileName) == false {
-            return true
-        }
-
+    private static func shouldSkipFile(relativePath: String) -> Bool {
         let pathComponents = relativePath.split(separator: "/")
         if pathComponents.count >= 2,
            pathComponents[0] == ".yarn",
@@ -312,6 +318,30 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
 
     private static func isDescendant(_ filePath: String, of rootPath: String) -> Bool {
         filePath == rootPath || filePath.hasPrefix(rootPath + "/")
+    }
+
+    private static func resolvedRelativePath(
+        for candidatePath: String,
+        rootPath: String
+    ) -> (relativePath: String, filePath: String)? {
+        if let relativePath = descendantRelativePath(candidatePath, of: rootPath) {
+            return (relativePath, candidatePath)
+        }
+
+        let normalizedCandidatePath = normalizedFilePath(candidatePath)
+        guard let relativePath = descendantRelativePath(normalizedCandidatePath, of: rootPath) else {
+            return nil
+        }
+
+        return (relativePath, normalizedCandidatePath)
+    }
+
+    private static func descendantRelativePath(_ filePath: String, of rootPath: String) -> String? {
+        guard isDescendant(filePath, of: rootPath) else {
+            return nil
+        }
+
+        return relativePath(for: filePath, rootPath: rootPath)
     }
 
     private static func normalizedDirectoryPath(_ path: String) -> String {
