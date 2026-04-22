@@ -253,6 +253,22 @@ Actionable lifecycle events — `needs_approval`, `ready`, and `error` — drive
 
 While a managed agent session is active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel so the session status path stays authoritative.
 
+### Later flags
+
+Use `Cmd+Shift+L` to flag or clear the focused managed session for later follow-up.
+
+Later flags are intentionally a lower-priority reminder, not a pin. When you use `Cmd+Shift+A`, Toastty first targets unread panels, then sessions that need approval or show errors, then forward working sessions. Later-flagged sessions only surface after those higher-priority cases are exhausted.
+
+Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
+
+### Watch running commands
+
+Use `Cmd+Shift+M` while the focused terminal is running a foreground command to watch that command as a temporary session-style row in the sidebar.
+
+This is separate from managed agent launches. Toastty uses the same unread-badge and desktop-notification path for watched commands, reporting success as `Command finished` and non-zero exits as `Command failed`. The watch stays tied to that terminal panel until the foreground command completes.
+
+Watched commands are intentionally not later-flaggable. The watch itself is already the reminder, so Toastty hides the later-flag affordance for those rows instead of stacking both features on the same panel.
+
 ## Custom and third-party agents
 
 For agents that are not `codex` or `claude`, Toastty still provides the base `TOASTTY_*` session context. Toastty has already created the session before your command starts, so the agent (or a wrapper script) should update and stop that existing session via the injected `TOASTTY_CLI_PATH`:

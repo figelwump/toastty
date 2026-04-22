@@ -95,6 +95,10 @@ For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md
 
 Toastty can launch coding agents directly into terminal panels from the `Agent` menu, the top bar, the command palette, or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically, while later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed.
 
+Use `Cmd+Shift+L` to mark a managed session for later follow-up without pinning it; later-flagged sessions only surface after unread, approval/error, and forward-working sessions when you cycle with `Cmd+Shift+A`, and the flag clears automatically when the session meaningfully advances.
+
+Use `Cmd+Shift+M` to watch a busy foreground terminal command and get the same sidebar row, unread, and completion-notification affordances for non-agent terminal work. Watched commands are intentionally not later-flaggable.
+
 For full details see [docs/running-agents.md](docs/running-agents.md).
 
 ### Agent profiles
@@ -140,11 +144,15 @@ Any other profile ID launches the configured command with base `TOASTTY_*` sessi
 
 ## CLI
 
-Toastty bundles a `toastty` CLI for communicating with the running app over its automation socket. When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, and the CLI is how agents and wrapper scripts report status back to the sidebar.
+Toastty bundles a `toastty` CLI for communicating with the running app over its Unix socket. When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment. The CLI handles both session telemetry (`session`, `notify`) and live app control (`action`, `query`).
 
 | Command | Description |
 |---|---|
+| `action list` | List the live app-control actions exposed by the running app |
+| `action run` | Run an app action against a live Toastty instance |
 | `notify <title> <body>` | Emit a macOS desktop notification |
+| `query list` | List the live read-only app-control queries exposed by the running app |
+| `query run` | Run a read-only app query against a live Toastty instance |
 | `session start` | Create a new agent session |
 | `session status` | Update session state (`idle`, `working`, `needs_approval`, `ready`, `error`) |
 | `session update-files` | Report files changed during a session |
@@ -159,6 +167,16 @@ Most flags fall back to `TOASTTY_*` environment variables that Toastty injects a
 ```
 
 For the full command reference including all flags, environment variables, JSON output format, and exit codes, see [docs/cli-reference.md](docs/cli-reference.md).
+
+### Workflow automation with the CLI
+
+The CLI can also drive higher-level workflows against a normal running Toastty instance. This repo's `worktree-create` skill is one example: it resolves the current Toastty window, creates a new workspace, opens `WORKTREE_HANDOFF.md` in a split, and sends the startup command into the new terminal via `query run` and `action run`.
+
+If you want to point an agent at that pattern and have it adapt the workflow for another repo, use this prompt:
+
+```text
+Read `.agents/skills/worktree-create/SKILL.md` and `.agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh`, then adapt that workflow for this repo. Reuse the same Toastty CLI pattern: resolve the current window/panel, create a workspace, open a handoff document in a split, and send the startup command into the new terminal.
+```
 
 ## Configuration
 
