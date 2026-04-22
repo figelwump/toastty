@@ -27,6 +27,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
     private let agentCatalogStore: AgentCatalogStore
     private let terminalProfileStore: TerminalProfileStore
     private let profileShortcutRegistryProvider: @MainActor () -> ProfileShortcutRegistry
+    private let fileIndexService: any CommandPaletteFileIndexing
     private let usageTracker: CommandPaletteUsageTracking
     private let panelFactory: () -> CommandPalettePanel
     private let scheduleWorkspaceFocusRestore: @MainActor (UUID, Bool) -> Void
@@ -51,6 +52,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         agentCatalogStore: AgentCatalogStore,
         terminalProfileStore: TerminalProfileStore,
         profileShortcutRegistryProvider: @escaping @MainActor () -> ProfileShortcutRegistry,
+        fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         panelFactory: @escaping () -> CommandPalettePanel = { CommandPalettePanel() },
         scheduleWorkspaceFocusRestore: (@MainActor (UUID, Bool) -> Void)? = nil
@@ -60,6 +62,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         self.agentCatalogStore = agentCatalogStore
         self.terminalProfileStore = terminalProfileStore
         self.profileShortcutRegistryProvider = profileShortcutRegistryProvider
+        self.fileIndexService = fileIndexService
         self.usageTracker = usageTracker
         self.panelFactory = panelFactory
         self.scheduleWorkspaceFocusRestore = scheduleWorkspaceFocusRestore ?? { [weak terminalRuntimeRegistry] workspaceID, avoidStealingKeyboardFocus in
@@ -127,7 +130,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
         panel?.delegate = nil
         panel?.contentViewController = nil
-        panel?.orderOut(nil)
+        panel?.close()
 
         if shouldRestoreFocus(for: reason),
            let originWindowID {
@@ -165,6 +168,17 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             executeCommand: { [weak self] invocation, commandOriginWindowID in
                 self?.actions.execute(invocation, originWindowID: commandOriginWindowID) ?? false
             },
+            resolveFileSearchScope: { [weak self] commandOriginWindowID in
+                self?.actions.fileSearchScope(originWindowID: commandOriginWindowID)
+            },
+            openFileResult: { [weak self] destination, placement, commandOriginWindowID in
+                self?.actions.openFileResult(
+                    destination,
+                    placement: placement,
+                    originWindowID: commandOriginWindowID
+                ) ?? false
+            },
+            fileIndexService: fileIndexService,
             usageTracker: usageTracker,
             onCancel: { [weak self] in
                 self?.dismiss(reason: .cancelled)

@@ -3,19 +3,129 @@ import CoreState
 import SwiftUI
 
 struct LocalDocumentPanelHostView: NSViewRepresentable {
+    typealias MainActorScheduler = (@escaping @MainActor @Sendable () -> Void) -> Void
+
     @ObservedObject var runtime: LocalDocumentPanelRuntime
     let webState: WebPanelState
     let isEffectivelyVisible: Bool
+    let isActivePanel: Bool
     let textScale: Double
 
     @MainActor
     final class Coordinator {
+        private static let maxDeferredFocusAttempts = 4
+
         let containerCoordinator = PanelHostContainerCoordinator()
         var lastAppliedWebState: WebPanelState?
+        var lastIsActivePanel = false
+        private var pendingFocusRequestID: UUID?
+        private var pendingFocusAttempt = 0
+        private let scheduleOnMainActor: MainActorScheduler
+
+        init(
+            scheduleOnMainActor: @escaping MainActorScheduler = { operation in
+                Task { @MainActor in
+                    operation()
+                }
+            }
+        ) {
+            self.scheduleOnMainActor = scheduleOnMainActor
+        }
+
+        func requestFocusIfNeeded(
+            isActivePanel: Bool,
+            runtime: LocalDocumentPanelRuntime
+        ) {
+            let shouldRequestFocus = Self.shouldRequestWebViewFocus(
+                previousIsActivePanel: lastIsActivePanel,
+                nextIsActivePanel: isActivePanel
+            )
+            lastIsActivePanel = isActivePanel
+
+            guard isActivePanel else {
+                resetPendingFocusRequest()
+                return
+            }
+
+            if runtime.focusWebView() {
+                resetPendingFocusRequest()
+                return
+            }
+
+            guard shouldRequestFocus else {
+                return
+            }
+
+            scheduleDeferredFocusRequest(runtime: runtime)
+        }
+
+        private func scheduleDeferredFocusRequest(runtime: LocalDocumentPanelRuntime) {
+            let nextAttempt = pendingFocusAttempt + 1
+            guard nextAttempt <= Self.maxDeferredFocusAttempts else {
+                resetPendingFocusRequest()
+                return
+            }
+
+            let requestID = pendingFocusRequestID ?? UUID()
+            pendingFocusRequestID = requestID
+            pendingFocusAttempt = nextAttempt
+
+            // SwiftUI can mark the panel active before WebKit has joined a window.
+            // Retry a few times on the main actor so first-responder assignment can
+            // catch up once AppKit finishes attaching the host view hierarchy.
+            scheduleOnMainActor { [weak self, weak runtime] in
+                guard let self,
+                      self.pendingFocusRequestID == requestID,
+                      self.lastIsActivePanel,
+                      let runtime else {
+                    return
+                }
+
+                if runtime.focusWebView() {
+                    self.resetPendingFocusRequest()
+                    return
+                }
+
+                guard self.pendingFocusRequestID == requestID,
+                      self.pendingFocusAttempt == nextAttempt else {
+                    return
+                }
+
+                self.scheduleDeferredFocusRequest(runtime: runtime)
+            }
+        }
+
+        func retryPendingFocusIfNeeded(
+            isActivePanel: Bool,
+            runtime: LocalDocumentPanelRuntime
+        ) {
+            guard isActivePanel,
+                  pendingFocusRequestID != nil else {
+                return
+            }
+
+            if runtime.focusWebView() {
+                resetPendingFocusRequest()
+            }
+        }
+
+        nonisolated static func shouldRequestWebViewFocus(
+            previousIsActivePanel: Bool,
+            nextIsActivePanel: Bool
+        ) -> Bool {
+            nextIsActivePanel && previousIsActivePanel == false
+        }
+
+        private func resetPendingFocusRequest() {
+            pendingFocusRequestID = nil
+            pendingFocusAttempt = 0
+        }
 
         func reset() {
             containerCoordinator.reset()
             lastAppliedWebState = nil
+            lastIsActivePanel = false
+            resetPendingFocusRequest()
         }
     }
 
@@ -39,6 +149,10 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
 
         let attach = { (view: NSView) in
             runtime.attachHost(to: view, attachment: attachment)
+            context.coordinator.retryPendingFocusIfNeeded(
+                isActivePanel: isActivePanel,
+                runtime: runtime
+            )
         }
 
         containerView.onLayout = attach
@@ -51,6 +165,10 @@ struct LocalDocumentPanelHostView: NSViewRepresentable {
             context.coordinator.lastAppliedWebState = webState
         }
         runtime.applyTextScale(textScale)
+        context.coordinator.requestFocusIfNeeded(
+            isActivePanel: isActivePanel,
+            runtime: runtime
+        )
     }
 
     static func dismantleNSView(_ containerView: WebPanelContainerView, coordinator: Coordinator) {

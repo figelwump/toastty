@@ -6,6 +6,7 @@ import Foundation
 class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var commandSelectionValue: WindowCommandSelection?
     var workspaceSwitchOptionsValue: [PaletteWorkspaceSwitchOption] = []
+    var fileSearchScopeValue: PaletteFileSearchScope?
 
     var canCreateWindowValue = true
     var canCreateWorkspaceValue = true
@@ -76,6 +77,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var workspaceSwitchCalls: [RecordedPaletteWorkspaceSwitchCall] = []
     var launchedAgentCalls: [RecordedPaletteAgentLaunchCall] = []
     var terminalProfileSplitCalls: [RecordedPaletteTerminalProfileSplitCall] = []
+    var openedFileResults: [RecordedPaletteFileOpenCall] = []
     var reloadConfigurationCount = 0
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -86,6 +88,11 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     func workspaceSwitchOptions(originWindowID: UUID) -> [PaletteWorkspaceSwitchOption] {
         _ = originWindowID
         return workspaceSwitchOptionsValue
+    }
+
+    func fileSearchScope(originWindowID: UUID) -> PaletteFileSearchScope? {
+        _ = originWindowID
+        return fileSearchScopeValue
     }
 
     func canCreateWindow(originWindowID: UUID) -> Bool {
@@ -342,6 +349,21 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return reloadConfigurationResult
     }
 
+    func openFileResult(
+        _ destination: PaletteFileOpenDestination,
+        placement: PaletteFileOpenPlacement,
+        originWindowID: UUID
+    ) -> Bool {
+        openedFileResults.append(
+            RecordedPaletteFileOpenCall(
+                destination: destination,
+                placement: placement,
+                originWindowID: originWindowID
+            )
+        )
+        return true
+    }
+
     func execute(_ invocation: PaletteCommandInvocation, originWindowID: UUID) -> Bool {
         switch invocation {
         case .builtIn(let command):
@@ -480,6 +502,12 @@ struct RecordedPaletteAgentLaunchCall: Equatable {
 struct RecordedPaletteTerminalProfileSplitCall: Equatable {
     let profileID: String
     let direction: SlotSplitDirection
+    let originWindowID: UUID
+}
+
+struct RecordedPaletteFileOpenCall: Equatable {
+    let destination: PaletteFileOpenDestination
+    let placement: PaletteFileOpenPlacement
     let originWindowID: UUID
 }
 

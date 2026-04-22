@@ -5,6 +5,7 @@ import Foundation
 protocol CommandPaletteActionHandling: AnyObject {
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection?
     func workspaceSwitchOptions(originWindowID: UUID) -> [PaletteWorkspaceSwitchOption]
+    func fileSearchScope(originWindowID: UUID) -> PaletteFileSearchScope?
     func canCreateWindow(originWindowID: UUID) -> Bool
     func createWindow(originWindowID: UUID) -> Bool
     func canCreateWorkspace(originWindowID: UUID) -> Bool
@@ -49,12 +50,18 @@ protocol CommandPaletteActionHandling: AnyObject {
     func splitWithTerminalProfile(profileID: String, direction: SlotSplitDirection, originWindowID: UUID) -> Bool
     func canReloadConfiguration() -> Bool
     func reloadConfiguration() -> Bool
+    func openFileResult(
+        _ destination: PaletteFileOpenDestination,
+        placement: PaletteFileOpenPlacement,
+        originWindowID: UUID
+    ) -> Bool
     func execute(_ invocation: PaletteCommandInvocation, originWindowID: UUID) -> Bool
 }
 
 @MainActor
 final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private weak var store: AppStore?
+    private let fileManager: FileManager
     private let splitLayoutCommandController: SplitLayoutCommandController
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -68,6 +75,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
 
     init(
         store: AppStore,
+        fileManager: FileManager = .default,
         splitLayoutCommandController: SplitLayoutCommandController,
         focusedPanelCommandController: FocusedPanelCommandController,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
@@ -80,6 +88,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         processWatchCommandController: ProcessWatchCommandController? = nil
     ) {
         self.store = store
+        self.fileManager = fileManager
         self.splitLayoutCommandController = splitLayoutCommandController
         self.focusedPanelCommandController = focusedPanelCommandController
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
@@ -118,6 +127,26 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
                 shortcut: shortcut
             )
         }
+    }
+
+    func fileSearchScope(originWindowID: UUID) -> PaletteFileSearchScope? {
+        guard let workspace = store?.commandSelection(preferredWindowID: originWindowID)?.workspace else {
+            return nil
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           let scope = paletteFileSearchScope(for: focusedPanelID, in: workspace) {
+            return scope
+        }
+
+        for panelID in workspace.terminalPanelIDsInDisplayOrder {
+            guard let scope = paletteFileSearchScope(for: panelID, in: workspace) else {
+                continue
+            }
+            return scope
+        }
+
+        return nil
     }
 
     func canCreateWindow(originWindowID: UUID) -> Bool {
@@ -370,6 +399,33 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return true
     }
 
+    func openFileResult(
+        _ destination: PaletteFileOpenDestination,
+        placement: PaletteFileOpenPlacement,
+        originWindowID: UUID
+    ) -> Bool {
+        let placementOverride = paletteFilePlacementOverride(for: placement)
+
+        switch destination {
+        case .localDocument(let filePath):
+            return store?.createLocalDocumentPanelFromCommand(
+                preferredWindowID: originWindowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: filePath,
+                    placementOverride: placementOverride
+                )
+            ) ?? false
+        case .browser(let fileURLString):
+            return store?.createBrowserPanelFromCommand(
+                preferredWindowID: originWindowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: fileURLString,
+                    placementOverride: placementOverride
+                )
+            ) ?? false
+        }
+    }
+
     func execute(_ invocation: PaletteCommandInvocation, originWindowID: UUID) -> Bool {
         switch invocation {
         case .builtIn(let command):
@@ -476,5 +532,50 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             preferringUnreadSessionPanelIn: sessionRuntimeStore
         )
         return true
+    }
+
+    private func paletteFilePlacementOverride(
+        for placement: PaletteFileOpenPlacement
+    ) -> WebPanelPlacement? {
+        switch placement {
+        case .default:
+            return nil
+        case .alternate:
+            return .newTab
+        }
+    }
+
+    private func paletteFileSearchScope(
+        for panelID: UUID,
+        in workspace: WorkspaceState
+    ) -> PaletteFileSearchScope? {
+        guard case .terminal(let terminalState)? = workspace.panels[panelID],
+              let scopePath = resolvedScopePath(from: terminalState.workingDirectorySeed) else {
+            return nil
+        }
+
+        let repoRoot = RepositoryRootLocator.inferRepoRoot(from: scopePath)
+        return PaletteFileSearchScope(
+            rootPath: repoRoot ?? scopePath,
+            kind: repoRoot == nil ? .workingDirectory : .repositoryRoot
+        )
+    }
+
+    private func resolvedScopePath(from candidatePath: String?) -> String? {
+        guard let candidatePath else {
+            return nil
+        }
+
+        let normalizedPath = URL(fileURLWithPath: candidatePath, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        var isDirectory = ObjCBool(false)
+        guard fileManager.fileExists(atPath: normalizedPath, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+
+        return normalizedPath
     }
 }

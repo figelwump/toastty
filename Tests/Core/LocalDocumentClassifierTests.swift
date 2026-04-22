@@ -21,6 +21,7 @@ struct LocalDocumentClassifierTests {
 
     @Test
     func formatForPathExtensionRecognizesExistingNonCodeFamiliesCaseInsensitively() {
+        #expect(LocalDocumentClassifier.format(forPathExtension: "") == nil)
         #expect(LocalDocumentClassifier.format(forPathExtension: "yaml") == .yaml)
         #expect(LocalDocumentClassifier.format(forPathExtension: "YML") == .yaml)
         #expect(LocalDocumentClassifier.format(forPathExtension: "toml") == .toml)
@@ -83,6 +84,18 @@ struct LocalDocumentClassifierTests {
         #expect(
             LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD") == .markdown
         )
+        #expect(
+            LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD:42") == .markdown
+        )
+        #expect(
+            LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD:draft") == .markdown
+        )
+        #expect(
+            LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD:42:extra") == .markdown
+        )
+        #expect(
+            LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes:1/README.MD") == .markdown
+        )
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/config.yaml") == .yaml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/Toastty.toml") == .toml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/settings.JSON") == .json)
@@ -91,6 +104,7 @@ struct LocalDocumentClassifierTests {
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/data/report.csv") == .csv)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/layout.xml") == .xml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/scripts/bootstrap.zsh") == .shell)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/config.txt:42") == nil)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/Toastty/App.swift") == .code)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/web/index.tsx") == .code)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/notes") == nil)

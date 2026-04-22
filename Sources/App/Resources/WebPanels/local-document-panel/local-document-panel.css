@@ -14,6 +14,8 @@
   --accent: #b65c22;
   --accent-soft: rgba(182, 92, 34, 0.12);
   --code-bg: rgba(78, 53, 31, 0.08);
+  --code-line-reveal: rgba(182, 92, 34, 0.16);
+  --code-line-reveal-border: rgba(182, 92, 34, 0.34);
   --quote-bg: rgba(182, 92, 34, 0.06);
   --quote-text: #5f422b;
   --pre-bg: #21160f;
@@ -67,6 +69,8 @@
   --accent: #f0a25e;
   --accent-soft: rgba(240, 162, 94, 0.16);
   --code-bg: rgba(255, 224, 191, 0.08);
+  --code-line-reveal: rgba(240, 162, 94, 0.18);
+  --code-line-reveal-border: rgba(255, 212, 167, 0.34);
   --quote-bg: rgba(240, 162, 94, 0.1);
   --quote-text: #e3c6af;
   --pre-bg: #100b08;
@@ -112,22 +116,30 @@ html {
   scroll-behavior: smooth;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
   background:
     radial-gradient(circle at top left, var(--bg-glow), transparent 24rem),
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 100%);
   color: var(--text);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+  /* Bound the document so .local-document-code-scroll is the actual scroller for
+     the code view; otherwise the page itself scrolls and the JS-driven reveal
+     scroll on the inner element is a no-op. */
+  overflow: hidden;
 }
 
 #root {
-  min-height: 100vh;
+  height: 100%;
 }
 
 .local-document-shell {
-  min-height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -230,20 +242,42 @@ body {
 
 .local-document-code-frame {
   --local-document-code-line-height: calc(21.45px * var(--toastty-markdown-text-scale));
+  --local-document-code-gutter-padding-left: 18px;
+  --local-document-code-gutter-padding-right: 10px;
+  --local-document-code-gutter-digit-width: 3ch;
   flex: 1;
   min-height: 0;
-  display: flex;
-  align-items: stretch;
   background: var(--pre-bg);
   color: var(--pre-text);
+  overflow: hidden;
+}
+
+.local-document-code-scroll {
+  height: 100%;
+  overflow: auto;
+}
+
+.local-document-code-scroll-inner {
+  display: flex;
+  align-items: stretch;
+  position: relative;
+  width: max-content;
+  min-width: 100%;
+}
+
+.local-document-code-gutter-frame {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  background: rgba(255, 224, 191, 0.03);
+  border-right: 1px solid rgba(255, 224, 191, 0.08);
 }
 
 .local-document-code-gutter {
-  flex: 0 0 auto;
   margin: 0;
-  padding: 20px 14px 28px 22px;
-  border-right: 1px solid rgba(255, 224, 191, 0.08);
-  background: rgba(255, 224, 191, 0.03);
+  padding: 20px var(--local-document-code-gutter-padding-right) 28px var(--local-document-code-gutter-padding-left);
+  background: transparent;
   color: #8a7566;
   font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
   font-size: calc(13px * var(--toastty-markdown-text-scale));
@@ -253,16 +287,39 @@ body {
   text-align: right;
   user-select: none;
   white-space: pre;
+  position: relative;
+  z-index: 1;
 }
 
-.local-document-code-scroll {
-  flex: 1;
-  margin: 0;
-  overflow: auto;
+.local-document-code-content-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 20px 28px 28px;
 }
 
-.local-document-code-scroll code,
+.local-document-code-content {
+  margin: 0;
+}
+
+.local-document-code-line-reveal,
+.local-document-code-gutter-reveal {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--local-document-code-line-height);
+  background: var(--code-line-reveal);
+  box-shadow:
+    inset 0 1px 0 var(--code-line-reveal-border),
+    inset 0 -1px 0 var(--code-line-reveal-border);
+  pointer-events: none;
+}
+
+.local-document-code-gutter-reveal {
+  z-index: 0;
+}
+
+.local-document-code-content code,
 .local-document-code-plain {
   display: block;
   min-width: max-content;
@@ -290,12 +347,10 @@ body {
 }
 
 .local-document-code-markdown-gutter {
-  --local-document-code-gutter-padding-left: 22px;
-  --local-document-code-gutter-padding-right: 14px;
   min-width: calc(
     var(--local-document-code-gutter-padding-left) +
     var(--local-document-code-gutter-padding-right) +
-    5ch
+    var(--local-document-code-gutter-digit-width)
   );
   padding: 20px 0 28px;
   border-right: 1px solid rgba(255, 224, 191, 0.08);
@@ -574,6 +629,27 @@ body {
 
 .local-document-editor::placeholder {
   color: var(--muted);
+}
+
+@keyframes local-document-line-reveal {
+  0% {
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .local-document-code-line-reveal {
+    animation: none;
+    opacity: 0.92;
+  }
 }
 
 /* Themed scrollbar */

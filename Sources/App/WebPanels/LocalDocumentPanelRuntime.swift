@@ -21,6 +21,7 @@ struct LocalDocumentPanelRuntimeAutomationState: Equatable, Sendable {
     let lifecycleState: PanelHostLifecycleState
     let currentTheme: LocalDocumentPanelTheme
     let hasPendingBootstrapScript: Bool
+    let pendingRevealLine: Int?
     let currentAssetPath: String?
     let currentBootstrap: LocalDocumentPanelBootstrap?
 }
@@ -289,6 +290,8 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     typealias DocumentSaver = @Sendable (String, String) async throws -> Void
     typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
     typealias ExternalFileOpener = @Sendable (URL) -> Bool
+    typealias BridgeScriptCompletion = @MainActor @Sendable (Any?, Error?) -> Void
+    typealias BridgeScriptEvaluator = @MainActor (String, @escaping BridgeScriptCompletion) -> Void
     private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
     nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
@@ -301,6 +304,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private let documentSaver: DocumentSaver
     private let savedDocumentReader: SavedDocumentReader
     private let externalFileOpener: ExternalFileOpener
+    private let bridgeScriptEvaluator: BridgeScriptEvaluator
     private let reloadDebounceNanoseconds: UInt64
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
@@ -313,6 +317,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private var activeSaveOperationID: UUID?
     private var reloadGeneration: UInt64 = 0
     private var pendingBootstrapScript: String?
+    private var pendingRevealLine: Int?
     private var currentAssetURL: URL?
     private var currentBootstrap: LocalDocumentPanelBootstrap?
     private var session: LocalDocumentEditingSession?
@@ -329,6 +334,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         documentSaver: @escaping DocumentSaver = { try await LocalDocumentPanelRuntime.writeLocalDocument(at: $0, content: $1) },
         savedDocumentReader: @escaping SavedDocumentReader = { try await LocalDocumentPanelRuntime.readLocalDocument(at: $0, displayName: $1, format: $2) },
         externalFileOpener: @escaping ExternalFileOpener = { NSWorkspace.shared.open($0) },
+        bridgeScriptEvaluator: BridgeScriptEvaluator? = nil,
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
@@ -339,14 +345,23 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.documentSaver = documentSaver
         self.savedDocumentReader = savedDocumentReader
         self.externalFileOpener = externalFileOpener
-        self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         let configuration = Self.makeWebViewConfiguration(
             for: WebPanelDefinition.localDocument.capabilityProfile
         )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
+        #if DEBUG
+        // Expose the panel to Safari Web Inspector for debug builds so reveal
+        // measurements can be inspected directly in WKWebView rather than
+        // guessed at through Chromium approximations.
+        webView.isInspectable = true
+        #endif
         self.webView = webView
+        self.bridgeScriptEvaluator = bridgeScriptEvaluator ?? { script, completion in
+            webView.evaluateJavaScript(script, completionHandler: completion)
+        }
+        self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         super.init()
 
@@ -388,6 +403,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             lifecycleState: lifecycleState,
             currentTheme: currentTheme,
             hasPendingBootstrapScript: pendingBootstrapScript != nil,
+            pendingRevealLine: pendingRevealLine,
             currentAssetPath: currentAssetURL?.path,
             currentBootstrap: currentBootstrap
         )
@@ -445,6 +461,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         guard session.beginEditing() else { return }
         objectWillChange.send()
         self.session = session
+        pendingRevealLine = nil
         updateCurrentBootstrap()
         pushPendingBootstrapIfPossible()
     }
@@ -553,6 +570,13 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         webView.isHidden = shouldHideWebView
     }
 
+    func focusWebView() -> Bool {
+        guard let window = webView.window else {
+            return false
+        }
+        return window.makeFirstResponder(webView)
+    }
+
     func applyTextScale(_ scale: Double) {
         let nextScale = AppState.clampedMarkdownTextScale(scale)
         guard abs(nextScale - currentTextScale) >= AppState.markdownTextScaleComparisonEpsilon else {
@@ -564,6 +588,16 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             self.currentBootstrap = currentBootstrap.setting(textScale: nextScale)
         }
         pushTextScaleUpdateIfPossible()
+    }
+
+    func requestReveal(lineNumber: Int) {
+        guard lineNumber > 0 else {
+            pendingRevealLine = nil
+            return
+        }
+
+        pendingRevealLine = lineNumber
+        pushPendingRevealIfPossible()
     }
 
     func applyEffectiveAppearance(_ appearance: NSAppearance?) {
@@ -644,11 +678,128 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
               let json = String(data: data, encoding: .utf8) else {
             return nil
         }
-        return "window.ToasttyLocalDocumentPanel?.receiveBootstrap(\(json));"
+        return bridgeCommandJavaScript(command: "bridge.receiveBootstrap(\(json));")
     }
 
     nonisolated static func textScaleJavaScript(for textScale: Double) -> String {
-        "window.ToasttyLocalDocumentPanel?.setTextScale(\(String(format: "%.4f", textScale)));"
+        bridgeCommandJavaScript(
+            command: "bridge.setTextScale(\(String(format: "%.4f", textScale)));"
+        )
+    }
+
+    nonisolated static func revealLineJavaScript(for lineNumber: Int) -> String {
+        bridgeCommandJavaScript(command: "bridge.revealLine(\(lineNumber));")
+    }
+
+    nonisolated static func bridgeCommandJavaScript(command: String) -> String {
+        """
+        (() => {
+            const bridge = window.ToasttyLocalDocumentPanel;
+            if (!bridge) {
+                return false;
+            }
+            \(command)
+            return true;
+        })();
+        """
+    }
+
+    nonisolated static func bridgeCommandWasDelivered(_ result: Any?) -> Bool {
+        if let result = result as? Bool {
+            return result
+        }
+        if let result = result as? NSNumber {
+            return result.boolValue
+        }
+        return false
+    }
+
+    nonisolated static var keyboardNavigationJavaScript: String {
+        """
+        (() => {
+          const installFlag = "__toasttyLocalDocumentKeyboardNavigationInstalled";
+          if (window[installFlag] === true) {
+            return;
+          }
+          window[installFlag] = true;
+
+          const scrollContainerSelector = ".local-document-code-scroll";
+          const handledKeys = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+
+          const isInteractiveTarget = (element) => {
+            if (!(element instanceof Element)) {
+              return false;
+            }
+
+            if (element instanceof HTMLTextAreaElement ||
+                element instanceof HTMLInputElement ||
+                element instanceof HTMLSelectElement ||
+                element instanceof HTMLButtonElement ||
+                element instanceof HTMLAnchorElement) {
+              return true;
+            }
+
+            return element.isContentEditable ||
+              element.closest("textarea, input, select, button, a[href], [contenteditable='true'], [contenteditable='']");
+          };
+
+          const scrollStep = (container, axis) => {
+            const lineHeight = Number.parseFloat(window.getComputedStyle(container).lineHeight);
+            const baseStep = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 20;
+            return axis === "y" ? Math.max(baseStep * 3, 36) : Math.max(baseStep * 2, 32);
+          };
+
+          document.addEventListener("keydown", (event) => {
+            if (event.defaultPrevented ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.altKey ||
+                event.shiftKey ||
+                handledKeys.has(event.key) === false) {
+              return;
+            }
+
+            const eventTarget = event.target instanceof Element ? event.target : document.activeElement;
+            if (isInteractiveTarget(eventTarget)) {
+              return;
+            }
+
+            const container = document.querySelector(scrollContainerSelector);
+            if (!(container instanceof HTMLElement)) {
+              return;
+            }
+
+            let deltaLeft = 0;
+            let deltaTop = 0;
+            switch (event.key) {
+            case "ArrowUp":
+              deltaTop = -scrollStep(container, "y");
+              break;
+            case "ArrowDown":
+              deltaTop = scrollStep(container, "y");
+              break;
+            case "ArrowLeft":
+              deltaLeft = -scrollStep(container, "x");
+              break;
+            case "ArrowRight":
+              deltaLeft = scrollStep(container, "x");
+              break;
+            default:
+              return;
+            }
+
+            const canScrollVertically = container.scrollHeight > container.clientHeight + 1;
+            const canScrollHorizontally = container.scrollWidth > container.clientWidth + 1;
+            if ((deltaTop !== 0 && canScrollVertically === false) ||
+                (deltaLeft !== 0 && canScrollHorizontally === false)) {
+              return;
+            }
+
+            container.scrollBy({ left: deltaLeft, top: deltaTop, behavior: "auto" });
+            event.preventDefault();
+          }, { capture: true });
+        })();
+        """
     }
 
     static func makeWebViewConfiguration(
@@ -656,6 +807,13 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     ) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: keyboardNavigationJavaScript,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true
+            )
+        )
         if capabilityProfile == .localOnly {
             configuration.websiteDataStore = .nonPersistent()
         }
@@ -974,10 +1132,11 @@ private extension LocalDocumentPanelRuntime {
             stageCurrentBootstrapScript()
         }
         guard let pendingBootstrapScript else { return }
-        webView.evaluateJavaScript(pendingBootstrapScript) { [weak self] _, error in
+        bridgeScriptEvaluator(pendingBootstrapScript) { [weak self] result, error in
             guard let self else { return }
-            if error == nil {
+            if error == nil, Self.bridgeCommandWasDelivered(result) {
                 self.pendingBootstrapScript = nil
+                self.pushPendingRevealIfPossible()
             }
         }
     }
@@ -1024,10 +1183,49 @@ private extension LocalDocumentPanelRuntime {
         }
 
         let script = Self.textScaleJavaScript(for: currentTextScale)
-        webView.evaluateJavaScript(script) { [weak self] _, error in
-            guard let self, error != nil else { return }
-            self.pendingBootstrapScript = nil
-            self.pushPendingBootstrapIfPossible()
+        bridgeScriptEvaluator(script) { [weak self] result, error in
+            guard let self else { return }
+            guard error == nil, Self.bridgeCommandWasDelivered(result) else {
+                self.pendingBootstrapScript = nil
+                self.pushPendingBootstrapIfPossible()
+                return
+            }
+        }
+    }
+
+    func pushPendingRevealIfPossible() {
+        guard let pendingRevealLine else { return }
+
+        if session?.isEditing == true {
+            self.pendingRevealLine = nil
+            return
+        }
+
+        guard let entryURL else {
+            ensurePanelAppLoaded()
+            return
+        }
+
+        if currentAssetURL != entryURL {
+            ensurePanelAppLoaded()
+            return
+        }
+
+        guard currentBootstrap != nil,
+              pendingBootstrapScript == nil else {
+            return
+        }
+
+        let script = Self.revealLineJavaScript(for: pendingRevealLine)
+        bridgeScriptEvaluator(script) { [weak self] result, error in
+            guard let self else { return }
+            if error == nil, Self.bridgeCommandWasDelivered(result) {
+                self.pendingRevealLine = nil
+                return
+            }
+            if error != nil {
+                self.pushPendingBootstrapIfPossible()
+            }
         }
     }
 
@@ -1223,6 +1421,7 @@ private extension LocalDocumentPanelRuntime {
 extension LocalDocumentPanelRuntime: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pushPendingBootstrapIfPossible()
+        pushPendingRevealIfPossible()
     }
 
     func webView(

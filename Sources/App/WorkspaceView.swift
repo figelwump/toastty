@@ -2451,6 +2451,7 @@ private struct PanelCardView: View {
                 webState: state,
                 runtime: webPanelRuntimeRegistry.localDocumentRuntime(for: panelID),
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
+                isActivePanel: isFocused,
                 textScale: windowMarkdownTextScale
             )
             .frame(
