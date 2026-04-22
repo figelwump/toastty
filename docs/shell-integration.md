@@ -202,6 +202,16 @@ _toastty_ensure_pane_journal_directory() {
 	return 0
 }
 
+_toastty_load_shared_history_if_needed() {
+	[[ -z "${_TOASTTY_SHARED_HISTORY_IMPORTED:-}" ]] || return
+
+	local histfile="${HISTFILE:-}"
+	if [[ -n "$histfile" && -r "$histfile" ]]; then
+		builtin history -n "$histfile"
+	fi
+	_TOASTTY_SHARED_HISTORY_IMPORTED=1
+}
+
 _toastty_import_pane_journal_if_needed() {
 	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
 
@@ -218,6 +228,7 @@ _toastty_initialize_pane_journal() {
 	[[ -z "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]] || return
 
 	if _toastty_ensure_pane_journal_directory; then
+		_toastty_load_shared_history_if_needed
 		_toastty_import_pane_journal_if_needed
 		_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
 	fi
@@ -282,6 +293,8 @@ Then add this near the end of `~/.bash_profile` on macOS, or `~/.bashrc` if that
 ```bash
 source "$HOME/.toastty/shell/toastty-profile-shell-integration.bash"
 ```
+
+The Bash snippet loads the readable `HISTFILE` once per shell before restore-time pane history import, so fresh shells see shared-history search immediately while restored pane-local commands stay at the top of recall.
 
 ## Fish
 

@@ -504,6 +504,16 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t/bin/mv -f -- "$temp_file" "$pane_journal_file" 2>/dev/null || /bin/rm -f -- "$temp_file"
             }
 
+            _toastty_load_shared_history_if_needed() {
+            \t[[ -z "${_TOASTTY_SHARED_HISTORY_IMPORTED:-}" ]] || return
+
+            \tlocal histfile="${HISTFILE:-}"
+            \tif [[ -n "$histfile" && -r "$histfile" ]]; then
+            \t\tbuiltin history -n "$histfile"
+            \tfi
+            \t_TOASTTY_SHARED_HISTORY_IMPORTED=1
+            }
+
             _toastty_import_pane_journal_if_needed() {
             \t[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
             \t[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
@@ -531,6 +541,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             \tif _toastty_ensure_pane_journal_directory; then
             \t\t_toastty_compact_pane_journal
+            \t\t_toastty_load_shared_history_if_needed
             \t\t_toastty_import_pane_journal_if_needed
             \t\t_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
             \t\t_toastty_log_pane_history_debug \

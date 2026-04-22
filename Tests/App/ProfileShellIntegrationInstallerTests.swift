@@ -1272,6 +1272,92 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
     }
 
+    func testManagedBashSnippetLoadsSharedHistoryOnStartup() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let sharedHistoryFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/bash.history")
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "echo toastty-bash-global\n".write(
+            to: sharedHistoryFile,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; history | tail -n 1 | sed -E 's/^ *[0-9]+ +//'",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "HISTFILE": sharedHistoryFile.path,
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+            ]
+        )
+
+        XCTAssertEqual(
+            output.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
+            "echo toastty-bash-global"
+        )
+    }
+
+    func testManagedBashSnippetLateSourceKeepsLiveHistoryEntries() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let sharedHistoryFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/bash.history")
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "echo shared-history-from-file\n".write(
+            to: sharedHistoryFile,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "history -s -- 'echo live-entry-one'; history -s -- 'echo live-entry-two'; source \"$1\"; history | tail -n 3 | sed -E 's/^ *[0-9]+ +//'",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "HISTFILE": sharedHistoryFile.path,
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+            ]
+        )
+
+        XCTAssertEqual(
+            output.split(separator: "\n").map(String.init),
+            ["echo live-entry-one", "echo live-entry-two", "echo shared-history-from-file"]
+        )
+    }
+
     func testManagedBashSnippetImportsPaneJournalOnRestore() throws {
         let snippetURL = try writeStandaloneSnippet(
             ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
@@ -1281,11 +1367,22 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
 
         let journalFileURL = snippetURL.deletingLastPathComponent()
             .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let sharedHistoryFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/bash.history")
         try FileManager.default.createDirectory(
             at: journalFileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         try Data("echo toastty-bash\0git status\0".utf8).write(to: journalFileURL, options: .atomic)
+        try "echo shared-history\n".write(
+            to: sharedHistoryFile,
+            atomically: true,
+            encoding: .utf8
+        )
 
         let output = try runProcess(
             executableURL: URL(fileURLWithPath: "/bin/bash"),
@@ -1293,18 +1390,21 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 "--noprofile",
                 "--norc",
                 "-ic",
-                "source \"$1\"; history",
+                "source \"$1\"; history | tail -n 3 | sed -E 's/^ *[0-9]+ +//'",
                 "toastty-bash-test",
                 snippetURL.path,
             ],
             environment: [
+                "HISTFILE": sharedHistoryFile.path,
                 ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
                 ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
             ]
         )
 
-        XCTAssertTrue(output.contains("echo toastty-bash"))
-        XCTAssertTrue(output.contains("git status"))
+        XCTAssertEqual(
+            output.split(separator: "\n").map(String.init),
+            ["echo shared-history", "echo toastty-bash", "git status"]
+        )
     }
 
     func testManagedBashSnippetSkipsPaneJournalImportForCreateLaunches() throws {
@@ -1316,10 +1416,17 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
 
         let journalFileURL = snippetURL.deletingLastPathComponent()
             .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let sharedHistoryFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/bash.history")
         try FileManager.default.createDirectory(
             at: journalFileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "".write(to: sharedHistoryFile, atomically: true, encoding: .utf8)
         try Data("echo toastty-bash\0".utf8).write(to: journalFileURL, options: .atomic)
         let output = try runProcess(
             executableURL: URL(fileURLWithPath: "/bin/bash"),
@@ -1332,6 +1439,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 snippetURL.path,
             ],
             environment: [
+                "HISTFILE": sharedHistoryFile.path,
                 ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
                 ToasttyLaunchContextEnvironment.launchReasonKey: "create",
             ]
@@ -1377,10 +1485,17 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
 
         let journalFileURL = snippetURL.deletingLastPathComponent()
             .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let sharedHistoryFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/bash.history")
         try FileManager.default.createDirectory(
             at: journalFileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "".write(to: sharedHistoryFile, atomically: true, encoding: .utf8)
         try paneJournalData(entries: ["echo toastty-bash"]).write(to: journalFileURL, options: .atomic)
 
         let output = try runProcess(
@@ -1394,6 +1509,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 snippetURL.path,
             ],
             environment: [
+                "HISTFILE": sharedHistoryFile.path,
                 ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
                 ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
             ]
@@ -1411,10 +1527,17 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
 
         let journalFileURL = snippetURL.deletingLastPathComponent()
             .appendingPathComponent("history/pane-journals/test-bash.journal")
+        let sharedHistoryFile = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/bash.history")
         try FileManager.default.createDirectory(
             at: journalFileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "".write(to: sharedHistoryFile, atomically: true, encoding: .utf8)
         try Data("echo toastty-bash\0git status".utf8).write(to: journalFileURL, options: .atomic)
 
         let output = try runProcess(
@@ -1428,6 +1551,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 snippetURL.path,
             ],
             environment: [
+                "HISTFILE": sharedHistoryFile.path,
                 ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
                 ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
             ]
