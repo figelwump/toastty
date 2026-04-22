@@ -76,6 +76,11 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .error), .hidden)
     }
 
+    func testLaterFlagActionTitleUsesLaterCopy() {
+        XCTAssertEqual(SidebarView.laterFlagActionTitle(isFlaggedForLater: false), "Flag for Later")
+        XCTAssertEqual(SidebarView.laterFlagActionTitle(isFlaggedForLater: true), "Clear Later Flag")
+    }
+
     func testUnreadSessionTypographyUsesEmphasizedWeights() {
         XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: false), .medium)
         XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: true), .heavy)
@@ -903,7 +908,11 @@ final class SidebarViewTests: XCTestCase {
 
     private func renderedTextValues(in rootView: NSView) -> [String] {
         let subviewValues = recursiveSubviewTextValues(in: rootView)
-        let accessibilityValues = recursiveAccessibilityTextValues(in: rootView)
+        let accessibilityRoot = (NSAccessibility.unignoredDescendant(of: rootView) as? AnyObject) ?? rootView
+        let accessibilityValues = recursiveAccessibilityTextValues(
+            in: accessibilityRoot,
+            visitedObjects: []
+        )
         return Array(Set(subviewValues + accessibilityValues)).sorted()
     }
 
@@ -923,7 +932,17 @@ final class SidebarViewTests: XCTestCase {
         return values
     }
 
-    private func recursiveAccessibilityTextValues(in object: AnyObject) -> [String] {
+    private func recursiveAccessibilityTextValues(
+        in object: AnyObject,
+        visitedObjects: Set<ObjectIdentifier>
+    ) -> [String] {
+        let identifier = ObjectIdentifier(object)
+        guard visitedObjects.contains(identifier) == false else {
+            return []
+        }
+
+        var visitedObjects = visitedObjects
+        visitedObjects.insert(identifier)
         var values: [String] = []
 
         for selectorName in ["accessibilityLabel", "accessibilityValue"] {
@@ -941,12 +960,29 @@ final class SidebarViewTests: XCTestCase {
             }
         }
 
-        let childrenSelector = NSSelectorFromString("accessibilityChildren")
-        if object.responds(to: childrenSelector),
-           let children = object.perform(childrenSelector)?.takeUnretainedValue() as? [AnyObject] {
-            for child in children {
-                values.append(contentsOf: recursiveAccessibilityTextValues(in: child))
+        var children: [AnyObject] = []
+
+        for selectorName in ["accessibilityChildrenInNavigationOrder", "accessibilityChildren"] {
+            let selector = NSSelectorFromString(selectorName)
+            guard object.responds(to: selector),
+                  let result = object.perform(selector)?.takeUnretainedValue() else {
+                continue
             }
+
+            if let typedChildren = result as? [AnyObject], typedChildren.isEmpty == false {
+                children = typedChildren
+                break
+            }
+        }
+
+        let unignoredChildren = NSAccessibility.unignoredChildren(from: children).compactMap { $0 as? AnyObject }
+        for child in unignoredChildren {
+            values.append(
+                contentsOf: recursiveAccessibilityTextValues(
+                    in: child,
+                    visitedObjects: visitedObjects
+                )
+            )
         }
 
         return values

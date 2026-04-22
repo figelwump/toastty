@@ -1056,15 +1056,31 @@ final class AppStore: ObservableObject {
         let workingPanelIDs = sessionRuntimeStore.activePanelIDs(
             matching: Self.nextUnreadOrWorkingFallbackStatusKinds
         )
-        let target = nextUnreadOrActiveFallbackTarget(
+        if let target = nextUnreadOrActiveFallbackTarget(
             selection: selection,
             selectedTabID: selectedTabID,
             matchingPanelIDs: workingPanelIDs
+        ) {
+            logNextUnreadOrActivePanelResolution(
+                selection: selection,
+                selectedTabID: selectedTabID,
+                resolution: "fallback_working",
+                target: target,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+            return target
+        }
+
+        let laterPanelIDs = sessionRuntimeStore.activeLaterPanelIDs()
+        let target = nextUnreadOrActiveFallbackTarget(
+            selection: selection,
+            selectedTabID: selectedTabID,
+            matchingPanelIDs: laterPanelIDs
         )
         logNextUnreadOrActivePanelResolution(
             selection: selection,
             selectedTabID: selectedTabID,
-            resolution: target == nil ? "none" : "fallback_working",
+            resolution: target == nil ? "none" : "fallback_later",
             target: target,
             sessionRuntimeStore: sessionRuntimeStore
         )
@@ -1184,6 +1200,13 @@ final class AppStore: ObservableObject {
                 }
                 .joined(separator: ",")
         } ?? ""
+        let laterPanelIDs = sessionRuntimeStore.map { runtimeStore in
+            runtimeStore
+                .activeLaterPanelIDs()
+                .sorted { $0.uuidString < $1.uuidString }
+                .map(\.uuidString)
+                .joined(separator: ",")
+        } ?? ""
 
         var metadata: [String: String] = [
             "resolution": resolution,
@@ -1195,6 +1218,7 @@ final class AppStore: ObservableObject {
             "workspace_unread_panel_ids": Self.commaSeparatedUUIDs(workspaceUnreadPanelIDs),
             "attention_panel_statuses": attentionPanelStatuses.isEmpty ? "none" : attentionPanelStatuses,
             "working_panel_statuses": workingPanelStatuses.isEmpty ? "none" : workingPanelStatuses,
+            "later_panel_ids": laterPanelIDs.isEmpty ? "none" : laterPanelIDs,
         ]
 
         if let target {
@@ -1205,6 +1229,11 @@ final class AppStore: ObservableObject {
             if let sessionRuntimeStore,
                let targetStatus = sessionRuntimeStore.panelStatus(for: target.panelID)?.status.kind.rawValue {
                 metadata["target_status_kind"] = targetStatus
+            }
+            if let sessionRuntimeStore {
+                metadata["target_later_flagged"] = sessionRuntimeStore
+                    .activeLaterPanelIDs()
+                    .contains(target.panelID) ? "true" : "false"
             }
         }
 

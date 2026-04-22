@@ -34,7 +34,8 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Opt+Up Arrow` | Focus pane above |
 | `Cmd+Opt+Down Arrow` | Focus pane below |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors, then working panels |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors, then working panels, then later-flagged panels |
+| `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Ctrl+Left Arrow` | Resize split left |
 | `Cmd+Ctrl+Right Arrow` | Resize split right |
 | `Cmd+Ctrl+Up Arrow` | Resize split up |

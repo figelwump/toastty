@@ -101,6 +101,21 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isFocusNextUnreadOrActiveShortcut(repeatedEvent))
     }
 
+    func testToggleLaterFlagShortcutMatchesCommandShiftLOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "L", modifiers: [.command, .shift], keyCode: 0x25)
+        let plainCommandEvent = try makeKeyEvent(characters: "l", modifiers: [.command], keyCode: 0x25)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "L",
+            modifiers: [.command, .shift],
+            keyCode: 0x25,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isToggleLaterFlagShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isToggleLaterFlagShortcut(plainCommandEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isToggleLaterFlagShortcut(repeatedEvent))
+    }
+
     func testToggleFocusedPanelShortcutMatchesCommandShiftFOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "F", modifiers: [.command, .shift], keyCode: 0x03)
         let plainCommandEvent = try makeKeyEvent(characters: "f", modifiers: [.command], keyCode: 0x03)
@@ -447,6 +462,71 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
 
         XCTAssertTrue(interceptor.handle(.commandPalette, appOwnedWindowID: windowID))
         XCTAssertEqual(toggledWindowID, windowID)
+    }
+
+    func testToggleLaterFlagShortcutRequiresAppOwnedWindowSelection() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let interceptor = makeInterceptor(store: store)
+        let toggleLaterEvent = try makeKeyEvent(
+            characters: "L",
+            modifiers: [.command, .shift],
+            keyCode: 0x25
+        )
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: toggleLaterEvent, appOwnedWindowID: windowID),
+            .toggleLaterFlag
+        )
+        XCTAssertNil(interceptor.shortcutAction(for: toggleLaterEvent, appOwnedWindowID: nil))
+    }
+
+    func testToggleLaterFlagActionTogglesFocusedManagedSession() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        terminalRuntimeRegistry.bind(store: store)
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        webPanelRuntimeRegistry.bind(store: store)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        sessionRuntimeStore.startSession(
+            sessionID: "sess-later-shortcut",
+            agent: .codex,
+            panelID: panelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        sessionRuntimeStore.updateStatus(
+            sessionID: "sess-later-shortcut",
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Revisit later"),
+            at: Date(timeIntervalSince1970: 1_700_000_401)
+        )
+
+        let focusedPanelCommandController = FocusedPanelCommandController(
+            store: store,
+            runtimeRegistry: terminalRuntimeRegistry,
+            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+        )
+        let interceptor = DisplayShortcutInterceptor(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: focusedPanelCommandController,
+            installEventMonitor: false
+        )
+
+        XCTAssertTrue(interceptor.handle(.toggleLaterFlag, appOwnedWindowID: windowID))
+        XCTAssertTrue(sessionRuntimeStore.isLaterFlagged(sessionID: "sess-later-shortcut"))
+        XCTAssertTrue(interceptor.handle(.toggleLaterFlag, appOwnedWindowID: windowID))
+        XCTAssertFalse(sessionRuntimeStore.isLaterFlagged(sessionID: "sess-later-shortcut"))
     }
 
     func testBrowserCreationShortcutsRequireAppOwnedWindowSelection() throws {

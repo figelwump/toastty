@@ -615,6 +615,7 @@ final class DisplayShortcutInterceptor {
         case cancelLocalDocumentEdit
         case saveLocalDocument
         case focusNextUnreadOrActivePanel
+        case toggleLaterFlag
         case toggleFocusedPanelMode
         case renameSelectedTab
         case selectWorkspaceTab(Int)
@@ -743,6 +744,11 @@ final class DisplayShortcutInterceptor {
             return .focusNextUnreadOrActivePanel
         }
 
+        if Self.isToggleLaterFlagShortcut(event),
+           appOwnedWindowID != nil {
+            return .toggleLaterFlag
+        }
+
         if Self.isToggleFocusedPanelShortcut(event),
            appOwnedWindowID != nil {
             return .toggleFocusedPanelMode
@@ -828,7 +834,9 @@ final class DisplayShortcutInterceptor {
         case .saveLocalDocument:
             handleSaveLocalDocumentShortcut(preferredWindowID: appOwnedWindowID)
         case .focusNextUnreadOrActivePanel:
-            focusNextUnreadOrActivePanel()
+            focusNextUnreadOrActivePanel(preferredWindowID: appOwnedWindowID)
+        case .toggleLaterFlag:
+            toggleLaterFlag(preferredWindowID: appOwnedWindowID)
         case .toggleFocusedPanelMode:
             toggleFocusedPanelMode()
         case .renameSelectedTab:
@@ -1045,6 +1053,16 @@ final class DisplayShortcutInterceptor {
         guard event.type == .keyDown,
               event.isARepeat == false,
               event.charactersIgnoringModifiers?.lowercased() == "a" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
+    static func isToggleLaterFlagShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "l" else {
             return false
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -1278,9 +1296,9 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
-    private func focusNextUnreadOrActivePanel() -> Bool {
+    private func focusNextUnreadOrActivePanel(preferredWindowID: UUID? = nil) -> Bool {
         guard let store else { return false }
-        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
         guard store.commandSelection(preferredWindowID: preferredWindowID) != nil else {
             return false
         }
@@ -1292,6 +1310,20 @@ final class DisplayShortcutInterceptor {
         // Cmd+Shift+A is app-owned for normal workspace windows. If there is no
         // next unread or active target, swallow the shortcut rather than
         // passing it to the embedded terminal or default responder.
+        return true
+    }
+
+    private func toggleLaterFlag(preferredWindowID: UUID? = nil) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
+        guard let focusedPanelID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.focusedPanelID else {
+            return false
+        }
+
+        _ = sessionRuntimeStore.toggleLaterFlagForPanel(panelID: focusedPanelID)
+        // Cmd+Shift+L is app-owned for normal workspace windows. If the
+        // focused panel does not currently host a managed session, keep the
+        // shortcut as a no-op rather than forwarding raw input.
         return true
     }
 
