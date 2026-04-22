@@ -621,6 +621,18 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \tor /bin/rm -f -- "$temp_file"
             end
 
+            function _toastty_fish_history_file_path
+            \tset --local history_session "$fish_history"
+            \ttest -n "$history_session"; or set history_session fish
+            \ttest "$history_session" = "default"; and set history_session fish
+
+            \tset --local data_home "$XDG_DATA_HOME"
+            \ttest -n "$data_home"; or set data_home "$HOME/.local/share"
+            \ttest -n "$data_home"; or return 1
+
+            \tprintf '%s/fish/%s_history\\n' "$data_home" "$history_session"
+            end
+
             function _toastty_import_pane_journal_if_needed
             \ttest "$TOASTTY_LAUNCH_REASON" = "restore"; or return
             \ttest "$TOASTTY_PANE_JOURNAL_IMPORTED" = "1"; and return
@@ -640,10 +652,34 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\treturn
             \tend
 
+            \tset --local history_file (_toastty_fish_history_file_path 2>/dev/null)
+            \tset --local history_file_existed 0
+            \tset --local history_snapshot_path
+            \tif test -n "$history_file" -a -e "$history_file"
+            \t\tset history_file_existed 1
+            \t\tset history_snapshot_path (/usr/bin/mktemp "$history_file.snapshot.XXXXXX" 2>/dev/null)
+            \t\tif test -n "$history_snapshot_path"
+            \t\t\t/bin/cp -p -- "$history_file" "$history_snapshot_path" 2>/dev/null
+            \t\t\tor begin
+            \t\t\t\t/bin/rm -f -- "$history_snapshot_path"
+            \t\t\t\tset --erase history_snapshot_path
+            \t\t\tend
+            \t\tend
+            \tend
+
             \twhile read --null --local entry
             \t\tbuiltin history append -- "$entry"
             \tend < "$snapshot_path"
             \t/bin/rm -f -- "$snapshot_path"
+
+            \tif test "$history_file_existed" = "1"
+            \t\tif test -n "$history_snapshot_path" -a -r "$history_snapshot_path"
+            \t\t\t/bin/mv -f -- "$history_snapshot_path" "$history_file" 2>/dev/null
+            \t\t\tor /bin/rm -f -- "$history_snapshot_path"
+            \t\tend
+            \telse if test -n "$history_file"
+            \t\t/bin/rm -f -- "$history_file" "$history_snapshot_path"
+            \tend
             end
 
             function _toastty_initialize_pane_journal

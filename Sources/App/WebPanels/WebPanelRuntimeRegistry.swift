@@ -128,6 +128,14 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         localDocumentRuntimeByPanelID[panelID]?.canCancelEditFromCommand() == true
     }
 
+    func localDocumentSearchState(panelID: UUID) -> LocalDocumentSearchState? {
+        localDocumentRuntimeByPanelID[panelID]?.searchState()
+    }
+
+    func isLocalDocumentSearchFieldFocused(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.isSearchFieldFocused() == true
+    }
+
     @discardableResult
     func enterEditingLocalDocumentPanel(panelID: UUID) -> Bool {
         localDocumentRuntimeByPanelID[panelID]?.enterEditFromCommand() == true
@@ -141,6 +149,35 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     @discardableResult
     func cancelEditingLocalDocumentPanel(panelID: UUID) -> Bool {
         localDocumentRuntimeByPanelID[panelID]?.cancelEditFromCommand() == true
+    }
+
+    @discardableResult
+    func startSearchLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntime(for: panelID).startSearch()
+    }
+
+    func updateSearchQueryLocalDocumentPanel(_ query: String, panelID: UUID) {
+        localDocumentRuntime(for: panelID).updateSearchQuery(query)
+    }
+
+    @discardableResult
+    func findNextLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.findNext() == true
+    }
+
+    @discardableResult
+    func findPreviousLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.findPrevious() == true
+    }
+
+    @discardableResult
+    func endSearchLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.endSearch() == true
+    }
+
+    @discardableResult
+    func restoreLocalDocumentFocusAfterSearch(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.focusWebView() == true
     }
 
     func localDocumentCloseConfirmationState(panelID: UUID) -> LocalDocumentCloseConfirmationState? {

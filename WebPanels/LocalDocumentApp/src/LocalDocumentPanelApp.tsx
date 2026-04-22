@@ -27,6 +27,7 @@ import {
   normalizeMarkdownLineTopOffsets,
   renderPlainMarkdownSourceHtml,
 } from "./markdownSoftWrap.mjs";
+import { useLocalDocumentSearchController } from "./localDocumentSearch";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
 if (!hljs.getLanguage("yaml")) {
@@ -96,6 +97,10 @@ function shortenPath(filePath: string | null, displayName: string): string {
 
 function computeLineCount(content: string): string {
   return contentLines(content).length.toLocaleString();
+}
+
+function assignObjectRef<T>(ref: React.RefObject<T | null>, value: T | null) {
+  ref.current = value;
 }
 
 function useBootstrap(): LocalDocumentPanelBootstrap | null {
@@ -580,12 +585,11 @@ function ExternalOpenIcon() {
 function LocalDocumentEditor(props: {
   bootstrap: LocalDocumentPanelBootstrap;
   draftContent: string;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   updateDraftContent: (nextContent: string) => void;
 }) {
-  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
-
   React.useLayoutEffect(() => {
-    const textarea = textareaRef.current;
+    const textarea = props.textareaRef.current;
     if (!textarea) {
       return;
     }
@@ -611,7 +615,7 @@ function LocalDocumentEditor(props: {
         </div>
       )}
       <textarea
-        ref={textareaRef}
+        ref={props.textareaRef}
         className="local-document-editor"
         value={props.draftContent}
         onChange={(event) => props.updateDraftContent(event.target.value)}
@@ -842,6 +846,8 @@ function MarkdownCodeDocumentView(props: {
   content: string;
   highlightedHTML: string | null;
   lines: string[];
+  previewRootRef: React.RefObject<HTMLElement | null>;
+  previewContentRef: React.RefObject<HTMLElement | null>;
 }) {
   const markdownGutterStyle = {
     "--local-document-code-gutter-digit-width": `${Math.max(String(props.lines.length).length, 2)}ch`
@@ -854,13 +860,23 @@ function MarkdownCodeDocumentView(props: {
     props.lines.length,
     sourceHTML
   );
+  const handleScrollRef = React.useCallback((node: HTMLDivElement | null) => {
+    assignObjectRef(scrollRef, node);
+    assignObjectRef(props.previewRootRef, node);
+  }, [props.previewRootRef, scrollRef]);
+  const handlePreviewContentRef = React.useCallback((node: HTMLPreElement | null) => {
+    assignObjectRef(props.previewContentRef, node);
+  }, [props.previewContentRef]);
   const codeClassName = props.highlightedHTML
     ? "starry-night local-document-code-markdown"
     : "local-document-code-plain local-document-code-plain-markdown";
 
   return (
     <div className="local-document-code-frame local-document-code-frame-markdown">
-      <div className="local-document-code-scroll local-document-code-scroll-markdown" ref={scrollRef}>
+      <div
+        className="local-document-code-scroll local-document-code-scroll-markdown"
+        ref={handleScrollRef}
+      >
         <div className="local-document-code-markdown-grid">
           <div
             className="local-document-code-markdown-gutter"
@@ -884,7 +900,7 @@ function MarkdownCodeDocumentView(props: {
               ))}
             </div>
           </div>
-          <pre className="local-document-code-markdown-surface">
+          <pre className="local-document-code-markdown-surface" ref={handlePreviewContentRef}>
             <code
               ref={contentRef}
               className={codeClassName}
@@ -897,7 +913,12 @@ function MarkdownCodeDocumentView(props: {
   );
 }
 
-function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; content: string }) {
+function CodeDocumentView(props: {
+  bootstrap: LocalDocumentPanelBootstrap;
+  content: string;
+  previewRootRef: React.RefObject<HTMLElement | null>;
+  previewContentRef: React.RefObject<HTMLElement | null>;
+}) {
   const lines = React.useMemo(() => contentLines(props.content), [props.content]);
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
   const revealRequest = useRevealRequest();
@@ -923,6 +944,13 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
     : language
       ? `hljs language-${language}`
       : "hljs";
+  const handleScrollRef = React.useCallback((node: HTMLDivElement | null) => {
+    assignObjectRef(scrollRef, node);
+    assignObjectRef(props.previewRootRef, node);
+  }, [props.previewRootRef, scrollRef]);
+  const handlePreviewContentRef = React.useCallback((node: HTMLPreElement | null) => {
+    assignObjectRef(props.previewContentRef, node);
+  }, [props.previewContentRef]);
 
   const cancelScheduledRevealScroll = React.useCallback(() => {
     revealScrollSequenceRef.current += 1;
@@ -1099,6 +1127,8 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
           content={props.content}
           highlightedHTML={highlightedHTML}
           lines={lines}
+          previewRootRef={props.previewRootRef}
+          previewContentRef={props.previewContentRef}
         />
       </section>
     );
@@ -1114,7 +1144,7 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
         </div>
       )}
       <div className="local-document-code-frame">
-        <div className="local-document-code-scroll" ref={scrollRef}>
+        <div className="local-document-code-scroll" ref={handleScrollRef}>
           <div className="local-document-code-scroll-inner">
             <div className="local-document-code-gutter-frame" ref={gutterFrameRef}>
               {revealLayout ? (
@@ -1142,7 +1172,7 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
                   }}
                 />
               ) : null}
-              <pre className="local-document-code-content">
+              <pre className="local-document-code-content" ref={handlePreviewContentRef}>
                 {highlightedHTML ? (
                   <code
                     ref={contentCodeRef}
@@ -1188,6 +1218,17 @@ export function LocalDocumentPanelApp() {
   }
 
   const renderedContent = bootstrap.isEditing ? draftContent : bootstrap.content;
+  const previewRootRef = React.useRef<HTMLElement | null>(null);
+  const previewContentRef = React.useRef<HTMLElement | null>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  useLocalDocumentSearchController({
+    content: renderedContent,
+    isEditing: bootstrap.isEditing,
+    previewRootRef,
+    previewContentRef,
+    textareaRef
+  });
 
   return (
     <main className="local-document-shell">
@@ -1207,10 +1248,16 @@ export function LocalDocumentPanelApp() {
         <LocalDocumentEditor
           bootstrap={bootstrap}
           draftContent={draftContent}
+          textareaRef={textareaRef}
           updateDraftContent={updateDraftContent}
         />
       ) : (
-        <CodeDocumentView bootstrap={bootstrap} content={renderedContent} />
+        <CodeDocumentView
+          bootstrap={bootstrap}
+          content={renderedContent}
+          previewRootRef={previewRootRef}
+          previewContentRef={previewContentRef}
+        />
       )}
     </main>
   );

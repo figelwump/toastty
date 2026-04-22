@@ -613,6 +613,9 @@ final class DisplayShortcutInterceptor {
         case resetTextSize
         case split(SlotSplitDirection)
         case watchRunningCommand
+        case startLocalDocumentSearch
+        case findNextLocalDocumentSearch
+        case findPreviousLocalDocumentSearch
         case enterLocalDocumentEdit
         case cancelLocalDocumentEdit
         case saveLocalDocument
@@ -736,6 +739,21 @@ final class DisplayShortcutInterceptor {
             return .closePanel
         }
 
+        if Self.isFindShortcut(event),
+           appOwnedFocusedLocalDocumentSelection(preferredWindowID: appOwnedWindowID) != nil {
+            return .startLocalDocumentSearch
+        }
+
+        if Self.isFindNextShortcut(event),
+           isFocusedLocalDocumentSearchActive(preferredWindowID: appOwnedWindowID) {
+            return .findNextLocalDocumentSearch
+        }
+
+        if Self.isFindPreviousShortcut(event),
+           isFocusedLocalDocumentSearchActive(preferredWindowID: appOwnedWindowID) {
+            return .findPreviousLocalDocumentSearch
+        }
+
         if Self.isEnterEditShortcut(event),
            canEnterFocusedLocalDocumentEdit(preferredWindowID: appOwnedWindowID) {
             return .enterLocalDocumentEdit
@@ -836,6 +854,12 @@ final class DisplayShortcutInterceptor {
             split(direction: direction, preferredWindowID: appOwnedWindowID)
         case .watchRunningCommand:
             watchRunningCommand()
+        case .startLocalDocumentSearch:
+            handleStartLocalDocumentSearchShortcut(preferredWindowID: appOwnedWindowID)
+        case .findNextLocalDocumentSearch:
+            handleFindNextLocalDocumentSearchShortcut(preferredWindowID: appOwnedWindowID)
+        case .findPreviousLocalDocumentSearch:
+            handleFindPreviousLocalDocumentSearchShortcut(preferredWindowID: appOwnedWindowID)
         case .enterLocalDocumentEdit:
             handleEnterLocalDocumentEditShortcut(preferredWindowID: appOwnedWindowID)
         case .cancelLocalDocumentEdit:
@@ -1044,6 +1068,36 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command]
+    }
+
+    static func isFindShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "f" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func isFindNextShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "g" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func isFindPreviousShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "g" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
     }
 
     static func isEnterEditShortcut(_ event: NSEvent) -> Bool {
@@ -1477,11 +1531,42 @@ final class DisplayShortcutInterceptor {
         return webPanelRuntimeRegistry.saveLocalDocumentPanel(panelID: selection.panelID)
     }
 
+    private func startFocusedLocalDocumentSearch(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.startSearchLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func findNextFocusedLocalDocumentSearch(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.findNextLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func findPreviousFocusedLocalDocumentSearch(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.findPreviousLocalDocumentPanel(panelID: selection.panelID)
+    }
+
     private func canEnterFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
         guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
             return false
         }
         return webPanelRuntimeRegistry.canEnterEditingLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func isFocusedLocalDocumentSearchActive(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        guard let searchState = webPanelRuntimeRegistry.localDocumentSearchState(panelID: selection.panelID) else {
+            return false
+        }
+        return searchState.isPresented && searchState.query.isEmpty == false
     }
 
     private func enterFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
@@ -1518,6 +1603,18 @@ final class DisplayShortcutInterceptor {
 
     private func handleEnterLocalDocumentEditShortcut(preferredWindowID: UUID?) -> Bool {
         enterFocusedLocalDocumentEdit(preferredWindowID: preferredWindowID)
+    }
+
+    private func handleStartLocalDocumentSearchShortcut(preferredWindowID: UUID?) -> Bool {
+        startFocusedLocalDocumentSearch(preferredWindowID: preferredWindowID)
+    }
+
+    private func handleFindNextLocalDocumentSearchShortcut(preferredWindowID: UUID?) -> Bool {
+        findNextFocusedLocalDocumentSearch(preferredWindowID: preferredWindowID)
+    }
+
+    private func handleFindPreviousLocalDocumentSearchShortcut(preferredWindowID: UUID?) -> Bool {
+        findPreviousFocusedLocalDocumentSearch(preferredWindowID: preferredWindowID)
     }
 
     private func handleSaveLocalDocumentShortcut(preferredWindowID: UUID?) -> Bool {

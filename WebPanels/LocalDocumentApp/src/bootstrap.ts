@@ -1,3 +1,5 @@
+import { localDocumentNativeBridge } from "./nativeBridge";
+
 export type LocalDocumentPanelTheme = "light" | "dark";
 export type LocalDocumentHighlightState =
   | "enabled"
@@ -56,6 +58,23 @@ export interface LocalDocumentLineRevealRequest {
 }
 type RevealListener = (request: LocalDocumentLineRevealRequest | null) => void;
 
+export interface LocalDocumentPanelSearchState {
+  query: string;
+  matchCount: number;
+  activeMatchIndex: number | null;
+  matchFound: boolean;
+}
+
+export type LocalDocumentPanelSearchCommand =
+  | { type: "setQuery"; query: string }
+  | { type: "next"; query: string }
+  | { type: "previous"; query: string }
+  | { type: "clear" };
+
+interface LocalDocumentPanelSearchController {
+  perform: (command: LocalDocumentPanelSearchCommand) => LocalDocumentPanelSearchState;
+}
+
 declare global {
   interface Window {
     ToasttyLocalDocumentPanel?: {
@@ -66,6 +85,13 @@ declare global {
       getCurrentRevealRequest: () => LocalDocumentLineRevealRequest | null;
       consumeRevealRequest: (requestID: number) => void;
       subscribe: (listener: BootstrapListener) => () => void;
+      getCurrentSearchState: () => LocalDocumentPanelSearchState;
+      setCurrentSearchState: (searchState: LocalDocumentPanelSearchState) => void;
+      resetSearchState: () => void;
+      registerSearchController: (controller: LocalDocumentPanelSearchController | null) => void;
+      performSearchCommand: (
+        command: LocalDocumentPanelSearchCommand
+      ) => LocalDocumentPanelSearchState | null;
       subscribeReveal: (listener: RevealListener) => () => void;
     };
   }
@@ -76,6 +102,17 @@ const revealListeners = new Set<RevealListener>();
 let currentBootstrap: LocalDocumentPanelBootstrap | null = null;
 let currentRevealRequest: LocalDocumentLineRevealRequest | null = null;
 let revealRequestID = 0;
+let currentSearchState: LocalDocumentPanelSearchState = emptySearchState();
+let currentSearchController: LocalDocumentPanelSearchController | null = null;
+
+function emptySearchState(query = ""): LocalDocumentPanelSearchState {
+  return {
+    query,
+    matchCount: 0,
+    activeMatchIndex: null,
+    matchFound: false
+  };
+}
 
 function applyTheme(bootstrap: LocalDocumentPanelBootstrap | null) {
   if (!bootstrap) {
@@ -160,6 +197,39 @@ window.ToasttyLocalDocumentPanel = {
     currentRevealRequest = null;
     notifyRevealListeners();
   },
+  getCurrentSearchState() {
+    return currentSearchState;
+  },
+  setCurrentSearchState(searchState) {
+    currentSearchState = searchState;
+  },
+  resetSearchState() {
+    if (currentSearchController) {
+      currentSearchState = currentSearchController.perform({ type: "clear" });
+      return;
+    }
+
+    currentSearchState = emptySearchState();
+  },
+  registerSearchController(controller) {
+    currentSearchController = controller;
+
+    if (controller && currentSearchState.query.length > 0) {
+      currentSearchState = controller.perform({
+        type: "setQuery",
+        query: currentSearchState.query
+      });
+    }
+  },
+  performSearchCommand(command) {
+    if (!currentSearchController) {
+      return null;
+    }
+
+    const nextState = currentSearchController.perform(command);
+    currentSearchState = nextState;
+    return nextState;
+  },
   subscribe(listener) {
     listeners.add(listener);
     listener(currentBootstrap);
@@ -175,3 +245,5 @@ window.ToasttyLocalDocumentPanel = {
     };
   }
 };
+
+localDocumentNativeBridge.bridgeReady();
