@@ -1681,7 +1681,15 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             at: sharedHistoryFile.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try "".write(to: sharedHistoryFile, atomically: true, encoding: .utf8)
+        try "echo shared-history\n".write(
+            to: sharedHistoryFile,
+            atomically: true,
+            encoding: .utf8
+        )
+        try paneJournalData(entries: ["echo toastty-bash", "git status"]).write(
+            to: journalFileURL,
+            options: .atomic
+        )
 
         let output = try runProcess(
             executableURL: URL(fileURLWithPath: "/bin/bash"),
@@ -1703,12 +1711,21 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             ]
         )
 
+        XCTAssertTrue(output.contains("event=import"))
+        XCTAssertTrue(output.contains("imported_entry_count=2"))
         XCTAssertTrue(output.contains("event=initialize"))
         XCTAssertTrue(output.contains("shell=bash"))
         XCTAssertTrue(output.contains("panel_id=\(panelID)"))
         XCTAssertTrue(output.contains("launch_reason=restore"))
         XCTAssertTrue(output.contains("pane_journal_file=\(journalFileURL.path)"))
         XCTAssertTrue(output.contains("histfile=\(sharedHistoryFile.path)"))
+        XCTAssertTrue(output.contains("history_entry_count=3"))
+        XCTAssertTrue(output.contains("history_last_entry=git status"))
+        XCTAssertTrue(output.contains("history_previous_entry=echo toastty-bash"))
+        XCTAssertTrue(
+            output.contains("history_tail_summary=echo shared-history || echo toastty-bash || git status")
+        )
+        XCTAssertTrue(output.contains("prompt_command="))
     }
 
     func testManagedBashSnippetAvoidsDuplicateJournalWritesForSameHistoryEntry() throws {
