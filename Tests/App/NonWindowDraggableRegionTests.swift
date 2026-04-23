@@ -5,8 +5,8 @@ import XCTest
 
 final class NonWindowDraggableRegionTests: XCTestCase {
     @MainActor
-    func testHostingViewDisablesWindowBackgroundDragging() {
-        let view = NonWindowDraggableHostingView(
+    func testContainerViewDisablesWindowBackgroundDragging() {
+        let view = NonWindowDraggableContainerView(
             rootView: AnyView(Color.clear.frame(width: 96, height: 28))
         )
 
@@ -14,8 +14,8 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
-    func testHostingViewSuppressesNestedSafeAreaInsets() {
-        let view = NonWindowDraggableHostingView(
+    func testContainerViewSuppressesNestedSafeAreaInsets() {
+        let view = NonWindowDraggableContainerView(
             rootView: AnyView(Color.clear.frame(width: 96, height: 28))
         )
 
@@ -26,8 +26,8 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
-    func testHostingViewUpdatesFittingSizeWhenRootViewChanges() {
-        let view = NonWindowDraggableHostingView(
+    func testContainerViewUpdatesFittingSizeWhenRootViewChanges() {
+        let view = NonWindowDraggableContainerView(
             rootView: AnyView(Color.clear.frame(width: 96, height: 28))
         )
         let window = NSWindow(
@@ -51,8 +51,8 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
-    func testHostingViewAcceptsFirstMouseForInactiveWindowDrags() {
-        let view = NonWindowDraggableHostingView(
+    func testContainerViewAcceptsFirstMouseForInactiveWindowDrags() {
+        let view = NonWindowDraggableContainerView(
             rootView: AnyView(Color.clear.frame(width: 96, height: 28))
         )
 
@@ -75,7 +75,7 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = false
 
-        let wrappedHost = NonWindowDraggableHostingView(
+        let wrappedHost = NonWindowDraggableContainerView(
             rootView: AnyView(
                 Color.red
                     .frame(width: 200, height: 32)
@@ -122,7 +122,7 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         // subview should keep receiving events — do not swallow the hit at
         // the wrapper.
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 32))
-        let wrappedHost = NonWindowDraggableHostingView(
+        let wrappedHost = NonWindowDraggableContainerView(
             rootView: AnyView(Color.clear.frame(width: 200, height: 32))
         )
         wrappedHost.frame = NSRect(x: 0, y: 0, width: 200, height: 32)
@@ -135,4 +135,135 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         let hit = container.hitTest(NSPoint(x: 100, y: 16))
         XCTAssertIdentical(hit, innerControl)
     }
+
+    @MainActor
+    func testHitTestRoutesWindowMovableHelperHitsToHostingView() throws {
+        // SwiftUI can put helper views inside the hosting hierarchy whose
+        // default AppKit behavior allows window dragging. Route those hits to
+        // the hosting view instead of the plain container so SwiftUI gestures
+        // still receive the mouse sequence while titlebar movement stays off.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 32),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 32))
+        let wrappedHost = NonWindowDraggableContainerView(
+            rootView: AnyView(
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: 20)
+                    WindowMovableProbeRepresentable()
+                        .frame(width: 160, height: 20)
+                    Color.clear.frame(width: 20)
+                }
+                .frame(width: 200, height: 32)
+            )
+        )
+        wrappedHost.frame = NSRect(x: 0, y: 0, width: 200, height: 32)
+        container.addSubview(wrappedHost)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        container.layoutSubtreeIfNeeded()
+
+        let hostingView = try XCTUnwrap(findDescendantView(in: wrappedHost, ofType: NonWindowDraggableHostingView.self))
+        let helperView = try XCTUnwrap(findDescendantView(in: hostingView, ofType: WindowMovableProbeView.self))
+        XCTAssertTrue(helperView.mouseDownCanMoveWindow)
+
+        let hit = container.hitTest(NSPoint(x: 100, y: 16))
+        XCTAssertIdentical(hit, hostingView)
+        XCTAssertFalse(hit?.mouseDownCanMoveWindow ?? true)
+    }
+
+    @MainActor
+    func testMountedSwiftUIRegionClaimsHitTestsInsideHiddenTitlebarWindow() throws {
+        struct MountedRegionHarness: View {
+            var body: some View {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 9)
+                    HStack(spacing: 0) {
+                        Color.clear.frame(width: 100)
+                        NonWindowDraggableRegion {
+                            HStack(spacing: 0) {
+                                Color.red.frame(width: 72, height: 34)
+                                Color.clear.frame(width: 56, height: 34)
+                                Button("Tab") {}
+                                    .buttonStyle(.plain)
+                                    .frame(width: 72, height: 34)
+                            }
+                            .frame(width: 200, height: 34)
+                        }
+                        .frame(width: 200, height: 34)
+                        Color.clear
+                    }
+                    .frame(height: 34)
+                    Spacer(minLength: 0)
+                }
+                .frame(width: 400, height: 120)
+            }
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 120),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+
+        let hostingView = NSHostingView(rootView: MountedRegionHarness())
+        hostingView.frame = NSRect(x: 0, y: 0, width: 400, height: 120)
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let region = try XCTUnwrap(findDescendantView(in: hostingView, ofType: NonWindowDraggableContainerView.self))
+        let frameView = try XCTUnwrap(hostingView.superview)
+        let samplePoints = [
+            NSPoint(x: 1, y: 1),
+            NSPoint(x: 72, y: 17),
+            NSPoint(x: 100, y: 17),
+            NSPoint(x: 199, y: 33),
+        ]
+
+        for localPoint in samplePoints {
+            let windowPoint = region.convert(localPoint, to: nil)
+            let hit = frameView.hitTest(frameView.convert(windowPoint, from: nil))
+            XCTAssertNotNil(hit, "expected mounted hit test to return a view at \(localPoint)")
+            XCTAssertEqual(
+                hit?.mouseDownCanMoveWindow,
+                false,
+                "mounted hit view at \(localPoint) should refuse to move the window"
+            )
+        }
+    }
+
+    @MainActor
+    private func findDescendantView<T: NSView>(in root: NSView, ofType viewType: T.Type) -> T? {
+        if let matchingView = root as? T {
+            return matchingView
+        }
+
+        for subview in root.subviews {
+            if let matchingView = findDescendantView(in: subview, ofType: viewType) {
+                return matchingView
+            }
+        }
+
+        return nil
+    }
 }
+
+private struct WindowMovableProbeRepresentable: NSViewRepresentable {
+    func makeNSView(context _: Context) -> WindowMovableProbeView {
+        WindowMovableProbeView(frame: .zero)
+    }
+
+    func updateNSView(_: WindowMovableProbeView, context _: Context) {}
+}
+
+private final class WindowMovableProbeView: NSView {}

@@ -864,18 +864,23 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testWorkspaceTabStripUsesNonWindowDraggableHost() throws {
+    func testWorkspaceTabStripUsesNonWindowDraggableContainer() throws {
         let harness = try makeWorkspaceHarness()
         defer { harness.window.orderOut(nil) }
 
         harness.hostingView.layoutSubtreeIfNeeded()
+        let tabStripContainer = try XCTUnwrap(
+            findDescendantView(in: harness.hostingView, ofType: NonWindowDraggableContainerView.self)
+        )
         let tabStripHost = try XCTUnwrap(
-            findDescendantView(in: harness.hostingView, ofType: NonWindowDraggableHostingView.self)
+            findDescendantView(in: tabStripContainer, ofType: NonWindowDraggableHostingView.self)
         )
 
+        XCTAssertFalse(tabStripContainer.mouseDownCanMoveWindow)
+
         XCTAssertFalse(tabStripHost.mouseDownCanMoveWindow)
-        XCTAssertGreaterThan(tabStripHost.frame.width, 0)
-        XCTAssertEqual(tabStripHost.frame.height, ToastyTheme.workspaceTabHeight, accuracy: 0.5)
+        XCTAssertGreaterThan(tabStripContainer.frame.width, 0)
+        XCTAssertEqual(tabStripContainer.frame.height, ToastyTheme.workspaceTabHeight, accuracy: 0.5)
     }
 
     private func assertColor(

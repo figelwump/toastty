@@ -1411,9 +1411,11 @@ struct WorkspaceView: View {
             }
         }
 
-        if installsContextMenu && isAnyTabDragActive == false {
+        if installsContextMenu {
             interactiveRow.contextMenu {
-                workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
+                if isAnyTabDragActive == false {
+                    workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
+                }
             }
         } else {
             interactiveRow
