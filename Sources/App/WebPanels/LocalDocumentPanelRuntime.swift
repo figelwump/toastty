@@ -707,7 +707,10 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.session = session
         // Keep runtime inspection current without forcing a full bootstrap round-trip on each debounce tick.
         updateCurrentBootstrap()
-        refreshSearchForCurrentVisibleContentIfNeeded()
+        // Draft edits already live in the page, so recompute match state locally
+        // instead of sending an interactive search command back into the editor.
+        cancelPendingSearchResult()
+        recomputeSearchMatchStateForCurrentVisibleContentIfNeeded()
     }
 
     func cancelEditMode(baseContentRevision: Int) {
@@ -1812,15 +1815,19 @@ private extension LocalDocumentPanelRuntime {
         activeSearchRequestGeneration &+= 1
     }
 
-    private func refreshSearchForCurrentVisibleContentIfNeeded() {
-        guard shouldRefreshSearchForCurrentWebContent() == false,
-              let searchState = searchStateValue,
+    private func recomputeSearchMatchStateForCurrentVisibleContentIfNeeded() {
+        guard let session,
+              var searchState = searchStateValue,
               searchState.isPresented,
               searchState.query.isEmpty == false else {
             return
         }
 
-        _ = performSearch(.setQuery(searchState.query))
+        searchState.lastMatchFound = Self.visibleContent(
+            session.visibleContent,
+            containsMatchFor: searchState.query
+        )
+        publishSearchState(searchState)
     }
 
     private func markSearchRefreshAfterVisibleContentChangeIfNeeded() {
@@ -1859,6 +1866,19 @@ private extension LocalDocumentPanelRuntime {
             pendingBootstrapScript != nil ||
             isPanelBridgeReady == false ||
             isSearchControllerReady == false
+    }
+
+    nonisolated private static func visibleContent(
+        _ content: String,
+        containsMatchFor query: String
+    ) -> Bool {
+        guard query.isEmpty == false else {
+            return false
+        }
+
+        let normalizedContent = content.lowercased(with: .current)
+        let normalizedQuery = query.lowercased(with: .current)
+        return normalizedContent.contains(normalizedQuery)
     }
 
     nonisolated static func readLocalDocument(

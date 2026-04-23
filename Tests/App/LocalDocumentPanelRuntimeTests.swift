@@ -1165,7 +1165,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(searchSpy.commands, [.clear])
     }
 
-    func testDraftUpdatesRefreshActiveSearch() async throws {
+    func testDraftUpdatesRecomputeActiveSearchStateWithoutInteractiveRefresh() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
         let searchSpy = LocalDocumentSearchExecutorSpy()
 
@@ -1203,7 +1203,52 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
         runtime.updateDraftContent("## Toastty refreshed", baseContentRevision: baseRevision)
 
-        XCTAssertEqual(searchSpy.commands, [.setQuery("toast")])
+        XCTAssertEqual(searchSpy.commands, [])
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, true)
+    }
+
+    func testDraftUpdatesIgnoreStaleInteractiveSearchCompletion() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("toast")
+
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## No match here", baseContentRevision: baseRevision)
+
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, false)
+
+        searchSpy.completeCall(at: 0, matchFound: true)
+
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, false)
     }
 
     func testSaveFailureKeepsEditingDraftAndSurfacesError() async throws {
