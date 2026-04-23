@@ -364,6 +364,10 @@ struct SidebarView: View {
             HStack(spacing: 6) {
                 titleView()
 
+                if Self.showsNewWorkspaceBadge(isSelected: isSelected, hasBeenVisited: workspace.hasBeenVisited) {
+                    workspaceNewBadge()
+                }
+
                 if workspace.unreadNotificationCount > 0 {
                     Circle()
                         .fill(ToastyTheme.badgeBlue)
@@ -391,6 +395,24 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private func workspaceNewBadge() -> some View {
+        Text(Self.workspaceNewBadgeLabel)
+            .font(ToastyTheme.fontWorkspaceNewBadge)
+            .foregroundStyle(ToastyTheme.workspaceNewBadgeText)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                ToastyTheme.workspaceNewBadgeBackground,
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(ToastyTheme.workspaceNewBadgeBorder, lineWidth: 1)
+            }
+            .fixedSize()
+            .accessibilityIdentifier("sidebar.workspace.newBadge")
     }
 
     @ViewBuilder
@@ -989,6 +1011,12 @@ struct SidebarView: View {
 
     static func sessionTextUsesItalic(for kind: SessionStatusKind) -> Bool {
         kind == .working
+    }
+
+    static let workspaceNewBadgeLabel = "New"
+
+    static func showsNewWorkspaceBadge(isSelected: Bool, hasBeenVisited: Bool) -> Bool {
+        isSelected == false && hasBeenVisited == false
     }
 
     static func workspaceTitleFontWeight(isSelected: Bool, hasBeenVisited: Bool) -> Font.Weight {

@@ -175,6 +175,17 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
     }
 
+    func testWorkspaceNewBadgeUsesConfiguredSidebarFontSize() throws {
+        let styledBitmap = try renderedBitmap(
+            for: Text(SidebarView.workspaceNewBadgeLabel).font(ToastyTheme.fontWorkspaceNewBadge)
+        )
+        let expectedBitmap = try renderedBitmap(
+            for: Text(SidebarView.workspaceNewBadgeLabel).font(Font.system(size: 10, weight: .medium, design: .default))
+        )
+
+        XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
+    }
+
     func testWorkspaceTitleUsesConfiguredSidebarFontSize() throws {
         let styledBitmap = try renderedBitmap(
             for: Text("Workspace 1").font(ToastyTheme.fontWorkspaceName)
@@ -208,6 +219,18 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testNewWorkspaceBadgeShowsOnlyForInactiveUnvisitedWorkspaces() {
+        XCTAssertTrue(
+            SidebarView.showsNewWorkspaceBadge(isSelected: false, hasBeenVisited: false)
+        )
+        XCTAssertFalse(
+            SidebarView.showsNewWorkspaceBadge(isSelected: true, hasBeenVisited: false)
+        )
+        XCTAssertFalse(
+            SidebarView.showsNewWorkspaceBadge(isSelected: false, hasBeenVisited: true)
+        )
+    }
+
     func testUnvisitedWorkspaceTitleRendersDistinctWeightFromVisitedTitle() throws {
         let unvisitedBitmap = try renderedBitmap(
             for: SidebarView.styledWorkspaceTitleText(
@@ -225,6 +248,52 @@ final class SidebarViewTests: XCTestCase {
         )
 
         XCTAssertGreaterThan(try differingPixelCount(between: unvisitedBitmap, and: visitedBitmap), 0)
+    }
+
+    func testInactiveUnvisitedWorkspaceRowRendersNewBadgeLabel() throws {
+        let selectedWorkspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let backgroundWorkspace = WorkspaceState.bootstrap(
+            title: "Workspace 2",
+            hasBeenVisited: false
+        )
+        let sidebarState = makeSidebarAppState(
+            selectedWorkspace: selectedWorkspace,
+            additionalWorkspaces: [backgroundWorkspace]
+        )
+        let hostingView = try makeSidebarHostingView(
+            state: sidebarState.state,
+            windowID: sidebarState.windowID
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        let workspaceRowValues = textValues.filter { $0.hasPrefix("Workspace 2") }
+        XCTAssertTrue(
+            workspaceRowValues.contains(where: { $0.contains(SidebarView.workspaceNewBadgeLabel) }),
+            "Expected inactive unvisited workspace row to expose the New badge label: \(textValues)"
+        )
+    }
+
+    func testVisitedInactiveWorkspaceRowDoesNotRenderNewBadgeLabel() throws {
+        let selectedWorkspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let backgroundWorkspace = WorkspaceState.bootstrap(
+            title: "Workspace 2",
+            hasBeenVisited: true
+        )
+        let sidebarState = makeSidebarAppState(
+            selectedWorkspace: selectedWorkspace,
+            additionalWorkspaces: [backgroundWorkspace]
+        )
+        let hostingView = try makeSidebarHostingView(
+            state: sidebarState.state,
+            windowID: sidebarState.windowID
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        let workspaceRowValues = textValues.filter { $0.hasPrefix("Workspace 2") }
+        XCTAssertFalse(
+            workspaceRowValues.contains(where: { $0.contains(SidebarView.workspaceNewBadgeLabel) }),
+            "Did not expect a New badge for visited workspace rows: \(textValues)"
+        )
     }
 
     func testWorkspaceRenameFontsMatchSidebarTitleFonts() {
@@ -708,6 +777,13 @@ final class SidebarViewTests: XCTestCase {
         ).hostingView
     }
 
+    private func makeSidebarHostingView(
+        state: AppState,
+        windowID: UUID
+    ) throws -> NSView {
+        try makeSidebarHarness(state: state, windowID: windowID).hostingView
+    }
+
     private func makeSidebarHarness(
         sessionID: String,
         agent: AgentKind = .codex,
@@ -769,6 +845,49 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             hostingView: hostingView,
             window: window
+        )
+    }
+
+    private func makeSidebarHarness(
+        state: AppState,
+        windowID: UUID
+    ) throws -> SidebarHarness {
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let hostWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        hostWindow.contentView = hostingView
+        hostWindow.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+
+        let stateWindow = try XCTUnwrap(state.windows.first(where: { $0.id == windowID }))
+        let selectedWorkspaceID = try XCTUnwrap(stateWindow.selectedWorkspaceID)
+        let selectedWorkspace = try XCTUnwrap(state.workspacesByID[selectedWorkspaceID])
+        let selectedPanelID = try XCTUnwrap(selectedWorkspace.focusedPanelID)
+
+        return SidebarHarness(
+            windowID: windowID,
+            workspaceID: selectedWorkspaceID,
+            panelID: selectedPanelID,
+            store: store,
+            hostingView: hostingView,
+            window: hostWindow
         )
     }
 
@@ -857,6 +976,27 @@ final class SidebarViewTests: XCTestCase {
             )
             return (state, windowID, workspaceID, rightPanelID)
         }
+    }
+
+    private func makeSidebarAppState(
+        selectedWorkspace: WorkspaceState,
+        additionalWorkspaces: [WorkspaceState]
+    ) -> (state: AppState, windowID: UUID) {
+        let windowID = UUID()
+        let workspaces = [selectedWorkspace] + additionalWorkspaces
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: selectedWorkspace.id
+                )
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        return (state, windowID)
     }
 
     private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {
