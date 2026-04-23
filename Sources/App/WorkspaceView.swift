@@ -674,46 +674,48 @@ struct WorkspaceView: View {
             )
         }
 
-        return WorkspaceTabStripLayout(
-            spacing: Self.workspaceTabStripSpacing,
-            accessorySpacing: Self.workspaceTabAccessorySpacing
-        ) {
-            ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
-                let isSelected = workspace.resolvedSelectedTabID == tab.id
-                let isDragged = activeTabDrag?.tabID == tab.id
-                workspaceTabRow(
-                    workspaceID: workspace.id,
-                    orderedTabIDs: workspace.tabIDs,
-                    tab: tab,
-                    index: index,
-                    isSelected: isSelected,
-                    allowsManagementAffordances: allowsManagementAffordances,
-                    installsContextMenu: installsContextMenu
-                )
-                .zIndex(
-                    isDragged
-                        ? Double(workspace.orderedTabs.count + 1)
-                        : isSelected ? Double(workspace.orderedTabs.count) : Double(index)
-                )
-            }
+        return NonWindowDraggableRegion {
+            WorkspaceTabStripLayout(
+                spacing: Self.workspaceTabStripSpacing,
+                accessorySpacing: Self.workspaceTabAccessorySpacing
+            ) {
+                ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
+                    let isSelected = workspace.resolvedSelectedTabID == tab.id
+                    let isDragged = activeTabDrag?.tabID == tab.id
+                    workspaceTabRow(
+                        workspaceID: workspace.id,
+                        orderedTabIDs: workspace.tabIDs,
+                        tab: tab,
+                        index: index,
+                        isSelected: isSelected,
+                        allowsManagementAffordances: allowsManagementAffordances,
+                        installsContextMenu: installsContextMenu
+                    )
+                    .zIndex(
+                        isDragged
+                            ? Double(workspace.orderedTabs.count + 1)
+                            : isSelected ? Double(workspace.orderedTabs.count) : Double(index)
+                    )
+                }
 
-            newTabButton
-        }
-        .frame(height: ToastyTheme.workspaceTabHeight, alignment: .bottom)
-        .coordinateSpace(name: WorkspaceTabStripCoordinateSpace.name)
-        .onPreferenceChange(WorkspaceTabFramePreferenceKey.self) { measuredWorkspaceTabFramesByID = $0 }
-        .overlay(alignment: .topLeading) {
-            if let insertionIndicatorX {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(ToastyTheme.accent)
-                    .frame(width: 2, height: ToastyTheme.workspaceTabHeight - 4)
-                    .offset(x: insertionIndicatorX - 1, y: 2)
-                    .allowsHitTesting(false)
+                newTabButton
             }
+            .frame(height: ToastyTheme.workspaceTabHeight, alignment: .bottom)
+            .coordinateSpace(name: WorkspaceTabStripCoordinateSpace.name)
+            .onPreferenceChange(WorkspaceTabFramePreferenceKey.self) { measuredWorkspaceTabFramesByID = $0 }
+            .overlay(alignment: .topLeading) {
+                if let insertionIndicatorX {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(ToastyTheme.accent)
+                        .frame(width: 2, height: ToastyTheme.workspaceTabHeight - 4)
+                        .offset(x: insertionIndicatorX - 1, y: 2)
+                        .allowsHitTesting(false)
+                }
+            }
+            .clipped()
+            .animation(.easeInOut(duration: 0.18), value: workspace.orderedTabs.map(\.id))
+            .accessibilityIdentifier("workspace.tabs.container")
         }
-        .clipped()
-        .animation(.easeInOut(duration: 0.18), value: workspace.orderedTabs.map(\.id))
-        .accessibilityIdentifier("workspace.tabs.container")
     }
 
     private var newTabButton: some View {
