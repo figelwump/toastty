@@ -74,6 +74,9 @@ When the parent thread already has a full implementation plan, prefer the follow
 - The worktree branch naming convention is `codex/<slug>`.
 - The filesystem naming convention is a sibling repo path like `../toastty-<slug>`.
 - Always run `scripts/dev/bootstrap-worktree.sh` in the new worktree before handing it off.
+- Treat bootstrap as a local worktree requirement, not just a remote-build requirement.
+- Before handing off, the new worktree itself should contain the generated Xcode artifacts such as `toastty.xcworkspace` / `*.xcodeproj` from `tuist generate`.
+- Remote wrappers that bootstrap or generate in disposable remote worktrees do not satisfy this handoff requirement for the local worktree.
 - The handoff file must exist before launching the new `cdx` session.
 - The default workspace layout is terminal on the left and the handoff markdown panel in a right split.
 - The default startup command should `cd` into the new worktree, export `TOASTTY_DEV_WORKTREE_ROOT`, and start `cdx` with a short prompt that points at `WORKTREE_HANDOFF.md`.
@@ -90,6 +93,8 @@ When the parent thread already has a full implementation plan, prefer the follow
 
 - After launch, confirm the helper returned the new `workspaceID` and terminal `panelID`.
 - Confirm the handoff document opened in a right split of the new workspace.
+- Confirm the new local worktree has been bootstrapped successfully, including locally generated Xcode files such as `toastty.xcworkspace`.
+- When picking up a handoff in a worktree, if those generated files are missing locally, rerun `scripts/dev/bootstrap-worktree.sh` before continuing.
 - For validation or debugging, you can override the startup command:
 
 ```bash
