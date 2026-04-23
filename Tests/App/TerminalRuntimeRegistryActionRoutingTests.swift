@@ -430,7 +430,7 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
                 state.workspacesByID[backgroundWorkspaceID]?.focusedPanelID
             )
 
-            XCTAssertTrue(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state))
+            XCTAssertTrue(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace", activate: true), state: &state))
             let selectedWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
             XCTAssertNotEqual(selectedWorkspaceID, backgroundWorkspaceID)
             let selectedWorkspaceFocusedPanelID = try XCTUnwrap(

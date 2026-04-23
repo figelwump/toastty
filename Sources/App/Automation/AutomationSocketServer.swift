@@ -1556,7 +1556,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "sidebar.workspaces.new":
             let windowID = try resolveWindowID(args: args)
             let title = args.string("title")
-            didMutate = store.send(.createWorkspace(windowID: windowID, title: title))
+            didMutate = store.send(.createWorkspace(windowID: windowID, title: title, activate: true))
 
         case "window.sidebar.toggle":
             didMutate = store.send(.toggleSidebar(windowID: try resolveWindowID(args: args)))

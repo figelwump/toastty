@@ -1380,7 +1380,7 @@ private func makeTwoWorkspaceState() throws -> AppState {
     let reducer = AppReducer()
     let windowID = try XCTUnwrap(state.windows.first?.id)
     XCTAssertTrue(
-        reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state),
+        reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace", activate: true), state: &state),
         "expected second workspace creation to succeed"
     )
     return state

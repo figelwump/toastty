@@ -108,6 +108,16 @@ struct WorkspaceView: View {
     private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
 
+    nonisolated static func mountedContentOpacity(isVisible: Bool) -> Double {
+        if isVisible {
+            return 1
+        }
+        // Keep inactive workspace/tab trees visually invisible without letting
+        // SwiftUI collapse their AppKit hosts into a hidden state. Background
+        // terminal surfaces still need to attach and initialize off-screen.
+        return 0.001
+    }
+
     nonisolated static func resolvedWorkspaceTitleWidth(
         preferredWidth: CGFloat,
         availableWidth: CGFloat,
@@ -696,7 +706,7 @@ struct WorkspaceView: View {
                         // Keep non-selected workspaces mounted so background terminal
                         // surfaces can continue emitting runtime actions (for example
                         // desktop notifications and command-finished updates).
-                        .opacity(isSelected ? 1 : 0)
+                        .opacity(Self.mountedContentOpacity(isVisible: isSelected))
                         .allowsHitTesting(isSelected)
                         .accessibilityHidden(!isSelected)
                         .zIndex(isSelected ? 1 : 0)
@@ -716,7 +726,7 @@ struct WorkspaceView: View {
                     isWorkspaceSelected: isSelected,
                     isTabSelected: isSelectedTab
                 )
-                .opacity(isSelectedTab ? 1 : 0)
+                .opacity(Self.mountedContentOpacity(isVisible: isSelectedTab))
                 .allowsHitTesting(isSelected && isSelectedTab)
                 .accessibilityHidden(!(isSelected && isSelectedTab))
                 .zIndex(isSelectedTab ? 1 : 0)

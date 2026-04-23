@@ -121,7 +121,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 kind: .action,
                 summary: "Create a workspace in a window.",
                 selectors: [.windowID],
-                parameters: [.title(required: false)],
+                parameters: [.title(required: false), .activate(required: false)],
                 aliases: aliases
             )
         case .workspaceSelect:
@@ -304,6 +304,15 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
 }
 
 private extension AppControlParameterDescriptor {
+    static func activate(required: Bool) -> Self {
+        .init(
+            name: "activate",
+            summary: "Select the new workspace immediately. Defaults to true.",
+            valueType: .boolean,
+            required: required
+        )
+    }
+
     static func amount(required: Bool) -> Self {
         .init(name: "amount", summary: "Positive resize amount.", valueType: .integer, required: required)
     }

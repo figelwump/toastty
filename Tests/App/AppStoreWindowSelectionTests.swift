@@ -1493,7 +1493,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let firstWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
-        XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: "Second")))
+        XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: "Second", activate: true)))
         let secondWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
         XCTAssertTrue(store.requestWorkspaceClose(workspaceID: secondWorkspaceID))
 

@@ -38,6 +38,7 @@ public struct AppReducer {
             state.selectedWindowID = windowID
             state.windows[index].selectedWorkspaceID = workspaceID
             markWorkspaceScopedNotificationsRead(workspaceID: workspaceID, state: &state)
+            markWorkspaceVisited(workspaceID: workspaceID, state: &state)
             return true
 
         case .selectWorkspaceTab(let workspaceID, let tabID):
@@ -53,18 +54,21 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
-        case .createWorkspace(let windowID, let title):
+        case .createWorkspace(let windowID, let title, let activate):
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
 
             let resolvedTitle = title ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state)
             let workspace = WorkspaceState.bootstrap(
                 title: resolvedTitle,
-                initialTerminalProfileBinding: state.defaultTerminalProfileBinding
+                initialTerminalProfileBinding: state.defaultTerminalProfileBinding,
+                hasBeenVisited: activate
             )
 
             commitWorkspace(workspace, workspaceID: workspace.id, state: &state)
             state.windows[windowIndex].workspaceIDs.append(workspace.id)
-            state.windows[windowIndex].selectedWorkspaceID = workspace.id
+            if activate {
+                state.windows[windowIndex].selectedWorkspaceID = workspace.id
+            }
             return true
 
         case .createWorkspaceTab(let workspaceID, let seed):
@@ -987,6 +991,20 @@ public struct AppReducer {
         commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
     }
 
+    private static func markWorkspaceVisited(workspaceID: UUID, state: inout AppState) {
+        guard var workspace = state.workspacesByID[workspaceID],
+              workspace.hasBeenVisited == false else {
+            return
+        }
+        workspace.hasBeenVisited = true
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+    }
+
+    private static func markSelectedWorkspaceVisited(windowID: UUID, state: inout AppState) {
+        guard let workspaceID = state.selectedWorkspaceID(in: windowID) else { return }
+        markWorkspaceVisited(workspaceID: workspaceID, state: &state)
+    }
+
     private static func resizeFocusedSlotSplit(
         workspaceID: UUID,
         direction: SplitResizeDirection,
@@ -1240,6 +1258,7 @@ public struct AppReducer {
         if state.selectedWindowID == nil {
             state.selectedWindowID = window.id
         }
+        markSelectedWorkspaceVisited(windowID: window.id, state: &state)
         return true
     }
 

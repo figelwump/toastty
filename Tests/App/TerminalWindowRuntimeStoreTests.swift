@@ -46,7 +46,7 @@ final class TerminalWindowRuntimeStoreTests: XCTestCase {
             delegate: delegate
         )
 
-        XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: "Second Workspace")))
+        XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: "Second Workspace", activate: true)))
         let targetWorkspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
 
         XCTAssertTrue(

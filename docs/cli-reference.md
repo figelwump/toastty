@@ -65,7 +65,15 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
   files=/tmp/a.png \
   files=/tmp/b.png \
   allowUnavailable=true
+"$TOASTTY_CLI_PATH" --json action run workspace.create \
+  --window "$WINDOW_ID" \
+  title=background-worktree \
+  activate=false
 ```
+
+`workspace.create` accepts optional `title` and `activate` arguments. When
+`activate=false`, Toastty appends the workspace without changing the currently
+visible selection and returns the created `workspaceID` and `windowID`.
 
 Prefer `action list --json` to discover the current canonical IDs. Common actions include:
 

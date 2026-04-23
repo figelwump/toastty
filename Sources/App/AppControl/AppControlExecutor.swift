@@ -67,14 +67,29 @@ final class AppControlExecutor {
             )
 
         case .workspaceCreate:
+            let store = try requiredStore()
+            let windowID = try resolveWindowID(args: args)
+            let existingWorkspaceIDs = Set(store.state.window(id: windowID)?.workspaceIDs ?? [])
+            let didMutateState = store.send(
+                .createWorkspace(
+                    windowID: windowID,
+                    title: normalizedOptionalText(args.stringValue("title")),
+                    activate: args.boolValue("activate") ?? true
+                )
+            )
+            guard didMutateState else {
+                return .init(didMutateState: false, result: nil)
+            }
+            guard let updatedWindow = store.state.window(id: windowID),
+                  let workspaceID = updatedWindow.workspaceIDs.last(where: { existingWorkspaceIDs.contains($0) == false }) else {
+                throw AutomationSocketError.invalidPayload("workspace.create did not return a created workspace")
+            }
             return .init(
-                didMutateState: try requiredStore().send(
-                    .createWorkspace(
-                        windowID: try resolveWindowID(args: args),
-                        title: normalizedOptionalText(args.stringValue("title"))
-                    )
-                ),
-                result: nil
+                didMutateState: true,
+                result: [
+                    "windowID": .string(windowID.uuidString),
+                    "workspaceID": .string(workspaceID.uuidString),
+                ]
             )
 
         case .workspaceSelect:

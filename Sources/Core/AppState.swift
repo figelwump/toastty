@@ -63,6 +63,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.selectedWindowID = selectedWindowID
         self.configuredTerminalFontPoints = configuredTerminalFontPoints.map(Self.clampedTerminalFontPoints)
         self.defaultTerminalProfileID = Self.normalizedTerminalProfileID(defaultTerminalProfileID)
+        normalizeVisitedWorkspacesForVisibleSelections()
     }
 
     public static func clampedTerminalFontPoints(_ points: Double) -> Double {
@@ -119,6 +120,19 @@ public struct AppState: Codable, Equatable, Sendable {
             return Self.defaultMarkdownTextScale
         }
         return effectiveMarkdownTextScale(for: window)
+    }
+
+    private mutating func normalizeVisitedWorkspacesForVisibleSelections() {
+        for window in windows {
+            guard let workspaceID = selectedWorkspaceID(in: window.id),
+                  var workspace = workspacesByID[workspaceID],
+                  workspace.hasBeenVisited == false else {
+                continue
+            }
+
+            workspace.hasBeenVisited = true
+            workspacesByID[workspaceID] = workspace
+        }
     }
 
     public static func bootstrap(defaultTerminalProfileID: String? = nil) -> AppState {

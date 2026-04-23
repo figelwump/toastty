@@ -474,7 +474,7 @@ struct AppReducerTests {
         let windowID = try #require(state.windows.first?.id)
         let originalWorkspaceCount = state.windows.first?.workspaceIDs.count ?? 0
 
-        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil, activate: true), state: &state))
 
         let window = try #require(state.windows.first(where: { $0.id == windowID }))
         #expect(window.workspaceIDs.count == originalWorkspaceCount + 1)
@@ -482,7 +482,64 @@ struct AppReducerTests {
         let selectedWorkspaceID = try #require(window.selectedWorkspaceID)
         let selectedWorkspace = try #require(state.workspacesByID[selectedWorkspaceID])
         #expect(selectedWorkspace.title == "Workspace 2")
+        #expect(selectedWorkspace.hasBeenVisited == true)
 
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func createWorkspaceWithoutActivationKeepsCurrentSelectionAndStartsUnvisited() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let originalWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Background", activate: false), state: &state))
+
+        let window = try #require(state.window(id: windowID))
+        #expect(window.selectedWorkspaceID == originalWorkspaceID)
+        let backgroundWorkspaceID = try #require(window.workspaceIDs.last)
+        #expect(backgroundWorkspaceID != originalWorkspaceID)
+        let backgroundWorkspace = try #require(state.workspacesByID[backgroundWorkspaceID])
+        #expect(backgroundWorkspace.title == "Background")
+        #expect(backgroundWorkspace.hasBeenVisited == false)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func selectingBackgroundWorkspaceMarksItVisited() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Background", activate: false), state: &state))
+
+        let backgroundWorkspaceID = try #require(state.window(id: windowID)?.workspaceIDs.last)
+        #expect(reducer.send(.selectWorkspace(windowID: windowID, workspaceID: backgroundWorkspaceID), state: &state))
+
+        let backgroundWorkspace = try #require(state.workspacesByID[backgroundWorkspaceID])
+        #expect(backgroundWorkspace.hasBeenVisited == true)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingSelectedWorkspaceMarksFallbackWorkspaceVisited() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let originalWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let originalPanelID = try #require(state.workspacesByID[originalWorkspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Background", activate: false), state: &state))
+
+        let backgroundWorkspaceID = try #require(state.window(id: windowID)?.workspaceIDs.last)
+        #expect(state.workspacesByID[backgroundWorkspaceID]?.hasBeenVisited == false)
+        #expect(reducer.send(.closePanel(panelID: originalPanelID), state: &state))
+
+        let window = try #require(state.window(id: windowID))
+        #expect(window.selectedWorkspaceID == backgroundWorkspaceID)
+        #expect(state.workspacesByID[backgroundWorkspaceID]?.hasBeenVisited == true)
         try StateValidator.validate(state)
     }
 
@@ -492,7 +549,7 @@ struct AppReducerTests {
         let reducer = AppReducer()
         let windowID = try #require(state.windows.first?.id)
 
-        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil, activate: true), state: &state))
 
         let window = try #require(state.windows.first(where: { $0.id == windowID }))
         let selectedWorkspaceID = try #require(window.selectedWorkspaceID)
@@ -709,7 +766,7 @@ struct AppReducerTests {
         state.workspacesByID[secondWorkspace.id] = secondWorkspace
         state.selectedWindowID = firstWindowID
 
-        #expect(reducer.send(.createWorkspace(windowID: secondWindowID, title: nil), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: secondWindowID, title: nil, activate: true), state: &state))
 
         #expect(state.selectedWindowID == firstWindowID)
         let updatedFirstWindow = try #require(state.windows.first(where: { $0.id == firstWindowID }))
@@ -3070,7 +3127,7 @@ struct AppReducerTests {
         let windowID = try #require(state.windows.first?.id)
         let firstWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace", activate: true), state: &state))
         let secondWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
         var firstWorkspace = try #require(state.workspacesByID[firstWorkspaceID])

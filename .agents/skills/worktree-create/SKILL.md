@@ -30,7 +30,8 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
    - Do not compress an already-settled implementation plan into a lightweight summary just because it is being handed off.
    - If there is no durable plan file yet and no detailed plan exists in-thread, put a concise task-specific plan directly in `WORKTREE_HANDOFF.md`.
 6. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
-   - The helper creates the workspace, opens `WORKTREE_HANDOFF.md` in a right-hand local-document split, and starts the new terminal command in the left terminal pane.
+   - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` in a right-hand local-document split, and starts the new terminal command in the left terminal pane.
+   - Background-created workspaces stay marked as new in the sidebar until the user visits them once.
 
 ```bash
 .agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh \
@@ -89,6 +90,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 ## Validation
 
 - After launch, confirm the helper returned the new `workspaceID` and terminal `panelID`.
+- Confirm the original workspace stayed visible while the new workspace was provisioned.
 - Confirm the handoff document opened in a right split of the new workspace.
 - For validation or debugging, you can override the startup command:
 

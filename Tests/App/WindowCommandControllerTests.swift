@@ -310,7 +310,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let firstWindowID = try XCTUnwrap(store.state.windows.first?.id)
         let firstWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
-        XCTAssertTrue(store.send(.createWorkspace(windowID: firstWindowID, title: "Second")))
+        XCTAssertTrue(store.send(.createWorkspace(windowID: firstWindowID, title: "Second", activate: true)))
         let secondWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
         XCTAssertNotEqual(firstWorkspaceID, secondWorkspaceID)
 
