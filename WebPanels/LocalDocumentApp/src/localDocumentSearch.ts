@@ -26,6 +26,8 @@ interface EditorSelectionSnapshot {
   end: number;
 }
 
+export type EditorSearchMode = "interactive" | "passive";
+
 interface CustomHighlightRegistry {
   set(name: string, highlight: object): void;
   delete(name: string): void;
@@ -534,7 +536,8 @@ function applyEditorSearch(
   textarea: HTMLTextAreaElement | null,
   command: LocalDocumentPanelSearchCommand,
   currentState: LocalDocumentPanelSearchState,
-  selectionSnapshotRef: React.MutableRefObject<EditorSelectionSnapshot | null>
+  selectionSnapshotRef: React.MutableRefObject<EditorSelectionSnapshot | null>,
+  mode: EditorSearchMode
 ): LocalDocumentPanelSearchState {
   const query = searchQueryForCommand(command, currentState);
   if (command.type === "clear") {
@@ -544,7 +547,12 @@ function applyEditorSearch(
   }
 
   if (!textarea || query.length === 0) {
-    restoreEditorSelection(textarea, selectionSnapshotRef.current);
+    if (mode === "interactive") {
+      restoreEditorSelection(textarea, selectionSnapshotRef.current);
+    }
+    if (mode === "passive") {
+      selectionSnapshotRef.current = null;
+    }
     return emptySearchState(query);
   }
 
@@ -555,16 +563,26 @@ function applyEditorSearch(
     };
   }
 
+  if (mode === "passive") {
+    // Once the document changes under an active Find session, the original
+    // pre-Find selection offsets are no longer trustworthy to restore.
+    selectionSnapshotRef.current = null;
+  }
+
   const matches = findTextMatches(textarea.value, query);
   const activeMatchIndex = nextActiveMatchIndex(command, currentState, matches.length);
   if (matches.length === 0 || activeMatchIndex === null) {
-    restoreEditorSelection(textarea, selectionSnapshotRef.current);
+    if (mode === "interactive") {
+      restoreEditorSelection(textarea, selectionSnapshotRef.current);
+    }
     return emptySearchState(query);
   }
 
   const activeMatch = matches[activeMatchIndex];
-  textarea.setSelectionRange(activeMatch.start, activeMatch.end, "forward");
-  scrollEditorMatchIntoView(textarea, activeMatch.start);
+  if (mode === "interactive") {
+    textarea.setSelectionRange(activeMatch.start, activeMatch.end, "forward");
+    scrollEditorMatchIntoView(textarea, activeMatch.start);
+  }
 
   return {
     query,
@@ -572,6 +590,22 @@ function applyEditorSearch(
     activeMatchIndex,
     matchFound: true
   };
+}
+
+export function applyEditorSearchForTesting(
+  textarea: HTMLTextAreaElement | null,
+  command: LocalDocumentPanelSearchCommand,
+  currentState: LocalDocumentPanelSearchState,
+  selectionSnapshotRef: React.MutableRefObject<EditorSelectionSnapshot | null>,
+  mode: EditorSearchMode
+): LocalDocumentPanelSearchState {
+  return applyEditorSearch(
+    textarea,
+    command,
+    currentState,
+    selectionSnapshotRef,
+    mode
+  );
 }
 
 export function useLocalDocumentSearchController(options: {
@@ -593,13 +627,20 @@ export function useLocalDocumentSearchController(options: {
     }
   }, [isEditing]);
 
+  const publishSearchState = React.useCallback((nextState: LocalDocumentPanelSearchState) => {
+    searchStateRef.current = nextState;
+    window.ToasttyLocalDocumentPanel?.setCurrentSearchState(nextState);
+    return nextState;
+  }, []);
+
   const applyCommand = React.useCallback((command: LocalDocumentPanelSearchCommand) => {
     const nextState = isEditing
       ? applyEditorSearch(
           textareaRef.current,
           command,
           searchStateRef.current,
-          editorSelectionSnapshotRef
+          editorSelectionSnapshotRef,
+          "interactive"
         )
       : applyPreviewSearch(
           previewRootRef.current,
@@ -607,10 +648,8 @@ export function useLocalDocumentSearchController(options: {
           command,
           searchStateRef.current
         );
-    searchStateRef.current = nextState;
-    window.ToasttyLocalDocumentPanel?.setCurrentSearchState(nextState);
-    return nextState;
-  }, [isEditing, previewContentRef, previewRootRef, textareaRef]);
+    return publishSearchState(nextState);
+  }, [isEditing, previewContentRef, previewRootRef, publishSearchState, textareaRef]);
 
   React.useEffect(() => {
     window.ToasttyLocalDocumentPanel?.registerSearchController({
@@ -633,8 +672,29 @@ export function useLocalDocumentSearchController(options: {
       return;
     }
 
+    if (isEditing) {
+      return;
+    }
+
     applyCommand({ type: "setQuery", query: currentQuery });
   }, [applyCommand, content, isEditing]);
+
+  React.useEffect(() => {
+    const currentQuery = searchStateRef.current.query;
+    if (isEditing === false || currentQuery.length === 0) {
+      return;
+    }
+
+    publishSearchState(
+      applyEditorSearch(
+        textareaRef.current,
+        { type: "setQuery", query: currentQuery },
+        searchStateRef.current,
+        editorSelectionSnapshotRef,
+        "passive"
+      )
+    );
+  }, [content, isEditing, publishSearchState, textareaRef]);
 
   React.useEffect(() => {
     if (isEditing) {

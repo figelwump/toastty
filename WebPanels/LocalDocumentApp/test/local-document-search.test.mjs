@@ -11,6 +11,28 @@ import { pathToFileURL } from "node:url";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 let searchModulePromise;
 
+function makeTextarea({
+  value,
+  selectionStart = 0,
+  selectionEnd = selectionStart,
+  clientHeight = 120,
+  scrollTop = 0
+}) {
+  return {
+    value,
+    selectionStart,
+    selectionEnd,
+    clientHeight,
+    scrollTop,
+    setSelectionRangeCalls: [],
+    setSelectionRange(start, end, direction) {
+      this.selectionStart = start;
+      this.selectionEnd = end;
+      this.setSelectionRangeCalls.push({ start, end, direction });
+    }
+  };
+}
+
 async function loadLocalDocumentSearchModule() {
   if (!searchModulePromise) {
     searchModulePromise = (async () => {
@@ -206,4 +228,151 @@ test("search styles define distinct preview match and active-match highlights", 
   assert.match(source, /::highlight\(toastty-local-document-find-active\)/);
   assert.match(source, /\.toastty-local-document-find-match-fallback/);
   assert.match(source, /\.toastty-local-document-find-active-fallback/);
+});
+
+test("edit-mode content refresh uses passive editor search updates", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/localDocumentSearch.ts"),
+    "utf8"
+  );
+
+  assert.match(source, /applyEditorSearchForTesting/);
+  assert.match(source, /type EditorSearchMode = "interactive" \| "passive"/);
+  assert.match(source, /if \(isEditing\) \{\s*return;\s*\}\s*\n\s*applyCommand\(\{ type: "setQuery", query: currentQuery \}\);/);
+  assert.match(source, /applyEditorSearch\(\s*textareaRef\.current,[\s\S]*?"passive"/);
+});
+
+test("passive editor refresh clamps the active match without moving selection or scroll", async () => {
+  const { module } = await loadLocalDocumentSearchModule();
+  const textarea = makeTextarea({
+    value: "alpha\nbeta\ngamma",
+    selectionStart: 4,
+    selectionEnd: 4,
+    scrollTop: 160
+  });
+  const selectionSnapshotRef = {
+    current: { start: 1, end: 3 }
+  };
+
+  const nextState = module.applyEditorSearchForTesting(
+    textarea,
+    { type: "setQuery", query: "alpha" },
+    {
+      query: "alpha",
+      matchCount: 2,
+      activeMatchIndex: 1,
+      matchFound: true
+    },
+    selectionSnapshotRef,
+    "passive"
+  );
+
+  assert.deepEqual(nextState, {
+    query: "alpha",
+    matchCount: 1,
+    activeMatchIndex: 0,
+    matchFound: true
+  });
+  assert.equal(textarea.setSelectionRangeCalls.length, 0);
+  assert.equal(textarea.scrollTop, 160);
+  assert.equal(selectionSnapshotRef.current, null);
+});
+
+test("interactive editor search still selects and scrolls to the active match", async () => {
+  const { module } = await loadLocalDocumentSearchModule();
+  const previousWindow = globalThis.window;
+  globalThis.window = {
+    ...(previousWindow ?? {}),
+    getComputedStyle() {
+      return {
+        lineHeight: "20",
+        fontSize: "12"
+      };
+    }
+  };
+
+  try {
+    const value = `${"line\n".repeat(24)}needle\n${"line\n".repeat(10)}needle`;
+    const firstMatchStart = value.indexOf("needle");
+    const secondMatchStart = value.indexOf("needle", firstMatchStart + 1);
+    const textarea = makeTextarea({
+      value,
+      selectionStart: 0,
+      selectionEnd: 0,
+      clientHeight: 100,
+      scrollTop: 0
+    });
+    const selectionSnapshotRef = {
+      current: { start: 0, end: 0 }
+    };
+
+    const nextState = module.applyEditorSearchForTesting(
+      textarea,
+      { type: "setQuery", query: "needle" },
+      {
+        query: "needle",
+        matchCount: 2,
+        activeMatchIndex: 1,
+        matchFound: true
+      },
+      selectionSnapshotRef,
+      "interactive"
+    );
+
+    assert.equal(textarea.setSelectionRangeCalls.length, 1);
+    assert.deepEqual(textarea.setSelectionRangeCalls[0], {
+      start: secondMatchStart,
+      end: secondMatchStart + "needle".length,
+      direction: "forward"
+    });
+    assert.ok(textarea.scrollTop > 0);
+    assert.deepEqual(nextState, {
+      query: "needle",
+      matchCount: 2,
+      activeMatchIndex: 1,
+      matchFound: true
+    });
+    assert.deepEqual(selectionSnapshotRef.current, { start: 0, end: 0 });
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
+test("clearing find after an edit keeps the current caret when the pre-find snapshot is invalidated", async () => {
+  const { module } = await loadLocalDocumentSearchModule();
+  const textarea = makeTextarea({
+    value: "alpha\nbeta",
+    selectionStart: 5,
+    selectionEnd: 5,
+    scrollTop: 90
+  });
+  const selectionSnapshotRef = {
+    current: null
+  };
+
+  const nextState = module.applyEditorSearchForTesting(
+    textarea,
+    { type: "clear" },
+    {
+      query: "alpha",
+      matchCount: 1,
+      activeMatchIndex: 0,
+      matchFound: true
+    },
+    selectionSnapshotRef,
+    "interactive"
+  );
+
+  assert.deepEqual(nextState, {
+    query: "",
+    matchCount: 0,
+    activeMatchIndex: null,
+    matchFound: false
+  });
+  assert.deepEqual(textarea.setSelectionRangeCalls, [{
+    start: 5,
+    end: 5,
+    direction: "none"
+  }]);
+  assert.equal(selectionSnapshotRef.current, null);
 });
