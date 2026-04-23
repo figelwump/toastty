@@ -81,6 +81,29 @@ struct LocalDocumentClassifierTests {
     }
 
     @Test
+    func classificationTreatsDotenvFilesAsEnvironmentConfigDocuments() throws {
+        let supportedFilePaths = [
+            "/tmp/.env",
+            "/tmp/.env.local",
+            "/tmp/.ENV.PRODUCTION",
+            "/tmp/.env:42",
+            "/tmp/.env.local:42",
+        ]
+
+        for filePath in supportedFilePaths {
+            let classification = try #require(
+                LocalDocumentClassifier.classification(forFilePath: filePath)
+            )
+            #expect(classification.format == .config)
+            #expect(classification.syntaxLanguage == nil)
+            #expect(classification.formatLabel == "Environment")
+            #expect(classification.warnsWhenSyntaxHighlightUnavailable == false)
+        }
+
+        #expect(LocalDocumentClassifier.classification(forFilePath: "/tmp/.envrc") == nil)
+    }
+
+    @Test
     func classificationKeepsJsoncCoarseFormatButDisablesSyntaxLanguage() throws {
         let classification = try #require(
             LocalDocumentClassifier.classification(forPathExtension: "JSONC")
@@ -113,6 +136,8 @@ struct LocalDocumentClassifierTests {
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/Toastty.toml") == .toml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/settings.JSON") == .json)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/logs/events.jsonl") == .jsonl)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/.env") == .config)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/.env.local") == .config)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/.gitignore") == .config)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/.gitignore:42") == .config)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/.toastty/config.properties") == .config)

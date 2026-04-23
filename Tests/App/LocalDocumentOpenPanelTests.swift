@@ -60,6 +60,33 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
         }
     }
 
+    func testAllowsSelectionForDotenvFiles() throws {
+        try withTemporaryDirectory { temporaryDirectoryURL in
+            let supportedFiles = [
+                ".env": "API_HOST=http://localhost\n",
+                ".env.local": "API_HOST=http://localhost\n",
+            ]
+
+            for (fileName, content) in supportedFiles {
+                let fileURL = temporaryDirectoryURL.appendingPathComponent(fileName, isDirectory: false)
+                try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+                XCTAssertTrue(
+                    LocalDocumentOpenPanel.allowsSelection(at: fileURL),
+                    "expected picker to allow \(fileName)"
+                )
+            }
+
+            let unsupportedFileURL = temporaryDirectoryURL.appendingPathComponent(".envrc", isDirectory: false)
+            try "use flake\n".write(to: unsupportedFileURL, atomically: true, encoding: .utf8)
+
+            XCTAssertFalse(
+                LocalDocumentOpenPanel.allowsSelection(at: unsupportedFileURL),
+                "expected picker to reject .envrc"
+            )
+        }
+    }
+
     func testAllowsSelectionKeepsDirectoriesEnabledForNavigation() throws {
         try withTemporaryDirectory { temporaryDirectoryURL in
             let nestedDirectoryURL = temporaryDirectoryURL.appendingPathComponent(

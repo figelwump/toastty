@@ -26,4 +26,15 @@ enum CommandPaletteFileOpenRouting {
     static var supportedExactFileNames: Set<String> {
         Set(LocalDocumentClassifier.supportedExactFileNames)
     }
+
+    static func supportsFileName(_ fileName: String) -> Bool {
+        let pathExtension = (fileName as NSString).pathExtension.lowercased()
+        return browserExtensions.contains(pathExtension)
+            || LocalDocumentClassifier.supportsFileName(fileName)
+    }
+
+    static func supportsHiddenFileName(_ fileName: String) -> Bool {
+        supportedExactFileNames.contains(fileName)
+            || LocalDocumentClassifier.supportsDotenvFileName(fileName)
+    }
 }

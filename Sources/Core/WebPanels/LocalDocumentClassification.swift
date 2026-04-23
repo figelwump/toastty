@@ -39,7 +39,15 @@ public enum LocalDocumentClassifier {
     // Keep grouped text/code families intentionally small. Some extensions like
     // `.jsonc` and `.properties` still share a broad viewer family even when we
     // do not offer specialized syntax highlighting for them yet.
+    private static let dotenvClassification = LocalDocumentClassification(
+        format: .config,
+        syntaxLanguage: nil,
+        formatLabel: "Environment",
+        warnsWhenSyntaxHighlightUnavailable: false
+    )
+
     private static let exactFileNameToClassification: [String: LocalDocumentClassification] = [
+        ".env": dotenvClassification,
         ".gitignore": .init(format: .config, syntaxLanguage: nil, formatLabel: "Git Ignore"),
     ]
 
@@ -107,6 +115,19 @@ public enum LocalDocumentClassifier {
     public static let supportedExactFileNames: [String] =
         exactFileNameToClassification.keys.sorted()
 
+    public static func supportsDotenvFileName(_ fileName: String) -> Bool {
+        let normalizedFileName = fileName.lowercased()
+        return normalizedFileName == ".env"
+            || (
+                normalizedFileName.hasPrefix(".env.")
+                    && normalizedFileName.count > ".env.".count
+            )
+    }
+
+    public static func supportsFileName(_ fileName: String) -> Bool {
+        classification(forFileName: fileName) != nil
+    }
+
     public static func classification(forPathExtension pathExtension: String) -> LocalDocumentClassification? {
         let normalizedExtension = pathExtension.lowercased()
         guard normalizedExtension.isEmpty == false else {
@@ -151,6 +172,10 @@ public enum LocalDocumentClassifier {
     ) -> LocalDocumentClassification? {
         if let directClassification = exactFileNameToClassification[fileName] {
             return directClassification
+        }
+
+        if supportsDotenvFileName(fileName) {
+            return dotenvClassification
         }
 
         let pathExtension = (fileName as NSString).pathExtension

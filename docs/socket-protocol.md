@@ -371,7 +371,7 @@ Supported action IDs:
   - When `args.placement` is omitted, the default is now `rootRight` rather than `newTab`
   - `args.url` is optional
 - `panel.create.localDocument`
-  - opens a supported local document: Markdown (`md`, `markdown`, `mdown`, `mkd`), YAML/TOML/JSON/config files, CSV/TSV/XML, shell scripts (`sh`, `bash`, `zsh`), or common source files (`swift`, `js`, `mjs`, `cjs`, `jsx`, `ts`, `mts`, `cts`, `tsx`, `py`, `go`, `rs`)
+  - opens a supported local document: Markdown (`md`, `markdown`, `mdown`, `mkd`), YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts (`sh`, `bash`, `zsh`), or common source files (`swift`, `js`, `mjs`, `cjs`, `jsx`, `ts`, `mts`, `cts`, `tsx`, `py`, `go`, `rs`)
   - requires `args.filePath`
   - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
   - when `args.placement` is omitted, the default is `rootRight`

@@ -182,8 +182,6 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
             return []
         }
 
-        let supportedExtensions = CommandPaletteFileOpenRouting.supportedPathExtensions
-        let supportedExactFileNames = CommandPaletteFileOpenRouting.supportedExactFileNames
         var results: [PaletteFileResult] = []
 
         while let candidate = enumerator.nextObject() as? URL {
@@ -222,12 +220,11 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
 
             let fileName = candidate.lastPathComponent
             if fileName.hasPrefix("."),
-               supportedExactFileNames.contains(fileName) == false {
+               CommandPaletteFileOpenRouting.supportsHiddenFileName(fileName) == false {
                 continue
             }
 
-            let pathExtension = candidate.pathExtension.lowercased()
-            guard supportedExtensions.contains(pathExtension) || supportedExactFileNames.contains(fileName) else {
+            guard CommandPaletteFileOpenRouting.supportsFileName(fileName) else {
                 continue
             }
 

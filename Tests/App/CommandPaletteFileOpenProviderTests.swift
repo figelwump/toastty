@@ -53,6 +53,9 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
             files: [
                 ".agents/skills/worktree-create/SKILL.md": "# Worktree Create\n",
                 ".claude/CLAUDE.md": "# Claude\n",
+                ".env": "API_HOST=http://localhost\n",
+                ".env.local": "API_HOST=http://localhost\n",
+                ".envrc": "use flake\n",
                 ".gitignore": "Derived*\n",
                 ".markdownlint.json": "{\n  \"default\": true\n}\n",
                 ".git/ignored.md": "# ignored\n",
@@ -75,8 +78,11 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
 
         XCTAssertTrue(relativePaths.contains(".agents/skills/worktree-create/SKILL.md"))
         XCTAssertTrue(relativePaths.contains(".claude/CLAUDE.md"))
+        XCTAssertTrue(relativePaths.contains(".env"))
+        XCTAssertTrue(relativePaths.contains(".env.local"))
         XCTAssertTrue(relativePaths.contains(".gitignore"))
         XCTAssertTrue(relativePaths.contains("DerivedState/model.md"))
+        XCTAssertFalse(relativePaths.contains(".envrc"))
         XCTAssertFalse(relativePaths.contains(".markdownlint.json"))
         XCTAssertFalse(relativePaths.contains(".git/ignored.md"))
         XCTAssertFalse(relativePaths.contains("Derived-tests/cache.json"))
@@ -104,6 +110,12 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
                 forNormalizedFilePath: "/tmp/.gitignore"
             ),
             .localDocument(filePath: "/tmp/.gitignore")
+        )
+        XCTAssertEqual(
+            CommandPaletteFileOpenRouting.destination(
+                forNormalizedFilePath: "/tmp/.env.local"
+            ),
+            .localDocument(filePath: "/tmp/.env.local")
         )
         XCTAssertEqual(
             CommandPaletteFileOpenRouting.destination(
