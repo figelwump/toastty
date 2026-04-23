@@ -426,7 +426,7 @@ struct SidebarView: View {
             in: workspace
         )
         let accessibilityLabel = Self.sessionAccessibilityLabel(
-            agentName: workspaceSessionStatus.agent.displayName,
+            agentName: workspaceSessionStatus.displayTitle,
             chipKind: Self.sessionStatusChipKind(
                 for: status,
                 showsUnreadSessionAccent: showsUnreadSessionAccent
