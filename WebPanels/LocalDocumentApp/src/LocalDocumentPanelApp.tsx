@@ -652,6 +652,7 @@ function highlightStatusMessage(
 ): string | null {
   switch (highlightState) {
     case "enabled":
+    case "plainText":
     case "unavailable":
       return null;
     case "disabledForLargeFile":

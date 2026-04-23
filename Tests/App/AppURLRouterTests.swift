@@ -37,8 +37,29 @@ final class AppURLRouterTests: XCTestCase {
         )
     }
 
-    func testRouteKeepsExistingUnsupportedLocalFileURLsExternalEvenWhenToasttyBrowserIsEnabled() throws {
+    func testRouteTreatsSupportedTextFilesAsLocalDocuments() throws {
         let fixture = try makeTextFixture()
+        let url = fixture.fileURL
+
+        XCTAssertEqual(
+            AppURLRouter.route(
+                for: url,
+                preferences: URLRoutingPreferences(
+                    destination: .toasttyBrowser,
+                    browserPlacement: .rootRight
+                )
+            ),
+            .localDocument(
+                LocalDocumentPanelCreateRequest(
+                    filePath: fixture.filePath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+    }
+
+    func testRouteKeepsExistingUnsupportedLocalFileURLsExternalEvenWhenToasttyBrowserIsEnabled() throws {
+        let fixture = try makeUnsupportedFixture()
         let url = fixture.fileURL
 
         XCTAssertEqual(
@@ -386,7 +407,7 @@ final class AppURLRouterTests: XCTestCase {
     }
 
     private func makeTextFixture(
-        fileName: String = "unsupported.txt"
+        fileName: String = "notes.txt"
     ) throws -> (filePath: String, fileURL: URL) {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
@@ -396,6 +417,26 @@ final class AppURLRouterTests: XCTestCase {
 
         try fileManager.createDirectory(at: docsURL, withIntermediateDirectories: true)
         try Data("plain text fixture\n".utf8).write(to: fileURL)
+
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let normalizedFileURL = fileURL.standardizedFileURL.resolvingSymlinksInPath()
+        return (filePath: normalizedFileURL.path, fileURL: fileURL)
+    }
+
+    private func makeUnsupportedFixture(
+        fileName: String = "archive.zip"
+    ) throws -> (filePath: String, fileURL: URL) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-app-url-router-unsupported-tests-\(UUID().uuidString)", isDirectory: true)
+        let docsURL = rootURL.appendingPathComponent("docs", isDirectory: true)
+        let fileURL = docsURL.appendingPathComponent(fileName, isDirectory: false)
+
+        try fileManager.createDirectory(at: docsURL, withIntermediateDirectories: true)
+        try Data("zip fixture\n".utf8).write(to: fileURL)
 
         addTeardownBlock {
             try? fileManager.removeItem(at: rootURL)

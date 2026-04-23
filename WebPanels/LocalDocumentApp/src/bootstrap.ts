@@ -4,6 +4,7 @@ export type LocalDocumentPanelTheme = "light" | "dark";
 export type LocalDocumentHighlightState =
   | "enabled"
   | "disabledForLargeFile"
+  | "plainText"
   | "unsupportedFormat"
   | "unavailable";
 export type LocalDocumentSyntaxLanguage =
@@ -32,7 +33,7 @@ export type LocalDocumentFormat =
   | "code";
 
 export interface LocalDocumentPanelBootstrap {
-  contractVersion: 6;
+  contractVersion: 7;
   filePath: string | null;
   displayName: string;
   format: LocalDocumentFormat;
@@ -131,9 +132,9 @@ function applyTextScale(bootstrap: LocalDocumentPanelBootstrap | null) {
 }
 
 function warnOnContractMismatch(bootstrap: LocalDocumentPanelBootstrap) {
-  if (bootstrap.contractVersion !== 6) {
+  if (bootstrap.contractVersion !== 7) {
     console.warn(
-      `[ToasttyLocalDocumentPanel] Expected bootstrap contractVersion 6 but received ${bootstrap.contractVersion}.`
+      `[ToasttyLocalDocumentPanel] Expected bootstrap contractVersion 7 but received ${bootstrap.contractVersion}.`
     );
   }
 }

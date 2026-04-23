@@ -135,6 +135,39 @@ final class CommandPaletteFileOpenIntegrationTests: XCTestCase {
         )
     }
 
+    func testOpenFileResultOpensTextFilesAsLocalDocuments() throws {
+        let scopeURL = try makeDirectoryScope()
+        let fileURL = scopeURL.appendingPathComponent("notes.txt")
+        try writeFixtureFile(at: fileURL, contents: "plain text\n")
+
+        let state = makeStateWithFocusedTerminalCWD(scopeURL.path)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let actions = try makeLiveActions(store: store)
+        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+
+        XCTAssertTrue(
+            actions.openFileResult(
+                .localDocument(filePath: fileURL.path),
+                placement: .default,
+                originWindowID: originWindowID
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        guard case .web(let webState) = workspace.panels[panelID] else {
+            XCTFail("expected focused panel to be local-document-backed")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: fileURL.path, format: .code)
+        )
+    }
+
     func testOpenFileResultAlternatePlacementOpensLocalDocumentInNewTab() throws {
         let scopeURL = try makeDirectoryScope()
         let fileURL = scopeURL.appendingPathComponent("README.md")

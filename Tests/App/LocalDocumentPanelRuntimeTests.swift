@@ -1648,7 +1648,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(bootstrap.contractVersion, 6)
+        XCTAssertEqual(bootstrap.contractVersion, 7)
         XCTAssertEqual(bootstrap.displayName, "README.md")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.format, .markdown)
@@ -1735,6 +1735,40 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.formatLabel, "Swift")
         XCTAssertTrue(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.highlightState, .enabled)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
+    func testBootstrapReadsTextFileContentsAsPlainTextDocument() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("notes.txt")
+        let content = """
+        Toastty plain text
+        still opens locally.
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "notes.txt",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .code
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "notes.txt")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .code)
+        XCTAssertNil(bootstrap.syntaxLanguage)
+        XCTAssertEqual(bootstrap.formatLabel, "Plain Text")
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .plainText)
         XCTAssertEqual(bootstrap.content, content)
     }
 
@@ -2017,7 +2051,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(script.contains("const bridge = window.ToasttyLocalDocumentPanel;"))
         XCTAssertTrue(script.contains("if (!bridge) {"))
         XCTAssertTrue(script.contains("bridge.receiveBootstrap("))
-        XCTAssertTrue(script.contains("\"contractVersion\":6"))
+        XCTAssertTrue(script.contains("\"contractVersion\":7"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
         XCTAssertTrue(script.contains("\"format\":\"markdown\""))
         XCTAssertTrue(script.contains("\"formatLabel\":\"Markdown\""))

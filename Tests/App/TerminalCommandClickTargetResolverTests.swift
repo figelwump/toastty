@@ -121,7 +121,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
-    func testResolveFallsBackForUnsupportedLocalFileExtension() throws {
+    func testResolveTreatsTextFileAsLocalDocument() throws {
         let fixture = try makeFixture(fileName: "config.txt")
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -130,7 +130,10 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+        )
     }
 
     func testResolveTreatsSwiftFileAsLocalDocument() throws {
@@ -413,7 +416,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         XCTAssertEqual(target, .unresolvedLocalDocument(url, .fileNotFound))
     }
 
-    func testResolveDoesNotTreatUnsupportedFileNumericSuffixAsLocalDocumentReveal() throws {
+    func testResolveTreatsTextFileNumericSuffixAsLocalDocumentReveal() throws {
         let fixture = try makeFixture(fileName: "config.txt")
         let url = try XCTUnwrap(URL(string: "docs/config.txt:42"))
 
@@ -423,7 +426,14 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(url))
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(
+                path: fixture.markdownPath,
+                lineNumber: 42,
+                placement: .newTab
+            )
+        )
     }
 
     func testResolveRecoversMalformedAbsoluteDirectoryPathWithAppendedProse() throws {

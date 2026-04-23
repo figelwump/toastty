@@ -18,15 +18,18 @@ public struct LocalDocumentClassification: Equatable, Sendable {
     public let format: LocalDocumentFormat
     public let syntaxLanguage: LocalDocumentSyntaxLanguage?
     public let formatLabel: String
+    public let warnsWhenSyntaxHighlightUnavailable: Bool
 
     public init(
         format: LocalDocumentFormat,
         syntaxLanguage: LocalDocumentSyntaxLanguage?,
-        formatLabel: String
+        formatLabel: String,
+        warnsWhenSyntaxHighlightUnavailable: Bool = true
     ) {
         self.format = format
         self.syntaxLanguage = syntaxLanguage
         self.formatLabel = formatLabel
+        self.warnsWhenSyntaxHighlightUnavailable = warnsWhenSyntaxHighlightUnavailable
     }
 }
 
@@ -73,6 +76,12 @@ public enum LocalDocumentClassifier {
         "py": .init(format: .code, syntaxLanguage: .python, formatLabel: "Python"),
         "go": .init(format: .code, syntaxLanguage: .go, formatLabel: "Go"),
         "rs": .init(format: .code, syntaxLanguage: .rust, formatLabel: "Rust"),
+        "txt": .init(
+            format: .code,
+            syntaxLanguage: nil,
+            formatLabel: "Plain Text",
+            warnsWhenSyntaxHighlightUnavailable: false
+        ),
     ]
 
     private static let fallbackClassificationByFormat: [LocalDocumentFormat: LocalDocumentClassification] = [

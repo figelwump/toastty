@@ -9,6 +9,7 @@ enum LocalDocumentPanelTheme: String, Codable, Equatable, Sendable {
 enum LocalDocumentHighlightState: String, Codable, Equatable, Sendable {
     case enabled
     case disabledForLargeFile
+    case plainText
     case unsupportedFormat
     case unavailable
 }
@@ -33,7 +34,7 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     let textScale: Double
 
     init(
-        contractVersion: Int = 6,
+        contractVersion: Int = 7,
         filePath: String?,
         displayName: String,
         format: LocalDocumentFormat = .markdown,

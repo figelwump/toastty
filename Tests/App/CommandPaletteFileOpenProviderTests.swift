@@ -27,11 +27,16 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
 
         XCTAssertEqual(
             Set(results.map(\.title)),
-            ["README.md", "package.json", "index.html"]
+            ["README.md", "package.json", "index.html", "notes.txt"]
         )
         XCTAssertTrue(
             results.contains {
                 $0.destination == .localDocument(filePath: fixture.path("package.json"))
+            }
+        )
+        XCTAssertTrue(
+            results.contains {
+                $0.destination == .localDocument(filePath: fixture.path("notes.txt"))
             }
         )
         XCTAssertTrue(
@@ -100,9 +105,15 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
             ),
             .localDocument(filePath: "/tmp/.gitignore")
         )
-        XCTAssertNil(
+        XCTAssertEqual(
             CommandPaletteFileOpenRouting.destination(
                 forNormalizedFilePath: "/tmp/notes.txt"
+            ),
+            .localDocument(filePath: "/tmp/notes.txt")
+        )
+        XCTAssertNil(
+            CommandPaletteFileOpenRouting.destination(
+                forNormalizedFilePath: "/tmp/archive.zip"
             )
         )
     }

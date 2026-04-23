@@ -346,6 +346,71 @@ struct AppStateCodableTests {
     }
 
     @Test
+    func appStateRoundTripsPlainTextLocalDocumentAsCodeFormat() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let panelID = UUID()
+        let slotID = UUID()
+        let filePath = "/tmp/toastty/notes.txt"
+
+        let tab = WorkspaceTabState(
+            id: tabID,
+            customTitle: "Notes",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .web(
+                    WebPanelState(
+                        definition: .localDocument,
+                        title: "notes.txt",
+                        filePath: filePath,
+                        localDocument: LocalDocumentState(filePath: filePath, format: .code)
+                    )
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 40, y: 60, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: WorkspaceState(
+                    id: workspaceID,
+                    title: "Workspace 1",
+                    selectedTabID: tabID,
+                    tabIDs: [tabID],
+                    tabsByID: [tabID: tab]
+                ),
+            ],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let encoded = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(AppState.self, from: encoded)
+        let decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
+        let decodedTab = try #require(decodedWorkspace.tab(id: tabID))
+
+        guard case .web(let webState) = decodedTab.panels[panelID] else {
+            Issue.record("Expected plain-text local document to decode as web")
+            return
+        }
+
+        #expect(webState.definition == .localDocument)
+        #expect(webState.title == "notes.txt")
+        #expect(webState.filePath == filePath)
+        #expect(webState.localDocument == LocalDocumentState(filePath: filePath, format: .code))
+        try StateValidator.validate(decoded)
+    }
+
+    @Test
     func closedPanelRecordCodablePreservesRestoreTabMetadata() throws {
         let workspaceID = UUID()
         let historyTabID = UUID()

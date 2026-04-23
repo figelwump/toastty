@@ -63,14 +63,14 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         return fileURL.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    private func makeUnsupportedFixture(fileName: String = "README.txt") throws -> String {
+    private func makeUnsupportedFixture(fileName: String = "README.zip") throws -> String {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
             .appendingPathComponent("toastty-local-document-tests-\(UUID().uuidString)", isDirectory: true)
-        let fileURL = rootURL.appendingPathComponent(fileName, conformingTo: .plainText)
+        let fileURL = rootURL.appendingPathComponent(fileName, isDirectory: false)
 
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        try Data("plain text\n".utf8).write(to: fileURL)
+        try Data("zip placeholder\n".utf8).write(to: fileURL)
         addTeardownBlock {
             try? fileManager.removeItem(at: rootURL)
         }
@@ -1016,6 +1016,36 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let workspaceAfterDedupedOpen = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
         XCTAssertEqual(workspaceAfterDedupedOpen.resolvedSelectedTabID, existingTabID)
         XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, existingPanelID)
+    }
+
+    func testCreateLocalDocumentPanelFromCommandOpensTextFilesAsCodeDocuments() throws {
+        let textPath = try makeLocalDocumentFixture(
+            fileName: "README.txt",
+            content: "plain text\n"
+        )
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: LocalDocumentPanelCreateRequest(filePath: textPath)
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        guard case .web(let webState) = workspace.panels[panelID] else {
+            XCTFail("expected focused panel to be local-document-backed")
+            return
+        }
+
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: textPath, format: .code)
+        )
     }
 
     func testCreateLocalDocumentPanelFromCommandRejectsUnsupportedFileExtension() throws {

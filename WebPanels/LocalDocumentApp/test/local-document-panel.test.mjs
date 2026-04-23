@@ -133,11 +133,23 @@ test("highlight status copy distinguishes large files from unsupported formats",
     "utf8"
   );
 
+  assert.match(source, /case "plainText":/);
   assert.match(source, /case "disabledForLargeFile":/);
   assert.match(source, /case "unsupportedFormat":/);
   assert.match(source, /formatLabel === "JSONC"/);
   assert.match(source, /JSONC files yet/);
   assert.match(source, /this format yet/);
+});
+
+test("bootstrap contract includes the plain-text highlight state and version 7", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/bootstrap.ts"),
+    "utf8"
+  );
+
+  assert.match(source, /\| "plainText"/);
+  assert.match(source, /contractVersion: 7;/);
+  assert.match(source, /Expected bootstrap contractVersion 7/);
 });
 
 test("read mode exposes an Open in Default App action through the native bridge", async () => {

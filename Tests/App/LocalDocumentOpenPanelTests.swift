@@ -30,6 +30,7 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
         try withTemporaryDirectory { temporaryDirectoryURL in
             let supportedFiles = [
                 ("README.MD", "# Toastty\n"),
+                ("notes.TXT", "plain text\n"),
                 ("config.YAML", "key: value\n"),
                 ("Toastty.TOML", "key = \"value\"\n"),
                 ("App.TS", "export const toastty = true\n"),
@@ -77,7 +78,6 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
     func testAllowsSelectionRejectsUnsupportedFiles() throws {
         try withTemporaryDirectory { temporaryDirectoryURL in
             let unsupportedFiles = [
-                ("notes.txt", "plain text\n"),
                 ("LICENSE", "no extension\n"),
                 ("archive.zip", "zip placeholder\n"),
             ]
@@ -132,6 +132,8 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
             return "#!/usr/bin/env bash\necho toastty\n"
         case "swift":
             return "struct Toastty {}\n"
+        case "txt":
+            return "plain text\n"
         case "js", "mjs", "cjs", "jsx":
             return "export const toastty = true;\n"
         case "ts", "mts", "cts", "tsx":

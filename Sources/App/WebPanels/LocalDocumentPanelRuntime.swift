@@ -1944,6 +1944,10 @@ private extension LocalDocumentPanelRuntime {
             return .unavailable
         }
 
+        if classification.warnsWhenSyntaxHighlightUnavailable == false {
+            return .plainText
+        }
+
         guard supportsHighlighting(classification: classification) else {
             return .unsupportedFormat
         }
