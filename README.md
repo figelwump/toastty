@@ -27,15 +27,15 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 ## Features
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
-- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions, then forward working sessions; if none remain ahead, later-flagged sessions surface before wrapping back to earlier working sessions.
-- **Later flags** — Mark a managed session for follow-up without pinning or reordering it; the flag stays until you clear it or the session meaningfully advances
+- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions; active sessions then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active sessions, then wrapped working panels.
 - **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
+- **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
+- **Command palette** — Open a keyboard-first palette with `Cmd+Shift+P` to run built-in commands, switch workspaces, launch configured agents, and split with terminal profiles
 - **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
 - **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`
 - **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu, top bar, or command palette, with live sidebar status and notifications
-- **Command palette** — Open a keyboard-first palette with `Cmd+Shift+P` to run built-in commands, switch workspaces, launch configured agents, and split with terminal profiles
+- **Later flags** — Mark a managed session for follow-up without pinning or reordering it; the flag stays until you clear it or the session meaningfully advances
 - **Watch running commands** — Mark a busy terminal with `Cmd+Shift+M` to surface a session-style row, unread badge, and completion notification when that foreground command exits
-- **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
@@ -62,7 +62,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
 | `Cmd+[` | Focus previous pane |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then forward working panels; if none remain ahead, later-flagged panels surface before wrapping back to earlier working panels; flash the current sidebar selection if nothing remains |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels; flash the current sidebar selection if nothing remains |
 | `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
@@ -95,7 +95,7 @@ For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md
 
 Toastty can launch coding agents directly into terminal panels from the `Agent` menu, the top bar, the command palette, or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically, while later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed.
 
-Use `Cmd+Shift+L` to mark a managed session for later follow-up without pinning it; later-flagged sessions only surface after unread, approval/error, and forward-working sessions when you cycle with `Cmd+Shift+A`, and the flag clears automatically when the session meaningfully advances.
+Use `Cmd+Shift+L` to mark a managed session for later follow-up without pinning it; later-flagged sessions join the active `Cmd+Shift+A` rotation after urgent unread or approval/error work, and the flag clears automatically when the session meaningfully advances.
 
 Use `Cmd+Shift+M` to watch a busy foreground terminal command and get the same sidebar row, unread, and completion-notification affordances for non-agent terminal work. Watched commands are intentionally not later-flaggable.
 

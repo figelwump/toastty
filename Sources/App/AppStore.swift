@@ -50,6 +50,30 @@ struct PendingBrowserLocationFocusRequest: Equatable {
     let panelID: UUID
 }
 
+private struct NextActiveCycleAnchor: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let selectedTabID: UUID
+    let focusedPanelID: UUID?
+}
+
+private enum NextActiveCycleSegment: String, Equatable {
+    case workingForward = "fallback_working"
+    case later = "fallback_later"
+    case workingWrapped = "fallback_working_wrapped"
+}
+
+private struct NextActiveCycleEntry: Equatable {
+    let panelID: UUID
+    let segment: NextActiveCycleSegment
+}
+
+private struct NextActiveCycleState: Equatable {
+    let anchor: NextActiveCycleAnchor
+    let entries: [NextActiveCycleEntry]
+    let lastReturnedIndex: Int
+}
+
 struct BrowserPanelCreateRequest: Equatable, Sendable {
     static let defaultPlacement: WebPanelPlacement = .rootRight
 
@@ -207,6 +231,7 @@ final class AppStore: ObservableObject {
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private let windowActivationHandler: WindowActivationHandler
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
+    private var nextActiveCycleState: NextActiveCycleState?
 
     init(
         state: AppState = .bootstrap(),
@@ -262,6 +287,7 @@ final class AppStore: ObservableObject {
 
     func replaceState(_ state: AppState) {
         self.state = state
+        nextActiveCycleState = nil
     }
 
     func window(id windowID: UUID) -> WindowState? {
@@ -582,7 +608,8 @@ final class AppStore: ObservableObject {
     ) -> Bool {
         nextUnreadOrActivePanelTarget(
             preferredWindowID: preferredWindowID,
-            sessionRuntimeStore: sessionRuntimeStore
+            sessionRuntimeStore: sessionRuntimeStore,
+            updatingCycleState: false
         ) != nil
     }
 
@@ -1009,7 +1036,8 @@ final class AppStore: ObservableObject {
 
     private func nextUnreadOrActivePanelTarget(
         preferredWindowID: UUID?,
-        sessionRuntimeStore: SessionRuntimeStore?
+        sessionRuntimeStore: SessionRuntimeStore?,
+        updatingCycleState: Bool = true
     ) -> PanelNavigationTarget? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
               let selectedTabID = selection.workspace.resolvedSelectedTabID else {
@@ -1022,23 +1050,31 @@ final class AppStore: ObservableObject {
             tabID: selectedTabID,
             focusedPanelID: selection.workspace.focusedPanelID
         ) {
+            if updatingCycleState {
+                nextActiveCycleState = nil
+            }
             logNextUnreadOrActivePanelResolution(
                 selection: selection,
                 selectedTabID: selectedTabID,
                 resolution: "unread",
                 target: unreadTarget,
-                sessionRuntimeStore: sessionRuntimeStore
+                sessionRuntimeStore: sessionRuntimeStore,
+                cycleResetReason: "unread_preemption"
             )
             return unreadTarget
         }
 
         guard let sessionRuntimeStore else {
+            if updatingCycleState {
+                nextActiveCycleState = nil
+            }
             logNextUnreadOrActivePanelResolution(
                 selection: selection,
                 selectedTabID: selectedTabID,
                 resolution: "none",
                 target: nil,
-                sessionRuntimeStore: nil
+                sessionRuntimeStore: nil,
+                cycleResetReason: "no_session_runtime_store"
             )
             return nil
         }
@@ -1051,66 +1087,35 @@ final class AppStore: ObservableObject {
             selectedTabID: selectedTabID,
             matchingPanelIDs: attentionPanelIDs
         ) {
+            if updatingCycleState {
+                nextActiveCycleState = nil
+            }
             logNextUnreadOrActivePanelResolution(
                 selection: selection,
                 selectedTabID: selectedTabID,
                 resolution: "fallback_attention",
                 target: target,
-                sessionRuntimeStore: sessionRuntimeStore
+                sessionRuntimeStore: sessionRuntimeStore,
+                cycleResetReason: "attention_preemption"
             )
             return target
         }
 
-        let workingPanelIDs = sessionRuntimeStore.activePanelIDs(
-            matching: Self.nextUnreadOrWorkingFallbackStatusKinds
-        )
-        if let target = nextUnreadOrActiveFallbackTarget(
+        let activeCycleResolution = nextUnreadOrActiveCycleTarget(
             selection: selection,
             selectedTabID: selectedTabID,
-            matchingPanelIDs: workingPanelIDs,
-            includeCurrentWorkspaceWrap: false
-        ) {
-            logNextUnreadOrActivePanelResolution(
-                selection: selection,
-                selectedTabID: selectedTabID,
-                resolution: "fallback_working",
-                target: target,
-                sessionRuntimeStore: sessionRuntimeStore
-            )
-            return target
-        }
-
-        let laterPanelIDs = sessionRuntimeStore.activeLaterPanelIDs()
-        if let target = nextUnreadOrActiveFallbackTarget(
-            selection: selection,
-            selectedTabID: selectedTabID,
-            matchingPanelIDs: laterPanelIDs
-        ) {
-            logNextUnreadOrActivePanelResolution(
-                selection: selection,
-                selectedTabID: selectedTabID,
-                resolution: "fallback_later",
-                target: target,
-                sessionRuntimeStore: sessionRuntimeStore
-            )
-            return target
-        }
-
-        // Let later-flagged sessions surface before we wrap back to already
-        // visited working sessions in the current workspace.
-        let target = nextUnreadOrActiveFallbackTarget(
-            selection: selection,
-            selectedTabID: selectedTabID,
-            matchingPanelIDs: workingPanelIDs
+            sessionRuntimeStore: sessionRuntimeStore,
+            updatingCycleState: updatingCycleState
         )
         logNextUnreadOrActivePanelResolution(
             selection: selection,
             selectedTabID: selectedTabID,
-            resolution: target == nil ? "none" : "fallback_working_wrapped",
-            target: target,
-            sessionRuntimeStore: sessionRuntimeStore
+            resolution: activeCycleResolution.resolution,
+            target: activeCycleResolution.target,
+            sessionRuntimeStore: sessionRuntimeStore,
+            cycleResetReason: activeCycleResolution.cycleResetReason
         )
-        return target
+        return activeCycleResolution.target
     }
 
     private func nextUnreadOrActiveFallbackTarget(
@@ -1132,6 +1137,171 @@ final class AppStore: ObservableObject {
         ) { _, panelID in
             matchingPanelIDs.contains(panelID)
         }
+    }
+
+    private func nextUnreadOrActiveCycleTarget(
+        selection: WindowCommandSelection,
+        selectedTabID: UUID,
+        sessionRuntimeStore: SessionRuntimeStore,
+        updatingCycleState: Bool
+    ) -> (target: PanelNavigationTarget?, resolution: String, cycleResetReason: String?) {
+        let currentAnchor = NextActiveCycleAnchor(
+            windowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            selectedTabID: selectedTabID,
+            focusedPanelID: selection.workspace.focusedPanelID
+        )
+        var cycleResetReason: String?
+
+        if let cycleState = nextActiveCycleState {
+            if let expectedCurrentTarget = panelNavigationTarget(for: cycleState.entries[cycleState.lastReturnedIndex].panelID),
+               expectedCurrentTarget.windowID == selection.windowID,
+               expectedCurrentTarget.workspaceID == selection.workspace.id,
+               expectedCurrentTarget.tabID == selectedTabID,
+               expectedCurrentTarget.panelID == selection.workspace.focusedPanelID {
+                let rebuiltEntries = buildNextActiveCycleEntries(
+                    anchor: cycleState.anchor,
+                    sessionRuntimeStore: sessionRuntimeStore
+                )
+                if rebuiltEntries == cycleState.entries {
+                    let nextIndex = cycleState.lastReturnedIndex < cycleState.entries.count - 1
+                        ? cycleState.lastReturnedIndex + 1
+                        : 0
+                    let nextEntry = cycleState.entries[nextIndex]
+                    if let target = panelNavigationTarget(for: nextEntry.panelID) {
+                        if updatingCycleState {
+                            nextActiveCycleState = NextActiveCycleState(
+                                anchor: cycleState.anchor,
+                                entries: cycleState.entries,
+                                lastReturnedIndex: nextIndex
+                            )
+                        }
+                        return (target, nextEntry.segment.rawValue, nil)
+                    }
+                    cycleResetReason = "cycle_target_missing"
+                } else {
+                    cycleResetReason = "cycle_entries_changed"
+                }
+            } else {
+                cycleResetReason = "focus_changed"
+            }
+            if updatingCycleState {
+                nextActiveCycleState = nil
+            }
+        }
+
+        let entries = buildNextActiveCycleEntries(
+            anchor: currentAnchor,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+        guard let firstEntry = entries.first,
+              let target = panelNavigationTarget(for: firstEntry.panelID) else {
+            return (nil, "none", cycleResetReason)
+        }
+
+        if updatingCycleState {
+            nextActiveCycleState = NextActiveCycleState(
+                anchor: currentAnchor,
+                entries: entries,
+                lastReturnedIndex: 0
+            )
+        }
+        return (target, firstEntry.segment.rawValue, cycleResetReason)
+    }
+
+    private func buildNextActiveCycleEntries(
+        anchor: NextActiveCycleAnchor,
+        sessionRuntimeStore: SessionRuntimeStore
+    ) -> [NextActiveCycleEntry] {
+        let workingPanelIDs = sessionRuntimeStore.activePanelIDs(
+            matching: Self.nextUnreadOrWorkingFallbackStatusKinds
+        )
+        let laterPanelIDs = sessionRuntimeStore.activeLaterPanelIDs()
+        var entries: [NextActiveCycleEntry] = []
+        var seenPanelIDs = Set<UUID>()
+
+        let forwardWorkingTargets = orderedNextUnreadOrActiveFallbackTargets(
+            anchor: anchor,
+            matchingPanelIDs: workingPanelIDs,
+            includeCurrentWorkspaceWrap: false
+        )
+        entries.append(contentsOf: forwardWorkingTargets.map { target in
+            seenPanelIDs.insert(target.panelID)
+            return NextActiveCycleEntry(panelID: target.panelID, segment: .workingForward)
+        })
+
+        let laterTargets = orderedNextUnreadOrActiveFallbackTargets(
+            anchor: anchor,
+            matchingPanelIDs: laterPanelIDs.subtracting(seenPanelIDs)
+        )
+        entries.append(contentsOf: laterTargets.map { target in
+            seenPanelIDs.insert(target.panelID)
+            return NextActiveCycleEntry(panelID: target.panelID, segment: .later)
+        })
+
+        let wrappedWorkingTargets = orderedNextUnreadOrActiveFallbackTargets(
+            anchor: anchor,
+            matchingPanelIDs: workingPanelIDs.subtracting(seenPanelIDs)
+        )
+        entries.append(contentsOf: wrappedWorkingTargets.map { target in
+            seenPanelIDs.insert(target.panelID)
+            return NextActiveCycleEntry(panelID: target.panelID, segment: .workingWrapped)
+        })
+
+        if entries.isEmpty == false,
+           let focusedPanelID = anchor.focusedPanelID,
+           seenPanelIDs.contains(focusedPanelID) == false {
+            if workingPanelIDs.contains(focusedPanelID) {
+                entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .workingWrapped))
+            } else if laterPanelIDs.contains(focusedPanelID) {
+                entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .later))
+            }
+        }
+
+        return entries
+    }
+
+    private func orderedNextUnreadOrActiveFallbackTargets(
+        anchor: NextActiveCycleAnchor,
+        matchingPanelIDs: Set<UUID>,
+        includeCurrentWorkspaceWrap: Bool = true
+    ) -> [PanelNavigationTarget] {
+        guard matchingPanelIDs.isEmpty == false else {
+            return []
+        }
+
+        var remainingPanelIDs = matchingPanelIDs
+        var orderedTargets: [PanelNavigationTarget] = []
+
+        while let target = state.nextMatchingPanel(
+            fromWindowID: anchor.windowID,
+            workspaceID: anchor.workspaceID,
+            tabID: anchor.selectedTabID,
+            focusedPanelID: anchor.focusedPanelID,
+            includeCurrentWorkspaceWrap: includeCurrentWorkspaceWrap,
+            matches: { _, panelID in
+            remainingPanelIDs.contains(panelID)
+            }
+        ) {
+            orderedTargets.append(target)
+            remainingPanelIDs.remove(target.panelID)
+        }
+
+        return orderedTargets
+    }
+
+    private func panelNavigationTarget(for panelID: UUID) -> PanelNavigationTarget? {
+        guard let selection = state.workspaceSelection(containingPanelID: panelID),
+              let tabID = selection.workspace.tabID(containingPanelID: panelID) else {
+            return nil
+        }
+
+        return PanelNavigationTarget(
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            tabID: tabID,
+            panelID: panelID
+        )
     }
 
     private func createdBrowserPanelID(
@@ -1200,7 +1370,8 @@ final class AppStore: ObservableObject {
         selectedTabID: UUID,
         resolution: String,
         target: PanelNavigationTarget?,
-        sessionRuntimeStore: SessionRuntimeStore?
+        sessionRuntimeStore: SessionRuntimeStore?,
+        cycleResetReason: String?
     ) {
         let selectedTabUnreadPanelIDs = selection.workspace.tab(id: selectedTabID)?.unreadPanelIDs ?? []
         let workspaceUnreadPanelIDs = selection.workspace.unreadPanelIDs
@@ -1248,6 +1419,19 @@ final class AppStore: ObservableObject {
             "working_panel_statuses": workingPanelStatuses.isEmpty ? "none" : workingPanelStatuses,
             "later_panel_ids": laterPanelIDs.isEmpty ? "none" : laterPanelIDs,
         ]
+        if let cycleState = nextActiveCycleState {
+            metadata["active_cycle_anchor_window_id"] = cycleState.anchor.windowID.uuidString
+            metadata["active_cycle_anchor_workspace_id"] = cycleState.anchor.workspaceID.uuidString
+            metadata["active_cycle_anchor_tab_id"] = cycleState.anchor.selectedTabID.uuidString
+            metadata["active_cycle_anchor_focused_panel_id"] = cycleState.anchor.focusedPanelID?.uuidString ?? "none"
+            metadata["active_cycle_last_returned_index"] = String(cycleState.lastReturnedIndex)
+            metadata["active_cycle_entries"] = cycleState.entries.map {
+                "\($0.panelID.uuidString):\($0.segment.rawValue)"
+            }.joined(separator: ",")
+        }
+        if let cycleResetReason {
+            metadata["active_cycle_reset_reason"] = cycleResetReason
+        }
 
         if let target {
             metadata["target_window_id"] = target.windowID.uuidString
