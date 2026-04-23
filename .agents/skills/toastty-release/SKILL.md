@@ -18,16 +18,17 @@ Use this workflow when the user asks to cut or prepare a Toastty release build a
 5. Verify that `artifacts/release/<version>-<build>/release-metadata.env`, `ghostty-metadata.env`, `sparkle-metadata.env`, and `Toastty-<version>.dmg` all exist and are non-empty, then read the metadata files.
 6. Confirm `RELEASE_SOURCE_COMMIT` is available in the local clone before inspecting history or writing notes.
 7. Use `.agents/skills/toastty-release/assets/release-notes-template.md` as the starting structure for `RELEASE_NOTES_PATH`.
-8. Inspect the Toastty diff and commit history from `RELEASE_PREVIOUS_TAG` to `RELEASE_SOURCE_COMMIT`.
-9. Write `release-notes.md` at `RELEASE_NOTES_PATH`, grounded in the recorded metadata rather than the current `HEAD`.
-10. Let the user review or edit `release-notes.md` if they want changes before publication.
-11. Hand off the generated release directory for later publication:
+8. Read several prior `artifacts/release/**/release-notes.md` files, prioritizing the most recent releases, so the new notes follow Toastty's established house style.
+9. Inspect the Toastty diff and commit history from `RELEASE_PREVIOUS_TAG` to `RELEASE_SOURCE_COMMIT`.
+10. Write `release-notes.md` at `RELEASE_NOTES_PATH`, grounded in the recorded metadata rather than the current `HEAD`.
+11. Let the user review or edit `release-notes.md` if they want changes before publication.
+12. Hand off the generated release directory for later publication:
    - `release-metadata.env`
    - `ghostty-metadata.env`
    - `sparkle-metadata.env`
    - `release-notes.md`
    - `Toastty-<version>.dmg`
-12. Stop after the build-and-draft handoff unless the user explicitly asks to continue into publication. If they do, open `../toastty-publish/SKILL.md` and follow that workflow.
+13. Stop after the build-and-draft handoff unless the user explicitly asks to continue into publication. If they do, open `../toastty-publish/SKILL.md` and follow that workflow.
 
 ## Important invariants
 
@@ -62,15 +63,37 @@ When the source path is inside a Ghostty git checkout, the installer auto-detect
 ## Release notes
 
 - Use [.agents/skills/toastty-release/assets/release-notes-template.md](assets/release-notes-template.md) as the initial outline. Fill in the `{{placeholder}}` tokens rather than copying them literally.
+- Before drafting, read several existing `artifacts/release/**/release-notes.md` files, prioritizing the most recent releases, and mirror that structure and voice unless the user asks for a deliberate format change.
 - `release-metadata.env` is the source of truth for:
   - `RELEASE_SOURCE_COMMIT`
   - `RELEASE_PREVIOUS_TAG`
   - `RELEASE_PREVIOUS_COMMIT`
   - `RELEASE_NOTES_PATH`
 - Use `ghostty-metadata.env` or the mirrored Ghostty fields in `release-metadata.env` so the notes include the shipped Ghostty commit and build flags.
-- Ground the `Changes` section in the actual diff and commit history between the previous release and the recorded release commit.
+- Follow the established Toastty section order unless the release is a first-public-build special case:
+  - `# v<version>`
+  - `Release date: <Month D, YYYY>`
+  - `Toastty commit: \`<short-sha>\``
+  - `Previous release: \`<tag>\`` or `Previous release: First public release`
+  - optional `## Highlights`
+  - `## Changes`
+  - `## Upgrade Notes`
+  - `## Embedded Ghostty`
+- Prefer the recent house style over the older early-release notes:
+  - concise, direct, product-facing prose
+  - lightly enthusiastic only when a flagship feature genuinely warrants it
+  - minimal filler, minimal implementation jargon, no commit-log dump
+- Use `## Highlights` only when the release has multiple headline features or a broader product shift. For narrower releases, skip `Highlights` and go straight to `Changes`.
+- Represent changes since the last version as a curated summary of the actual diff, not a chronological list of commits:
+  - group related commits into a single user-facing bullet
+  - order bullets by user impact, not commit order
+  - lead with new capabilities or behavior changes, then notable fixes and polish
+  - explain the user-visible effect, not the implementation mechanics, unless the mechanics matter for operators
+- Default to short `## Changes` bullets. Use short `###` subsections inside `Highlights` only when a major release needs a little extra explanation, config context, or a short example.
+- Mention concrete shortcuts, menu items, config files, CLI commands, or paths inline with backticks when they help the reader understand what changed.
+- Use `## Upgrade Notes` for migration steps, changed shortcuts, config additions, shell-integration refreshes, or behavior caveats. If there is nothing actionable, explicitly say that no manual migration is required for the release.
 - If there is no previous tag, summarize the shipped functionality from the reachable history for `RELEASE_SOURCE_COMMIT`.
-- It is fine for the agent to draft the prose itself, but the content should stay anchored to the recorded metadata and git history.
+- It is fine for the agent to draft the prose itself, but the content should stay anchored to the recorded metadata, release diff, and prior release-note style.
 - Keep the notes focused on shipped behavior, upgrade-relevant fixes, and operator-relevant build provenance.
 
 ## Validation
