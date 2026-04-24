@@ -283,6 +283,44 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertNil(targetIndex)
     }
 
+    func testWorkspaceInsertionIndicatorFrameUsesHeaderHorizontalBounds() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredHeaderFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 42),
+                third: CGRect(x: 8, y: 84, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            targetIndex: 0
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 0, width: 244, height: 2))
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredHeaderFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 42),
+                third: CGRect(x: 8, y: 84, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            targetIndex: 2
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 126, width: 244, height: 2))
+    }
+
     func testWorkspaceDragActivationUsesVerticalThreshold() {
         XCTAssertFalse(
             SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 30, height: 3.9))

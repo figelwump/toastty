@@ -91,12 +91,12 @@ struct SidebarView: View {
         return measuredFrames.count
     }
 
-    nonisolated static func workspaceInsertionIndicatorY(
+    nonisolated static func workspaceInsertionIndicatorFrame(
         orderedWorkspaceIDs: [UUID],
         measuredHeaderFramesByID: [UUID: CGRect],
         draggedWorkspaceID: UUID,
         targetIndex: Int
-    ) -> CGFloat? {
+    ) -> CGRect? {
         let measuredFrames = orderedWorkspaceIDs.compactMap { workspaceID -> CGRect? in
             guard workspaceID != draggedWorkspaceID else { return nil }
             return measuredHeaderFramesByID[workspaceID]
@@ -105,13 +105,19 @@ struct SidebarView: View {
         guard measuredFrames.isEmpty == false else { return nil }
         guard targetIndex >= 0, targetIndex <= measuredFrames.count else { return nil }
 
+        let referenceFrame: CGRect
+        let y: CGFloat
         if targetIndex == 0 {
-            return measuredFrames[0].minY
+            referenceFrame = measuredFrames[0]
+            y = referenceFrame.minY
+        } else if targetIndex == measuredFrames.count {
+            referenceFrame = measuredFrames[measuredFrames.count - 1]
+            y = referenceFrame.maxY
+        } else {
+            referenceFrame = measuredFrames[targetIndex]
+            y = referenceFrame.minY
         }
-        if targetIndex == measuredFrames.count {
-            return measuredFrames[measuredFrames.count - 1].maxY
-        }
-        return measuredFrames[targetIndex].minY
+        return CGRect(x: referenceFrame.minX, y: y, width: referenceFrame.width, height: 2)
     }
 
     init(
@@ -170,7 +176,7 @@ struct SidebarView: View {
                     .overlay(alignment: .topLeading) {
                         if let activeWorkspaceDrag,
                            activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex,
-                           let indicatorY = Self.workspaceInsertionIndicatorY(
+                           let indicatorFrame = Self.workspaceInsertionIndicatorFrame(
                                orderedWorkspaceIDs: store.window(id: windowID)?.workspaceIDs ?? [],
                                measuredHeaderFramesByID: measuredWorkspaceHeaderFramesByID,
                                draggedWorkspaceID: activeWorkspaceDrag.workspaceID,
@@ -178,9 +184,11 @@ struct SidebarView: View {
                            ) {
                             Rectangle()
                                 .fill(ToastyTheme.accent)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 2)
-                                .offset(y: indicatorY - 1)
+                                .frame(width: indicatorFrame.width, height: indicatorFrame.height)
+                                .offset(
+                                    x: indicatorFrame.minX,
+                                    y: indicatorFrame.minY - (indicatorFrame.height / 2)
+                                )
                                 .allowsHitTesting(false)
                         }
                     }
