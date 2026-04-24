@@ -332,6 +332,10 @@ struct SidebarView: View {
         orderedWorkspaceIDs: [UUID]
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        let accessibilityLabel = Self.workspaceAccessibilityLabel(
+            for: workspace,
+            isSelected: isSelected
+        )
 
         return workspaceRowChrome(
             workspaceID: workspaceID,
@@ -387,7 +391,7 @@ struct SidebarView: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel(workspace.title)
+                .accessibilityLabel(accessibilityLabel)
                 .accessibilityAction {
                     handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
                 }
@@ -1378,6 +1382,16 @@ struct SidebarView: View {
     }
 
     static let workspaceNewBadgeLabel = "New"
+
+    static func workspaceAccessibilityLabel(
+        for workspace: WorkspaceState,
+        isSelected: Bool
+    ) -> String {
+        guard showsNewWorkspaceBadge(isSelected: isSelected, hasBeenVisited: workspace.hasBeenVisited) else {
+            return workspace.title
+        }
+        return "\(workspace.title) \(workspaceNewBadgeLabel)"
+    }
 
     static func showsNewWorkspaceBadge(isSelected: Bool, hasBeenVisited: Bool) -> Bool {
         isSelected == false && hasBeenVisited == false

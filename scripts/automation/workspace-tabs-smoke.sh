@@ -13,6 +13,8 @@ ARTIFACTS_DIR="${ARTIFACTS_DIR:-$DEV_RUN_ROOT/artifacts}"
 TOASTTY_RUNTIME_HOME="${TOASTTY_RUNTIME_HOME:-$DEV_RUN_ROOT/runtime-home}"
 SOCKET_TOKEN="$(printf '%s' "$RUN_ID" | cksum | awk '{printf "%08x", $1}')"
 SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/tt-tabs-${SOCKET_TOKEN}.sock}"
+SOCKET_REQUEST_TIMEOUT="${TOASTTY_WORKSPACE_TABS_SOCKET_TIMEOUT:-2}"
+SCREENSHOT_REQUEST_TIMEOUT="${TOASTTY_WORKSPACE_TABS_SCREENSHOT_TIMEOUT:-10}"
 ARCH="${ARCH:-$(uname -m)}"
 if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   ARCH="arm64"
@@ -169,6 +171,7 @@ restore_previous_front_app
 send_request() {
   local command="$1"
   local payload="$2"
+  local timeout="${3:-$SOCKET_REQUEST_TIMEOUT}"
   local request_id
   request_id="$(uuidgen)"
 
@@ -176,7 +179,7 @@ send_request() {
   request="{\"protocolVersion\":\"1.0\",\"kind\":\"request\",\"requestID\":\"${request_id}\",\"command\":\"${command}\",\"payload\":${payload}}"
 
   local response
-  response="$(printf '%s\n' "$request" | nc -U -w 2 "$SOCKET_PATH")"
+  response="$(printf '%s\n' "$request" | nc -U -w "$timeout" "$SOCKET_PATH")"
   if [[ -z "$response" ]]; then
     echo "error: no response for command ${command}" >&2
     exit 1
@@ -246,7 +249,10 @@ capture_screenshot() {
   local step="$1"
   local fixture_name="${2:-$FIXTURE}"
   local response
-  response="$(send_request "automation.capture_screenshot" "{\"step\":\"${step}\",\"fixture\":\"${fixture_name}\"}")"
+  response="$(send_request \
+    "automation.capture_screenshot" \
+    "{\"step\":\"${step}\",\"fixture\":\"${fixture_name}\"}" \
+    "$SCREENSHOT_REQUEST_TIMEOUT")"
   local path
   path="$(extract_string_field "$response" "path")"
   if [[ -z "$path" || ! -f "$path" ]]; then
