@@ -553,7 +553,9 @@ struct ToasttyCommandMenus: Commands {
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Show Scratchpad For Current Session") {
+            Divider()
+
+            Button(ToasttyBuiltInCommand.showScratchpadForCurrentSession.title) {
                 showScratchpadForCurrentSession(preferredWindowID)
             }
             .disabled(canShowScratchpadForCurrentSession == false)

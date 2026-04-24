@@ -119,6 +119,9 @@ V1 should include one user-facing backup action:
 
 - `Show Scratchpad For Current Session`
 
+Expose this action from the Workspace menu and the command palette. Do not add a
+standalone `New Scratchpad` action in v1.
+
 Behavior:
 
 - if a scratchpad is open for the current session, focus it
