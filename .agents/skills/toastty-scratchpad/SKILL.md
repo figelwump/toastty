@@ -1,6 +1,6 @@
 ---
 name: toastty-scratchpad
-description: Use this skill when an agent should show information visually in a Toastty Scratchpad panel - architecture diagrams, data/control flow, UI/UX wireframes, state machines, timelines, comparison grids, visual plans, spatial workflows, or text that is clearer when laid out visually. Use when the input is current thread context, a referenced file, or a user-provided prompt asking for a visual Scratchpad artifact.
+description: Use this skill when an agent should show information visually in a Toastty Scratchpad panel - architecture diagrams, data/control flow, data visualization, charts, tables, UI/UX wireframes, state machines, timelines, comparison grids, visual plans, spatial workflows, or text that is clearer when laid out visually. Use when the input is current thread context, a referenced file, or a user-provided prompt asking for a visual Scratchpad artifact.
 ---
 
 # Toastty Scratchpad
@@ -17,6 +17,7 @@ Use Scratchpad when a visual surface will communicate better than terminal prose
 
 - architecture maps and module boundaries
 - data flow, request flow, lifecycle flow, and state machines
+- data visualization, charts, tables, dashboards, metric cards, trend views, distributions, and ranked comparisons
 - UI/UX wireframes, screen flows, layout comparisons, and interaction maps
 - timelines, sequencing, dependency graphs, risk maps, and test matrices
 - visual summaries of text when grouping, hierarchy, or spatial layout adds clarity
