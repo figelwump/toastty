@@ -39,6 +39,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceEqualizeSplits = "workspace.equalize-splits"
     case panelCreateBrowser = "panel.create.browser"
     case panelCreateLocalDocument = "panel.create.local-document"
+    case panelScratchpadSetContent = "panel.scratchpad.set-content"
     case panelLocalDocumentSearchStart = "panel.local-document.search.start"
     case panelLocalDocumentSearchUpdateQuery = "panel.local-document.search.update-query"
     case panelLocalDocumentSearchNext = "panel.local-document.search.next"
@@ -80,6 +81,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return ["workspace.close-focused-panel"]
         case .panelCreateLocalDocument:
             return ["panel.create.localDocument", "panel.create.markdown"]
+        case .panelScratchpadSetContent:
+            return ["panel.scratchpad.setContent"]
         case .panelLocalDocumentSearchStart:
             return ["panel.markdown.search.start"]
         case .panelLocalDocumentSearchUpdateQuery:
@@ -222,6 +225,21 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(id: rawValue, kind: .action, summary: "Create a browser panel.", selectors: [.windowID, .workspaceID], parameters: [.placement(required: false), .url(required: false)])
         case .panelCreateLocalDocument:
             return .init(id: rawValue, kind: .action, summary: "Open a local document panel.", selectors: [.windowID, .workspaceID], parameters: [.filePath(required: true), .placement(required: false)], aliases: aliases)
+        case .panelScratchpadSetContent:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Create or update the Scratchpad linked to an active session.",
+                selectors: [],
+                parameters: [
+                    .sessionID(required: true),
+                    .filePath(summary: "HTML file to render in the session Scratchpad.", required: false),
+                    .content(required: false),
+                    .title(required: false),
+                    .expectedRevision(required: false),
+                ],
+                aliases: aliases
+            )
         case .panelLocalDocumentSearchStart:
             return .init(id: rawValue, kind: .action, summary: "Show find for a local-document panel.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         case .panelLocalDocumentSearchUpdateQuery:
@@ -270,6 +288,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case terminalVisibleText = "terminal.visible-text"
     case panelLocalDocumentState = "panel.local-document.state"
     case panelBrowserState = "panel.browser.state"
+    case panelScratchpadState = "panel.scratchpad.state"
 
     static func resolve(_ rawValue: String) -> Self? {
         if let query = Self(rawValue: rawValue) {
@@ -282,6 +301,8 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
         switch self {
         case .panelLocalDocumentState:
             return ["panel.markdown.state"]
+        case .panelScratchpadState:
+            return ["panel.scratchpadState"]
         default:
             return []
         }
@@ -299,6 +320,8 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(id: rawValue, kind: .query, summary: "Return local-document panel state.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         case .panelBrowserState:
             return .init(id: rawValue, kind: .query, summary: "Return browser panel state.", selectors: [.windowID, .workspaceID, .panelID])
+        case .panelScratchpadState:
+            return .init(id: rawValue, kind: .query, summary: "Return Scratchpad panel state.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         }
     }
 }
@@ -333,6 +356,18 @@ private extension AppControlParameterDescriptor {
         .init(name: "filePath", summary: "Local file path to open.", valueType: .string, required: required)
     }
 
+    static func filePath(summary: String, required: Bool) -> Self {
+        .init(name: "filePath", summary: summary, valueType: .string, required: required)
+    }
+
+    static func content(required: Bool) -> Self {
+        .init(name: "content", summary: "Inline content payload. Use filePath for non-trivial HTML.", valueType: .string, required: required)
+    }
+
+    static func expectedRevision(required: Bool) -> Self {
+        .init(name: "expectedRevision", summary: "Reject the write unless the current document revision matches this value.", valueType: .integer, required: required)
+    }
+
     static func files(required: Bool) -> Self {
         .init(name: "files", summary: "Image file path. Repeat to provide multiple paths.", valueType: .string, required: required, repeatable: true)
     }
@@ -359,6 +394,10 @@ private extension AppControlParameterDescriptor {
 
     static func submit(required: Bool) -> Self {
         .init(name: "submit", summary: "Submit the text after sending it.", valueType: .boolean, required: required)
+    }
+
+    static func sessionID(required: Bool) -> Self {
+        .init(name: "sessionID", summary: "Active managed session ID.", valueType: .string, required: required)
     }
 
     static func tabID(required: Bool) -> Self {

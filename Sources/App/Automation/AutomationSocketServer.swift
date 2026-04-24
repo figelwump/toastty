@@ -1113,6 +1113,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 args: payload
             )
 
+        case "automation.scratchpad_panel_state":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.panelScratchpadState.rawValue,
+                args: payload
+            )
+
         case "automation.dump_state":
             try requireAutomationMode(for: command)
             flushCoalescedUpdates(at: Date())

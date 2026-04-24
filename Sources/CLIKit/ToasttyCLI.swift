@@ -374,7 +374,7 @@ public enum ToasttyCLI {
         case "run":
             let parsed = try parseCommandArguments(
                 remainingArguments,
-                valueOptions: ["--window", "--workspace", "--panel"]
+                valueOptions: ["--window", "--workspace", "--panel", "--stdin"]
             )
             guard let id = parsed.positionals.first, id.isEmpty == false else {
                 throw ToasttyCLIError.usage("\(kind.rawValue) run requires <id>\n\n\(usage)")
@@ -394,6 +394,13 @@ public enum ToasttyCLI {
             for argument in parsed.positionals.dropFirst() {
                 let assignment = try parseKeyValueAssignment(argument)
                 recordAppControlValue(.string(assignment.value), for: assignment.key, in: &args)
+            }
+            if let stdinKey = parsed.singleValue("--stdin") {
+                let stdinData = FileHandle.standardInput.readDataToEndOfFile()
+                guard let stdinValue = String(data: stdinData, encoding: .utf8) else {
+                    throw ToasttyCLIError.usage("stdin must be valid UTF-8\n\n\(usage)")
+                }
+                recordAppControlValue(.string(stdinValue), for: stdinKey, in: &args)
             }
 
             return .appControlRun(kind: kind, id: id, args: args)

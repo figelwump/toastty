@@ -29,6 +29,13 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     private var localDocumentRuntimeByPanelID: [UUID: LocalDocumentPanelRuntime] = [:]
     private var localDocumentRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
     private var pendingLocalDocumentRevealLineByPanelID: [UUID: Int] = [:]
+    private var scratchpadRuntimeByPanelID: [UUID: ScratchpadPanelRuntime] = [:]
+    private var scratchpadRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
+    let scratchpadDocumentStore: ScratchpadDocumentStore
+
+    init(scratchpadDocumentStore: ScratchpadDocumentStore = ScratchpadDocumentStore()) {
+        self.scratchpadDocumentStore = scratchpadDocumentStore
+    }
 
     func bind(store: AppStore) {
         if let existingStore = self.store {
@@ -114,6 +121,34 @@ final class WebPanelRuntimeRegistry: ObservableObject {
 
     func loadedLocalDocumentRuntime(for panelID: UUID) -> LocalDocumentPanelRuntime? {
         localDocumentRuntimeByPanelID[panelID]
+    }
+
+    func scratchpadRuntime(for panelID: UUID) -> ScratchpadPanelRuntime {
+        if let runtime = scratchpadRuntimeByPanelID[panelID] {
+            return runtime
+        }
+
+        let runtime = ScratchpadPanelRuntime(
+            panelID: panelID,
+            documentStore: scratchpadDocumentStore,
+            metadataDidChange: { [weak self] panelID, title, url in
+                guard let self else { return }
+                _ = self.store?.send(.updateWebPanelMetadata(panelID: panelID, title: title, url: url))
+            },
+            interactionDidRequestFocus: { [weak self] panelID in
+                guard let self else { return }
+                _ = self.store?.focusPanel(containing: panelID)
+            }
+        )
+        scratchpadRuntimeByPanelID[panelID] = runtime
+        scratchpadRuntimeObservationByPanelID[panelID] = runtime.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        return runtime
+    }
+
+    func loadedScratchpadRuntime(for panelID: UUID) -> ScratchpadPanelRuntime? {
+        scratchpadRuntimeByPanelID[panelID]
     }
 
     func canEnterEditingLocalDocumentPanel(panelID: UUID) -> Bool {
@@ -270,6 +305,14 @@ private extension WebPanelRuntimeRegistry {
         pendingLocalDocumentRevealLineByPanelID = pendingLocalDocumentRevealLineByPanelID.filter { panelID, _ in
             liveLocalDocumentPanelIDs.contains(panelID)
         }
+
+        let liveScratchpadPanelIDs = liveScratchpadPanelIDs(in: state)
+        scratchpadRuntimeByPanelID = scratchpadRuntimeByPanelID.filter { panelID, _ in
+            liveScratchpadPanelIDs.contains(panelID)
+        }
+        scratchpadRuntimeObservationByPanelID = scratchpadRuntimeObservationByPanelID.filter { panelID, _ in
+            liveScratchpadPanelIDs.contains(panelID)
+        }
     }
 
     func liveBrowserPanelIDs(in state: AppState) -> Set<UUID> {
@@ -292,6 +335,20 @@ private extension WebPanelRuntimeRegistry {
                 for (panelID, panelState) in tab.panels {
                     guard case .web(let webState) = panelState,
                           webState.definition == .localDocument else {
+                        continue
+                    }
+                    result.insert(panelID)
+                }
+            }
+        }
+    }
+
+    func liveScratchpadPanelIDs(in state: AppState) -> Set<UUID> {
+        state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
+            for tab in workspace.orderedTabs {
+                for (panelID, panelState) in tab.panels {
+                    guard case .web(let webState) = panelState,
+                          webState.definition == .scratchpad else {
                         continue
                     }
                     result.insert(panelID)

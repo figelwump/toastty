@@ -16,6 +16,7 @@ final class AppControlExecutor {
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
     private let reloadConfigurationAction: (@MainActor () -> Void)?
+    private let scratchpadDocumentStore: ScratchpadDocumentStore
 
     init(
         store: AppStore,
@@ -24,7 +25,8 @@ final class AppControlExecutor {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
-        reloadConfigurationAction: (@MainActor () -> Void)?
+        reloadConfigurationAction: (@MainActor () -> Void)?,
+        scratchpadDocumentStore: ScratchpadDocumentStore? = nil
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
@@ -33,6 +35,7 @@ final class AppControlExecutor {
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
         self.reloadConfigurationAction = reloadConfigurationAction
+        self.scratchpadDocumentStore = scratchpadDocumentStore ?? webPanelRuntimeRegistry.scratchpadDocumentStore
     }
 
     func listActionDescriptors() -> [AppControlCommandDescriptor] {
@@ -296,6 +299,9 @@ final class AppControlExecutor {
                 result: nil
             )
 
+        case .panelScratchpadSetContent:
+            return try setScratchpadContent(args: args)
+
         case .panelLocalDocumentSearchStart:
             let resolved = try resolveLocalDocumentTarget(payload: args)
             let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
@@ -538,6 +544,17 @@ final class AppControlExecutor {
                 webState: resolved.webState,
                 runtimeState: runtime.automationState()
             )
+
+        case .panelScratchpadState:
+            let resolved = try resolveScratchpadTarget(payload: args)
+            let runtime = webPanelRuntimeRegistry.scratchpadRuntime(for: resolved.panelID)
+            runtime.apply(webState: resolved.webState)
+            return scratchpadPanelStateSnapshot(
+                workspaceID: resolved.workspaceID,
+                panelID: resolved.panelID,
+                webState: resolved.webState,
+                runtimeState: runtime.automationState()
+            )
         }
     }
 }
@@ -609,6 +626,81 @@ private extension AppControlExecutor {
             didMutate = try requiredStore().send(.resetBrowserPanelPageZoom(panelID: target.panelID))
         }
         return .init(didMutateState: didMutate, result: nil)
+    }
+
+    func setScratchpadContent(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let store = try requiredStore()
+        guard let sessionID = normalizedOptionalText(args.stringValue("sessionID")) else {
+            throw AutomationSocketError.invalidPayload("sessionID is required")
+        }
+        let content = try scratchpadContent(args: args, sessionID: sessionID)
+
+        let outcome: ScratchpadPanelSetContentOutcome
+        do {
+            outcome = try store.setScratchpadContentForSession(
+                request: ScratchpadPanelSetContentRequest(
+                    sessionID: sessionID,
+                    title: normalizedOptionalText(args.stringValue("title")),
+                    content: content,
+                    expectedRevision: args.intValue("expectedRevision")
+                ),
+                sessionRuntimeStore: sessionRuntimeStore,
+                documentStore: scratchpadDocumentStore
+            )
+        } catch let error as ScratchpadDocumentStoreError {
+            throw AutomationSocketError.invalidPayload(error.localizedDescription)
+        } catch let error as ScratchpadPanelError {
+            throw AutomationSocketError.invalidPayload(error.localizedDescription)
+        }
+
+        return .init(
+            didMutateState: true,
+            result: [
+                "windowID": .string(outcome.windowID.uuidString),
+                "workspaceID": .string(outcome.workspaceID.uuidString),
+                "panelID": .string(outcome.panelID.uuidString),
+                "documentID": .string(outcome.documentID.uuidString),
+                "revision": .int(outcome.revision),
+                "created": .bool(outcome.created),
+            ]
+        )
+    }
+
+    func scratchpadContent(args: [String: AutomationJSONValue], sessionID: String) throws -> String {
+        let inlineContent = args.stringValue("content")
+        let filePath = normalizedOptionalText(args.stringValue("filePath"))
+
+        if inlineContent != nil, filePath != nil {
+            throw AutomationSocketError.invalidPayload("provide either filePath or content, not both")
+        }
+        if let inlineContent {
+            return inlineContent
+        }
+        guard let filePath else {
+            throw AutomationSocketError.invalidPayload("filePath or content is required")
+        }
+
+        let resolvedURL = resolvedScratchpadContentFileURL(filePath, sessionID: sessionID)
+        do {
+            return try String(contentsOf: resolvedURL, encoding: .utf8)
+        } catch {
+            throw AutomationSocketError.invalidPayload("could not read filePath: \(error.localizedDescription)")
+        }
+    }
+
+    func resolvedScratchpadContentFileURL(_ filePath: String, sessionID: String) -> URL {
+        let expanded = (filePath as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded).standardizedFileURL
+        }
+
+        let basePath = sessionRuntimeStore
+            .sessionRegistry
+            .activeSession(sessionID: sessionID)?
+            .cwd
+        let baseURL = basePath.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
+            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        return baseURL.appendingPathComponent(expanded).standardizedFileURL
     }
 
     func requireTextParameter(_ name: String, args: [String: AutomationJSONValue]) throws -> String {
@@ -871,6 +963,48 @@ private extension AppControlExecutor {
         throw AutomationSocketError.invalidPayload("workspace has no browser panel to target")
     }
 
+    func resolveScratchpadTarget(
+        payload: [String: AutomationJSONValue]
+    ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
+        let store = try requiredStore()
+        if let rawPanelID = payload.stringValue("panelID") {
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard let workspace = store.state.workspacesByID[location.workspaceID],
+                  let panelState = workspace.panelState(for: panelID),
+                  case .web(let webState) = panelState,
+                  webState.definition == .scratchpad else {
+                throw AutomationSocketError.invalidPayload("panelID is not a Scratchpad panel")
+            }
+            return (location.workspaceID, panelID, webState)
+        }
+
+        let workspaceID = try resolveWorkspaceID(args: payload)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+        if let focusedPanelID = workspace.focusedPanelID,
+           let panelState = workspace.panels[focusedPanelID],
+           case .web(let webState) = panelState,
+           webState.definition == .scratchpad {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        for leaf in workspace.layoutTree.allSlotInfos {
+            let panelID = leaf.panelID
+            guard let panelState = workspace.panels[panelID],
+                  case .web(let webState) = panelState,
+                  webState.definition == .scratchpad else {
+                continue
+            }
+            return (workspaceID, panelID, webState)
+        }
+        throw AutomationSocketError.invalidPayload("workspace has no Scratchpad panel to target")
+    }
+
     func terminalStateSnapshot(
         windowID: UUID,
         workspaceID: UUID,
@@ -973,6 +1107,52 @@ private extension AppControlExecutor {
             "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
             "runtimePageZoom": .double(runtimeState.pageZoom),
         ]
+    }
+
+    func scratchpadPanelStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState,
+        runtimeState: ScratchpadPanelRuntimeAutomationState
+    ) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = [
+            "workspaceID": .string(workspaceID.uuidString),
+            "panelID": .string(panelID.uuidString),
+            "stateTitle": .string(webState.title),
+            "stateDocumentID": webState.scratchpad.map { .string($0.documentID.uuidString) } ?? .null,
+            "stateRevision": webState.scratchpad.map { .int($0.revision) } ?? .null,
+            "stateSessionID": webState.scratchpad?.sessionLink.map { .string($0.sessionID) } ?? .null,
+            "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
+            "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
+            "currentTheme": .string(runtimeState.currentTheme.rawValue),
+            "hasCurrentBootstrap": .bool(runtimeState.currentBootstrap != nil),
+            "pendingBootstrapScript": .bool(runtimeState.hasPendingBootstrapScript),
+            "currentAssetPath": runtimeState.currentAssetPath.map { .string($0) } ?? .null,
+        ]
+
+        if let bootstrap = runtimeState.currentBootstrap {
+            result["bootstrapContractVersion"] = .int(bootstrap.contractVersion)
+            result["bootstrapDocumentID"] = bootstrap.documentID.map { .string($0.uuidString) } ?? .null
+            result["bootstrapDisplayName"] = .string(bootstrap.displayName)
+            result["bootstrapRevision"] = bootstrap.revision.map { .int($0) } ?? .null
+            result["bootstrapMissingDocument"] = .bool(bootstrap.missingDocument)
+            result["bootstrapMessage"] = bootstrap.message.map { .string($0) } ?? .null
+            result["bootstrapTheme"] = .string(bootstrap.theme.rawValue)
+            result["bootstrapContentLength"] = bootstrap.contentHTML.map { .int($0.utf8.count) } ?? .null
+            result["bootstrapContentSHA256"] = bootstrap.contentHTML.map { .string(Self.sha256Hex($0)) } ?? .null
+        } else {
+            result["bootstrapContractVersion"] = .null
+            result["bootstrapDocumentID"] = .null
+            result["bootstrapDisplayName"] = .null
+            result["bootstrapRevision"] = .null
+            result["bootstrapMissingDocument"] = .null
+            result["bootstrapMessage"] = .null
+            result["bootstrapTheme"] = .null
+            result["bootstrapContentLength"] = .null
+            result["bootstrapContentSHA256"] = .null
+        }
+
+        return result
     }
 
     func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {
