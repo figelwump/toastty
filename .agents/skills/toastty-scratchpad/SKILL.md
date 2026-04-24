@@ -5,13 +5,34 @@ description: Use this skill when an agent should show information visually in a 
 
 # Toastty Scratchpad
 
-Use Scratchpad when a visual surface will communicate better than terminal prose. Create a self-contained HTML document, then publish it to the current Toastty-managed session.
+Use Scratchpad when a visual surface will communicate better than terminal prose. Open the Scratchpad first with a rough visual outline, then replace it with the finished self-contained HTML artifact after analysis.
+
+## Open First
+
+When this skill triggers and a Toastty-managed session is available, publish an initial rough Scratchpad before doing deeper analysis, reading large files, or building the final artifact. The initial outline should show the user that a visual artifact is being worked on.
+
+Use placeholders, silhouettes, skeleton blocks, empty chart axes, wireframe panels, generic lanes, or unlabeled connector shapes. Keep this first pass intentionally low-detail:
+
+- no real data values
+- no conclusions
+- no file-derived facts beyond a generic title if already known
+- subtle animation is preferred, such as shimmer, pulse, or moving placeholder strokes
+
+Publish the rough outline from the repo root:
+
+```bash
+.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
+  "Architecture Map" \
+  architecture
+```
+
+Then do the needed thread/file/prompt analysis and publish the completed artifact over the same session-linked Scratchpad.
 
 ## Input Modes
 
-- **Thread context**: synthesize the visual from the current conversation, implementation plan, bug investigation, or decision tradeoff.
-- **File input**: read the referenced file first, extract the structure that matters, then create a visual representation. Do not dump a long file verbatim into the panel.
-- **Manual prompt**: follow the prompt as the design brief. If the prompt is broad, choose a compact first visual that answers the likely need.
+- **Thread context**: publish a rough outline, then synthesize the visual from the current conversation, implementation plan, bug investigation, or decision tradeoff.
+- **File input**: publish a rough outline before deep reading, then read the referenced file, extract the structure that matters, and create a visual representation. Do not dump a long file verbatim into the panel.
+- **Manual prompt**: publish a rough outline from the prompt, then follow the prompt as the design brief. If the prompt is broad, choose a compact final visual that answers the likely need.
 
 ## Good Uses
 
@@ -26,7 +47,7 @@ Avoid Scratchpad for ordinary logs, raw command output, long code listings, or p
 
 ## Build The Artifact
 
-1. Decide the most useful visual form before writing HTML.
+1. After the rough outline is visible, decide the most useful final visual form before writing the detailed HTML.
 2. Generate one complete HTML document with inline CSS and optional inline JavaScript.
 3. Keep it self-contained:
    - no remote scripts, fonts, stylesheets, images, or network fetches
@@ -37,7 +58,7 @@ Avoid Scratchpad for ordinary logs, raw command output, long code listings, or p
    - readable at narrow and wide widths
    - no text overlap
    - enough labels that the user can understand the artifact without chat context
-5. If updating an existing topic in the same managed session, reuse the current Scratchpad by publishing again instead of creating a separate artifact.
+5. Replace the initial outline by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact.
 
 ## Publish
 
