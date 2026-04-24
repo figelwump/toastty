@@ -1,4 +1,0 @@
-interface:
-  display_name: "Toastty Scratchpad Test Flow"
-  short_description: "Test Toastty Scratchpad agent flow from a managed session."
-  default_prompt: "Use Toastty Scratchpad Test Flow to create or update a Scratchpad panel from this managed agent session."
