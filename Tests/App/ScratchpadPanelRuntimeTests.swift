@@ -107,6 +107,113 @@ final class ScratchpadPanelRuntimeTests: XCTestCase {
         )
 
         XCTAssertTrue(logs.isEmpty)
+        XCTAssertTrue(runtime.automationState().recentDiagnostics.isEmpty)
+    }
+
+    func testGeneratedContentDiagnosticsAreRecordedInAutomationState() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        var logs: [(ToasttyLogLevel, String, [String: String])] = []
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(),
+            documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            diagnosticLogger: { level, message, metadata in
+                logs.append((level, message, metadata))
+            }
+        )
+
+        runtime.simulateBridgeMessageForTesting([
+            "type": "javascriptError",
+            "diagnosticSource": "generated-content",
+            "message": "Cannot read properties of null",
+            "source": "about:srcdoc",
+            "line": 14,
+            "column": 9,
+            "stack": "render@about:srcdoc:14:9",
+        ])
+
+        let diagnostic = try XCTUnwrap(runtime.automationState().recentDiagnostics.first)
+        XCTAssertEqual(diagnostic.source, "generated-content")
+        XCTAssertEqual(diagnostic.kind, "javascript-error")
+        XCTAssertEqual(diagnostic.level, "error")
+        XCTAssertEqual(diagnostic.message, "Cannot read properties of null")
+        XCTAssertEqual(diagnostic.metadata["source"], "about:srcdoc")
+        XCTAssertEqual(diagnostic.metadata["line"], "14")
+        XCTAssertEqual(diagnostic.metadata["column"], "9")
+        XCTAssertEqual(diagnostic.metadata["stack"], "render@about:srcdoc:14:9")
+        XCTAssertEqual(logs.last?.0, .error)
+        XCTAssertEqual(logs.last?.1, "Scratchpad JavaScript error")
+        XCTAssertEqual(logs.last?.2["diagnostic_source"], "generated-content")
+    }
+
+    func testContentSecurityPolicyViolationsAreRecordedInAutomationState() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(),
+            documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            diagnosticLogger: { _, _, _ in }
+        )
+
+        runtime.simulateBridgeMessageForTesting([
+            "type": "cspViolation",
+            "diagnosticSource": "generated-content",
+            "violatedDirective": "connect-src",
+            "effectiveDirective": "connect-src",
+            "blockedURI": "https://example.com/data.json",
+            "sourceFile": "about:srcdoc",
+            "line": 22,
+            "column": 5,
+            "disposition": "enforce",
+        ])
+
+        let diagnostic = try XCTUnwrap(runtime.automationState().recentDiagnostics.first)
+        XCTAssertEqual(diagnostic.source, "generated-content")
+        XCTAssertEqual(diagnostic.kind, "csp-violation")
+        XCTAssertEqual(diagnostic.level, "warn")
+        XCTAssertEqual(diagnostic.message, "Blocked https://example.com/data.json by connect-src")
+        XCTAssertEqual(diagnostic.metadata["violatedDirective"], "connect-src")
+        XCTAssertEqual(diagnostic.metadata["effectiveDirective"], "connect-src")
+        XCTAssertEqual(diagnostic.metadata["blockedURI"], "https://example.com/data.json")
+        XCTAssertEqual(diagnostic.metadata["sourceFile"], "about:srcdoc")
+    }
+
+    func testDiagnosticsResetWhenBootstrapReloads() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(),
+            documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            diagnosticLogger: { _, _, _ in }
+        )
+        let document = try fixture.store.createDocument(
+            title: "Sketch",
+            content: "<strong>Visible</strong>",
+            sessionLink: nil
+        )
+        let webState = WebPanelState(
+            definition: .scratchpad,
+            title: "Scratchpad",
+            scratchpad: ScratchpadState(
+                documentID: document.documentID,
+                revision: document.revision
+            )
+        )
+
+        runtime.simulateBridgeMessageForTesting([
+            "type": "consoleMessage",
+            "diagnosticSource": "generated-content",
+            "level": "error",
+            "message": "before reload",
+        ])
+        XCTAssertEqual(runtime.automationState().recentDiagnostics.count, 1)
+
+        runtime.reloadBootstrap(for: webState)
+
+        XCTAssertTrue(runtime.automationState().recentDiagnostics.isEmpty)
     }
 }
 

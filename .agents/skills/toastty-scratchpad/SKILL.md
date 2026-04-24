@@ -60,6 +60,33 @@ Avoid Scratchpad for ordinary logs, raw command output, long code listings, or p
    - enough labels that the user can understand the artifact without chat context
 5. Replace the initial outline by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact.
 
+## Inline JavaScript
+
+Scratchpad supports inline JavaScript, but the generated document runs in a sandboxed iframe with a strict content security policy. JavaScript can enhance the artifact, but the core information should remain visible without it whenever practical.
+
+- Prefer pre-rendered HTML/SVG for charts, tables, metric cards, and other static data views.
+- Use inline JavaScript for real interactivity such as filtering, sorting, expand/collapse, hover details, or client-side measurements.
+- Do not rely on external scripts, imports, remote styles, CDN chart libraries, network fetches, XHR, websockets, workers, nested frames, forms, local storage, or remote assets.
+- Embed all data inline, either directly in the script or in a local `<script type="application/json">` block.
+- Wrap startup/rendering code in `try`/`catch`. On failure, render a visible error message in the artifact and call `console.error(...)` with useful context.
+- Avoid blank startup states where all data appears only after JavaScript runs. If JavaScript is required, include a visible loading/failure container that is replaced after successful render.
+
+## Diagnostics
+
+If a published Scratchpad looks blank or incomplete, do not assume JavaScript is disabled. First inspect the panel state for generated-content diagnostics. Use the `panelID` returned by the publish helper:
+
+```bash
+"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.state "panelID=<panel-id>"
+```
+
+The state response includes `recentDiagnostics` when the generated iframe reports console messages, JavaScript errors, unhandled promise rejections, or CSP violations. Pay attention to:
+
+- `source`: `generated-content` means the agent-authored iframe reported it.
+- `kind`: `javascript-error`, `unhandled-rejection`, `csp-violation`, or `console-message`.
+- `message` and `metadata`: the failure detail, blocked URI/directive, source location, or stack when available.
+
+Fix the artifact from those diagnostics before republishing. If `recentDiagnostics` is empty but the panel is still blank, confirm the current document/revision and content length in the same state response.
+
 ## Publish
 
 From the repo root, pipe generated HTML into the helper:
@@ -83,7 +110,7 @@ The helper requires `TOASTTY_CLI_PATH` and `TOASTTY_SESSION_ID`, which are prese
 
 - Tell the user what you put in the Scratchpad and summarize the key visual.
 - Mention if the helper reported a panel/document/revision so the user knows the update succeeded.
-- If the helper succeeds but the panel is not visible, query `panel.scratchpad.state` for the returned `panelID` before republishing.
+- If the helper succeeds but the panel is not visible or appears incomplete, query `panel.scratchpad.state` for the returned `panelID` and inspect `recentDiagnostics` before republishing.
 
 ## HTML Starting Point
 

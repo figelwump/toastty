@@ -23,6 +23,16 @@ struct ScratchpadPanelRuntimeAutomationState: Equatable, Sendable {
     let hasPendingBootstrapScript: Bool
     let currentAssetPath: String?
     let currentBootstrap: ScratchpadPanelBootstrap?
+    let recentDiagnostics: [ScratchpadPanelDiagnostic]
+}
+
+struct ScratchpadPanelDiagnostic: Equatable, Sendable {
+    let sequence: Int
+    let source: String
+    let kind: String
+    let level: String?
+    let message: String
+    let metadata: [String: String]
 }
 
 @MainActor
@@ -32,6 +42,7 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
     typealias DiagnosticLogger = @MainActor @Sendable (ToasttyLogLevel, String, [String: String]) -> Void
 
     private static let scriptMessageHandlerName = "toasttyScratchpadPanel"
+    private static let maxRecentDiagnostics = 20
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
@@ -52,6 +63,8 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
     private var pendingBootstrapScript: String?
     private var currentTheme: ScratchpadPanelTheme = .dark
     private var isPanelBridgeReady = false
+    private var nextDiagnosticSequence = 0
+    private var recentDiagnostics: [ScratchpadPanelDiagnostic] = []
 
     init(
         panelID: UUID,
@@ -133,7 +146,8 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
             currentTheme: currentTheme,
             hasPendingBootstrapScript: pendingBootstrapScript != nil,
             currentAssetPath: currentAssetURL?.path,
-            currentBootstrap: currentBootstrap
+            currentBootstrap: currentBootstrap,
+            recentDiagnostics: recentDiagnostics
         )
     }
 
@@ -310,9 +324,30 @@ extension ScratchpadPanelRuntime {
 
     enum BridgeEvent {
         case bridgeReady
-        case consoleMessage(level: JavaScriptConsoleLevel, message: String)
-        case javascriptError(message: String, source: String?, line: Int?, column: Int?, stack: String?)
-        case unhandledRejection(reason: String, stack: String?)
+        case consoleMessage(
+            level: JavaScriptConsoleLevel,
+            message: String,
+            diagnosticSource: String
+        )
+        case javascriptError(
+            message: String,
+            source: String?,
+            line: Int?,
+            column: Int?,
+            stack: String?,
+            diagnosticSource: String
+        )
+        case unhandledRejection(reason: String, stack: String?, diagnosticSource: String)
+        case cspViolation(
+            violatedDirective: String,
+            effectiveDirective: String,
+            blockedURI: String?,
+            sourceFile: String?,
+            line: Int?,
+            column: Int?,
+            disposition: String?,
+            diagnosticSource: String
+        )
         case renderReady(displayName: String, revision: Int?)
 
         init?(messageBody: Any) {
@@ -332,6 +367,8 @@ extension ScratchpadPanelRuntime {
                 return (body[key] as? NSNumber)?.intValue
             }
 
+            let diagnosticSource = optionalString("diagnosticSource") ?? "panel"
+
             switch type {
             case "bridgeReady":
                 self = .bridgeReady
@@ -341,7 +378,11 @@ extension ScratchpadPanelRuntime {
                       let message = body["message"] as? String else {
                     return nil
                 }
-                self = .consoleMessage(level: level, message: message)
+                self = .consoleMessage(
+                    level: level,
+                    message: message,
+                    diagnosticSource: diagnosticSource
+                )
             case "javascriptError":
                 guard let message = body["message"] as? String else {
                     return nil
@@ -351,13 +392,33 @@ extension ScratchpadPanelRuntime {
                     source: optionalString("source"),
                     line: optionalInt("line"),
                     column: optionalInt("column"),
-                    stack: optionalString("stack")
+                    stack: optionalString("stack"),
+                    diagnosticSource: diagnosticSource
                 )
             case "unhandledRejection":
                 guard let reason = body["reason"] as? String else {
                     return nil
                 }
-                self = .unhandledRejection(reason: reason, stack: optionalString("stack"))
+                self = .unhandledRejection(
+                    reason: reason,
+                    stack: optionalString("stack"),
+                    diagnosticSource: diagnosticSource
+                )
+            case "cspViolation":
+                guard let violatedDirective = body["violatedDirective"] as? String,
+                      let effectiveDirective = body["effectiveDirective"] as? String else {
+                    return nil
+                }
+                self = .cspViolation(
+                    violatedDirective: violatedDirective,
+                    effectiveDirective: effectiveDirective,
+                    blockedURI: optionalString("blockedURI"),
+                    sourceFile: optionalString("sourceFile"),
+                    line: optionalInt("line"),
+                    column: optionalInt("column"),
+                    disposition: optionalString("disposition"),
+                    diagnosticSource: diagnosticSource
+                )
             case "renderReady":
                 guard let displayName = body["displayName"] as? String else {
                     return nil
@@ -370,6 +431,7 @@ extension ScratchpadPanelRuntime {
     }
 
     func reloadBootstrap(for webState: WebPanelState) {
+        resetDiagnostics()
         currentBootstrap = Self.bootstrap(
             for: webState,
             documentStore: documentStore,
@@ -508,11 +570,19 @@ extension ScratchpadPanelRuntime {
             isPanelBridgeReady = true
             logDiagnostic(.debug, "Scratchpad bridge ready")
             pushPendingBootstrapIfPossible()
-        case .consoleMessage(let level, let message):
+        case .consoleMessage(let level, let message, let diagnosticSource):
+            let source = normalizedDiagnosticSource(diagnosticSource)
             let metadata = [
+                "diagnostic_source": source,
                 "console_level": level.rawValue,
                 "console_message": clampedDiagnosticValue(message) ?? "<empty>",
             ]
+            recordDiagnostic(
+                kind: "console-message",
+                source: source,
+                level: level.rawValue,
+                message: message
+            )
             switch level {
             case .info:
                 logDiagnostic(.info, "Scratchpad JavaScript console info", metadata: metadata)
@@ -521,27 +591,104 @@ extension ScratchpadPanelRuntime {
             case .error:
                 logDiagnostic(.error, "Scratchpad JavaScript console error", metadata: metadata)
             }
-        case .javascriptError(let message, let source, let line, let column, let stack):
-            var metadata = ["javascript_message": clampedDiagnosticValue(message) ?? "<empty>"]
-            if let source = clampedDiagnosticValue(source) {
-                metadata["javascript_source"] = source
+        case .javascriptError(let message, let scriptSource, let line, let column, let stack, let diagnosticSource):
+            let source = normalizedDiagnosticSource(diagnosticSource)
+            var metadata = [
+                "diagnostic_source": source,
+                "javascript_message": clampedDiagnosticValue(message) ?? "<empty>",
+            ]
+            var diagnosticMetadata: [String: String] = [:]
+            if let scriptSource = clampedDiagnosticValue(scriptSource) {
+                metadata["javascript_source"] = scriptSource
+                diagnosticMetadata["source"] = scriptSource
             }
             if let line {
                 metadata["javascript_line"] = String(line)
+                diagnosticMetadata["line"] = String(line)
             }
             if let column {
                 metadata["javascript_column"] = String(column)
+                diagnosticMetadata["column"] = String(column)
             }
             if let stack = clampedDiagnosticValue(stack) {
                 metadata["javascript_stack"] = stack
+                diagnosticMetadata["stack"] = stack
             }
+            recordDiagnostic(
+                kind: "javascript-error",
+                source: source,
+                level: "error",
+                message: message,
+                metadata: diagnosticMetadata
+            )
             logDiagnostic(.error, "Scratchpad JavaScript error", metadata: metadata)
-        case .unhandledRejection(let reason, let stack):
-            var metadata = ["javascript_reason": clampedDiagnosticValue(reason) ?? "<empty>"]
+        case .unhandledRejection(let reason, let stack, let diagnosticSource):
+            let source = normalizedDiagnosticSource(diagnosticSource)
+            var metadata = [
+                "diagnostic_source": source,
+                "javascript_reason": clampedDiagnosticValue(reason) ?? "<empty>",
+            ]
+            var diagnosticMetadata: [String: String] = [:]
             if let stack = clampedDiagnosticValue(stack) {
                 metadata["javascript_stack"] = stack
+                diagnosticMetadata["stack"] = stack
             }
+            recordDiagnostic(
+                kind: "unhandled-rejection",
+                source: source,
+                level: "error",
+                message: reason,
+                metadata: diagnosticMetadata
+            )
             logDiagnostic(.error, "Scratchpad JavaScript unhandled rejection", metadata: metadata)
+        case .cspViolation(
+            let violatedDirective,
+            let effectiveDirective,
+            let blockedURI,
+            let sourceFile,
+            let line,
+            let column,
+            let disposition,
+            let diagnosticSource
+        ):
+            let source = normalizedDiagnosticSource(diagnosticSource)
+            let blockedDescription = blockedURI.flatMap { clampedDiagnosticValue($0) } ?? "<inline>"
+            let message = "Blocked \(blockedDescription) by \(violatedDirective)"
+            var metadata = [
+                "diagnostic_source": source,
+                "violated_directive": clampedDiagnosticValue(violatedDirective) ?? "<empty>",
+                "effective_directive": clampedDiagnosticValue(effectiveDirective) ?? "<empty>",
+                "blocked_uri": blockedDescription,
+            ]
+            var diagnosticMetadata = [
+                "violatedDirective": clampedDiagnosticValue(violatedDirective) ?? "<empty>",
+                "effectiveDirective": clampedDiagnosticValue(effectiveDirective) ?? "<empty>",
+                "blockedURI": blockedDescription,
+            ]
+            if let sourceFile = clampedDiagnosticValue(sourceFile) {
+                metadata["source_file"] = sourceFile
+                diagnosticMetadata["sourceFile"] = sourceFile
+            }
+            if let line {
+                metadata["line"] = String(line)
+                diagnosticMetadata["line"] = String(line)
+            }
+            if let column {
+                metadata["column"] = String(column)
+                diagnosticMetadata["column"] = String(column)
+            }
+            if let disposition = clampedDiagnosticValue(disposition) {
+                metadata["disposition"] = disposition
+                diagnosticMetadata["disposition"] = disposition
+            }
+            recordDiagnostic(
+                kind: "csp-violation",
+                source: source,
+                level: "warn",
+                message: message,
+                metadata: diagnosticMetadata
+            )
+            logDiagnostic(.warning, "Scratchpad content security policy violation", metadata: metadata)
         case .renderReady(let displayName, let revision):
             logDiagnostic(
                 .debug,
@@ -578,6 +725,41 @@ extension ScratchpadPanelRuntime {
         }
 
         return metadata
+    }
+
+    func resetDiagnostics() {
+        nextDiagnosticSequence = 0
+        recentDiagnostics.removeAll()
+    }
+
+    func recordDiagnostic(
+        kind: String,
+        source: String,
+        level: String?,
+        message: String,
+        metadata: [String: String] = [:]
+    ) {
+        nextDiagnosticSequence += 1
+        let clampedMetadata = metadata.reduce(into: [String: String]()) { result, entry in
+            result[entry.key] = clampedDiagnosticValue(entry.value) ?? "<empty>"
+        }
+        recentDiagnostics.append(
+            ScratchpadPanelDiagnostic(
+                sequence: nextDiagnosticSequence,
+                source: normalizedDiagnosticSource(source),
+                kind: kind,
+                level: level,
+                message: clampedDiagnosticValue(message) ?? "<empty>",
+                metadata: clampedMetadata
+            )
+        )
+        if recentDiagnostics.count > Self.maxRecentDiagnostics {
+            recentDiagnostics.removeFirst(recentDiagnostics.count - Self.maxRecentDiagnostics)
+        }
+    }
+
+    func normalizedDiagnosticSource(_ source: String?) -> String {
+        clampedDiagnosticValue(source) ?? "panel"
     }
 
     func logDiagnostic(

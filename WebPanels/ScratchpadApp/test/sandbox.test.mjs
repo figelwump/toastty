@@ -27,3 +27,15 @@ test("generated iframe allows scripts without same-origin privileges", () => {
   assert.match(mainSource, /iframe\.sandbox\.add\("allow-scripts"\)/);
   assert.doesNotMatch(mainSource, /allow-same-origin/);
 });
+
+test("generated iframe forwards diagnostics through the parent frame", () => {
+  assert.match(sandboxSource, /toastty:scratchpad-generated-diagnostic:v1/);
+  assert.match(sandboxSource, /window\.parent\?\.postMessage\(\{ type: messageType, sessionToken, event \}/);
+  assert.match(sandboxSource, /securitypolicyviolation/);
+  assert.match(sandboxSource, /truncate\(event\.blockedURI, 512\)/);
+  assert.match(mainSource, /window\.addEventListener\("message"/);
+  assert.match(mainSource, /event\.source !== currentGeneratedContentWindow/);
+  assert.match(mainSource, /event\.data\.sessionToken !== currentGeneratedContentDiagnosticsToken/);
+  assert.match(mainSource, /optionalDiagnosticString\(event\.blockedURI, 512\)/);
+  assert.match(mainSource, /"generated-content"/);
+});

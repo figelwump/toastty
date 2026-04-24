@@ -1128,6 +1128,10 @@ private extension AppControlExecutor {
             "hasCurrentBootstrap": .bool(runtimeState.currentBootstrap != nil),
             "pendingBootstrapScript": .bool(runtimeState.hasPendingBootstrapScript),
             "currentAssetPath": runtimeState.currentAssetPath.map { .string($0) } ?? .null,
+            "diagnosticCount": .int(runtimeState.recentDiagnostics.count),
+            "recentDiagnostics": .array(runtimeState.recentDiagnostics.map {
+                Self.scratchpadDiagnosticJSON($0)
+            }),
         ]
 
         if let bootstrap = runtimeState.currentBootstrap {
@@ -1153,6 +1157,28 @@ private extension AppControlExecutor {
         }
 
         return result
+    }
+
+    static func scratchpadDiagnosticJSON(
+        _ diagnostic: ScratchpadPanelDiagnostic
+    ) -> AutomationJSONValue {
+        var result: [String: AutomationJSONValue] = [
+            "sequence": .int(diagnostic.sequence),
+            "source": .string(diagnostic.source),
+            "kind": .string(diagnostic.kind),
+            "message": .string(diagnostic.message),
+            "metadata": .object(
+                diagnostic.metadata.reduce(into: [String: AutomationJSONValue]()) { result, entry in
+                    result[entry.key] = .string(entry.value)
+                }
+            ),
+        ]
+        if let level = diagnostic.level {
+            result["level"] = .string(level)
+        } else {
+            result["level"] = .null
+        }
+        return .object(result)
     }
 
     func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {

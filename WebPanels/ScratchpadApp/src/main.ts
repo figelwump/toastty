@@ -1,5 +1,5 @@
 import { scratchpadNativeBridge } from "./nativeBridge";
-import { sandboxedSrcdoc } from "./sandbox";
+import { generatedDiagnosticsMessageType, sandboxedSrcdoc } from "./sandbox";
 
 type ScratchpadPanelTheme = "light" | "dark";
 
@@ -29,13 +29,15 @@ declare global {
 
 const listeners = new Set<BootstrapListener>();
 let currentBootstrap: ScratchpadPanelBootstrap | null = null;
+let currentGeneratedContentWindow: Window | null = null;
+let currentGeneratedContentDiagnosticsToken: string | null = null;
 const diagnosticStringLimit = 2_000;
 
-function truncateDiagnosticString(value: string): string {
-  if (value.length <= diagnosticStringLimit) {
+function truncateDiagnosticString(value: string, limit = diagnosticStringLimit): string {
+  if (value.length <= limit) {
     return value;
   }
-  return `${value.slice(0, diagnosticStringLimit - 1)}...`;
+  return `${value.slice(0, limit - 1)}...`;
 }
 
 function describeDiagnosticValue(
@@ -132,6 +134,120 @@ function installDiagnostics() {
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function optionalDiagnosticString(value: unknown, limit = diagnosticStringLimit): string | null {
+  return typeof value === "string" && value.length > 0
+    ? truncateDiagnosticString(value, limit)
+    : null;
+}
+
+function requiredDiagnosticString(
+  value: unknown,
+  fallback: string,
+  limit = diagnosticStringLimit
+): string {
+  return typeof value === "string" && value.length > 0
+    ? truncateDiagnosticString(value, limit)
+    : fallback;
+}
+
+function optionalDiagnosticNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  const normalized = Math.trunc(value);
+  return normalized >= 0 && normalized <= 1_000_000 ? normalized : null;
+}
+
+function generatedConsoleLevel(value: unknown): "info" | "warn" | "error" | null {
+  switch (value) {
+    case "info":
+    case "warn":
+    case "error":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function forwardGeneratedContentDiagnostic(event: Record<string, unknown>) {
+  switch (event.type) {
+    case "consoleMessage": {
+      const level = generatedConsoleLevel(event.level);
+      const message = optionalDiagnosticString(event.message);
+      if (!level || !message) {
+        return;
+      }
+      scratchpadNativeBridge.consoleMessage(level, message, "generated-content");
+      return;
+    }
+    case "javascriptError": {
+      scratchpadNativeBridge.javascriptError(
+        requiredDiagnosticString(event.message, "JavaScript error"),
+        optionalDiagnosticString(event.source),
+        optionalDiagnosticNumber(event.line),
+        optionalDiagnosticNumber(event.column),
+        optionalDiagnosticString(event.stack),
+        "generated-content"
+      );
+      return;
+    }
+    case "unhandledRejection": {
+      scratchpadNativeBridge.unhandledRejection(
+        requiredDiagnosticString(event.reason, "Unhandled promise rejection"),
+        optionalDiagnosticString(event.stack),
+        "generated-content"
+      );
+      return;
+    }
+    case "cspViolation": {
+      scratchpadNativeBridge.cspViolation(
+        requiredDiagnosticString(event.violatedDirective, "<unknown>", 128),
+        requiredDiagnosticString(event.effectiveDirective, "<unknown>", 128),
+        optionalDiagnosticString(event.blockedURI, 512),
+        optionalDiagnosticString(event.sourceFile, 512),
+        optionalDiagnosticNumber(event.line),
+        optionalDiagnosticNumber(event.column),
+        optionalDiagnosticString(event.disposition, 32),
+        "generated-content"
+      );
+      return;
+    }
+  }
+}
+
+function installGeneratedContentDiagnosticsBridge() {
+  window.addEventListener("message", (event: MessageEvent<unknown>) => {
+    if (!currentGeneratedContentWindow || event.source !== currentGeneratedContentWindow) {
+      return;
+    }
+
+    if (!isRecord(event.data) || event.data.type !== generatedDiagnosticsMessageType) {
+      return;
+    }
+    if (
+      typeof event.data.sessionToken !== "string" ||
+      event.data.sessionToken !== currentGeneratedContentDiagnosticsToken
+    ) {
+      return;
+    }
+
+    const diagnosticEvent = event.data.event;
+    if (!isRecord(diagnosticEvent)) {
+      return;
+    }
+
+    forwardGeneratedContentDiagnostic(diagnosticEvent);
+  });
+}
+
+function createDiagnosticsSessionToken(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
 function applyTheme(bootstrap: ScratchpadPanelBootstrap | null) {
   document.documentElement.dataset.theme = bootstrap?.theme ?? "dark";
 }
@@ -168,6 +284,8 @@ window.ToasttyScratchpadPanel = {
 };
 
 function renderMissing(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
+  currentGeneratedContentWindow = null;
+  currentGeneratedContentDiagnosticsToken = null;
   root.replaceChildren();
   const section = document.createElement("section");
   section.className = "scratchpad-empty";
@@ -181,19 +299,28 @@ function renderMissing(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
 }
 
 function renderDocument(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
+  currentGeneratedContentWindow = null;
+  currentGeneratedContentDiagnosticsToken = createDiagnosticsSessionToken();
   root.replaceChildren();
 
   const iframe = document.createElement("iframe");
   iframe.className = "scratchpad-frame";
   iframe.title = bootstrap.displayName || "Scratchpad";
+  // Keep generated content in an opaque origin; scripts are allowed only inside that boundary.
   iframe.sandbox.add("allow-scripts");
   iframe.referrerPolicy = "no-referrer";
-  iframe.srcdoc = sandboxedSrcdoc(bootstrap.contentHTML ?? "", bootstrap.theme);
+  iframe.srcdoc = sandboxedSrcdoc(
+    bootstrap.contentHTML ?? "",
+    bootstrap.theme,
+    currentGeneratedContentDiagnosticsToken
+  );
   iframe.addEventListener("load", () => {
     scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision);
   }, { once: true });
 
+  currentGeneratedContentWindow = iframe.contentWindow;
   root.append(iframe);
+  currentGeneratedContentWindow = iframe.contentWindow;
 }
 
 function render(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap | null) {
@@ -208,6 +335,7 @@ function render(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap | null) {
 }
 
 installDiagnostics();
+installGeneratedContentDiagnosticsBridge();
 
 const root = document.getElementById("root");
 if (!(root instanceof HTMLElement)) {
