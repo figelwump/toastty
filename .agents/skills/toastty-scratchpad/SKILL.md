@@ -5,7 +5,7 @@ description: Use this skill when an agent should show information visually in a 
 
 # Toastty Scratchpad
 
-Use Scratchpad when a visual surface will communicate better than terminal prose. Open the Scratchpad first with a quick loading screen, then replace it with the finished self-contained HTML artifact after analysis.
+Use Scratchpad when a visual surface will communicate better than terminal prose. Open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots as the artifact takes shape, then publish the finished self-contained HTML artifact.
 
 ## Open First
 
@@ -20,7 +20,7 @@ Publish the loading screen from the repo root:
   "Architecture Map"
 ```
 
-Then do the needed thread/file/prompt analysis and publish the completed artifact over the same session-linked Scratchpad.
+Then do the needed thread/file/prompt analysis and publish updates over the same session-linked Scratchpad.
 
 ## Input Modes
 
@@ -79,6 +79,16 @@ If you find yourself reaching for `display: grid; grid-template-columns: repeat(
    - no text overlap
    - enough labels that the user can understand the artifact without chat context
 5. Replace the initial loading screen by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact.
+
+## Progressive Updates
+
+Scratchpad publishing replaces the whole session-linked document each time. To create a progressive-building effect, publish complete valid HTML snapshots at meaningful checkpoints while the artifact is being built, then publish the polished final version.
+
+- Each update must be a full HTML document or complete renderable HTML snapshot, not a fragment or diff.
+- Publish only at stable points where the content is useful and syntactically valid. Good checkpoints are a finalized layout shell, populated major sections, complete data visualization, and final polish.
+- Avoid publishing every small edit or token stream. Each update reloads the generated iframe, which can reset scroll, focus, animation, and JavaScript state.
+- Keep using the same helper and session. The helper sends the full content through `panel.scratchpad.set-content`, so repeated publishes update the existing Scratchpad instead of creating separate panels.
+- If an intermediate snapshot uses JavaScript, keep the no-blank-state and diagnostics guidance below in place just as you would for the final artifact.
 
 ## Inline JavaScript
 
