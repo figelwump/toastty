@@ -200,10 +200,12 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `window.sidebar.toggle`
 - `workspace.create`
 - `workspace.select`
+- `workspace.move`
 - `workspace.rename`
 - `workspace.close`
 - `workspace.tab.create`
 - `workspace.tab.select`
+- `workspace.tab.move`
 - `workspace.tab.rename`
 - `workspace.tab.close`
 - `panel.close`
@@ -222,7 +224,17 @@ Notable action-specific behavior:
   - `args.activate` is optional and defaults to `true`.
   - When `args.activate=false`, Toastty creates the workspace without changing
     the visible workspace selection.
+  - Background-created workspaces remain marked as new until selected once.
   - The action result includes `workspaceID` and `windowID`.
+- `workspace.move`
+  - requires `args.index` and `args.toIndex`, both 1-based workspace positions
+    in the target window.
+  - Reorders the window's workspace list without changing the selected
+    workspace ID.
+- `workspace.tab.move`
+  - requires `args.index` and `args.toIndex`, both 1-based tab positions in the
+    target workspace.
+  - Reorders the workspace's tab list without changing the selected tab ID.
 
 ### `app_control.list_queries`
 
@@ -326,6 +338,8 @@ Supported action IDs:
 - `workspace.tab.new`
 - `workspace.tab.select`
   - requires `args.index` (1-based) or `args.tabID`
+- `workspace.tab.move`
+  - requires `args.index` and `args.toIndex` (1-based)
 - `workspace.tab.close`
   - accepts `args.index` (1-based) or `args.tabID`
   - if neither is provided, closes the selected tab
@@ -334,6 +348,13 @@ Supported action IDs:
   - accepts `args.index` (1-based) or `args.tabID`
 - `workspace.select`
   - requires `args.workspaceID` or `args.index` (1-based)
+- `workspace.create`
+  - `args.title` is optional
+  - `args.activate` is optional and defaults to `true`
+  - `args.activate=false` keeps the current workspace selected and marks the
+    created background workspace as new until selected once
+- `workspace.move`
+  - requires `args.index` and `args.toIndex` (1-based)
 - `workspace.rename`
   - requires `args.title`
 - `workspace.close`

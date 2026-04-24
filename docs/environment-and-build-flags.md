@@ -147,6 +147,8 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
 | `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-tabs-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
+| `TOASTTY_WORKSPACE_TABS_SOCKET_TIMEOUT` | `2` | Timeout in seconds for ordinary workspace-tabs smoke socket requests. |
+| `TOASTTY_WORKSPACE_TABS_SCREENSHOT_TIMEOUT` | `10` | Timeout in seconds for screenshot capture socket requests, which can take longer than ordinary state queries. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/shortcut-trace.sh`

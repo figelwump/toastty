@@ -49,15 +49,24 @@ Current non-rule:
 
 For each workspace, the validator enforces:
 
-- `WorkspaceState.panels` is the canonical storage for panel state.
-- Every `LayoutNode.slot.panelID` exists in `WorkspaceState.panels`.
-- Every panel in `WorkspaceState.panels` appears in exactly one slot in the layout tree.
-- `WorkspaceState.focusedPanelID`, if non-nil, exists in `WorkspaceState.panels`.
-- `WorkspaceState.focusedPanelID`, if non-nil, is also present in the layout tree.
+- `WorkspaceState.tabIDs` must contain at least one tab ID.
+- Every tab ID in `WorkspaceState.tabIDs` must exist in `WorkspaceState.tabsByID`.
+- `WorkspaceState.selectedTabID`, if non-nil, must be present in
+  `WorkspaceState.tabIDs`.
+- For each tab, `WorkspaceTabState.panels` is the canonical storage for panel
+  state.
+- Every `LayoutNode.slot.panelID` exists in its tab's `WorkspaceTabState.panels`.
+- Every panel in a tab's `WorkspaceTabState.panels` appears in exactly one slot
+  in that tab's layout tree.
+- `WorkspaceTabState.focusedPanelID`, if non-nil, exists in that tab's
+  `WorkspaceTabState.panels`.
+- `WorkspaceTabState.focusedPanelID`, if non-nil, is also present in that tab's
+  layout tree.
 - Every split ratio satisfies `0 < ratio < 1`.
-- Slot IDs and split node IDs are unique within a workspace tree.
-- `WorkspaceState.unreadPanelIDs` may only contain panel IDs present in
-  `WorkspaceState.panels`.
+- Slot IDs and split node IDs are unique across all tab layout trees in a
+  workspace.
+- `WorkspaceTabState.unreadPanelIDs` and `WorkspaceTabState.selectedPanelIDs`
+  may only contain panel IDs present in that tab's `WorkspaceTabState.panels`.
 
 Important model detail:
 
@@ -72,15 +81,28 @@ These behaviors are intentional current contract, not incidental implementation 
 
 During `WorkspaceState` decode:
 
-- `focusedPanelModeActive` is always reset to `false`.
-- `unreadPanelIDs` is intersected with the current `panels` keys.
 - `unreadWorkspaceNotificationCount` is clamped to `>= 0`.
+- missing `hasBeenVisited` values default to `true` for compatibility with
+  older persisted state.
+
+During `WorkspaceTabState` decode:
+
+- `focusedPanelModeActive` is always reset to `false`.
+- `focusModeRootNodeID` is reset to `nil`.
+- `unreadPanelIDs` is intersected with the current `panels` keys.
+- `selectedPanelIDs` is reset to `[]`.
+
+During `AppState` initialization or decode:
+
+- workspaces selected in visible windows are normalized to `hasBeenVisited=true`.
+- background workspaces preserve their decoded `hasBeenVisited` value.
 
 During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 
 - window membership and `selectedWindowID` are restored from the snapshot as-is
 - `makeAppState()` itself does not call `StateValidator`
-- workspace titles, layout trees, panel kinds, and `focusedPanelID` are restored
+- workspace titles, visit state, tab order, layout trees, panel kinds, and
+  `focusedPanelID` are restored
 - `focusedPanelModeActive` is reset to `false`
 - `unreadPanelIDs` is reset to `[]`
 - `unreadWorkspaceNotificationCount` is reset to `0`

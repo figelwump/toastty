@@ -55,6 +55,8 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
 
+Dragging workspace rows in the sidebar or tabs in the top tab strip changes this order; the numeric workspace and tab shortcuts follow the current visual order.
+
 ## Command palette
 
 | Shortcut | Action |

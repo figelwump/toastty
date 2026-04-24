@@ -69,11 +69,25 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
   --window "$WINDOW_ID" \
   title=background-worktree \
   activate=false
+"$TOASTTY_CLI_PATH" action run workspace.move \
+  --window "$WINDOW_ID" \
+  index=3 \
+  toIndex=1
+"$TOASTTY_CLI_PATH" action run workspace.tab.move \
+  --workspace "$WORKSPACE_ID" \
+  index=2 \
+  toIndex=1
 ```
 
 `workspace.create` accepts optional `title` and `activate` arguments. When
 `activate=false`, Toastty appends the workspace without changing the currently
-visible selection and returns the created `workspaceID` and `windowID`.
+visible selection, returns the created `workspaceID` and `windowID`, and marks
+the background workspace as `New` in the sidebar until the user visits it once.
+
+`workspace.move` and `workspace.tab.move` use 1-based `index` and `toIndex`
+arguments. Reordering keeps the selected workspace or tab selected, but changes
+which item each numeric shortcut targets because shortcuts follow the current
+visual order.
 
 Prefer `action list --json` to discover the current canonical IDs. Common actions include:
 
@@ -81,10 +95,12 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `window.sidebar.toggle`
 - `workspace.create`
 - `workspace.select`
+- `workspace.move`
 - `workspace.rename`
 - `workspace.close`
 - `workspace.tab.create`
 - `workspace.tab.select`
+- `workspace.tab.move`
 - `workspace.tab.rename`
 - `workspace.tab.close`
 - `panel.close`
