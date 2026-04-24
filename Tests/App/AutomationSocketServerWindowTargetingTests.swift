@@ -235,6 +235,217 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testWorkspaceTabMoveReordersTabIDsAndKeepsSelectedTabID() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            for _ in 0 ..< 2 {
+                let createResponse = try sendRequest(
+                    command: "automation.perform_action",
+                    payload: [
+                        "action": "workspace.tab.new",
+                        "args": [:],
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(createResponse.ok)
+            }
+
+            let selectResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.select",
+                    "args": [
+                        "index": 2,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectResponse.ok)
+
+            let initialSnapshot = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(initialSnapshot.ok)
+            let initialTabIDs = try XCTUnwrap(initialSnapshot.result["tabIDs"] as? [String])
+            XCTAssertEqual(initialSnapshot.result["selectedTabID"] as? String, initialTabIDs[1])
+
+            let moveResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.move",
+                    "args": [
+                        "index": 2,
+                        "toIndex": 3,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(moveResponse.ok)
+
+            let snapshot = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(snapshot.ok)
+            XCTAssertEqual(snapshot.result["tabIDs"] as? [String], [initialTabIDs[0], initialTabIDs[2], initialTabIDs[1]])
+            XCTAssertEqual(snapshot.result["selectedTabID"] as? String, initialTabIDs[1])
+            XCTAssertEqual(snapshot.result["selectedTabIndex"] as? Int, 3)
+        }
+    }
+
+    func testWorkspaceTabMoveRejectsInvalidIndices() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.new",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let zeroIndexResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.move",
+                    "args": [
+                        "index": 0,
+                        "toIndex": 1,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertFalse(zeroIndexResponse.ok)
+            XCTAssertEqual(zeroIndexResponse.errorMessage, "index must be greater than zero")
+
+            let outOfBoundsResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.move",
+                    "args": [
+                        "index": 1,
+                        "toIndex": 3,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertFalse(outOfBoundsResponse.ok)
+            XCTAssertEqual(outOfBoundsResponse.errorMessage, "toIndex does not exist")
+        }
+    }
+
+    func testWorkspaceMoveReordersWindowWorkspaceIDsAndKeepsSelectedWorkspaceID() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let firstCreateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.create",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(firstCreateResponse.ok)
+
+            let secondCreateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.create",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(secondCreateResponse.ok)
+
+            let selectResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.select",
+                    "args": [
+                        "index": 2,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectResponse.ok)
+
+            let stateBeforeMove = await MainActor.run { harness.store.state }
+            let windowBeforeMove = try XCTUnwrap(stateBeforeMove.window(id: fixture.windowID))
+            let originalWorkspaceIDs = windowBeforeMove.workspaceIDs
+            XCTAssertEqual(windowBeforeMove.selectedWorkspaceID, originalWorkspaceIDs[1])
+
+            let moveResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.move",
+                    "args": [
+                        "index": 2,
+                        "toIndex": 1,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(moveResponse.ok)
+
+            let stateAfterMove = await MainActor.run { harness.store.state }
+            let windowAfterMove = try XCTUnwrap(stateAfterMove.window(id: fixture.windowID))
+            XCTAssertEqual(windowAfterMove.workspaceIDs, [originalWorkspaceIDs[1], originalWorkspaceIDs[0], originalWorkspaceIDs[2]])
+            XCTAssertEqual(windowAfterMove.selectedWorkspaceID, originalWorkspaceIDs[1])
+        }
+    }
+
+    func testWorkspaceMoveRejectsInvalidIndices() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.create",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let zeroIndexResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.move",
+                    "args": [
+                        "index": 0,
+                        "toIndex": 1,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertFalse(zeroIndexResponse.ok)
+            XCTAssertEqual(zeroIndexResponse.errorMessage, "index must be greater than zero")
+
+            let outOfBoundsResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.move",
+                    "args": [
+                        "index": 1,
+                        "toIndex": 3,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertFalse(outOfBoundsResponse.ok)
+            XCTAssertEqual(outOfBoundsResponse.errorMessage, "toIndex does not exist")
+        }
+    }
+
     func testReopenLastClosedPanelRestoresClosedBrowserTabAsTab() async throws {
         let fixture = makeSingleWindowFixture()
 

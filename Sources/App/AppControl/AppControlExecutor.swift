@@ -118,6 +118,33 @@ final class AppControlExecutor {
                 result: nil
             )
 
+        case .workspaceMove:
+            let windowID = try resolveWindowID(args: args)
+            let store = try requiredStore()
+            guard let window = store.state.window(id: windowID) else {
+                throw AutomationSocketError.invalidPayload("windowID does not exist")
+            }
+            return .init(
+                didMutateState: store.send(
+                    .moveWorkspace(
+                        windowID: windowID,
+                        fromIndex: try resolveRequiredIndex(
+                            name: "index",
+                            args: args,
+                            upperBound: window.workspaceIDs.count,
+                            missingMessage: "index is required"
+                        ) - 1,
+                        toIndex: try resolveRequiredIndex(
+                            name: "toIndex",
+                            args: args,
+                            upperBound: window.workspaceIDs.count,
+                            missingMessage: "toIndex is required"
+                        ) - 1
+                    )
+                ),
+                result: nil
+            )
+
         case .workspaceRename:
             let title = try requireTextParameter("title", args: args)
             return .init(
@@ -142,6 +169,33 @@ final class AppControlExecutor {
             let tabID = try resolveWorkspaceTabID(args: args, workspaceID: workspaceID, allowSelectedTabFallback: false)
             return .init(
                 didMutateState: try requiredStore().send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID)),
+                result: nil
+            )
+
+        case .workspaceTabMove:
+            let workspaceID = try resolveWorkspaceID(args: args)
+            let store = try requiredStore()
+            guard let workspace = store.state.workspacesByID[workspaceID] else {
+                throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+            }
+            return .init(
+                didMutateState: store.send(
+                    .moveWorkspaceTab(
+                        workspaceID: workspaceID,
+                        fromIndex: try resolveRequiredIndex(
+                            name: "index",
+                            args: args,
+                            upperBound: workspace.tabIDs.count,
+                            missingMessage: "index is required"
+                        ) - 1,
+                        toIndex: try resolveRequiredIndex(
+                            name: "toIndex",
+                            args: args,
+                            upperBound: workspace.tabIDs.count,
+                            missingMessage: "toIndex is required"
+                        ) - 1
+                    )
+                ),
                 result: nil
             )
 
@@ -616,6 +670,24 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("\(name) is required")
         }
         return value
+    }
+
+    func resolveRequiredIndex(
+        name: String,
+        args: [String: AutomationJSONValue],
+        upperBound: Int,
+        missingMessage: String
+    ) throws -> Int {
+        guard let index = args.intValue(name) else {
+            throw AutomationSocketError.invalidPayload(missingMessage)
+        }
+        guard index > 0 else {
+            throw AutomationSocketError.invalidPayload("\(name) must be greater than zero")
+        }
+        guard index <= upperBound else {
+            throw AutomationSocketError.invalidPayload("\(name) does not exist")
+        }
+        return index
     }
 
     func profileBinding(args: [String: AutomationJSONValue]) throws -> TerminalProfileBinding {

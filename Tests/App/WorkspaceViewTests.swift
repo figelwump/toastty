@@ -230,6 +230,105 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceTabReorderTargetIndexHandlesBeforeFirstBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: -12
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceTabReorderTargetIndexHandlesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 360
+        )
+
+        XCTAssertEqual(targetIndex, 2)
+    }
+
+    func testWorkspaceTabReorderTargetIndexTreatsSelfDropAsNoOpIndex() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 150
+        )
+
+        XCTAssertEqual(targetIndex, 1)
+    }
+
+    func testWorkspaceTabReorderTargetIndexReturnsNilWhenFramesAreMissing() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 210
+        )
+
+        XCTAssertNil(targetIndex)
+    }
+
+    func testWorkspaceTabDragActivationUsesHorizontalThreshold() {
+        XCTAssertFalse(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: 3.9, height: 30))
+        )
+        XCTAssertTrue(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: 4, height: 0))
+        )
+        XCTAssertTrue(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: -4, height: 0))
+        )
+    }
+
+    func testWorkspaceTabTapToleranceUsesTotalPointerDistance() {
+        XCTAssertTrue(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 2, height: 2))
+        )
+        XCTAssertFalse(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 0, height: 4))
+        )
+        XCTAssertFalse(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 3, height: 3))
+        )
+    }
+
     func testResolvedWorkspaceTitleWidthUsesIntrinsicWidthWhenItFits() {
         XCTAssertEqual(
             WorkspaceView.resolvedWorkspaceTitleWidth(
@@ -796,6 +895,26 @@ final class WorkspaceViewTests: XCTestCase {
         harness.hostingView.layoutSubtreeIfNeeded()
 
         XCTAssertNotNil(findDescendantView(in: harness.hostingView, ofType: LocalDocumentSearchTextField.self))
+    }
+
+    @MainActor
+    func testWorkspaceTabStripUsesNonWindowDraggableContainer() throws {
+        let harness = try makeWorkspaceHarness()
+        defer { harness.window.orderOut(nil) }
+
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let tabStripContainer = try XCTUnwrap(
+            findDescendantView(in: harness.hostingView, ofType: NonWindowDraggableContainerView.self)
+        )
+        let tabStripHost = try XCTUnwrap(
+            findDescendantView(in: tabStripContainer, ofType: NonWindowDraggableHostingView.self)
+        )
+
+        XCTAssertFalse(tabStripContainer.mouseDownCanMoveWindow)
+
+        XCTAssertFalse(tabStripHost.mouseDownCanMoveWindow)
+        XCTAssertGreaterThan(tabStripContainer.frame.width, 0)
+        XCTAssertEqual(tabStripContainer.frame.height, ToastyTheme.workspaceTabHeight, accuracy: 0.5)
     }
 
     private func assertColor(

@@ -307,6 +307,181 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceReorderTargetIndexHandlesBeforeFirstBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: -8
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceReorderTargetIndexHandlesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 150
+        )
+
+        XCTAssertEqual(targetIndex, 2)
+    }
+
+    func testWorkspaceReorderTargetIndexTreatsSelfDropAsNoOpIndex() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 60
+        )
+
+        XCTAssertEqual(targetIndex, 1)
+    }
+
+    func testWorkspaceReorderTargetIndexReturnsNilWhenRowFramesAreMissing() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 120
+        )
+
+        XCTAssertNil(targetIndex)
+    }
+
+    func testWorkspaceReorderTargetIndexUsesFullWorkspaceRowHeight() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 118),
+                third: CGRect(x: 0, y: 160, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: first,
+            pointerY: 90
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesRowHorizontalBounds() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 42),
+                third: CGRect(x: 8, y: 84, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            targetIndex: 0
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 0, width: 244, height: 2))
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 42),
+                third: CGRect(x: 8, y: 84, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            targetIndex: 2
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 126, width: 244, height: 2))
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesTallRowBottom() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 118),
+                third: CGRect(x: 8, y: 160, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: first,
+            targetIndex: 1
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 160, width: 244, height: 2))
+    }
+
+    func testWorkspaceDragActivationUsesVerticalThreshold() {
+        XCTAssertFalse(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 30, height: 3.9))
+        )
+        XCTAssertTrue(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 0, height: 4))
+        )
+        XCTAssertTrue(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 0, height: -4))
+        )
+    }
+
+    func testWorkspaceTapToleranceUsesTotalPointerDistance() {
+        XCTAssertTrue(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 2, height: 2))
+        )
+        XCTAssertFalse(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 4, height: 0))
+        )
+        XCTAssertFalse(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 3, height: 3))
+        )
+    }
+
     func testBackgroundTabSessionPanelRemainsFocusable() throws {
         let backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
         let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
@@ -603,12 +778,14 @@ final class SidebarViewTests: XCTestCase {
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        var rowFramesByID: [UUID: CGRect] = [:]
         let sidebarView = SidebarView(
             windowID: windowID,
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
-            terminalRuntimeContext: runtimeContext
+            terminalRuntimeContext: runtimeContext,
+            workspaceRowFrameObserver: { rowFramesByID = $0 }
         )
         let hostingView = NSHostingView(
             rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth, height: 220)
@@ -624,24 +801,29 @@ final class SidebarViewTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         pumpMainRunLoop()
         hostingView.layoutSubtreeIfNeeded()
+        pumpMainRunLoop()
 
-        let secondWorkspaceButton = try XCTUnwrap(
-            workspaceRowButtons(in: hostingView).dropFirst().first
+        let secondWorkspaceFrame = try XCTUnwrap(rowFramesByID[workspaces[1].id])
+        let secondWorkspacePointerView = try XCTUnwrap(
+            pointerInteractionView(in: hostingView, workspaceID: workspaces[1].id)
         )
-        let clickPointInButton = NSPoint(
-            x: secondWorkspaceButton.bounds.midX,
-            y: secondWorkspaceButton.bounds.maxY - 6
+        secondWorkspacePointerView.usesEventTrackingLoop = false
+        let clickPointInHeader = NSPoint(
+            x: secondWorkspacePointerView.bounds.midX,
+            y: 6
         )
-        let clickPointInHost = secondWorkspaceButton.convert(clickPointInButton, to: hostingView)
-        let clickPointInWindow = secondWorkspaceButton.convert(clickPointInButton, to: nil)
 
-        XCTAssertGreaterThan(secondWorkspaceButton.frame.height, 30)
-        XCTAssertTrue(hostingView.bounds.contains(clickPointInHost))
+        XCTAssertGreaterThan(secondWorkspaceFrame.height, 30)
+        XCTAssertTrue(secondWorkspacePointerView.bounds.contains(clickPointInHeader))
 
-        try click(window: window, at: clickPointInWindow)
+        try click(view: secondWorkspacePointerView, at: clickPointInHeader)
         pumpMainRunLoop(duration: 0.2)
 
-        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), workspaces[1].id)
+        XCTAssertEqual(
+            store.selectedWorkspaceID(in: windowID),
+            workspaces[1].id,
+            "Expected click at \(clickPointInHeader) to select frame \(secondWorkspaceFrame)"
+        )
     }
 
     func testPendingSidebarFlashRequestPulsesAndClearsSelectedSessionRow() throws {
@@ -1061,16 +1243,17 @@ final class SidebarViewTests: XCTestCase {
     }
 
     private func click(
-        window: NSWindow,
+        view: PointerInteractionView,
         at location: NSPoint,
         clickCount: Int = 1
     ) throws {
+        let windowLocation = view.convert(location, to: nil)
         guard let mouseDown = NSEvent.mouseEvent(
             with: .leftMouseDown,
-            location: location,
+            location: windowLocation,
             modifierFlags: [],
             timestamp: 0,
-            windowNumber: window.windowNumber,
+            windowNumber: view.window?.windowNumber ?? 0,
             context: nil,
             eventNumber: 0,
             clickCount: clickCount,
@@ -1080,10 +1263,10 @@ final class SidebarViewTests: XCTestCase {
         }
         guard let mouseUp = NSEvent.mouseEvent(
             with: .leftMouseUp,
-            location: location,
+            location: windowLocation,
             modifierFlags: [],
             timestamp: 0.05,
-            windowNumber: window.windowNumber,
+            windowNumber: view.window?.windowNumber ?? 0,
             context: nil,
             eventNumber: 1,
             clickCount: clickCount,
@@ -1092,8 +1275,23 @@ final class SidebarViewTests: XCTestCase {
             throw NSError(domain: "SidebarViewTests", code: 2, userInfo: nil)
         }
 
-        window.sendEvent(mouseDown)
-        window.sendEvent(mouseUp)
+        view.mouseDown(with: mouseDown)
+        view.mouseUp(with: mouseUp)
+    }
+
+    private func pointerInteractionView(in rootView: NSView, workspaceID: UUID) -> PointerInteractionView? {
+        if let pointerView = rootView as? PointerInteractionView,
+           pointerView.logMetadata["workspaceID"] == workspaceID.uuidString {
+            return pointerView
+        }
+
+        for subview in rootView.subviews {
+            if let matchingView = pointerInteractionView(in: subview, workspaceID: workspaceID) {
+                return matchingView
+            }
+        }
+
+        return nil
     }
 
     private func renderedTextValues(in rootView: NSView) -> [String] {
@@ -1176,51 +1374,6 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return values
-    }
-
-    private func findSubview<ViewType: NSView>(
-        ofType type: ViewType.Type,
-        in rootView: NSView
-    ) -> ViewType? {
-        if let typedView = rootView as? ViewType {
-            return typedView
-        }
-
-        for subview in rootView.subviews {
-            if let match = findSubview(ofType: type, in: subview) {
-                return match
-            }
-        }
-
-        return nil
-    }
-
-    private func findSubviews(
-        namedClass className: String,
-        in rootView: NSView
-    ) -> [NSView] {
-        var matches: [NSView] = []
-        if String(describing: type(of: rootView)) == className {
-            matches.append(rootView)
-        }
-
-        for subview in rootView.subviews {
-            matches.append(contentsOf: findSubviews(namedClass: className, in: subview))
-        }
-
-        return matches
-    }
-
-    private func workspaceRowButtons(in rootView: NSView) -> [NSView] {
-        let workspaceButtons = findSubviews(namedClass: "KeyViewProxy", in: rootView)
-            .filter { $0.frame.width >= 200 && $0.frame.height >= 30 }
-        let rowLayoutIsFlipped = workspaceButtons.first?.superview?.isFlipped ?? true
-        return workspaceButtons.sorted { lhs, rhs in
-            if rowLayoutIsFlipped {
-                return lhs.frame.minY < rhs.frame.minY
-            }
-            return lhs.frame.minY > rhs.frame.minY
-        }
     }
 
 }

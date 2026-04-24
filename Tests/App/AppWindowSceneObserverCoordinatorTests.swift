@@ -88,6 +88,54 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.identifier?.rawValue, windowID.uuidString)
     }
 
+    func testAttachAndDetachDoNotMutateEnabledWindowBackgroundDragging() {
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+        window.isMovableByWindowBackground = true
+        var backgroundDraggingChangeCount = 0
+        let observation = window.observe(\.isMovableByWindowBackground, options: []) { _, _ in
+            backgroundDraggingChangeCount += 1
+        }
+
+        withExtendedLifetime(observation) {
+            coordinator.attach(to: window)
+            coordinator.detach()
+
+            XCTAssertTrue(window.isMovableByWindowBackground)
+            XCTAssertEqual(backgroundDraggingChangeCount, 0)
+        }
+    }
+
+    func testAttachAndDetachDoNotMutateDisabledWindowBackgroundDragging() {
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+        window.isMovableByWindowBackground = false
+        var backgroundDraggingChangeCount = 0
+        let observation = window.observe(\.isMovableByWindowBackground, options: []) { _, _ in
+            backgroundDraggingChangeCount += 1
+        }
+
+        withExtendedLifetime(observation) {
+            coordinator.attach(to: window)
+            coordinator.detach()
+
+            XCTAssertFalse(window.isMovableByWindowBackground)
+            XCTAssertEqual(backgroundDraggingChangeCount, 0)
+        }
+    }
+
     func testAttachRetargetsNativeCloseButtonToPresentWindowCloseConfirmation() throws {
         var willCloseCallCount = 0
         var presentedWindow: NSWindow?
