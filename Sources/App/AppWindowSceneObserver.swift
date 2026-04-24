@@ -86,6 +86,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     private weak var observedWindow: NSWindow?
     private var observerTokens: [NSObjectProtocol] = []
     private var lastPublishedWindowFrame: CGRect?
+    private var originalObservedWindowIsMovableByWindowBackground: Bool?
     private let scheduleOnMainActor: MainActorScheduler
     private let defaultWindowTitle: WindowTitleProvider
     private let screenVisibleFramesProvider: VisibleScreenFramesProvider
@@ -157,6 +158,8 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         if window.identifier != expectedIdentifier {
             window.identifier = expectedIdentifier
         }
+        originalObservedWindowIsMovableByWindowBackground = window.isMovableByWindowBackground
+        window.isMovableByWindowBackground = false
         installNativeCloseButtonOverrideIfNeeded()
         applyWindowTitleIfNeeded()
         let notificationCenter = NotificationCenter.default
@@ -257,6 +260,11 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         observerTokens.removeAll()
         lastPublishedWindowFrame = nil
         isPresentingWindowCloseConfirmation = false
+        if let observedWindow,
+           let originalObservedWindowIsMovableByWindowBackground {
+            observedWindow.isMovableByWindowBackground = originalObservedWindowIsMovableByWindowBackground
+        }
+        originalObservedWindowIsMovableByWindowBackground = nil
         observedWindow = nil
     }
 

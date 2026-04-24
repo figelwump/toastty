@@ -283,6 +283,30 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertNil(targetIndex)
     }
 
+    func testWorkspaceDragActivationUsesVerticalThreshold() {
+        XCTAssertFalse(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 30, height: 3.9))
+        )
+        XCTAssertTrue(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 0, height: 4))
+        )
+        XCTAssertTrue(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 0, height: -4))
+        )
+    }
+
+    func testWorkspaceTapToleranceUsesTotalPointerDistance() {
+        XCTAssertTrue(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 2, height: 2))
+        )
+        XCTAssertFalse(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 4, height: 0))
+        )
+        XCTAssertFalse(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 3, height: 3))
+        )
+    }
+
     func testBackgroundTabSessionPanelRemainsFocusable() throws {
         let backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
         let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
@@ -579,12 +603,14 @@ final class SidebarViewTests: XCTestCase {
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        var headerFramesByID: [UUID: CGRect] = [:]
         let sidebarView = SidebarView(
             windowID: windowID,
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
-            terminalRuntimeContext: runtimeContext
+            terminalRuntimeContext: runtimeContext,
+            workspaceHeaderFrameObserver: { headerFramesByID = $0 }
         )
         let hostingView = NSHostingView(
             rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth, height: 220)
@@ -600,24 +626,26 @@ final class SidebarViewTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         pumpMainRunLoop()
         hostingView.layoutSubtreeIfNeeded()
+        pumpMainRunLoop()
 
-        let secondWorkspaceButton = try XCTUnwrap(
-            workspaceRowButtons(in: hostingView).dropFirst().first
+        let secondWorkspaceFrame = try XCTUnwrap(headerFramesByID[workspaces[1].id])
+        let clickPointInHost = NSPoint(
+            x: secondWorkspaceFrame.midX,
+            y: ToastyTheme.sidebarTopPadding + secondWorkspaceFrame.minY + 6
         )
-        let clickPointInButton = NSPoint(
-            x: secondWorkspaceButton.bounds.midX,
-            y: secondWorkspaceButton.bounds.maxY - 6
-        )
-        let clickPointInHost = secondWorkspaceButton.convert(clickPointInButton, to: hostingView)
-        let clickPointInWindow = secondWorkspaceButton.convert(clickPointInButton, to: nil)
+        let clickPointInWindow = hostingView.convert(clickPointInHost, to: nil)
 
-        XCTAssertGreaterThan(secondWorkspaceButton.frame.height, 30)
+        XCTAssertGreaterThan(secondWorkspaceFrame.height, 30)
         XCTAssertTrue(hostingView.bounds.contains(clickPointInHost))
 
         try click(window: window, at: clickPointInWindow)
         pumpMainRunLoop(duration: 0.2)
 
-        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), workspaces[1].id)
+        XCTAssertEqual(
+            store.selectedWorkspaceID(in: windowID),
+            workspaces[1].id,
+            "Expected click at \(clickPointInWindow) to select frame \(secondWorkspaceFrame)"
+        )
     }
 
     func testPendingSidebarFlashRequestPulsesAndClearsSelectedSessionRow() throws {
@@ -1081,51 +1109,6 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return values
-    }
-
-    private func findSubview<ViewType: NSView>(
-        ofType type: ViewType.Type,
-        in rootView: NSView
-    ) -> ViewType? {
-        if let typedView = rootView as? ViewType {
-            return typedView
-        }
-
-        for subview in rootView.subviews {
-            if let match = findSubview(ofType: type, in: subview) {
-                return match
-            }
-        }
-
-        return nil
-    }
-
-    private func findSubviews(
-        namedClass className: String,
-        in rootView: NSView
-    ) -> [NSView] {
-        var matches: [NSView] = []
-        if String(describing: type(of: rootView)) == className {
-            matches.append(rootView)
-        }
-
-        for subview in rootView.subviews {
-            matches.append(contentsOf: findSubviews(namedClass: className, in: subview))
-        }
-
-        return matches
-    }
-
-    private func workspaceRowButtons(in rootView: NSView) -> [NSView] {
-        let workspaceButtons = findSubviews(namedClass: "KeyViewProxy", in: rootView)
-            .filter { $0.frame.width >= 200 && $0.frame.height >= 30 }
-        let rowLayoutIsFlipped = workspaceButtons.first?.superview?.isFlipped ?? true
-        return workspaceButtons.sorted { lhs, rhs in
-            if rowLayoutIsFlipped {
-                return lhs.frame.minY < rhs.frame.minY
-            }
-            return lhs.frame.minY > rhs.frame.minY
-        }
     }
 
 }

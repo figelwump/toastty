@@ -25,6 +25,7 @@ struct SidebarView: View {
     struct WorkspaceDragState: Equatable {
         let workspaceID: UUID
         let sourceIndex: Int
+        let startPointerY: CGFloat
         var translationHeight: CGFloat
         var targetIndex: Int
     }
@@ -37,6 +38,8 @@ struct SidebarView: View {
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
+    /// Test seam for asserting click targets against the same geometry used by drag reordering.
+    let workspaceHeaderFrameObserver: (([UUID: CGRect]) -> Void)?
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
@@ -63,6 +66,7 @@ struct SidebarView: View {
     private static let sessionStatusesTopSpacing: CGFloat = 0
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
+    private nonisolated static let workspaceDragActivationDistance: CGFloat = 4
 
     nonisolated static func workspaceReorderTargetIndex(
         orderedWorkspaceIDs: [UUID],
@@ -116,7 +120,8 @@ struct SidebarView: View {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
-        scrollRequestObserver: ((UUID, Bool) -> Void)? = nil
+        scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
+        workspaceHeaderFrameObserver: (([UUID: CGRect]) -> Void)? = nil
     ) {
         self.windowID = windowID
         self.store = store
@@ -124,6 +129,7 @@ struct SidebarView: View {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeContext = terminalRuntimeContext
         self.scrollRequestObserver = scrollRequestObserver
+        self.workspaceHeaderFrameObserver = workspaceHeaderFrameObserver
     }
 
     private var selectedWorkspaceID: UUID? {
@@ -157,8 +163,9 @@ struct SidebarView: View {
                     }
                     .padding(.horizontal, 8)
                     .coordinateSpace(name: SidebarWorkspaceListCoordinateSpace.name)
-                    .onPreferenceChange(WorkspaceHeaderFramePreferenceKey.self) {
-                        measuredWorkspaceHeaderFramesByID = $0
+                    .onPreferenceChange(WorkspaceHeaderFramePreferenceKey.self) { framesByID in
+                        measuredWorkspaceHeaderFramesByID = framesByID
+                        workspaceHeaderFrameObserver?(framesByID)
                     }
                     .overlay(alignment: .topLeading) {
                         if let activeWorkspaceDrag,
@@ -326,33 +333,56 @@ struct SidebarView: View {
             isFlashing: flashingWorkspaceID == workspaceID
         ) {
             VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
-                } label: {
-                    workspaceHeaderContent {
-                        workspacePrimaryContent(
-                            workspace: workspace,
-                            shortcutLabel: shortcutLabel,
-                            selectionSubtitle: nil,
-                            isSelected: isSelected
-                        ) {
-                            Text(workspace.title)
-                                .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
-                                .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
+                workspaceHeaderContent {
+                    workspacePrimaryContent(
+                        workspace: workspace,
+                        shortcutLabel: shortcutLabel,
+                        selectionSubtitle: nil,
+                        isSelected: isSelected
+                    ) {
+                        Text(workspace.title)
+                            .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
+                            .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
-                .buttonStyle(SidebarRowButtonStyle())
                 .background(workspaceHeaderFrameMeasurement(workspaceID: workspaceID))
-                .highPriorityGesture(
-                    workspaceDragGesture(
-                        workspaceID: workspaceID,
-                        sourceIndex: sourceIndex,
-                        orderedWorkspaceIDs: orderedWorkspaceIDs
+                .contentShape(Rectangle())
+                .overlay {
+                    PointerInteractionRegion(
+                        name: "workspace-sidebar-row",
+                        metadata: [
+                            "workspaceID": workspaceID.uuidString,
+                            "sourceIndex": "\(sourceIndex)",
+                        ],
+                        onBegan: { _ in
+                            beginWorkspaceInteraction(workspaceID: workspaceID)
+                        },
+                        onChanged: { value in
+                            updateWorkspaceDrag(
+                                workspaceID: workspaceID,
+                                sourceIndex: sourceIndex,
+                                orderedWorkspaceIDs: orderedWorkspaceIDs,
+                                value: value
+                            )
+                        },
+                        onEnded: { value in
+                            finishWorkspaceInteraction(
+                                workspaceID: workspaceID,
+                                workspace: workspace,
+                                value: value
+                            )
+                        }
                     )
-                )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(workspace.title)
+                .accessibilityAction {
+                    handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
+                }
 
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
@@ -730,62 +760,149 @@ struct SidebarView: View {
         }
     }
 
-    private func workspaceDragGesture(
-        workspaceID: UUID,
-        sourceIndex: Int,
-        orderedWorkspaceIDs: [UUID]
-    ) -> some Gesture {
-        DragGesture(minimumDistance: 4, coordinateSpace: .named(SidebarWorkspaceListCoordinateSpace.name))
-            .onChanged { value in
-                updateWorkspaceDrag(
-                    workspaceID: workspaceID,
-                    sourceIndex: sourceIndex,
-                    orderedWorkspaceIDs: orderedWorkspaceIDs,
-                    value: value
-                )
-            }
-            .onEnded { _ in
-                finishWorkspaceDrag()
-            }
+    nonisolated static func workspaceDragActivationExceeded(translation: CGSize) -> Bool {
+        abs(translation.height) >= workspaceDragActivationDistance
+    }
+
+    nonisolated static func pointerMovementWithinTapTolerance(translation: CGSize) -> Bool {
+        let distanceSquared = (translation.width * translation.width) + (translation.height * translation.height)
+        return distanceSquared < (workspaceDragActivationDistance * workspaceDragActivationDistance)
     }
 
     private func updateWorkspaceDrag(
         workspaceID: UUID,
         sourceIndex: Int,
         orderedWorkspaceIDs: [UUID],
-        value: DragGesture.Value
+        value: PointerInteractionValue
     ) {
-        guard renamingWorkspaceID == nil else { return }
+        let baseMetadata = workspaceDragLogMetadata(
+            workspaceID: workspaceID,
+            sourceIndex: sourceIndex,
+            value: value
+        )
+        if renamingWorkspaceID != nil {
+            ToasttyLog.info(
+                "workspace sidebar drag ignored",
+                category: .input,
+                metadata: baseMetadata.merging(["reason": "renaming-workspace"], uniquingKeysWith: { _, new in new })
+            )
+            return
+        }
+        guard Self.workspaceDragActivationExceeded(translation: value.translation) else {
+            ToasttyLog.info(
+                "workspace sidebar drag below activation threshold",
+                category: .input,
+                metadata: baseMetadata
+            )
+            return
+        }
 
         hoveredWorkspaceID = nil
         hoveredPanelID = nil
 
         var dragState = activeWorkspaceDrag
         if dragState?.workspaceID != workspaceID {
+            let startPointerY = (measuredWorkspaceHeaderFramesByID[workspaceID]?.minY ?? 0) + value.startLocation.y
             dragState = WorkspaceDragState(
                 workspaceID: workspaceID,
                 sourceIndex: sourceIndex,
+                startPointerY: startPointerY,
                 translationHeight: value.translation.height,
                 targetIndex: sourceIndex
+            )
+            ToasttyLog.info(
+                "workspace sidebar drag activated",
+                category: .input,
+                metadata: baseMetadata.merging(
+                    [
+                        "startPointerY": "\(startPointerY)",
+                        "orderedWorkspaceCount": "\(orderedWorkspaceIDs.count)",
+                    ],
+                    uniquingKeysWith: { _, new in new }
+                )
             )
         } else {
             dragState?.translationHeight = value.translation.height
         }
 
-        dragState?.targetIndex = Self.workspaceReorderTargetIndex(
+        let pointerY = (dragState?.startPointerY ?? value.location.y) + value.translation.height
+        let targetIndex = Self.workspaceReorderTargetIndex(
             orderedWorkspaceIDs: orderedWorkspaceIDs,
             measuredHeaderFramesByID: measuredWorkspaceHeaderFramesByID,
             draggedWorkspaceID: workspaceID,
-            pointerY: value.location.y
+            pointerY: pointerY
         ) ?? sourceIndex
+        let previousTargetIndex = dragState?.targetIndex
+        dragState?.targetIndex = targetIndex
         activeWorkspaceDrag = dragState
+        if previousTargetIndex != targetIndex {
+            ToasttyLog.info(
+                "workspace sidebar drag target changed",
+                category: .input,
+                metadata: baseMetadata.merging(
+                    [
+                        "pointerY": "\(pointerY)",
+                        "targetIndex": "\(targetIndex)",
+                        "previousTargetIndex": previousTargetIndex.map(String.init) ?? "nil",
+                    ],
+                    uniquingKeysWith: { _, new in new }
+                )
+            )
+        }
+    }
+
+    private func finishWorkspaceInteraction(
+        workspaceID: UUID,
+        workspace: WorkspaceState,
+        value: PointerInteractionValue
+    ) {
+        if activeWorkspaceDrag?.workspaceID == workspaceID {
+            ToasttyLog.info(
+                "workspace sidebar drag finishing",
+                category: .input,
+                metadata: workspaceDragLogMetadata(workspaceID: workspaceID, sourceIndex: nil, value: value)
+            )
+            finishWorkspaceDrag()
+            return
+        }
+
+        guard activeWorkspaceDrag == nil else { return }
+        guard Self.pointerMovementWithinTapTolerance(translation: value.translation) else { return }
+        ToasttyLog.info(
+            "workspace sidebar pointer ended as tap",
+            category: .input,
+            metadata: workspaceDragLogMetadata(workspaceID: workspaceID, sourceIndex: nil, value: value)
+        )
+        handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
     }
 
     private func finishWorkspaceDrag() {
         guard let activeWorkspaceDrag else { return }
         cancelWorkspaceDrag()
 
-        guard activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex else { return }
+        guard activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex else {
+            ToasttyLog.info(
+                "workspace sidebar drag finished without reorder",
+                category: .input,
+                metadata: [
+                    "workspaceID": activeWorkspaceDrag.workspaceID.uuidString,
+                    "sourceIndex": "\(activeWorkspaceDrag.sourceIndex)",
+                    "targetIndex": "\(activeWorkspaceDrag.targetIndex)",
+                    "translationHeight": "\(activeWorkspaceDrag.translationHeight)",
+                ]
+            )
+            return
+        }
+        ToasttyLog.info(
+            "workspace sidebar drag committing reorder",
+            category: .input,
+            metadata: [
+                "workspaceID": activeWorkspaceDrag.workspaceID.uuidString,
+                "sourceIndex": "\(activeWorkspaceDrag.sourceIndex)",
+                "targetIndex": "\(activeWorkspaceDrag.targetIndex)",
+                "translationHeight": "\(activeWorkspaceDrag.translationHeight)",
+            ]
+        )
         _ = store.send(
             .moveWorkspace(
                 windowID: windowID,
@@ -797,6 +914,48 @@ struct SidebarView: View {
 
     private func cancelWorkspaceDrag() {
         activeWorkspaceDrag = nil
+    }
+
+    private func beginWorkspaceInteraction(workspaceID: UUID) {
+        guard let activeWorkspaceDrag else { return }
+        ToasttyLog.info(
+            "workspace sidebar stale drag cancelled on new pointer sequence",
+            category: .input,
+            metadata: [
+                "newWorkspaceID": workspaceID.uuidString,
+                "activeWorkspaceID": activeWorkspaceDrag.workspaceID.uuidString,
+                "sourceIndex": "\(activeWorkspaceDrag.sourceIndex)",
+                "targetIndex": "\(activeWorkspaceDrag.targetIndex)",
+                "translationHeight": "\(activeWorkspaceDrag.translationHeight)",
+            ]
+        )
+        cancelWorkspaceDrag()
+    }
+
+    private func workspaceDragLogMetadata(
+        workspaceID: UUID,
+        sourceIndex: Int?,
+        value: PointerInteractionValue
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "workspaceID": workspaceID.uuidString,
+            "startLocation": DraggableInteractionLog.pointDescription(value.startLocation),
+            "location": DraggableInteractionLog.pointDescription(value.location),
+            "translation": DraggableInteractionLog.sizeDescription(value.translation),
+        ]
+        if let sourceIndex {
+            metadata["sourceIndex"] = "\(sourceIndex)"
+        }
+        if let activeWorkspaceDrag {
+            metadata["activeWorkspaceID"] = activeWorkspaceDrag.workspaceID.uuidString
+            metadata["activeSourceIndex"] = "\(activeWorkspaceDrag.sourceIndex)"
+            metadata["activeTargetIndex"] = "\(activeWorkspaceDrag.targetIndex)"
+            metadata["activeTranslationHeight"] = "\(activeWorkspaceDrag.translationHeight)"
+        }
+        if let measuredFrame = measuredWorkspaceHeaderFramesByID[workspaceID] {
+            metadata["measuredFrame"] = DraggableInteractionLog.rectDescription(measuredFrame)
+        }
+        return metadata
     }
 
     @MainActor

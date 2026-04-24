@@ -60,6 +60,143 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
+    func testPointerInteractionViewDisablesWindowBackgroundDragging() {
+        let view = PointerInteractionView(frame: NSRect(x: 0, y: 0, width: 120, height: 40))
+
+        XCTAssertFalse(view.mouseDownCanMoveWindow)
+        XCTAssertTrue(view.acceptsFirstMouse(for: nil))
+    }
+
+    @MainActor
+    func testPointerInteractionViewReportsDragSequenceTranslation() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        view.usesEventTrackingLoop = false
+        container.addSubview(view)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+
+        var beganValue: PointerInteractionValue?
+        var changedValue: PointerInteractionValue?
+        var endedValue: PointerInteractionValue?
+        view.onBegan = { beganValue = $0 }
+        view.onChanged = { changedValue = $0 }
+        view.onEnded = { endedValue = $0 }
+
+        let startLocation = NSPoint(x: 52, y: 56)
+        let draggedLocation = NSPoint(x: 86, y: 43)
+        XCTAssertTrue(window.isMovable)
+        view.mouseDown(
+            with: try pointerMouseEvent(type: .leftMouseDown, location: startLocation, window: window)
+        )
+        XCTAssertFalse(window.isMovable)
+        view.mouseDragged(
+            with: try pointerMouseEvent(type: .leftMouseDragged, location: draggedLocation, window: window)
+        )
+        view.mouseUp(
+            with: try pointerMouseEvent(type: .leftMouseUp, location: draggedLocation, window: window)
+        )
+        XCTAssertTrue(window.isMovable)
+
+        let expectedStartLocation = view.convert(startLocation, from: nil)
+        let expectedLocation = CGPoint(x: expectedStartLocation.x + 34, y: expectedStartLocation.y + 13)
+
+        let began = try XCTUnwrap(beganValue)
+        XCTAssertEqual(began.startLocation.x, expectedStartLocation.x, accuracy: 0.001)
+        XCTAssertEqual(began.startLocation.y, expectedStartLocation.y, accuracy: 0.001)
+        XCTAssertEqual(began.translation.width, 0, accuracy: 0.001)
+        XCTAssertEqual(began.translation.height, 0, accuracy: 0.001)
+
+        let changed = try XCTUnwrap(changedValue)
+        XCTAssertEqual(changed.startLocation.x, expectedStartLocation.x, accuracy: 0.001)
+        XCTAssertEqual(changed.startLocation.y, expectedStartLocation.y, accuracy: 0.001)
+        XCTAssertEqual(changed.translation.width, 34, accuracy: 0.001)
+        XCTAssertEqual(changed.translation.height, 13, accuracy: 0.001)
+        XCTAssertEqual(changed.location.x, expectedLocation.x, accuracy: 0.001)
+        XCTAssertEqual(changed.location.y, expectedLocation.y, accuracy: 0.001)
+        XCTAssertEqual(endedValue, changedValue)
+    }
+
+    @MainActor
+    func testWindowMovementSuppressionRestoresAfterAllReasonsRelease() {
+        defer { WindowMovementSuppression.resetForTesting() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let owner = NSObject()
+        XCTAssertTrue(window.isMovable)
+
+        WindowMovementSuppression.suppress(window: window, owner: owner, reason: "hover")
+        XCTAssertFalse(window.isMovable)
+
+        WindowMovementSuppression.suppress(window: window, owner: owner, reason: "pointer-sequence")
+        WindowMovementSuppression.restore(owner: owner, reason: "hover")
+        XCTAssertFalse(window.isMovable)
+
+        WindowMovementSuppression.restore(owner: owner, reason: "pointer-sequence")
+        XCTAssertTrue(window.isMovable)
+    }
+
+    @MainActor
+    func testWindowMovementSuppressionPreservesInitiallyNonMovableWindow() {
+        defer { WindowMovementSuppression.resetForTesting() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let owner = NSObject()
+        window.isMovable = false
+
+        WindowMovementSuppression.suppress(window: window, owner: owner, reason: "hover")
+        XCTAssertFalse(window.isMovable)
+
+        WindowMovementSuppression.restore(owner: owner, reason: "hover")
+        XCTAssertFalse(window.isMovable)
+    }
+
+    @MainActor
+    func testWindowMovementSuppressionStacksAcrossOwners() {
+        defer { WindowMovementSuppression.resetForTesting() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let firstOwner = NSObject()
+        let secondOwner = NSObject()
+
+        WindowMovementSuppression.suppress(window: window, owner: firstOwner, reason: "hover")
+        WindowMovementSuppression.suppress(window: window, owner: secondOwner, reason: "hover")
+        XCTAssertFalse(window.isMovable)
+
+        WindowMovementSuppression.restore(owner: firstOwner, reason: "hover")
+        XCTAssertFalse(window.isMovable)
+
+        WindowMovementSuppression.restore(owner: secondOwner, reason: "hover")
+        XCTAssertTrue(window.isMovable)
+    }
+
+    @MainActor
     func testHitTestInsideBoundsReturnsViewWithWindowDragsDisabled() {
         // Mirror the real app window: hidden titlebar, transparent titlebar,
         // full-size content view. This reproduces the path where AppKit asks
@@ -121,18 +258,18 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         // refuses window drags (e.g., an NSTextField for rename), the inner
         // subview should keep receiving events — do not swallow the hit at
         // the wrapper.
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 32))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 80))
         let wrappedHost = NonWindowDraggableContainerView(
             rootView: AnyView(Color.clear.frame(width: 200, height: 32))
         )
-        wrappedHost.frame = NSRect(x: 0, y: 0, width: 200, height: 32)
+        wrappedHost.frame = NSRect(x: 30, y: 20, width: 200, height: 32)
         container.addSubview(wrappedHost)
 
         let innerControl = NSTextField(frame: NSRect(x: 20, y: 6, width: 160, height: 20))
         XCTAssertFalse(innerControl.mouseDownCanMoveWindow)
         wrappedHost.addSubview(innerControl)
 
-        let hit = container.hitTest(NSPoint(x: 100, y: 16))
+        let hit = container.hitTest(NSPoint(x: 130, y: 36))
         XCTAssertIdentical(hit, innerControl)
     }
 
@@ -255,6 +392,28 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         }
 
         return nil
+    }
+
+    @MainActor
+    private func pointerMouseEvent(
+        type: NSEvent.EventType,
+        location: NSPoint,
+        window: NSWindow
+    ) throws -> NSEvent {
+        guard let event = NSEvent.mouseEvent(
+            with: type,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: type == .leftMouseUp ? 0 : 1
+        ) else {
+            throw NSError(domain: "NonWindowDraggableRegionTests", code: 1, userInfo: nil)
+        }
+        return event
     }
 }
 

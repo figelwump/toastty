@@ -48,6 +48,7 @@ struct WorkspaceView: View {
     struct WorkspaceTabDragState: Equatable {
         let tabID: UUID
         let sourceIndex: Int
+        let startPointerX: CGFloat
         var translationWidth: CGFloat
         var targetIndex: Int
     }
@@ -116,6 +117,7 @@ struct WorkspaceView: View {
     private static let workspaceTabStripSpacing: CGFloat = -1.5
     private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
+    private nonisolated static let workspaceTabDragActivationDistance: CGFloat = 4
 
     nonisolated static func resolvedWorkspaceTitleWidth(
         preferredWidth: CGFloat,
@@ -1330,40 +1332,68 @@ struct WorkspaceView: View {
                     hasUnread: hasUnread
                 )
             } else {
-                Button {
-                    if renamingTabID != nil {
-                        cancelTabRename()
-                    }
-                    _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
-                } label: {
-                    workspaceTabChrome(chromeSpec: chromeSpec) {
-                        GeometryReader { geometry in
-                            let focusIndicatorStyle = Self.workspaceTabFocusIndicatorStyle(
-                                tabWidth: geometry.size.width
+                workspaceTabChrome(chromeSpec: chromeSpec) {
+                    GeometryReader { geometry in
+                        let focusIndicatorStyle = Self.workspaceTabFocusIndicatorStyle(
+                            tabWidth: geometry.size.width
+                        )
+                        HStack(spacing: 5) {
+                            workspaceTabTitleContent(
+                                tab: tab,
+                                textColor: chromeSpec.text,
+                                hasUnread: hasUnread,
+                                focusIndicatorStyle: focusIndicatorStyle
                             )
-                            HStack(spacing: 5) {
-                                workspaceTabTitleContent(
-                                    tab: tab,
-                                    textColor: chromeSpec.text,
-                                    hasUnread: hasUnread,
-                                    focusIndicatorStyle: focusIndicatorStyle
-                                )
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                                workspaceTabTrailingContent(
-                                    index: index,
-                                    isSelected: isSelected,
-                                    isHovered: isHovered,
-                                    showsCloseAffordance: showsManagementAffordances
-                                )
-                                .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, alignment: .trailing)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                            workspaceTabTrailingContent(
+                                index: index,
+                                isSelected: isSelected,
+                                isHovered: isHovered,
+                                showsCloseAffordance: showsManagementAffordances
+                            )
+                            .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, alignment: .trailing)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     }
                 }
-                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .overlay {
+                    PointerInteractionRegion(
+                        name: "workspace-tab",
+                        metadata: [
+                            "workspaceID": workspaceID.uuidString,
+                            "tabID": tab.id.uuidString,
+                            "sourceIndex": "\(index)",
+                        ],
+                        onBegan: { _ in
+                            beginWorkspaceTabInteraction(tabID: tab.id)
+                        },
+                        onChanged: { value in
+                            updateWorkspaceTabDrag(
+                                workspaceID: workspaceID,
+                                orderedTabIDs: orderedTabIDs,
+                                tabID: tab.id,
+                                sourceIndex: index,
+                                value: value
+                            )
+                        },
+                        onEnded: { value in
+                            finishWorkspaceTabInteraction(
+                                workspaceID: workspaceID,
+                                tabID: tab.id,
+                                value: value
+                            )
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(tab.displayTitle)
+                .accessibilityAction {
+                    selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id)
+                }
                 .help(tab.displayTitle)
                 .accessibilityIdentifier("workspace.tab.\(tab.id.uuidString)")
                 .animation(.easeOut(duration: 0.1), value: isHovered)
@@ -1396,20 +1426,7 @@ struct WorkspaceView: View {
                 y: isDraggedTab ? 3 : 0
             )
 
-        let interactiveRow = Group {
-            if isRenaming {
-                measuredRow
-            } else {
-                measuredRow.highPriorityGesture(
-                    workspaceTabDragGesture(
-                        workspaceID: workspaceID,
-                        orderedTabIDs: orderedTabIDs,
-                        tabID: tab.id,
-                        sourceIndex: index
-                    )
-                )
-            }
-        }
+        let interactiveRow = measuredRow
 
         if installsContextMenu {
             interactiveRow.contextMenu {
@@ -1780,25 +1797,13 @@ struct WorkspaceView: View {
         }
     }
 
-    private func workspaceTabDragGesture(
-        workspaceID: UUID,
-        orderedTabIDs: [UUID],
-        tabID: UUID,
-        sourceIndex: Int
-    ) -> some Gesture {
-        DragGesture(minimumDistance: 4, coordinateSpace: .named(WorkspaceTabStripCoordinateSpace.name))
-            .onChanged { value in
-                updateWorkspaceTabDrag(
-                    workspaceID: workspaceID,
-                    orderedTabIDs: orderedTabIDs,
-                    tabID: tabID,
-                    sourceIndex: sourceIndex,
-                    value: value
-                )
-            }
-            .onEnded { _ in
-                finishWorkspaceTabDrag(workspaceID: workspaceID)
-            }
+    nonisolated static func workspaceTabDragActivationExceeded(translation: CGSize) -> Bool {
+        abs(translation.width) >= workspaceTabDragActivationDistance
+    }
+
+    nonisolated static func pointerMovementWithinTapTolerance(translation: CGSize) -> Bool {
+        let distanceSquared = (translation.width * translation.width) + (translation.height * translation.height)
+        return distanceSquared < (workspaceTabDragActivationDistance * workspaceTabDragActivationDistance)
     }
 
     private func updateWorkspaceTabDrag(
@@ -1806,39 +1811,146 @@ struct WorkspaceView: View {
         orderedTabIDs: [UUID],
         tabID: UUID,
         sourceIndex: Int,
-        value: DragGesture.Value
+        value: PointerInteractionValue
     ) {
-        guard renamingTabID == nil else { return }
-        guard workspaceID == selectedWorkspace?.id else { return }
+        let baseMetadata = workspaceTabDragLogMetadata(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            sourceIndex: sourceIndex,
+            value: value
+        )
+        if renamingTabID != nil {
+            ToasttyLog.info(
+                "workspace tab drag ignored",
+                category: .input,
+                metadata: baseMetadata.merging(["reason": "renaming-tab"], uniquingKeysWith: { _, new in new })
+            )
+            return
+        }
+        if workspaceID != selectedWorkspace?.id {
+            ToasttyLog.info(
+                "workspace tab drag ignored",
+                category: .input,
+                metadata: baseMetadata.merging(["reason": "inactive-workspace"], uniquingKeysWith: { _, new in new })
+            )
+            return
+        }
+        guard Self.workspaceTabDragActivationExceeded(translation: value.translation) else {
+            ToasttyLog.info(
+                "workspace tab drag below activation threshold",
+                category: .input,
+                metadata: baseMetadata
+            )
+            return
+        }
 
         clearTabHoverState(for: tabID)
 
         var dragState = activeTabDrag
         if dragState?.tabID != tabID {
+            let startPointerX = (measuredWorkspaceTabFramesByID[tabID]?.minX ?? 0) + value.startLocation.x
             dragState = WorkspaceTabDragState(
                 tabID: tabID,
                 sourceIndex: sourceIndex,
+                startPointerX: startPointerX,
                 translationWidth: value.translation.width,
                 targetIndex: sourceIndex
+            )
+            ToasttyLog.info(
+                "workspace tab drag activated",
+                category: .input,
+                metadata: baseMetadata.merging(
+                    [
+                        "startPointerX": "\(startPointerX)",
+                        "orderedTabCount": "\(orderedTabIDs.count)",
+                    ],
+                    uniquingKeysWith: { _, new in new }
+                )
             )
         } else {
             dragState?.translationWidth = value.translation.width
         }
 
-        dragState?.targetIndex = Self.workspaceTabReorderTargetIndex(
+        let pointerX = (dragState?.startPointerX ?? value.location.x) + value.translation.width
+        let targetIndex = Self.workspaceTabReorderTargetIndex(
             orderedTabIDs: orderedTabIDs,
             measuredFramesByID: measuredWorkspaceTabFramesByID,
             draggedTabID: tabID,
-            pointerX: value.location.x
+            pointerX: pointerX
         ) ?? sourceIndex
+        let previousTargetIndex = dragState?.targetIndex
+        dragState?.targetIndex = targetIndex
         activeTabDrag = dragState
+        if previousTargetIndex != targetIndex {
+            ToasttyLog.info(
+                "workspace tab drag target changed",
+                category: .input,
+                metadata: baseMetadata.merging(
+                    [
+                        "pointerX": "\(pointerX)",
+                        "targetIndex": "\(targetIndex)",
+                        "previousTargetIndex": previousTargetIndex.map(String.init) ?? "nil",
+                    ],
+                    uniquingKeysWith: { _, new in new }
+                )
+            )
+        }
+    }
+
+    private func finishWorkspaceTabInteraction(
+        workspaceID: UUID,
+        tabID: UUID,
+        value: PointerInteractionValue
+    ) {
+        if activeTabDrag?.tabID == tabID {
+            ToasttyLog.info(
+                "workspace tab drag finishing",
+                category: .input,
+                metadata: workspaceTabDragLogMetadata(workspaceID: workspaceID, tabID: tabID, sourceIndex: nil, value: value)
+            )
+            finishWorkspaceTabDrag(workspaceID: workspaceID)
+            return
+        }
+
+        guard activeTabDrag == nil else { return }
+        guard Self.pointerMovementWithinTapTolerance(translation: value.translation) else { return }
+        ToasttyLog.info(
+            "workspace tab pointer ended as tap",
+            category: .input,
+            metadata: workspaceTabDragLogMetadata(workspaceID: workspaceID, tabID: tabID, sourceIndex: nil, value: value)
+        )
+        selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID)
     }
 
     private func finishWorkspaceTabDrag(workspaceID: UUID) {
         guard let activeTabDrag else { return }
         cancelWorkspaceTabDrag()
 
-        guard activeTabDrag.targetIndex != activeTabDrag.sourceIndex else { return }
+        guard activeTabDrag.targetIndex != activeTabDrag.sourceIndex else {
+            ToasttyLog.info(
+                "workspace tab drag finished without reorder",
+                category: .input,
+                metadata: [
+                    "workspaceID": workspaceID.uuidString,
+                    "tabID": activeTabDrag.tabID.uuidString,
+                    "sourceIndex": "\(activeTabDrag.sourceIndex)",
+                    "targetIndex": "\(activeTabDrag.targetIndex)",
+                    "translationWidth": "\(activeTabDrag.translationWidth)",
+                ]
+            )
+            return
+        }
+        ToasttyLog.info(
+            "workspace tab drag committing reorder",
+            category: .input,
+            metadata: [
+                "workspaceID": workspaceID.uuidString,
+                "tabID": activeTabDrag.tabID.uuidString,
+                "sourceIndex": "\(activeTabDrag.sourceIndex)",
+                "targetIndex": "\(activeTabDrag.targetIndex)",
+                "translationWidth": "\(activeTabDrag.translationWidth)",
+            ]
+        )
         _ = store.send(
             .moveWorkspaceTab(
                 workspaceID: workspaceID,
@@ -1848,8 +1960,59 @@ struct WorkspaceView: View {
         )
     }
 
+    private func selectWorkspaceTab(workspaceID: UUID, tabID: UUID) {
+        if renamingTabID != nil {
+            cancelTabRename()
+        }
+        _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+    }
+
+    private func beginWorkspaceTabInteraction(tabID: UUID) {
+        guard let activeTabDrag else { return }
+        ToasttyLog.info(
+            "workspace tab stale drag cancelled on new pointer sequence",
+            category: .input,
+            metadata: [
+                "newTabID": tabID.uuidString,
+                "activeTabID": activeTabDrag.tabID.uuidString,
+                "sourceIndex": "\(activeTabDrag.sourceIndex)",
+                "targetIndex": "\(activeTabDrag.targetIndex)",
+                "translationWidth": "\(activeTabDrag.translationWidth)",
+            ]
+        )
+        cancelWorkspaceTabDrag()
+    }
+
     private func cancelWorkspaceTabDrag() {
         activeTabDrag = nil
+    }
+
+    private func workspaceTabDragLogMetadata(
+        workspaceID: UUID,
+        tabID: UUID,
+        sourceIndex: Int?,
+        value: PointerInteractionValue
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "workspaceID": workspaceID.uuidString,
+            "tabID": tabID.uuidString,
+            "startLocation": DraggableInteractionLog.pointDescription(value.startLocation),
+            "location": DraggableInteractionLog.pointDescription(value.location),
+            "translation": DraggableInteractionLog.sizeDescription(value.translation),
+        ]
+        if let sourceIndex {
+            metadata["sourceIndex"] = "\(sourceIndex)"
+        }
+        if let activeTabDrag {
+            metadata["activeTabID"] = activeTabDrag.tabID.uuidString
+            metadata["activeSourceIndex"] = "\(activeTabDrag.sourceIndex)"
+            metadata["activeTargetIndex"] = "\(activeTabDrag.targetIndex)"
+            metadata["activeTranslationWidth"] = "\(activeTabDrag.translationWidth)"
+        }
+        if let measuredFrame = measuredWorkspaceTabFramesByID[tabID] {
+            metadata["measuredFrame"] = DraggableInteractionLog.rectDescription(measuredFrame)
+        }
+        return metadata
     }
 
     private func pruneTransientTabDragState() {

@@ -1,4 +1,5 @@
 import AppKit
+import CoreState
 import SwiftUI
 
 // Hidden-titlebar windows let AppKit treat top chrome as draggable background.
@@ -94,22 +95,24 @@ final class NonWindowDraggableContainerView: NSView {
     // return `false` and keep receiving events directly.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard isHidden == false, alphaValue > 0.01 else { return nil }
-        guard let localPoint = hitTestPointInBounds(point) else { return nil }
-        guard let hit = super.hitTest(localPoint) else { return hostingView }
+        guard containsHitTestPoint(point) else { return nil }
+        guard let hit = super.hitTest(point) else {
+            logHitTest(point: point, hit: nil, returned: hostingView, reason: "fallback-hosting-no-hit")
+            return hostingView
+        }
         if hit !== self, hit.mouseDownCanMoveWindow == false {
+            logHitTest(point: point, hit: hit, returned: hit, reason: "direct-non-window-draggable-hit")
             return hit
         }
+        logHitTest(point: point, hit: hit, returned: hostingView, reason: "reroute-window-draggable-hit")
         return hostingView
     }
 
-    private func hitTestPointInBounds(_ point: NSPoint) -> NSPoint? {
-        if bounds.contains(point) {
-            return point
+    private func containsHitTestPoint(_ point: NSPoint) -> Bool {
+        guard superview != nil else {
+            return bounds.contains(point)
         }
-        guard let superview else { return nil }
-
-        let pointFromSuperview = convert(point, from: superview)
-        return bounds.contains(pointFromSuperview) ? pointFromSuperview : nil
+        return frame.contains(point)
     }
 
     // Let a pointer drag that starts while the window is inactive reach the
@@ -118,6 +121,33 @@ final class NonWindowDraggableContainerView: NSView {
     // forwards the rest of the drag to its titlebar-move recognizer.
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool {
         true
+    }
+
+    private func logHitTest(point: NSPoint, hit: NSView?, returned: NSView, reason: String) {
+        guard let event = NSApp.currentEvent,
+              event.type == .leftMouseDown || event.type == .leftMouseDragged || event.type == .leftMouseUp else {
+            return
+        }
+
+        let localPoint = superview.map { convert(point, from: $0) } ?? point
+        var metadata: [String: String] = [
+            "reason": reason,
+            "eventType": DraggableInteractionLog.eventTypeDescription(event.type),
+            "eventWindowLocation": DraggableInteractionLog.pointDescription(event.locationInWindow),
+            "pointInSuperview": DraggableInteractionLog.pointDescription(point),
+            "pointInContainer": DraggableInteractionLog.pointDescription(localPoint),
+            "frame": DraggableInteractionLog.rectDescription(frame),
+            "bounds": DraggableInteractionLog.rectDescription(bounds),
+            "returnedType": String(describing: type(of: returned)),
+            "returnedMouseDownCanMoveWindow": "\(returned.mouseDownCanMoveWindow)",
+        ]
+        if let hit {
+            metadata["hitType"] = String(describing: type(of: hit))
+            metadata["hitMouseDownCanMoveWindow"] = "\(hit.mouseDownCanMoveWindow)"
+        } else {
+            metadata["hitType"] = "nil"
+        }
+        ToasttyLog.info("non-window-draggable hit test", category: .input, metadata: metadata)
     }
 }
 

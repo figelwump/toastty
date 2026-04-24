@@ -295,6 +295,30 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertNil(targetIndex)
     }
 
+    func testWorkspaceTabDragActivationUsesHorizontalThreshold() {
+        XCTAssertFalse(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: 3.9, height: 30))
+        )
+        XCTAssertTrue(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: 4, height: 0))
+        )
+        XCTAssertTrue(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: -4, height: 0))
+        )
+    }
+
+    func testWorkspaceTabTapToleranceUsesTotalPointerDistance() {
+        XCTAssertTrue(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 2, height: 2))
+        )
+        XCTAssertFalse(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 0, height: 4))
+        )
+        XCTAssertFalse(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 3, height: 3))
+        )
+    }
+
     func testResolvedWorkspaceTitleWidthUsesIntrinsicWidthWhenItFits() {
         XCTAssertEqual(
             WorkspaceView.resolvedWorkspaceTitleWidth(
