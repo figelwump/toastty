@@ -28,10 +28,10 @@ Use this workflow when a task is complete in a Toastty worktree and the next ste
    - Inspect the landed diff for worktree-only artifacts before validation.
    - In Toastty, `WORKTREE_HANDOFF.md` is a handoff artifact and should not stay on `main` unless the user explicitly wants it committed there.
 5. Validate the merged result on `main`.
-   - Use the repo’s normal full validation gate.
-   - In Toastty, the default baseline is `./scripts/automation/check.sh`.
-   - If the change touched UI or runtime behavior, also run the smoke validation expected by the repo instructions instead of relying on unit tests alone.
-   - In Toastty, that usually means the local smoke flows documented in `AGENTS.md`, including the fallback no-Ghostty pass before the Ghostty-enabled pass when the surface is covered there.
+   - Choose validation from the current repo instructions, not from this skill alone.
+   - Prefer the repo’s remote/wrapper validation paths for agent-driven test and smoke runs when they cover the change.
+   - If the change touched UI or runtime behavior, include the relevant smoke validation instead of relying on unit tests alone.
+   - Use local-only validation only when the repo instructions call for it, the check cannot run remotely, or a remote wrapper has failed and you are intentionally continuing with a local fallback.
 6. Report the landing result.
    - If validation fails, tell the user exactly what failed, keep the worktree intact, and stop.
    - If validation passes, summarize that `main` now contains the merged work and what validation succeeded.
@@ -55,9 +55,10 @@ Use this workflow when a task is complete in a Toastty worktree and the next ste
 ## Toastty-specific validation
 
 - Read the repo `AGENTS.md` before choosing the final validation set.
-- `./scripts/automation/check.sh` is the default full gate.
-- For UI or runtime changes, prefer the smoke automation paths documented there.
-- In handoff or completion messages, say whether validation ran locally, remotely, or via a wrapper with fallback.
+- For agent-driven smoke validation, start with `sv exec -- scripts/remote/validate.sh --smoke-test ...` unless the current repo instructions make a narrower local check more appropriate.
+- For agent-driven `xcodebuild test` validation, prefer `sv exec -- scripts/remote/test.sh -- ...` when test coverage is needed and the wrapper applies.
+- Use `./scripts/automation/check.sh` only when it is explicitly the right validation for the situation, not as a default substitute for remote wrappers.
+- In handoff or completion messages, say whether each validation ran remotely, locally, or via a wrapper with fallback.
 
 ## When to stop and ask the user
 
