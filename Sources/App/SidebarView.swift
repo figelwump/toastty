@@ -38,8 +38,8 @@ struct SidebarView: View {
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
-    /// Test seam for asserting click targets against the same geometry used by drag reordering.
-    let workspaceHeaderFrameObserver: (([UUID: CGRect]) -> Void)?
+    /// Test seam for asserting row geometry used by drag reordering.
+    let workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)?
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
@@ -52,7 +52,7 @@ struct SidebarView: View {
     @State private var sidebarFlashClearWorkItem: DispatchWorkItem?
     @State private var sidebarFlashResetWorkItem: DispatchWorkItem?
     @State private var activeWorkspaceDrag: WorkspaceDragState?
-    @State private var measuredWorkspaceHeaderFramesByID: [UUID: CGRect] = [:]
+    @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
 
     /// Fixed height for the session detail text area (1 line at the detail
     /// font size). Reserving a constant height prevents the sidebar from
@@ -70,7 +70,7 @@ struct SidebarView: View {
 
     nonisolated static func workspaceReorderTargetIndex(
         orderedWorkspaceIDs: [UUID],
-        measuredHeaderFramesByID: [UUID: CGRect],
+        measuredRowFramesByID: [UUID: CGRect],
         draggedWorkspaceID: UUID,
         pointerY: CGFloat
     ) -> Int? {
@@ -78,7 +78,7 @@ struct SidebarView: View {
 
         let measuredFrames = orderedWorkspaceIDs.compactMap { workspaceID -> CGRect? in
             guard workspaceID != draggedWorkspaceID else { return nil }
-            return measuredHeaderFramesByID[workspaceID]
+            return measuredRowFramesByID[workspaceID]
         }
         guard measuredFrames.count == max(orderedWorkspaceIDs.count - 1, 0) else { return nil }
         guard measuredFrames.isEmpty == false else { return 0 }
@@ -93,13 +93,13 @@ struct SidebarView: View {
 
     nonisolated static func workspaceInsertionIndicatorFrame(
         orderedWorkspaceIDs: [UUID],
-        measuredHeaderFramesByID: [UUID: CGRect],
+        measuredRowFramesByID: [UUID: CGRect],
         draggedWorkspaceID: UUID,
         targetIndex: Int
     ) -> CGRect? {
         let measuredFrames = orderedWorkspaceIDs.compactMap { workspaceID -> CGRect? in
             guard workspaceID != draggedWorkspaceID else { return nil }
-            return measuredHeaderFramesByID[workspaceID]
+            return measuredRowFramesByID[workspaceID]
         }
         guard measuredFrames.count == max(orderedWorkspaceIDs.count - 1, 0) else { return nil }
         guard measuredFrames.isEmpty == false else { return nil }
@@ -127,7 +127,7 @@ struct SidebarView: View {
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
-        workspaceHeaderFrameObserver: (([UUID: CGRect]) -> Void)? = nil
+        workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil
     ) {
         self.windowID = windowID
         self.store = store
@@ -135,7 +135,7 @@ struct SidebarView: View {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeContext = terminalRuntimeContext
         self.scrollRequestObserver = scrollRequestObserver
-        self.workspaceHeaderFrameObserver = workspaceHeaderFrameObserver
+        self.workspaceRowFrameObserver = workspaceRowFrameObserver
     }
 
     private var selectedWorkspaceID: UUID? {
@@ -169,16 +169,16 @@ struct SidebarView: View {
                     }
                     .padding(.horizontal, 8)
                     .coordinateSpace(name: SidebarWorkspaceListCoordinateSpace.name)
-                    .onPreferenceChange(WorkspaceHeaderFramePreferenceKey.self) { framesByID in
-                        measuredWorkspaceHeaderFramesByID = framesByID
-                        workspaceHeaderFrameObserver?(framesByID)
+                    .onPreferenceChange(WorkspaceRowFramePreferenceKey.self) { framesByID in
+                        measuredWorkspaceRowFramesByID = framesByID
+                        workspaceRowFrameObserver?(framesByID)
                     }
                     .overlay(alignment: .topLeading) {
                         if let activeWorkspaceDrag,
                            activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex,
                            let indicatorFrame = Self.workspaceInsertionIndicatorFrame(
                                orderedWorkspaceIDs: store.window(id: windowID)?.workspaceIDs ?? [],
-                               measuredHeaderFramesByID: measuredWorkspaceHeaderFramesByID,
+                               measuredRowFramesByID: measuredWorkspaceRowFramesByID,
                                draggedWorkspaceID: activeWorkspaceDrag.workspaceID,
                                targetIndex: activeWorkspaceDrag.targetIndex
                            ) {
@@ -353,7 +353,6 @@ struct SidebarView: View {
                             .truncationMode(.tail)
                     }
                 }
-                .background(workspaceHeaderFrameMeasurement(workspaceID: workspaceID))
                 .contentShape(Rectangle())
                 .overlay {
                     PointerInteractionRegion(
@@ -439,8 +438,6 @@ struct SidebarView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .background(workspaceHeaderFrameMeasurement(workspaceID: workspaceID))
-
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
                         .padding(.horizontal, 10)
@@ -461,6 +458,7 @@ struct SidebarView: View {
             .background(isSelected ? ToastyTheme.elevatedBackground
                 : activeWorkspaceDrag == nil && hoveredWorkspaceID == workspaceID ? ToastyTheme.elevatedBackground
                 : Color.clear)
+            .background(workspaceRowFrameMeasurement(workspaceID: workspaceID))
             .overlay {
                 Rectangle()
                     .fill(ToastyTheme.accent.opacity(0.28 * (isFlashing ? flashingSessionOverlayOpacity : 0)))
@@ -755,10 +753,10 @@ struct SidebarView: View {
         .contentShape(RoundedRectangle(cornerRadius: 5))
     }
 
-    private func workspaceHeaderFrameMeasurement(workspaceID: UUID) -> some View {
+    private func workspaceRowFrameMeasurement(workspaceID: UUID) -> some View {
         GeometryReader { geometry in
             Color.clear.preference(
-                key: WorkspaceHeaderFramePreferenceKey.self,
+                key: WorkspaceRowFramePreferenceKey.self,
                 value: [
                     workspaceID: geometry.frame(in: .named(SidebarWorkspaceListCoordinateSpace.name))
                 ]
@@ -808,7 +806,7 @@ struct SidebarView: View {
 
         var dragState = activeWorkspaceDrag
         if dragState?.workspaceID != workspaceID {
-            let startPointerY = (measuredWorkspaceHeaderFramesByID[workspaceID]?.minY ?? 0) + value.startLocation.y
+            let startPointerY = (measuredWorkspaceRowFramesByID[workspaceID]?.minY ?? 0) + value.startLocation.y
             dragState = WorkspaceDragState(
                 workspaceID: workspaceID,
                 sourceIndex: sourceIndex,
@@ -834,7 +832,7 @@ struct SidebarView: View {
         let pointerY = (dragState?.startPointerY ?? value.location.y) + value.translation.height
         let targetIndex = Self.workspaceReorderTargetIndex(
             orderedWorkspaceIDs: orderedWorkspaceIDs,
-            measuredHeaderFramesByID: measuredWorkspaceHeaderFramesByID,
+            measuredRowFramesByID: measuredWorkspaceRowFramesByID,
             draggedWorkspaceID: workspaceID,
             pointerY: pointerY
         ) ?? sourceIndex
@@ -958,7 +956,7 @@ struct SidebarView: View {
             metadata["activeTargetIndex"] = "\(activeWorkspaceDrag.targetIndex)"
             metadata["activeTranslationHeight"] = "\(activeWorkspaceDrag.translationHeight)"
         }
-        if let measuredFrame = measuredWorkspaceHeaderFramesByID[workspaceID] {
+        if let measuredFrame = measuredWorkspaceRowFramesByID[workspaceID] {
             metadata["measuredFrame"] = DraggableInteractionLog.rectDescription(measuredFrame)
         }
         return metadata
@@ -1227,13 +1225,13 @@ struct SidebarView: View {
 
     private func pruneTransientWorkspaceDragState() {
         guard let window = store.window(id: windowID) else {
-            measuredWorkspaceHeaderFramesByID = [:]
+            measuredWorkspaceRowFramesByID = [:]
             cancelWorkspaceDrag()
             return
         }
 
         let workspaceIDs = Set(window.workspaceIDs)
-        measuredWorkspaceHeaderFramesByID = measuredWorkspaceHeaderFramesByID.filter { workspaceIDs.contains($0.key) }
+        measuredWorkspaceRowFramesByID = measuredWorkspaceRowFramesByID.filter { workspaceIDs.contains($0.key) }
         if let activeWorkspaceDrag,
            workspaceIDs.contains(activeWorkspaceDrag.workspaceID) == false {
             cancelWorkspaceDrag()
@@ -1425,7 +1423,7 @@ private enum SidebarWorkspaceListCoordinateSpace {
     static let name = "sidebar-workspaces.list"
 }
 
-private struct WorkspaceHeaderFramePreferenceKey: PreferenceKey {
+private struct WorkspaceRowFramePreferenceKey: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
 
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {

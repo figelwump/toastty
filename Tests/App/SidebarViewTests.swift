@@ -215,7 +215,7 @@ final class SidebarViewTests: XCTestCase {
 
         let targetIndex = SidebarView.workspaceReorderTargetIndex(
             orderedWorkspaceIDs: [first, second, third],
-            measuredHeaderFramesByID: [
+            measuredRowFramesByID: [
                 first: CGRect(x: 0, y: 0, width: 260, height: 42),
                 second: CGRect(x: 0, y: 42, width: 260, height: 42),
                 third: CGRect(x: 0, y: 84, width: 260, height: 42),
@@ -234,7 +234,7 @@ final class SidebarViewTests: XCTestCase {
 
         let targetIndex = SidebarView.workspaceReorderTargetIndex(
             orderedWorkspaceIDs: [first, second, third],
-            measuredHeaderFramesByID: [
+            measuredRowFramesByID: [
                 first: CGRect(x: 0, y: 0, width: 260, height: 42),
                 second: CGRect(x: 0, y: 42, width: 260, height: 42),
                 third: CGRect(x: 0, y: 84, width: 260, height: 42),
@@ -253,7 +253,7 @@ final class SidebarViewTests: XCTestCase {
 
         let targetIndex = SidebarView.workspaceReorderTargetIndex(
             orderedWorkspaceIDs: [first, second, third],
-            measuredHeaderFramesByID: [
+            measuredRowFramesByID: [
                 first: CGRect(x: 0, y: 0, width: 260, height: 42),
                 second: CGRect(x: 0, y: 42, width: 260, height: 42),
                 third: CGRect(x: 0, y: 84, width: 260, height: 42),
@@ -265,14 +265,14 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(targetIndex, 1)
     }
 
-    func testWorkspaceReorderTargetIndexReturnsNilWhenHeaderFramesAreMissing() {
+    func testWorkspaceReorderTargetIndexReturnsNilWhenRowFramesAreMissing() {
         let first = UUID()
         let second = UUID()
         let third = UUID()
 
         let targetIndex = SidebarView.workspaceReorderTargetIndex(
             orderedWorkspaceIDs: [first, second, third],
-            measuredHeaderFramesByID: [
+            measuredRowFramesByID: [
                 first: CGRect(x: 0, y: 0, width: 260, height: 42),
                 second: CGRect(x: 0, y: 42, width: 260, height: 42),
             ],
@@ -283,14 +283,33 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertNil(targetIndex)
     }
 
-    func testWorkspaceInsertionIndicatorFrameUsesHeaderHorizontalBounds() {
+    func testWorkspaceReorderTargetIndexUsesFullWorkspaceRowHeight() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 118),
+                third: CGRect(x: 0, y: 160, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: first,
+            pointerY: 90
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesRowHorizontalBounds() {
         let first = UUID()
         let second = UUID()
         let third = UUID()
 
         let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
             orderedWorkspaceIDs: [first, second, third],
-            measuredHeaderFramesByID: [
+            measuredRowFramesByID: [
                 first: CGRect(x: 8, y: 0, width: 244, height: 42),
                 second: CGRect(x: 8, y: 42, width: 244, height: 42),
                 third: CGRect(x: 8, y: 84, width: 244, height: 42),
@@ -309,7 +328,7 @@ final class SidebarViewTests: XCTestCase {
 
         let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
             orderedWorkspaceIDs: [first, second, third],
-            measuredHeaderFramesByID: [
+            measuredRowFramesByID: [
                 first: CGRect(x: 8, y: 0, width: 244, height: 42),
                 second: CGRect(x: 8, y: 42, width: 244, height: 42),
                 third: CGRect(x: 8, y: 84, width: 244, height: 42),
@@ -319,6 +338,25 @@ final class SidebarViewTests: XCTestCase {
         )
 
         XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 126, width: 244, height: 2))
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesTallRowBottom() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 118),
+                third: CGRect(x: 8, y: 160, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: first,
+            targetIndex: 1
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 160, width: 244, height: 2))
     }
 
     func testWorkspaceDragActivationUsesVerticalThreshold() {
@@ -641,14 +679,14 @@ final class SidebarViewTests: XCTestCase {
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
-        var headerFramesByID: [UUID: CGRect] = [:]
+        var rowFramesByID: [UUID: CGRect] = [:]
         let sidebarView = SidebarView(
             windowID: windowID,
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
             terminalRuntimeContext: runtimeContext,
-            workspaceHeaderFrameObserver: { headerFramesByID = $0 }
+            workspaceRowFrameObserver: { rowFramesByID = $0 }
         )
         let hostingView = NSHostingView(
             rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth, height: 220)
@@ -666,7 +704,7 @@ final class SidebarViewTests: XCTestCase {
         hostingView.layoutSubtreeIfNeeded()
         pumpMainRunLoop()
 
-        let secondWorkspaceFrame = try XCTUnwrap(headerFramesByID[workspaces[1].id])
+        let secondWorkspaceFrame = try XCTUnwrap(rowFramesByID[workspaces[1].id])
         let secondWorkspacePointerView = try XCTUnwrap(
             pointerInteractionView(in: hostingView, workspaceID: workspaces[1].id)
         )
