@@ -5,34 +5,28 @@ description: Use this skill when an agent should show information visually in a 
 
 # Toastty Scratchpad
 
-Use Scratchpad when a visual surface will communicate better than terminal prose. Open the Scratchpad first with a rough visual outline, then replace it with the finished self-contained HTML artifact after analysis.
+Use Scratchpad when a visual surface will communicate better than terminal prose. Open the Scratchpad first with a quick loading screen, then replace it with the finished self-contained HTML artifact after analysis.
 
 ## Open First
 
-When this skill triggers and a Toastty-managed session is available, publish an initial rough Scratchpad before doing deeper analysis, reading large files, or building the final artifact. The initial outline should show the user that a visual artifact is being worked on.
+When this skill triggers and a Toastty-managed session is available, publish a quick loading screen before doing deeper analysis, reading large files, or building the final artifact. The loading screen tells the user that a visual artifact is being prepared.
 
-Use placeholders, silhouettes, skeleton blocks, empty chart axes, wireframe panels, generic lanes, or unlabeled connector shapes. Keep this first pass intentionally low-detail:
+The loading screen is intentionally minimal: a title (if known) and a subtle animated indicator. Do not pre-mock the structure of the final artifact. Pre-mocking biases the design toward the same look every time and flattens visual variety across runs.
 
-- no real data values
-- no conclusions
-- no file-derived facts beyond a generic title if already known
-- subtle animation is preferred, such as shimmer, pulse, or moving placeholder strokes
-
-Publish the rough outline from the repo root:
+Publish the loading screen from the repo root:
 
 ```bash
 .agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
-  "Architecture Map" \
-  architecture
+  "Architecture Map"
 ```
 
 Then do the needed thread/file/prompt analysis and publish the completed artifact over the same session-linked Scratchpad.
 
 ## Input Modes
 
-- **Thread context**: publish a rough outline, then synthesize the visual from the current conversation, implementation plan, bug investigation, or decision tradeoff.
-- **File input**: publish a rough outline before deep reading, then read the referenced file, extract the structure that matters, and create a visual representation. Do not dump a long file verbatim into the panel.
-- **Manual prompt**: publish a rough outline from the prompt, then follow the prompt as the design brief. If the prompt is broad, choose a compact final visual that answers the likely need.
+- **Thread context**: publish a loading screen, then synthesize the visual from the current conversation, implementation plan, bug investigation, or decision tradeoff.
+- **File input**: publish a loading screen before deep reading, then read the referenced file, extract the structure that matters, and create a visual representation. Do not dump a long file verbatim into the panel.
+- **Manual prompt**: publish a loading screen from the prompt, then follow the prompt as the design brief. If the prompt is broad, choose a compact final visual that answers the likely need.
 
 ## Good Uses
 
@@ -45,9 +39,35 @@ Then do the needed thread/file/prompt analysis and publish the completed artifac
 
 Avoid Scratchpad for ordinary logs, raw command output, long code listings, or prose that is already clearer in chat or a local document.
 
+## Design Direction
+
+Treat each artifact as a fresh design problem. Pick an aesthetic that fits the content rather than defaulting to a generic dark dashboard with a grid of cards. Variety is part of the value of this surface.
+
+Vary across runs:
+
+- **Aesthetic**: technical blueprint, editorial print, scientific paper, infographic poster, hand-sketched, isometric/3D, retro CRT or terminal, modern minimal, bold magazine, schematic, cartographic map, annotated diagram, data art.
+- **Palette**: dark slate plus blue is one option, not the default. Light cream, paper white, warm tan, deep navy, washed pastel, high-contrast monochrome, single accent on neutral, duotone, and content-driven palettes (sunset for time, red for risk, forest for systems, sepia for archive) all work. Match the palette to the subject matter.
+- **Typography**: serif for editorial or scientific, mono or condensed for technical, geometric sans for modern UI, display weight for posters and headlines. Mix weights, sizes, and tracking for hierarchy. System fonts only — no remote fonts or imports.
+- **Layout**: avoid auto-fit card grids by default. Try asymmetric two-column, single hero with annotations, full-bleed schematic, vertical narrative, radial/orbital, isometric stacks, swimlanes, table-as-art, broadside poster, magazine spread, side margin notes.
+- **Visual primitives**: SVG arrows and connectors, dashed routes, hand-drawn strokes, isometric blocks, orthographic projections, sankey-style flows, dot matrices, sparklines, badges, callouts with leader lines, axes with real tick marks, hand-labeled annotations.
+- **Texture and depth**: subtle paper grain, blueprint grid, halftone, soft shadow, line weight variation, deliberate negative space. Flat is fine; uniformly flat is boring.
+
+Match the visual to the structure of the content:
+
+- Architecture or systems → schematic, blueprint, or layered diagram with explicit connectors and labeled boundaries.
+- Data or metrics → editorial chart with annotation, ranked list with typography hierarchy, or small-multiples — not just bars in cards.
+- Flows or sequences → swimlane, sankey, numbered narrative, or step-by-step storyboard — not a card grid.
+- Comparisons → side-by-side as deliberate typography, scoring matrix, head-to-head columns with shared rows.
+- Timelines → horizontal track or vertical narrative with proportional spacing — not equal-sized boxes.
+- Wireframes → fidelity-matched line drawings on a neutral background with annotations.
+- State machines → nodes and labeled transitions, not a grid.
+- Risk or tradeoffs → 2x2, radar, or quadrant.
+
+If you find yourself reaching for `display: grid; grid-template-columns: repeat(auto-fit, minmax(...))` of identical cards on a dark slate background, stop. That is the AI-default look. Pick a structure and palette that actually expresses the content.
+
 ## Build The Artifact
 
-1. After the rough outline is visible, decide the most useful final visual form before writing the detailed HTML.
+1. After the loading screen is visible, decide the most useful final visual form, aesthetic, and palette before writing the detailed HTML. Sketch the structure mentally first; do not start with a card grid by reflex.
 2. Generate one complete HTML document with inline CSS and optional inline JavaScript.
 3. Keep it self-contained:
    - no remote scripts, fonts, stylesheets, images, or network fetches
@@ -58,7 +78,7 @@ Avoid Scratchpad for ordinary logs, raw command output, long code listings, or p
    - readable at narrow and wide widths
    - no text overlap
    - enough labels that the user can understand the artifact without chat context
-5. Replace the initial outline by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact.
+5. Replace the initial loading screen by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact.
 
 ## Inline JavaScript
 
@@ -111,34 +131,3 @@ The helper requires `TOASTTY_CLI_PATH` and `TOASTTY_SESSION_ID`, which are prese
 - Tell the user what you put in the Scratchpad and summarize the key visual.
 - Mention if the helper reported a panel/document/revision so the user knows the update succeeded.
 - If the helper succeeds but the panel is not visible or appears incomplete, query `panel.scratchpad.state` for the returned `panelID` and inspect `recentDiagnostics` before republishing.
-
-## HTML Starting Point
-
-Use this as a compact baseline when no stronger visual pattern is obvious:
-
-```html
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Scratchpad</title>
-  <style>
-    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-    body { margin: 0; background: #111827; color: #f9fafb; }
-    main { max-width: 1100px; margin: 0 auto; padding: 28px; }
-    h1 { margin: 0 0 18px; font-size: 28px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
-    .card { border: 1px solid #374151; border-radius: 8px; padding: 16px; background: #1f2937; }
-    .muted { color: #9ca3af; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Scratchpad</h1>
-    <section class="grid">
-      <article class="card"><strong>Item</strong><p class="muted">Explain the visual unit.</p></article>
-    </section>
-  </main>
-</body>
-</html>
-```
