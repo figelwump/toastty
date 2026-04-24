@@ -1,6 +1,8 @@
 export const generatedContentCSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",
+  "script-src-elem 'unsafe-inline'",
+  "script-src-attr 'none'",
   "style-src 'unsafe-inline'",
   "img-src data: blob:",
   "font-src data: blob:",
@@ -8,6 +10,7 @@ export const generatedContentCSP = [
   "connect-src 'none'",
   "frame-src 'none'",
   "worker-src 'none'",
+  "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'"
 ].join("; ");

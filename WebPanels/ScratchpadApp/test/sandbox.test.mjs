@@ -11,13 +11,30 @@ const mainSource = readFileSync(
   resolve(import.meta.dirname, "../src/main.ts"),
   "utf8"
 );
+const shellSource = readFileSync(
+  resolve(import.meta.dirname, "../index.html"),
+  "utf8"
+);
+
+test("shell CSP permits generated script elements without inline attributes", () => {
+  assert.match(shellSource, /script-src 'self' 'unsafe-inline'/);
+  assert.match(shellSource, /script-src-elem 'self' 'unsafe-inline'/);
+  assert.match(shellSource, /script-src-attr 'none'/);
+  assert.match(shellSource, /connect-src 'none'/);
+  assert.match(shellSource, /frame-src 'self' about:/);
+  assert.match(shellSource, /worker-src 'none'/);
+  assert.match(shellSource, /object-src 'none'/);
+});
 
 test("generated content CSP blocks network and native-adjacent surfaces", () => {
   assert.match(sandboxSource, /default-src 'none'/);
   assert.match(sandboxSource, /connect-src 'none'/);
   assert.match(sandboxSource, /frame-src 'none'/);
   assert.match(sandboxSource, /script-src 'unsafe-inline'/);
+  assert.match(sandboxSource, /script-src-elem 'unsafe-inline'/);
+  assert.match(sandboxSource, /script-src-attr 'none'/);
   assert.match(sandboxSource, /worker-src 'none'/);
+  assert.match(sandboxSource, /object-src 'none'/);
   assert.match(sandboxSource, /form-action 'none'/);
   assert.doesNotMatch(sandboxSource, /script-src 'unsafe-inline' data: blob:/);
   assert.doesNotMatch(sandboxSource, /worker-src blob:/);

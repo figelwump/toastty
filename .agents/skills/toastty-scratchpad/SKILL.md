@@ -96,6 +96,8 @@ Scratchpad supports inline JavaScript, but the generated document runs in a sand
 
 - Prefer pre-rendered HTML/SVG for charts, tables, metric cards, and other static data views.
 - Use inline JavaScript for real interactivity such as filtering, sorting, expand/collapse, hover details, or client-side measurements.
+- Put executable code in `<script>` blocks and wire interactions with `addEventListener` after the relevant DOM nodes exist.
+- Inline event attributes such as `onclick`, `onchange`, and `onload` are blocked by CSP (`script-src-attr 'none'`), and `javascript:` URLs are unsupported. Do not use them.
 - Do not rely on external scripts, imports, remote styles, CDN chart libraries, network fetches, XHR, websockets, workers, nested frames, forms, local storage, or remote assets.
 - Embed all data inline, either directly in the script or in a local `<script type="application/json">` block.
 - Wrap startup/rendering code in `try`/`catch`. On failure, render a visible error message in the artifact and call `console.error(...)` with useful context.
@@ -116,6 +118,8 @@ The state response includes `recentDiagnostics` when the generated iframe report
 - `message` and `metadata`: the failure detail, blocked URI/directive, source location, or stack when available.
 
 Fix the artifact from those diagnostics before republishing. If `recentDiagnostics` is empty but the panel is still blank, confirm the current document/revision and content length in the same state response.
+
+When debugging JavaScript, add short `console.info(...)` checkpoints around startup and event handlers, republish, and verify they appear as `generated-content` `console-message` diagnostics.
 
 ## Publish
 

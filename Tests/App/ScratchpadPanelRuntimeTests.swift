@@ -35,6 +35,78 @@ final class ScratchpadPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(ScratchpadPanelAssetLocator.directoryURL(bundle: bundle), panelDirectoryURL)
     }
 
+    func testBundledScratchpadPanelRunsGeneratedInlineScripts() async throws {
+        let assetDirectoryURL = try XCTUnwrap(ScratchpadPanelAssetLocator.directoryURL())
+        let entryURL = assetDirectoryURL.appendingPathComponent("index.html")
+        let handler = ScratchpadPanelTestMessageHandler()
+        let configuration = ScratchpadPanelRuntime.makeWebViewConfiguration(for: .localOnly)
+        configuration.userContentController.add(handler, name: "toasttyScratchpadPanel")
+        defer {
+            configuration.userContentController.removeScriptMessageHandler(forName: "toasttyScratchpadPanel")
+        }
+
+        let bridgeReady = expectation(description: "Scratchpad bridge becomes ready")
+        let scriptRan = expectation(description: "generated inline script runs")
+        let clickRan = expectation(description: "generated addEventListener click handler runs")
+        let keyRan = expectation(description: "generated addEventListener key handler runs")
+        let inlineAttributeRan = expectation(description: "generated inline event attribute is blocked")
+        inlineAttributeRan.isInverted = true
+        handler.bridgeReadyExpectation = bridgeReady
+        handler.expectedGeneratedMessages = [
+            "scratchpad-js-ran": scriptRan,
+            "scratchpad-click-ran": clickRan,
+            "scratchpad-key-ran": keyRan,
+        ]
+        handler.unexpectedGeneratedMessages = [
+            "scratchpad-inline-attr-ran": inlineAttributeRan,
+        ]
+
+        let webView = WKWebView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600),
+            configuration: configuration
+        )
+        webView.loadFileURL(entryURL, allowingReadAccessTo: assetDirectoryURL)
+
+        await fulfillment(of: [bridgeReady], timeout: 5)
+
+        let bootstrapScript = try XCTUnwrap(ScratchpadPanelRuntime.bootstrapJavaScript(
+            for: ScratchpadPanelBootstrap(
+                documentID: UUID(),
+                displayName: "JavaScript Fixture",
+                revision: 1,
+                contentHTML: """
+                <!doctype html>
+                <html>
+                  <head><title>JavaScript Fixture</title></head>
+                  <body>
+                    <p id="status">booting</p>
+                    <button id="listener" type="button">Listener</button>
+                    <button id="attribute" type="button" onclick="console.info('scratchpad-inline-attr-ran')">Attribute</button>
+                    <script>
+                    (() => {
+                      document.getElementById('status').textContent = 'js-ready';
+                      console.info('scratchpad-js-ran');
+                      const listener = document.getElementById('listener');
+                      listener.addEventListener('click', () => console.info('scratchpad-click-ran'));
+                      listener.click();
+                      document.addEventListener('keydown', () => console.info('scratchpad-key-ran'));
+                      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k' }));
+                      document.getElementById('attribute').click();
+                    })();
+                    </script>
+                  </body>
+                </html>
+                """,
+                theme: .dark
+            )
+        ))
+
+        _ = try await webView.evaluateJavaScript(bootstrapScript)
+
+        await fulfillment(of: [scriptRan, clickRan, keyRan], timeout: 5)
+        await fulfillment(of: [inlineAttributeRan], timeout: 0.3)
+    }
+
     func testBootstrapLoadsPersistedDocument() throws {
         let fixture = try ScratchpadRuntimeFixture()
         let document = try fixture.store.createDocument(
@@ -225,5 +297,35 @@ private struct ScratchpadRuntimeFixture {
         directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         store = ScratchpadDocumentStore(directoryURL: directoryURL)
+    }
+}
+
+private final class ScratchpadPanelTestMessageHandler: NSObject, WKScriptMessageHandler {
+    var bridgeReadyExpectation: XCTestExpectation?
+    var expectedGeneratedMessages: [String: XCTestExpectation] = [:]
+    var unexpectedGeneratedMessages: [String: XCTestExpectation] = [:]
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "toasttyScratchpadPanel",
+              message.frameInfo.isMainFrame,
+              let body = message.body as? [String: Any],
+              let type = body["type"] as? String else {
+            return
+        }
+
+        switch type {
+        case "bridgeReady":
+            bridgeReadyExpectation?.fulfill()
+            bridgeReadyExpectation = nil
+        case "consoleMessage":
+            guard (body["diagnosticSource"] as? String) == "generated-content",
+                  let consoleMessage = body["message"] as? String else {
+                return
+            }
+            expectedGeneratedMessages.removeValue(forKey: consoleMessage)?.fulfill()
+            unexpectedGeneratedMessages[consoleMessage]?.fulfill()
+        default:
+            return
+        }
     }
 }
