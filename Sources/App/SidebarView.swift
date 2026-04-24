@@ -302,8 +302,8 @@ struct SidebarView: View {
         .zIndex(activeWorkspaceDrag?.workspaceID == workspaceID ? 1 : 0)
         .accessibilityIdentifier("sidebar.workspace.\(index)")
 
-        if activeWorkspaceDrag == nil {
-            row.contextMenu {
+        row.contextMenu {
+            if activeWorkspaceDrag == nil {
                 Button(ToasttyKeyboardShortcuts.renameWorkspace.menuTitle("Rename Workspace")) {
                     beginWorkspaceRename(workspace)
                 }
@@ -312,8 +312,6 @@ struct SidebarView: View {
                     requestWorkspaceClose(workspaceID: workspaceID)
                 }
             }
-        } else {
-            row
         }
     }
 

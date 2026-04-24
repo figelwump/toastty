@@ -629,22 +629,25 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop()
 
         let secondWorkspaceFrame = try XCTUnwrap(headerFramesByID[workspaces[1].id])
-        let clickPointInHost = NSPoint(
-            x: secondWorkspaceFrame.midX,
-            y: ToastyTheme.sidebarTopPadding + secondWorkspaceFrame.minY + 6
+        let secondWorkspacePointerView = try XCTUnwrap(
+            pointerInteractionView(in: hostingView, workspaceID: workspaces[1].id)
         )
-        let clickPointInWindow = hostingView.convert(clickPointInHost, to: nil)
+        secondWorkspacePointerView.usesEventTrackingLoop = false
+        let clickPointInHeader = NSPoint(
+            x: secondWorkspacePointerView.bounds.midX,
+            y: 6
+        )
 
         XCTAssertGreaterThan(secondWorkspaceFrame.height, 30)
-        XCTAssertTrue(hostingView.bounds.contains(clickPointInHost))
+        XCTAssertTrue(secondWorkspacePointerView.bounds.contains(clickPointInHeader))
 
-        try click(window: window, at: clickPointInWindow)
+        try click(view: secondWorkspacePointerView, at: clickPointInHeader)
         pumpMainRunLoop(duration: 0.2)
 
         XCTAssertEqual(
             store.selectedWorkspaceID(in: windowID),
             workspaces[1].id,
-            "Expected click at \(clickPointInWindow) to select frame \(secondWorkspaceFrame)"
+            "Expected click at \(clickPointInHeader) to select frame \(secondWorkspaceFrame)"
         )
     }
 
@@ -994,16 +997,17 @@ final class SidebarViewTests: XCTestCase {
     }
 
     private func click(
-        window: NSWindow,
+        view: PointerInteractionView,
         at location: NSPoint,
         clickCount: Int = 1
     ) throws {
+        let windowLocation = view.convert(location, to: nil)
         guard let mouseDown = NSEvent.mouseEvent(
             with: .leftMouseDown,
-            location: location,
+            location: windowLocation,
             modifierFlags: [],
             timestamp: 0,
-            windowNumber: window.windowNumber,
+            windowNumber: view.window?.windowNumber ?? 0,
             context: nil,
             eventNumber: 0,
             clickCount: clickCount,
@@ -1013,10 +1017,10 @@ final class SidebarViewTests: XCTestCase {
         }
         guard let mouseUp = NSEvent.mouseEvent(
             with: .leftMouseUp,
-            location: location,
+            location: windowLocation,
             modifierFlags: [],
             timestamp: 0.05,
-            windowNumber: window.windowNumber,
+            windowNumber: view.window?.windowNumber ?? 0,
             context: nil,
             eventNumber: 1,
             clickCount: clickCount,
@@ -1025,8 +1029,23 @@ final class SidebarViewTests: XCTestCase {
             throw NSError(domain: "SidebarViewTests", code: 2, userInfo: nil)
         }
 
-        window.sendEvent(mouseDown)
-        window.sendEvent(mouseUp)
+        view.mouseDown(with: mouseDown)
+        view.mouseUp(with: mouseUp)
+    }
+
+    private func pointerInteractionView(in rootView: NSView, workspaceID: UUID) -> PointerInteractionView? {
+        if let pointerView = rootView as? PointerInteractionView,
+           pointerView.logMetadata["workspaceID"] == workspaceID.uuidString {
+            return pointerView
+        }
+
+        for subview in rootView.subviews {
+            if let matchingView = pointerInteractionView(in: subview, workspaceID: workspaceID) {
+                return matchingView
+            }
+        }
+
+        return nil
     }
 
     private func renderedTextValues(in rootView: NSView) -> [String] {
