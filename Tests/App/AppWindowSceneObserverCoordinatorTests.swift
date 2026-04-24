@@ -88,7 +88,7 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.identifier?.rawValue, windowID.uuidString)
     }
 
-    func testAttachDisablesWindowBackgroundDragging() {
+    func testAttachAndDetachDoNotMutateEnabledWindowBackgroundDragging() {
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
@@ -98,15 +98,21 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         )
         let window = TestWindow()
         window.isMovableByWindowBackground = true
+        var backgroundDraggingChangeCount = 0
+        let observation = window.observe(\.isMovableByWindowBackground, options: []) { _, _ in
+            backgroundDraggingChangeCount += 1
+        }
 
-        coordinator.attach(to: window)
+        withExtendedLifetime(observation) {
+            coordinator.attach(to: window)
+            coordinator.detach()
 
-        XCTAssertFalse(window.isMovableByWindowBackground)
-        coordinator.detach()
-        XCTAssertTrue(window.isMovableByWindowBackground)
+            XCTAssertTrue(window.isMovableByWindowBackground)
+            XCTAssertEqual(backgroundDraggingChangeCount, 0)
+        }
     }
 
-    func testDetachPreservesInitiallyDisabledWindowBackgroundDragging() {
+    func testAttachAndDetachDoNotMutateDisabledWindowBackgroundDragging() {
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
@@ -116,11 +122,18 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         )
         let window = TestWindow()
         window.isMovableByWindowBackground = false
+        var backgroundDraggingChangeCount = 0
+        let observation = window.observe(\.isMovableByWindowBackground, options: []) { _, _ in
+            backgroundDraggingChangeCount += 1
+        }
 
-        coordinator.attach(to: window)
-        coordinator.detach()
+        withExtendedLifetime(observation) {
+            coordinator.attach(to: window)
+            coordinator.detach()
 
-        XCTAssertFalse(window.isMovableByWindowBackground)
+            XCTAssertFalse(window.isMovableByWindowBackground)
+            XCTAssertEqual(backgroundDraggingChangeCount, 0)
+        }
     }
 
     func testAttachRetargetsNativeCloseButtonToPresentWindowCloseConfirmation() throws {
