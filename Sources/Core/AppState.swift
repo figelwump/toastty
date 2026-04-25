@@ -207,8 +207,7 @@ public struct AppState: Codable, Equatable, Sendable {
         for window in windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = workspacesByID[workspaceID],
-                      workspace.panelState(for: panelID) != nil,
-                      workspace.slotID(containingPanelID: panelID) != nil else {
+                      workspace.panelState(for: panelID) != nil else {
                     continue
                 }
 

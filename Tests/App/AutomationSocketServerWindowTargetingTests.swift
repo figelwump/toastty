@@ -55,6 +55,56 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testRightPanelBrowserActionDoesNotMutateMainLayoutFocusAndAppearsInSnapshot() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let initialWorkspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            let initialFocusedPanelID = initialWorkspace.focusedPanelID
+            let initialLayoutTree = initialWorkspace.layoutTree
+
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.browser",
+                    "args": [
+                        "placement": "rightPanel",
+                        "url": "https://example.com/docs",
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            XCTAssertEqual(workspace.layoutTree, initialLayoutTree)
+            XCTAssertEqual(workspace.focusedPanelID, initialFocusedPanelID)
+            XCTAssertNil(workspace.rightAuxPanel.focusedPanelID)
+            XCTAssertTrue(workspace.rightAuxPanel.isVisible)
+            XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
+            XCTAssertEqual(workspace.panels.count, 1)
+
+            let snapshotResponse = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(snapshotResponse.ok)
+            XCTAssertEqual(snapshotResponse.result["layoutPanelCount"] as? Int, 1)
+            XCTAssertEqual(snapshotResponse.result["panelCount"] as? Int, 2)
+
+            let rightPanel = try XCTUnwrap(snapshotResponse.result["rightPanel"] as? [String: Any])
+            XCTAssertEqual(rightPanel["isVisible"] as? Bool, true)
+            XCTAssertEqual(rightPanel["tabCount"] as? Int, 1)
+            XCTAssertEqual((rightPanel["panelIDs"] as? [String])?.count, 1)
+            XCTAssertEqual((rightPanel["tabIDs"] as? [String])?.count, 1)
+        }
+    }
+
     func testWorkspaceCreateCanCreateBackgroundWorkspaceAndReturnCreatedWorkspaceID() async throws {
         let fixture = makeSingleWindowFixture()
 

@@ -29,11 +29,11 @@ final class AppURLRouterTests: XCTestCase {
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
                     browserPlacement: .newTab,
-                    alternateBrowserPlacement: .rootRight
+                    alternateBrowserPlacement: .rightPanel
                 ),
                 useAlternatePlacement: true
             ),
-            .toasttyBrowser(placement: .rootRight)
+            .toasttyBrowser(placement: .rightPanel)
         )
     }
 
@@ -46,7 +46,7 @@ final class AppURLRouterTests: XCTestCase {
                 for: url,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .rootRight
+                    browserPlacement: .rightPanel
                 )
             ),
             .localDocument(
@@ -67,7 +67,7 @@ final class AppURLRouterTests: XCTestCase {
                 for: url,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .rootRight
+                    browserPlacement: .rightPanel
                 )
             ),
             .external
@@ -136,7 +136,7 @@ final class AppURLRouterTests: XCTestCase {
                 for: url,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .rootRight
+                    browserPlacement: .rightPanel
                 )
             ),
             .external
@@ -158,7 +158,7 @@ final class AppURLRouterTests: XCTestCase {
                 appStore: store,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .rootRight
+                    browserPlacement: .rightPanel
                 ),
                 openExternally: { openedURL in
                     externallyOpenedURL = openedURL
@@ -263,7 +263,7 @@ final class AppURLRouterTests: XCTestCase {
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
                     browserPlacement: .newTab,
-                    alternateBrowserPlacement: .rootRight
+                    alternateBrowserPlacement: .rightPanel
                 ),
                 openExternally: { _ in
                     XCTFail("router should not fall back to external open")
@@ -275,10 +275,11 @@ final class AppURLRouterTests: XCTestCase {
         let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
         let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(workspace.orderedTabs.count, 1)
-        XCTAssertEqual(workspace.panels.count, 2)
-        let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
-        guard case .web(let webState) = workspace.panels[focusedPanelID] else {
-            XCTFail("expected root-right browser panel")
+        XCTAssertEqual(workspace.panels.count, 1)
+        XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspace.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel browser panel")
             return
         }
 
@@ -292,7 +293,7 @@ final class AppURLRouterTests: XCTestCase {
         store.setURLRoutingPreferences(
             URLRoutingPreferences(
                 destination: .systemBrowser,
-                browserPlacement: .rootRight
+                browserPlacement: .rightPanel
             )
         )
         let url = try XCTUnwrap(URL(string: "https://example.com/external"))

@@ -105,14 +105,12 @@ enum AppQuitConfirmation {
         }
         let localDocumentPanelIDs = state.workspacesByID.values
             .reduce(into: Set<UUID>()) { result, workspace in
-                for tab in workspace.orderedTabs {
-                    for (panelID, panelState) in tab.panels {
-                        guard case .web(let webState) = panelState,
-                              webState.definition == .localDocument else {
-                            continue
-                        }
-                        result.insert(panelID)
+                for (panelID, panelState) in workspace.allPanelsByID {
+                    guard case .web(let webState) = panelState,
+                          webState.definition == .localDocument else {
+                        continue
                     }
+                    result.insert(panelID)
                 }
             }
             .sorted { lhs, rhs in

@@ -43,6 +43,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var selectedTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: WorkspaceTabState]
+    public var rightAuxPanel: RightAuxPanelState
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -62,6 +63,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         selectedTabID: UUID?,
         tabIDs: [UUID],
         tabsByID: [UUID: WorkspaceTabState],
+        rightAuxPanel: RightAuxPanelState = RightAuxPanelState(),
         unreadWorkspaceNotificationCount: Int = 0
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
@@ -75,6 +77,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.selectedTabID = sanitizedTabs.selectedTabID
         self.tabIDs = sanitizedTabs.tabIDs
         self.tabsByID = sanitizedTabs.tabsByID
+        self.rightAuxPanel = rightAuxPanel
+        self.rightAuxPanel.repairTransientState()
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
     }
 
@@ -90,7 +94,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         selectedPanelIDs: Set<UUID> = [],
         unreadPanelIDs: Set<UUID> = [],
         unreadWorkspaceNotificationCount: Int = 0,
-        recentlyClosedPanels: [ClosedPanelRecord] = []
+        recentlyClosedPanels: [ClosedPanelRecord] = [],
+        rightAuxPanel: RightAuxPanelState = RightAuxPanelState()
     ) {
         let tab = WorkspaceTabState(
             id: UUID(),
@@ -110,6 +115,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             selectedTabID: tab.id,
             tabIDs: [tab.id],
             tabsByID: [tab.id: tab],
+            rightAuxPanel: rightAuxPanel,
             unreadWorkspaceNotificationCount: unreadWorkspaceNotificationCount
         )
     }
@@ -202,11 +208,15 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     }
 
     public var allPanelsByID: [UUID: PanelState] {
-        orderedTabs.reduce(into: [UUID: PanelState]()) { partialResult, tab in
+        var panelsByID = orderedTabs.reduce(into: [UUID: PanelState]()) { partialResult, tab in
             for (panelID, panelState) in tab.panels {
                 partialResult[panelID] = panelState
             }
         }
+        for tab in rightAuxPanel.orderedTabs {
+            panelsByID[tab.panelID] = tab.panelState
+        }
+        return panelsByID
     }
 
     public var allTerminalPanelIDs: Set<UUID> {
@@ -233,7 +243,11 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             }
         }
 
-        return nil
+        return rightAuxPanel.panelState(for: panelID)
+    }
+
+    public func rightAuxPanelTabID(containingPanelID panelID: UUID) -> UUID? {
+        rightAuxPanel.tabID(containingPanelID: panelID)
     }
 
     public func tabID(containingPanelID panelID: UUID) -> UUID? {
@@ -323,6 +337,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case selectedTabID
         case tabIDs
         case tabsByID
+        case rightAuxPanel
         case layoutTree
         case panels
         case focusedPanelID
@@ -340,6 +355,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         let decodedSelectedTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTabID)
         let decodedTabIDs = try container.decodeIfPresent([UUID].self, forKey: .tabIDs)
         let decodedTabsByID = try container.decodeIfPresent([UUID: WorkspaceTabState].self, forKey: .tabsByID)
+        rightAuxPanel = try container.decodeIfPresent(RightAuxPanelState.self, forKey: .rightAuxPanel) ?? RightAuxPanelState()
 
         if let decodedTabIDs, let decodedTabsByID, decodedTabsByID.isEmpty == false {
             let sanitizedTabs = Self.sanitizedTabs(
@@ -383,6 +399,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(resolvedSelectedTabID, forKey: .selectedTabID)
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
+        try container.encode(rightAuxPanel, forKey: .rightAuxPanel)
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

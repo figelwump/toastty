@@ -350,7 +350,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             URLRoutingPreferences(
                 destination: .toasttyBrowser,
                 browserPlacement: .newTab,
-                alternateBrowserPlacement: .rootRight
+                alternateBrowserPlacement: .rightPanel
             )
         )
         let registry = TerminalRuntimeRegistry()
@@ -367,10 +367,11 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspace.id])
         XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
-        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count + 1)
-        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
-        guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
-            XCTFail("expected root-right browser panel in source workspace")
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel browser panel in source workspace")
             return
         }
         XCTAssertEqual(webState.definition, .browser)
@@ -666,7 +667,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testAlternateOpenCommandClickMarkdownFileURLUsesRootRightPlacement() throws {
+    func testAlternateOpenCommandClickMarkdownFileURLUsesRightPanelPlacement() throws {
         let fixture = try makeMarkdownFixture()
         let workspace = WorkspaceState(
             id: UUID(),
@@ -720,10 +721,11 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
         XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
-        XCTAssertEqual(workspaceAfter.panels.count, workspaceWithTerminal.panels.count + 1)
-        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
-        guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
-            XCTFail("expected root-right local document panel in source workspace")
+        XCTAssertEqual(workspaceAfter.panels.count, workspaceWithTerminal.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document panel in source workspace")
             return
         }
 
@@ -1237,8 +1239,8 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         store.setURLRoutingPreferences(
             URLRoutingPreferences(
                 destination: .systemBrowser,
-                browserPlacement: .rootRight,
-                alternateBrowserPlacement: .rootRight
+                browserPlacement: .rightPanel,
+                alternateBrowserPlacement: .rightPanel
             )
         )
         let registry = TerminalRuntimeRegistry()

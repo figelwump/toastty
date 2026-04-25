@@ -172,6 +172,16 @@ struct ToasttyCommandMenus: Commands {
         commandSelection?.workspace
     }
 
+    private var commandRightPanelToggleTitle: String {
+        ToasttyBuiltInCommand.toggleRightPanelTitle(
+            rightPanelVisible: commandWorkspace?.rightAuxPanel.isVisible == true
+        )
+    }
+
+    private var canToggleCommandRightPanel: Bool {
+        commandWorkspace?.rightAuxPanel.tabIDs.isEmpty == false
+    }
+
     private var focusedLocalDocumentPanelSelection: FocusedLocalDocumentPanelCommandSelection? {
         store.focusedLocalDocumentPanelSelection(preferredWindowID: preferredCommandWindowID)
     }
@@ -459,6 +469,15 @@ struct ToasttyCommandMenus: Commands {
                 modifiers: ToasttyBuiltInCommand.toggleSidebar.requiredShortcut.modifiers
             )
             .disabled(commandSelection == nil)
+
+            Button(commandRightPanelToggleTitle) {
+                toggleRightPanelFromCommandSelection()
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.toggleRightPanel.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.toggleRightPanel.requiredShortcut.modifiers
+            )
+            .disabled(!canToggleCommandRightPanel)
         }
 
         CommandMenu("Workspace") {
@@ -495,7 +514,7 @@ struct ToasttyCommandMenus: Commands {
                 store.createBrowserPanelFromCommand(
                     preferredWindowID: preferredWindowID,
                     request: BrowserPanelCreateRequest(
-                        placementOverride: .rootRight
+                        placementOverride: .rightPanel
                     )
                 )
             }
@@ -551,7 +570,9 @@ struct ToasttyCommandMenus: Commands {
             Button(ToasttyBuiltInCommand.closePanel.title) {
                 closeFocusedPanelFromCommandSelection()
             }
-            .disabled(commandWorkspace?.focusedPanelID == nil)
+            .disabled(
+                focusedPanelCommandController.canCloseFocusedPanel(in: commandWorkspace?.id) == false
+            )
 
             Button(ToasttyBuiltInCommand.watchRunningCommand.title) {
                 processWatchCommandController.watchFocusedProcess(
@@ -676,6 +697,11 @@ struct ToasttyCommandMenus: Commands {
     private func toggleFocusedPanelFromCommandSelection() {
         guard let workspaceID = commandWorkspace?.id else { return }
         _ = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: workspaceID)
+    }
+
+    private func toggleRightPanelFromCommandSelection() {
+        guard let workspaceID = commandWorkspace?.id else { return }
+        _ = store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
     }
 
     private func closeFocusedPanelFromCommandSelection() {

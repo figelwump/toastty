@@ -20,7 +20,7 @@ enum TerminalCommandClickTargetResolver {
             cwd: cwd,
             fileManager: fileManager
         ) {
-            let placement: WebPanelPlacement = useAlternatePlacement ? .rootRight : .newTab
+            let placement: WebPanelPlacement = useAlternatePlacement ? .rightPanel : .newTab
             return .localDocumentFile(
                 path: localDocumentTarget.path,
                 lineNumber: localDocumentTarget.lineNumber,

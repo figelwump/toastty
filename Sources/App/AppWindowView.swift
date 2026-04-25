@@ -116,7 +116,7 @@ struct AppWindowView: View {
             let closeConfirmationSummary: LocalDocumentCloseConfirmationSummary
             if let workspace = store.state.workspacesByID[request.workspaceID] {
                 closeConfirmationSummary = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
-                    panelIDs: workspace.orderedTabs.flatMap { Array($0.panels.keys) }
+                    panelIDs: workspace.allPanelsByID.keys
                 )
             } else {
                 closeConfirmationSummary = .none

@@ -466,7 +466,11 @@ struct WorkspaceView: View {
             topBar
 
             if let window = store.window(id: windowID) {
-                workspaceStack(for: window)
+                HStack(spacing: 0) {
+                    workspaceStack(for: window)
+
+                    rightAuxPanelStack(for: window)
+                }
             } else {
                 EmptyStateView(onCreateWorkspace: createWorkspaceAction)
             }
@@ -532,6 +536,9 @@ struct WorkspaceView: View {
             handlePendingBrowserLocationFocusRequest()
         }
         .onChange(of: selectedWorkspace?.focusedPanelID) { _, _ in
+            handlePendingBrowserLocationFocusRequest()
+        }
+        .onChange(of: selectedWorkspace?.rightAuxPanel.focusedPanelID) { _, _ in
             handlePendingBrowserLocationFocusRequest()
         }
         .onDisappear {
@@ -653,6 +660,8 @@ struct WorkspaceView: View {
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
+            rightPanelToggle(identifier: "topbar.toggle.right-panel")
+
             topBarFlashButton(icon: { highlighted in
                 SplitHorizontalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
             }) {
@@ -748,6 +757,29 @@ struct WorkspaceView: View {
         .accessibilityIdentifier("workspace.tabs.new")
     }
 
+    private func rightPanelToggle(identifier: String) -> some View {
+        let isVisible = selectedWorkspace?.rightAuxPanel.isVisible == true
+        let hasTabs = selectedWorkspace?.rightAuxPanel.tabIDs.isEmpty == false
+
+        return styledTopBarButton(active: isVisible) {
+            guard let workspaceID = selectedWorkspace?.id else { return }
+            _ = store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+        } label: {
+            Image(systemName: "sidebar.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isVisible ? ToastyTheme.accent : ToastyTheme.inactiveText)
+                .frame(width: 16, height: 16)
+        }
+        .disabled(!hasTabs)
+        .help(
+            ToasttyKeyboardShortcuts.toggleRightPanel.helpText(
+                ToasttyBuiltInCommand.toggleRightPanelTitle(rightPanelVisible: isVisible)
+            )
+        )
+        .accessibilityLabel(ToasttyBuiltInCommand.toggleRightPanelTitle(rightPanelVisible: isVisible))
+        .accessibilityIdentifier(identifier)
+    }
+
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = selectedWorkspace?.id else { return }
         terminalRuntimeContext?.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
@@ -802,6 +834,35 @@ struct WorkspaceView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func rightAuxPanelStack(for window: WindowState) -> some View {
+        let selectedWorkspace = store.selectedWorkspace(in: windowID)
+        let selectedRightPanel = selectedWorkspace?.rightAuxPanel
+        let isVisible = selectedRightPanel?.isVisible == true && selectedRightPanel?.tabIDs.isEmpty == false
+        let width = isVisible
+            ? CGFloat(selectedRightPanel?.width ?? RightAuxPanelState.defaultWidth)
+            : 0
+
+        return RightAuxPanelStackView(
+            windowID: windowID,
+            workspaceIDs: window.workspaceIDs,
+            selectedWorkspaceID: store.selectedWorkspaceID(in: windowID),
+            renderedWidth: width,
+            store: store,
+            terminalProfileStore: terminalProfileStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            focusedPanelCommandController: focusedPanelCommandController,
+            windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
+            windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+            appIsActive: appIsActive
+        )
+        .frame(width: width)
+        .clipped()
+        .animation(.easeInOut(duration: 0.15), value: isVisible)
+        .animation(.easeInOut(duration: 0.15), value: width)
     }
 
     @ViewBuilder
@@ -1058,7 +1119,7 @@ struct WorkspaceView: View {
               request.windowID == windowID,
               let workspace = selectedWorkspace,
               workspace.id == request.workspaceID,
-              workspace.focusedPanelID == request.panelID,
+              workspace.focusedPanelID == request.panelID || workspace.rightAuxPanel.focusedPanelID == request.panelID,
               case .web(let webState)? = workspace.panelState(for: request.panelID),
               webState.definition == .browser else {
             return
@@ -2503,7 +2564,7 @@ private struct SlotPlacementView: View {
     }
 }
 
-private struct PanelCardView: View {
+struct PanelCardView: View {
     let workspaceID: UUID
     let panelID: UUID
     let panelState: PanelState

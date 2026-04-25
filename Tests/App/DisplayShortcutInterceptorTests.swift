@@ -309,6 +309,21 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isNewBrowserTabShortcut(repeatedEvent))
     }
 
+    func testToggleRightPanelShortcutMatchesCommandOptionBOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .option], keyCode: 0x0B)
+        let browserEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .control], keyCode: 0x0B)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "b",
+            modifiers: [.command, .option],
+            keyCode: 0x0B,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isToggleRightPanelShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isToggleRightPanelShortcut(browserEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isToggleRightPanelShortcut(repeatedEvent))
+    }
+
     func testSplitDirectionMatchesCommandDVariantsOnly() throws {
         let splitRightEvent = try makeKeyEvent(characters: "d", modifiers: [.command], keyCode: 0x02)
         let splitDownEvent = try makeKeyEvent(characters: "D", modifiers: [.command, .shift], keyCode: 0x02)
@@ -1029,16 +1044,55 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
 
         XCTAssertTrue(interceptor.handle(.createBrowser, appOwnedWindowID: windowID))
         let workspaceAfterBrowser = try XCTUnwrap(store.state.workspacesByID[workspaceID])
-        XCTAssertEqual(workspaceAfterBrowser.layoutTree.allSlotInfos.count, 2)
+        XCTAssertEqual(workspaceAfterBrowser.layoutTree.allSlotInfos.count, 1)
         XCTAssertEqual(workspaceAfterBrowser.orderedTabs.count, 1)
-        guard case .web = workspaceAfterBrowser.panels[try XCTUnwrap(workspaceAfterBrowser.focusedPanelID)] else {
-            XCTFail("expected createBrowser shortcut to focus a browser panel in the current tab")
+        let rightPanelTab = try XCTUnwrap(workspaceAfterBrowser.rightAuxPanel.activeTab)
+        guard case .web = rightPanelTab.panelState else {
+            XCTFail("expected createBrowser shortcut to create a browser panel in the right panel")
             return
         }
 
         XCTAssertTrue(interceptor.handle(.createBrowserTab, appOwnedWindowID: windowID))
         let workspaceAfterBrowserTab = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(workspaceAfterBrowserTab.orderedTabs.count, 2)
+    }
+
+    func testToggleRightPanelActionTogglesSelectedWorkspacePanel() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let event = try makeKeyEvent(characters: "b", modifiers: [.command, .option], keyCode: 0x0B)
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.createBrowser, appOwnedWindowID: windowID))
+        XCTAssertEqual(interceptor.shortcutAction(for: event, appOwnedWindowID: windowID), .toggleRightPanel)
+
+        XCTAssertTrue(interceptor.handle(.toggleRightPanel, appOwnedWindowID: windowID))
+        XCTAssertFalse(try XCTUnwrap(store.state.workspacesByID[workspaceID]).rightAuxPanel.isVisible)
+
+        XCTAssertTrue(interceptor.handle(.toggleRightPanel, appOwnedWindowID: windowID))
+        XCTAssertTrue(try XCTUnwrap(store.state.workspacesByID[workspaceID]).rightAuxPanel.isVisible)
+    }
+
+    func testClosePanelActionPrefersFocusedRightPanelTab() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.createBrowser, appOwnedWindowID: windowID))
+        let workspaceAfterBrowser = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let tab = try XCTUnwrap(workspaceAfterBrowser.rightAuxPanel.activeTab)
+        let mainFocusedPanelID = workspaceAfterBrowser.focusedPanelID
+        XCTAssertTrue(store.send(.focusRightAuxPanel(workspaceID: workspaceID, panelID: tab.panelID)))
+
+        XCTAssertTrue(interceptor.handle(.closePanel, appOwnedWindowID: windowID))
+
+        let workspaceAfterClose = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertTrue(workspaceAfterClose.rightAuxPanel.tabIDs.isEmpty)
+        XCTAssertFalse(workspaceAfterClose.rightAuxPanel.isVisible)
+        XCTAssertEqual(workspaceAfterClose.focusedPanelID, mainFocusedPanelID)
+        XCTAssertEqual(workspaceAfterClose.layoutTree.allSlotInfos.count, 1)
     }
 
     func testFocusSplitActionConsumesShortcutWhenWorkspaceWindowResolves() throws {

@@ -49,6 +49,51 @@ struct AppStateCodableTests {
     }
 
     @Test
+    func rightAuxPanelPersistsAndTransientFocusResetsWhenDecodingAppState() throws {
+        var state = AppState.bootstrap()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let tabID = UUID()
+        let panelID = UUID()
+        workspace.rightAuxPanel = RightAuxPanelState(
+            isVisible: true,
+            width: 420,
+            activeTabID: tabID,
+            tabIDs: [tabID],
+            tabsByID: [
+                tabID: RightAuxPanelTabState(
+                    id: tabID,
+                    identity: .localDocument(path: "/tmp/project/README.md"),
+                    panelID: panelID,
+                    panelState: .web(
+                        WebPanelState(
+                            definition: .localDocument,
+                            title: "README.md",
+                            localDocument: LocalDocumentState(filePath: "/tmp/project/README.md")
+                        )
+                    )
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+        state.workspacesByID[workspaceID] = workspace
+
+        let encoded = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(AppState.self, from: encoded)
+        let decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
+        let decodedRightPanel = decodedWorkspace.rightAuxPanel
+
+        #expect(decodedRightPanel.isVisible)
+        #expect(decodedRightPanel.width == 420)
+        #expect(decodedRightPanel.activeTabID == tabID)
+        #expect(decodedRightPanel.tabIDs == [tabID])
+        #expect(decodedRightPanel.focusedPanelID == nil)
+        #expect(decodedRightPanel.panelState(for: panelID) != nil)
+        #expect(decodedWorkspace.allPanelsByID[panelID] == decodedRightPanel.panelState(for: panelID))
+        try StateValidator.validate(decoded)
+    }
+
+    @Test
     func appStateCodableRoundTripsMultipleWorkspaceTabs() throws {
         var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
         let reducer = AppReducer()

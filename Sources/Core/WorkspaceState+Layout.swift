@@ -115,6 +115,8 @@ extension WorkspaceState {
     }
 
     mutating func repairTransientTabState() {
+        rightAuxPanel.repairTransientState()
+
         for tabID in tabIDs {
             guard var tab = tabsByID[tabID] else { continue }
 

@@ -7,14 +7,38 @@ enum URLOpenDestination: String, Equatable {
     case systemBrowser = "system-browser"
 }
 
-enum URLBrowserOpenPlacement: String, Equatable {
-    case rootRight
+enum URLBrowserOpenPlacement: Equatable, RawRepresentable {
+    case rightPanel
     case newTab
+
+    static var rootRight: URLBrowserOpenPlacement {
+        .rightPanel
+    }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "rightPanel", "rootRight":
+            self = .rightPanel
+        case "newTab":
+            self = .newTab
+        default:
+            return nil
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .rightPanel:
+            return "rightPanel"
+        case .newTab:
+            return "newTab"
+        }
+    }
 
     var webPanelPlacement: WebPanelPlacement {
         switch self {
-        case .rootRight:
-            return .rootRight
+        case .rightPanel:
+            return .rightPanel
         case .newTab:
             return .newTab
         }
@@ -24,7 +48,7 @@ enum URLBrowserOpenPlacement: String, Equatable {
 struct URLRoutingPreferences: Equatable {
     var destination: URLOpenDestination = .toasttyBrowser
     var browserPlacement: URLBrowserOpenPlacement = .newTab
-    var alternateBrowserPlacement: URLBrowserOpenPlacement = .rootRight
+    var alternateBrowserPlacement: URLBrowserOpenPlacement = .rightPanel
 
     func resolvedBrowserPlacement(alternateOpen: Bool) -> URLBrowserOpenPlacement {
         alternateOpen ? alternateBrowserPlacement : browserPlacement
@@ -67,7 +91,7 @@ enum AppURLRouter {
         useAlternatePlacement: Bool = false
     ) -> AppURLRoute {
         if let localDocumentTarget = LocalFileLinkResolver.resolvedLocalDocumentTarget(for: url) {
-            let placement: WebPanelPlacement = useAlternatePlacement ? .rootRight : .newTab
+            let placement: WebPanelPlacement = useAlternatePlacement ? .rightPanel : .newTab
             return .localDocument(
                 LocalDocumentPanelCreateRequest(
                     filePath: localDocumentTarget.path,

@@ -621,6 +621,7 @@ final class DisplayShortcutInterceptor {
         case saveLocalDocument
         case focusNextUnreadOrActivePanel
         case toggleLaterFlag
+        case toggleRightPanel
         case toggleFocusedPanelMode
         case renameSelectedTab
         case selectWorkspaceTab(Int)
@@ -716,6 +717,11 @@ final class DisplayShortcutInterceptor {
         if Self.isNewBrowserTabShortcut(event),
            appOwnedWindowID != nil {
             return .createBrowserTab
+        }
+
+        if Self.isToggleRightPanelShortcut(event),
+           appOwnedWindowID != nil {
+            return .toggleRightPanel
         }
 
         if let textSizeShortcutAction = textSizeShortcutAction(
@@ -843,9 +849,9 @@ final class DisplayShortcutInterceptor {
         case .commandPalette:
             toggleCommandPalette(appOwnedWindowID)
         case .closePanel:
-            closeFocusedPanel()
+            closeFocusedPanel(preferredWindowID: appOwnedWindowID)
         case .createBrowser:
-            createBrowser(preferredWindowID: appOwnedWindowID, placement: .rootRight)
+            createBrowser(preferredWindowID: appOwnedWindowID, placement: .rightPanel)
         case .createBrowserTab:
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
         case .createWorkspaceTab:
@@ -876,6 +882,8 @@ final class DisplayShortcutInterceptor {
             focusNextUnreadOrActivePanel(preferredWindowID: appOwnedWindowID)
         case .toggleLaterFlag:
             toggleLaterFlag(preferredWindowID: appOwnedWindowID)
+        case .toggleRightPanel:
+            toggleRightPanel(preferredWindowID: appOwnedWindowID)
         case .toggleFocusedPanelMode:
             toggleFocusedPanelMode()
         case .renameSelectedTab:
@@ -943,6 +951,16 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command, .control, .shift]
+    }
+
+    static func isToggleRightPanelShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "b" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .option]
     }
 
     static func isSaveShortcut(_ event: NSEvent) -> Bool {
@@ -1277,9 +1295,9 @@ final class DisplayShortcutInterceptor {
         return currentToasttyAppOwnedWindowID(in: store)
     }
 
-    private func closeFocusedPanel() -> Bool {
+    private func closeFocusedPanel(preferredWindowID: UUID? = nil) -> Bool {
         guard let store else { return false }
-        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
         let preferredWorkspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id
         guard focusedPanelCommandController.closeFocusedPanel(in: preferredWorkspaceID).consumesShortcut else {
             // Cmd+W is app-owned for normal workspace windows. If there is no
@@ -1294,6 +1312,14 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func toggleRightPanel(preferredWindowID: UUID?) -> Bool {
+        guard let store,
+              let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+        return store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
     }
 
     private func textSizeShortcutAction(
@@ -2360,7 +2386,7 @@ struct ToasttyApp: App {
                 openLocalDocumentFile: { preferredWindowID in
                     self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
-                        placement: WebPanelPlacement.rootRight
+                        placement: WebPanelPlacement.rightPanel
                     )
                 },
                 openLocalDocumentFileInTab: { preferredWindowID in
@@ -2659,7 +2685,7 @@ struct ToasttyApp: App {
 
     private static func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
         switch placement {
-        case .rootRight:
+        case .rightPanel:
             return "Open Local File"
         case .newTab:
             return "Open Local File in Tab"

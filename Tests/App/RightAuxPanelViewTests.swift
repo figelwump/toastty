@@ -1,0 +1,21 @@
+import XCTest
+@testable import ToasttyApp
+
+final class RightAuxPanelViewTests: XCTestCase {
+    func testTabStripOnlyShowsForMultipleTabs() {
+        XCTAssertFalse(RightAuxPanelTabStrip.showsTabStrip(tabCount: 0))
+        XCTAssertFalse(RightAuxPanelTabStrip.showsTabStrip(tabCount: 1))
+        XCTAssertTrue(RightAuxPanelTabStrip.showsTabStrip(tabCount: 2))
+    }
+
+    func testTabWidthCompressesWithinRightPanelMinimum() {
+        XCTAssertEqual(
+            RightAuxPanelTabStrip.resolvedTabWidth(availableWidth: 360, tabCount: 2),
+            142
+        )
+        XCTAssertEqual(
+            RightAuxPanelTabStrip.resolvedTabWidth(availableWidth: 260, tabCount: 4),
+            82
+        )
+    }
+}

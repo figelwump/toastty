@@ -133,16 +133,16 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # url-opening-browser-placement controls how Toastty places those
             # internally opened browser panels for default opens such as
             # terminal Cmd-click links.
-            # Supported values: rootRight, newTab.
+            # Supported values: rightPanel, newTab. Legacy rootRight is still accepted.
             # The default is newTab.
             # url-opening-browser-placement = newTab
 
             # url-opening-alternate-browser-placement controls how Toastty
             # places alternate browser opens such as terminal
             # Cmd+Shift+click links.
-            # Supported values: rootRight, newTab.
-            # The default is rootRight.
-            # url-opening-alternate-browser-placement = rootRight
+            # Supported values: rightPanel, newTab. Legacy rootRight is still accepted.
+            # The default is rightPanel.
+            # url-opening-alternate-browser-placement = rightPanel
 
             """
         )
@@ -240,7 +240,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertEqual(referenceURL.path, "/tmp/toastty-runtime-home-tests/ref-runtime/config-reference")
     }
 
-    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserInNewTabWithRootRightAlternate() throws {
+    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserInNewTabWithRightPanelAlternate() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let configURL = ToasttyConfigStore.configFileURL(
             homeDirectoryPath: homeDirectoryURL.path,
@@ -264,7 +264,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
             URLRoutingPreferences(
                 destination: .toasttyBrowser,
                 browserPlacement: .newTab,
-                alternateBrowserPlacement: .rootRight
+                alternateBrowserPlacement: .rightPanel
             )
         )
     }

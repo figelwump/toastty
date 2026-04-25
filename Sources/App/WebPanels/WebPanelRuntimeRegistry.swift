@@ -274,28 +274,24 @@ private extension WebPanelRuntimeRegistry {
 
     func liveBrowserPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
-            for tab in workspace.orderedTabs {
-                for (panelID, panelState) in tab.panels {
-                    guard case .web(let webState) = panelState,
-                          webState.definition == .browser else {
-                        continue
-                    }
-                    result.insert(panelID)
+            for (panelID, panelState) in workspace.allPanelsByID {
+                guard case .web(let webState) = panelState,
+                      webState.definition == .browser else {
+                    continue
                 }
+                result.insert(panelID)
             }
         }
     }
 
     func liveLocalDocumentPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
-            for tab in workspace.orderedTabs {
-                for (panelID, panelState) in tab.panels {
-                    guard case .web(let webState) = panelState,
-                          webState.definition == .localDocument else {
-                        continue
-                    }
-                    result.insert(panelID)
+            for (panelID, panelState) in workspace.allPanelsByID {
+                guard case .web(let webState) = panelState,
+                      webState.definition == .localDocument else {
+                    continue
                 }
+                result.insert(panelID)
             }
         }
     }

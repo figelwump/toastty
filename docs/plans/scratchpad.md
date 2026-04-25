@@ -18,7 +18,7 @@ architecture lives in `docs/plans/web-panels.md`.
    content surface with no direct native bridge access.
 5. Scratchpad content persists outside workspace layout snapshots. The layout
    snapshot stores a small typed reference and session-link metadata.
-6. Auto-created scratchpads use existing `rootRight` placement in v1 and restore
+6. Auto-created scratchpads use existing `rightPanel` placement in v1 and restore
    focus to the source terminal after creation.
 
 ## purpose
@@ -101,7 +101,7 @@ current `TOASTTY_SESSION_ID`:
 - If a scratchpad is already linked to that session, Toastty updates it in
   place.
 - If no scratchpad is linked to that session, Toastty creates one in the same
-  workspace using `rootRight` placement.
+  workspace using `rightPanel` placement.
 - Auto-create does not leave focus in the scratchpad. If creation focuses the
   new panel internally, Toastty restores focus to the source terminal.
 - If the scratchpad is not focused when updated, Toastty marks it updated using
@@ -137,10 +137,10 @@ Use existing placement primitives in v1.
 
 Default v1 behavior:
 
-- agent-created scratchpad: `rootRight`, then restore focus to the source
+- agent-created scratchpad: `rightPanel`, then restore focus to the source
   terminal
 - user `Show Scratchpad For Current Session`: focus existing/reopened scratchpad
-  or create with `rootRight`
+  or create with `rightPanel`
 
 If the source session or source terminal panel cannot be resolved for an
 agent-initiated `set-content`, fail the command with a clear error. Do not
@@ -381,7 +381,7 @@ Reducer/app-state tests:
 - `WebPanelState` encodes/decodes `ScratchpadState`
 - creating a scratchpad stores typed scratchpad state
 - updating existing session-linked scratchpad reuses the panel
-- agent auto-create uses `rootRight`
+- agent auto-create uses `rightPanel`
 - agent auto-create restores focus to the source terminal
 - stale `expectedRevision` rejects the write
 - missing session fails with a clear error

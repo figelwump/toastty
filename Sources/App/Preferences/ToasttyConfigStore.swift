@@ -199,16 +199,16 @@ enum ToasttyConfigStore {
             "# url-opening-browser-placement controls how Toastty places those",
             "# internally opened browser panels for default opens such as",
             "# terminal Cmd-click links.",
-            "# Supported values: rootRight, newTab.",
+            "# Supported values: rightPanel, newTab. Legacy rootRight is still accepted.",
             "# The default is newTab.",
             "# url-opening-browser-placement = newTab",
             "",
             "# url-opening-alternate-browser-placement controls how Toastty",
             "# places alternate browser opens such as terminal",
             "# Cmd+Shift+click links.",
-            "# Supported values: rootRight, newTab.",
-            "# The default is rootRight.",
-            "# url-opening-alternate-browser-placement = rootRight",
+            "# Supported values: rightPanel, newTab. Legacy rootRight is still accepted.",
+            "# The default is rightPanel.",
+            "# url-opening-alternate-browser-placement = rightPanel",
         ]
 
         if config.terminalFontSizePoints != nil
@@ -242,7 +242,7 @@ enum ToasttyConfigStore {
             )
         }
 
-        if config.urlRoutingPreferences.alternateBrowserPlacement != .rootRight {
+        if config.urlRoutingPreferences.alternateBrowserPlacement != .rightPanel {
             lines.append(
                 "\(urlOpeningAlternateBrowserPlacementKey) = \(config.urlRoutingPreferences.alternateBrowserPlacement.rawValue)"
             )

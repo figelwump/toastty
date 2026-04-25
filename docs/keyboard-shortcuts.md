@@ -9,6 +9,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+N` | New window |
 | `Cmd+T` | New tab |
 | `Cmd+B` | Show or hide the sidebar |
+| `Cmd+Opt+B` | Show or hide the right panel |
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |
 | `Option+Shift+E` | Rename tab |
@@ -26,7 +27,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 |---|---|
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
-| `Cmd+Ctrl+B` | New browser in the current tab layout |
+| `Cmd+Ctrl+B` | New browser in the right panel |
 | `Cmd+Ctrl+Shift+B` | New browser tab |
 | `Cmd+[` | Focus previous pane |
 | `Cmd+]` | Focus next pane |

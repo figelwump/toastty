@@ -27,6 +27,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFile.id, "local-document.open")
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInTab.id, "local-document.open-tab")
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInSplit.id, "local-document.open-split")
+        XCTAssertEqual(ToasttyBuiltInCommand.toggleRightPanel.id, "window.toggle-right-panel")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
         XCTAssertEqual(ToasttyBuiltInCommand.reloadConfiguration.id, "app.reload-configuration")
@@ -63,6 +64,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.openLocalFileInTab.id,
                 ToasttyBuiltInCommand.openLocalFileInSplit.id,
                 ToasttyBuiltInCommand.toggleSidebar.id,
+                ToasttyBuiltInCommand.toggleRightPanel.id,
                 ToasttyBuiltInCommand.toggleFocusedPanelMode.id,
                 ToasttyBuiltInCommand.watchRunningCommand.id,
                 ToasttyBuiltInCommand.closePanel.id,
@@ -80,6 +82,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
     func testCatalogUsesDynamicTitlesAndLocalFileNaming() throws {
         let actions = CommandPaletteActionSpy()
         actions.sidebarTitleValue = "Hide Sidebar"
+        actions.rightPanelTitleValue = "Hide Right Panel"
         actions.focusedPanelModeTitleValue = "Restore Layout"
 
         let commands = makeCommands(actions: actions)
@@ -87,6 +90,10 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(
             try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.toggleSidebar.id })).title,
             "Hide Sidebar"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.toggleRightPanel.id })).title,
+            "Hide Right Panel"
         )
         XCTAssertEqual(
             try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.toggleFocusedPanelMode.id })).title,
@@ -103,6 +110,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.canEqualizeSplitsValue = false
         actions.canCreateBrowserValue = false
         actions.canOpenLocalDocumentValue = false
+        actions.canToggleRightPanelValue = false
         actions.canWatchRunningCommandValue = false
         actions.canReloadValue = false
 
@@ -111,6 +119,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.equalizeSplits.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.newBrowser.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.openLocalFile.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.toggleRightPanel.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.reloadConfiguration.id }))
     }

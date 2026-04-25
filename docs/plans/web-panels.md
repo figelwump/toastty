@@ -240,11 +240,11 @@ behavior rather than a more general future system.
 
 Browser already has concrete placement behavior:
 
-- `New Browser` uses `rootRight`
+- `New Browser` uses `rightPanel`
 - `New Browser Tab` uses `newTab`
 - `New Browser Split` uses `splitRight`
 - internal URL opens default to `newTab`
-- alternate URL opens default to `rootRight`
+- alternate URL opens default to `rightPanel`
 
 ### near-term rule
 
@@ -261,7 +261,7 @@ panel needs it.
 
 Current useful placement vocabulary:
 
-- `rootRight`
+- `rightPanel` (`rootRight` is accepted as a legacy alias)
 - `newTab`
 - `splitRight`
 

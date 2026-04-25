@@ -370,7 +370,7 @@ private extension AppControlParameterDescriptor {
     }
 
     static func placement(required: Bool) -> Self {
-        .init(name: "placement", summary: "Panel placement strategy.", valueType: .string, required: required, allowedValues: ["rootRight", "newTab", "splitRight"])
+        .init(name: "placement", summary: "Panel placement strategy.", valueType: .string, required: required, allowedValues: ["rightPanel", "newTab", "splitRight", "rootRight"])
     }
 
     static func profileID(required: Bool) -> Self {

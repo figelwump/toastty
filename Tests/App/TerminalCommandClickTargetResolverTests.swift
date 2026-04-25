@@ -19,7 +19,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
-    func testResolveTreatsRelativeMarkdownPathAsRootRightWhenAlternateOpenIsRequested() throws {
+    func testResolveTreatsRelativeMarkdownPathAsRightPanelWhenAlternateOpenIsRequested() throws {
         let fixture = try makeFixture()
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -30,7 +30,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rootRight)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 

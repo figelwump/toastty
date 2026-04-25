@@ -58,6 +58,7 @@ enum CommandPaletteCatalog {
             (.openLocalFileInTab, actions.canOpenLocalDocument(originWindowID: originWindowID)),
             (.openLocalFileInSplit, actions.canOpenLocalDocument(originWindowID: originWindowID)),
             (.toggleSidebar, actions.canToggleSidebar(originWindowID: originWindowID)),
+            (.toggleRightPanel, actions.canToggleRightPanel(originWindowID: originWindowID)),
             (.toggleFocusedPanelMode, actions.canToggleFocusedPanelMode(originWindowID: originWindowID)),
             (.watchRunningCommand, actions.canWatchRunningCommand(originWindowID: originWindowID)),
             (.closePanel, actions.canClosePanel(originWindowID: originWindowID)),
@@ -195,6 +196,8 @@ enum CommandPaletteCatalog {
         switch command {
         case .toggleSidebar:
             return actions.sidebarTitle(originWindowID: originWindowID)
+        case .toggleRightPanel:
+            return actions.rightPanelTitle(originWindowID: originWindowID)
         case .toggleFocusedPanelMode:
             return actions.toggleFocusedPanelModeTitle(originWindowID: originWindowID)
         default:

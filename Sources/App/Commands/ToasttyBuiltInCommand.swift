@@ -29,6 +29,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case openLocalFileInTab
     case openLocalFileInSplit
     case toggleSidebar
+    case toggleRightPanel
     case toggleFocusedPanelMode
     case watchRunningCommand
     case closePanel
@@ -42,6 +43,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     private static let showSidebarTitle = "Show Sidebar"
     private static let hideSidebarTitle = "Hide Sidebar"
+    private static let showRightPanelTitle = "Show Right Panel"
+    private static let hideRightPanelTitle = "Hide Right Panel"
     private static let focusPanelTitle = "Focus Panel"
     private static let restoreLayoutTitle = "Restore Layout"
 
@@ -98,6 +101,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "local-document.open-split"
         case .toggleSidebar:
             return "window.toggle-sidebar"
+        case .toggleRightPanel:
+            return "window.toggle-right-panel"
         case .toggleFocusedPanelMode:
             return "panel.focus-mode.toggle"
         case .watchRunningCommand:
@@ -173,6 +178,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Open Local File in Split"
         case .toggleSidebar:
             return Self.showSidebarTitle
+        case .toggleRightPanel:
+            return Self.showRightPanelTitle
         case .toggleFocusedPanelMode:
             return Self.focusPanelTitle
         case .watchRunningCommand:
@@ -248,6 +255,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .toggleSidebar:
             return ToasttyKeyboardShortcuts.toggleSidebar
+        case .toggleRightPanel:
+            return ToasttyKeyboardShortcuts.toggleRightPanel
         case .toggleFocusedPanelMode:
             return ToasttyKeyboardShortcuts.toggleFocusedPanel
         case .watchRunningCommand:
@@ -330,6 +339,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["open", "local", "file", "document", "split", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
+        case .toggleRightPanel:
+            return ["right", "panel", "sidebar", "toggle", "show", "hide"]
         case .toggleFocusedPanelMode:
             return ["focus", "panel", "layout", "restore"]
         case .watchRunningCommand:
@@ -355,6 +366,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     static func toggleSidebarTitle(sidebarVisible: Bool) -> String {
         sidebarVisible ? hideSidebarTitle : showSidebarTitle
+    }
+
+    static func toggleRightPanelTitle(rightPanelVisible: Bool) -> String {
+        rightPanelVisible ? hideRightPanelTitle : showRightPanelTitle
     }
 
     static func toggleFocusedPanelModeTitle(focusedPanelModeActive: Bool) -> String {

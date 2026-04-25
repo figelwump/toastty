@@ -18,6 +18,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canCreateBrowserValue = true
     var canOpenLocalDocumentValue = true
     var canToggleSidebarValue = true
+    var canToggleRightPanelValue = true
     var canToggleFocusedPanelModeValue = true
     var canWatchRunningCommandValue = true
     var canClosePanelValue = true
@@ -41,6 +42,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var createBrowserResult = true
     var openLocalDocumentResult = true
     var toggleSidebarResult = true
+    var toggleRightPanelResult = true
     var toggleFocusedPanelModeResult = true
     var watchRunningCommandResult = true
     var closePanelResult = true
@@ -54,6 +56,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var reloadConfigurationResult = true
 
     var sidebarTitleValue = ToasttyBuiltInCommand.toggleSidebar.title
+    var rightPanelTitleValue = ToasttyBuiltInCommand.toggleRightPanel.title
     var focusedPanelModeTitleValue = ToasttyBuiltInCommand.toggleFocusedPanelMode.title
 
     var createdWindowIDs: [UUID] = []
@@ -66,6 +69,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var browserCalls: [RecordedPaletteBrowserCall] = []
     var localDocumentCalls: [RecordedPaletteLocalDocumentCall] = []
     var toggledSidebarWindowIDs: [UUID] = []
+    var toggledRightPanelWindowIDs: [UUID] = []
     var toggledFocusedPanelModeWindowIDs: [UUID] = []
     var watchedRunningCommandWindowIDs: [UUID] = []
     var closedPanelWindowIDs: [UUID] = []
@@ -209,6 +213,21 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     func sidebarTitle(originWindowID: UUID) -> String {
         _ = originWindowID
         return sidebarTitleValue
+    }
+
+    func canToggleRightPanel(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canToggleRightPanelValue
+    }
+
+    func toggleRightPanel(originWindowID: UUID) -> Bool {
+        toggledRightPanelWindowIDs.append(originWindowID)
+        return toggleRightPanelResult
+    }
+
+    func rightPanelTitle(originWindowID: UUID) -> String {
+        _ = originWindowID
+        return rightPanelTitleValue
     }
 
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool {
@@ -405,19 +424,21 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
             case .newTab:
                 return createWorkspaceTab(originWindowID: originWindowID)
             case .newBrowser:
-                return createBrowser(placement: .rootRight, originWindowID: originWindowID)
+                return createBrowser(placement: .rightPanel, originWindowID: originWindowID)
             case .newBrowserTab:
                 return createBrowser(placement: .newTab, originWindowID: originWindowID)
             case .newBrowserSplit:
                 return createBrowser(placement: .splitRight, originWindowID: originWindowID)
             case .openLocalFile:
-                return openLocalDocument(placement: .rootRight, originWindowID: originWindowID)
+                return openLocalDocument(placement: .rightPanel, originWindowID: originWindowID)
             case .openLocalFileInTab:
                 return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
             case .openLocalFileInSplit:
                 return openLocalDocument(placement: .splitRight, originWindowID: originWindowID)
             case .toggleSidebar:
                 return toggleSidebar(originWindowID: originWindowID)
+            case .toggleRightPanel:
+                return toggleRightPanel(originWindowID: originWindowID)
             case .toggleFocusedPanelMode:
                 return toggleFocusedPanelMode(originWindowID: originWindowID)
             case .watchRunningCommand:

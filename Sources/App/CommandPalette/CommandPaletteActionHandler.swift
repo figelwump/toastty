@@ -27,6 +27,9 @@ protocol CommandPaletteActionHandling: AnyObject {
     func canToggleSidebar(originWindowID: UUID) -> Bool
     func toggleSidebar(originWindowID: UUID) -> Bool
     func sidebarTitle(originWindowID: UUID) -> String
+    func canToggleRightPanel(originWindowID: UUID) -> Bool
+    func toggleRightPanel(originWindowID: UUID) -> Bool
+    func rightPanelTitle(originWindowID: UUID) -> String
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool
     func toggleFocusedPanelMode(originWindowID: UUID) -> Bool
     func toggleFocusedPanelModeTitle(originWindowID: UUID) -> String
@@ -252,6 +255,29 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return ToasttyBuiltInCommand.toggleSidebar.title
         }
         return ToasttyBuiltInCommand.toggleSidebarTitle(sidebarVisible: window.sidebarVisible)
+    }
+
+    func canToggleRightPanel(originWindowID: UUID) -> Bool {
+        guard let workspace = store?.commandSelection(preferredWindowID: originWindowID)?.workspace else {
+            return false
+        }
+        return workspace.rightAuxPanel.tabIDs.isEmpty == false
+    }
+
+    func toggleRightPanel(originWindowID: UUID) -> Bool {
+        guard let store,
+              let workspaceID = store.commandSelection(preferredWindowID: originWindowID)?.workspace.id else {
+            return false
+        }
+        return store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+    }
+
+    func rightPanelTitle(originWindowID: UUID) -> String {
+        let isVisible = store?.commandSelection(preferredWindowID: originWindowID)?
+            .workspace
+            .rightAuxPanel
+            .isVisible == true
+        return ToasttyBuiltInCommand.toggleRightPanelTitle(rightPanelVisible: isVisible)
     }
 
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool {
@@ -482,19 +508,21 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         case .newTab:
             return createWorkspaceTab(originWindowID: originWindowID)
         case .newBrowser:
-            return createBrowser(placement: .rootRight, originWindowID: originWindowID)
+            return createBrowser(placement: .rightPanel, originWindowID: originWindowID)
         case .newBrowserTab:
             return createBrowser(placement: .newTab, originWindowID: originWindowID)
         case .newBrowserSplit:
             return createBrowser(placement: .splitRight, originWindowID: originWindowID)
         case .openLocalFile:
-            return openLocalDocument(placement: .rootRight, originWindowID: originWindowID)
+            return openLocalDocument(placement: .rightPanel, originWindowID: originWindowID)
         case .openLocalFileInTab:
             return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
         case .openLocalFileInSplit:
             return openLocalDocument(placement: .splitRight, originWindowID: originWindowID)
         case .toggleSidebar:
             return toggleSidebar(originWindowID: originWindowID)
+        case .toggleRightPanel:
+            return toggleRightPanel(originWindowID: originWindowID)
         case .toggleFocusedPanelMode:
             return toggleFocusedPanelMode(originWindowID: originWindowID)
         case .watchRunningCommand:
