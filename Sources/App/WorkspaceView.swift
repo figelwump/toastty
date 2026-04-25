@@ -468,12 +468,8 @@ struct WorkspaceView: View {
 
             if let window = store.window(id: windowID) {
                 GeometryReader { geometry in
-                    HStack(spacing: 0) {
-                        workspaceStack(for: window)
-
-                        rightAuxPanelStack(for: window, availableWidth: geometry.size.width)
-                    }
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                    workspaceStack(for: window)
+                        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                 }
             } else {
                 EmptyStateView(onCreateWorkspace: createWorkspaceAction)
@@ -840,38 +836,6 @@ struct WorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func rightAuxPanelStack(for window: WindowState, availableWidth: CGFloat) -> some View {
-        let selectedWorkspace = store.selectedWorkspace(in: windowID)
-        let selectedRightPanel = selectedWorkspace?.rightAuxPanel
-        let isVisible = selectedRightPanel?.isVisible == true
-        let targetWidth = Self.effectiveRightAuxPanelWidth(
-            for: selectedRightPanel,
-            availableWidth: availableWidth
-        )
-        let renderedWidth = isVisible ? targetWidth : 0
-
-        return RightAuxPanelStackView(
-            windowID: windowID,
-            workspaceIDs: window.workspaceIDs,
-            selectedWorkspaceID: store.selectedWorkspaceID(in: windowID),
-            renderedWidth: renderedWidth,
-            effectiveContentWidth: targetWidth,
-            store: store,
-            terminalProfileStore: terminalProfileStore,
-            terminalRuntimeRegistry: terminalRuntimeRegistry,
-            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-            focusedPanelCommandController: focusedPanelCommandController,
-            openLocalFileSearch: openRightPanelFileSearch,
-            openBrowser: openRightPanelBrowser,
-            windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
-            windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
-            appIsActive: appIsActive
-        )
-        .frame(width: targetWidth)
-        .frame(width: renderedWidth, alignment: .leading)
-        .clipped()
-    }
-
     static func effectiveRightAuxPanelWidth(
         for panel: RightAuxPanelState?,
         availableWidth: CGFloat
@@ -882,6 +846,29 @@ struct WorkspaceView: View {
         }
 
         return CGFloat(RightAuxPanelState.defaultWidth(for: availableWorkspaceWidth))
+    }
+
+    static func renderedRightAuxPanelWidth(
+        for panel: RightAuxPanelState,
+        availableWidth: CGFloat
+    ) -> CGFloat {
+        panel.isVisible
+            ? effectiveRightAuxPanelWidth(for: panel, availableWidth: availableWidth)
+            : 0
+    }
+
+    static func primaryContentWidth(
+        availableWidth: CGFloat,
+        rightAuxPanelRenderedWidth: CGFloat
+    ) -> CGFloat {
+        max(0, availableWidth - rightAuxPanelRenderedWidth)
+    }
+
+    static func rightAuxPanelAnimatesVisibilityChanges(
+        isWorkspaceSelected: Bool,
+        isWorkspaceTabSelected: Bool
+    ) -> Bool {
+        isWorkspaceSelected && isWorkspaceTabSelected
     }
 
     private func openRightPanelFileSearch(originWindowID: UUID) {
@@ -944,84 +931,183 @@ struct WorkspaceView: View {
         )
 
         GeometryReader { geometry in
-            let viewportFrame = LayoutFrame(
-                minX: 0,
-                minY: 0,
-                width: geometry.size.width,
-                height: geometry.size.height
+            let rightPanelTargetWidth = Self.effectiveRightAuxPanelWidth(
+                for: tab.rightAuxPanel,
+                availableWidth: geometry.size.width
             )
-            let projection = renderedLayout.projectLayout(
-                in: viewportFrame,
-                dividerThickness: 1
+            let rightPanelRenderedWidth = Self.renderedRightAuxPanelWidth(
+                for: tab.rightAuxPanel,
+                availableWidth: geometry.size.width
             )
-            ZStack(alignment: .topLeading) {
-                ForEach(projection.slots) { placement in
-                    SlotPlacementView(
-                        placement: placement,
-                        workspaceID: workspace.id,
-                        tab: tab,
-                        isWorkspaceSelected: isWorkspaceSelected,
-                        isTabSelected: isTabSelected,
-                        store: store,
-                        terminalProfileStore: terminalProfileStore,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                        focusedPanelCommandController: focusedPanelCommandController,
-                        terminalRuntimeContext: terminalRuntimeContext,
-                        windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
-                        windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
-                        appIsActive: appIsActive,
-                        unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
-                        terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
-                        panelSessionStatusesByPanelID: panelSessionStatusesByPanelID,
-                        panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0
-                    )
-                }
+            let primaryContentWidth = Self.primaryContentWidth(
+                availableWidth: geometry.size.width,
+                rightAuxPanelRenderedWidth: rightPanelRenderedWidth
+            )
+            let animatesRightPanelVisibility = Self.rightAuxPanelAnimatesVisibilityChanges(
+                isWorkspaceSelected: isWorkspaceSelected,
+                isWorkspaceTabSelected: isTabSelected
+            )
 
-                ForEach(projection.dividers) { placement in
-                    Rectangle()
-                        .fill(ToastyTheme.slotDivider)
-                        .frame(
-                            width: CGFloat(placement.frame.width),
-                            height: CGFloat(placement.frame.height)
-                        )
-                        .offset(
-                            x: CGFloat(placement.frame.minX),
-                            y: CGFloat(placement.frame.minY)
-                        )
-                        .allowsHitTesting(false)
-                }
+            HStack(spacing: 0) {
+                workspaceTabPrimarySurface(
+                    workspace: workspace,
+                    tab: tab,
+                    isWorkspaceSelected: isWorkspaceSelected,
+                    isTabSelected: isTabSelected,
+                    renderedLayout: renderedLayout,
+                    width: primaryContentWidth,
+                    height: geometry.size.height,
+                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
+                    panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
+                )
+
+                rightAuxPanelSurface(
+                    workspace: workspace,
+                    tab: tab,
+                    isWorkspaceSelected: isWorkspaceSelected,
+                    isTabSelected: isTabSelected,
+                    targetWidth: rightPanelTargetWidth,
+                    renderedWidth: rightPanelRenderedWidth
+                )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
-            .overlay(alignment: .topLeading) {
-                if isWorkspaceSelected,
-                   isTabSelected,
-                   tab.focusedPanelModeActive {
-                    FocusModeViewportChrome()
-                        .allowsHitTesting(false)
-                } else if isWorkspaceSelected,
-                          isTabSelected,
-                          let frame = transientUnfocusHighlightFrame(
-                              workspaceID: workspace.id,
-                              tabID: tab.id,
-                              layoutTree: tab.layoutTree,
-                              projection: projection
-                          ) {
-                    FocusModeViewportChrome(fillOpacity: 0.04)
-                        .opacity(transientUnfocusHighlightOpacity)
-                        .frame(
-                            width: CGFloat(frame.width),
-                            height: CGFloat(frame.height)
-                        )
-                        .offset(
-                            x: CGFloat(frame.minX),
-                            y: CGFloat(frame.minY)
-                        )
-                        .allowsHitTesting(false)
+            .transaction { transaction in
+                if animatesRightPanelVisibility == false {
+                    transaction.animation = nil
                 }
             }
+            .animation(
+                animatesRightPanelVisibility ? .easeInOut(duration: 0.15) : nil,
+                value: tab.rightAuxPanel.isVisible
+            )
         }
+    }
+
+    private func workspaceTabPrimarySurface(
+        workspace: WorkspaceState,
+        tab: WorkspaceTabState,
+        isWorkspaceSelected: Bool,
+        isTabSelected: Bool,
+        renderedLayout: WorkspaceRenderedLayout,
+        width: CGFloat,
+        height: CGFloat,
+        terminalShortcutNumbersByPanelID: [UUID: Int],
+        panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus]
+    ) -> some View {
+        let viewportFrame = LayoutFrame(
+            minX: 0,
+            minY: 0,
+            width: width,
+            height: height
+        )
+        let projection = renderedLayout.projectLayout(
+            in: viewportFrame,
+            dividerThickness: 1
+        )
+
+        return ZStack(alignment: .topLeading) {
+            ForEach(projection.slots) { placement in
+                SlotPlacementView(
+                    placement: placement,
+                    workspaceID: workspace.id,
+                    tab: tab,
+                    isWorkspaceSelected: isWorkspaceSelected,
+                    isTabSelected: isTabSelected,
+                    store: store,
+                    terminalProfileStore: terminalProfileStore,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                    focusedPanelCommandController: focusedPanelCommandController,
+                    terminalRuntimeContext: terminalRuntimeContext,
+                    windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
+                    windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+                    appIsActive: appIsActive,
+                    unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
+                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
+                    panelSessionStatusesByPanelID: panelSessionStatusesByPanelID,
+                    panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0
+                )
+            }
+
+            ForEach(projection.dividers) { placement in
+                Rectangle()
+                    .fill(ToastyTheme.slotDivider)
+                    .frame(
+                        width: CGFloat(placement.frame.width),
+                        height: CGFloat(placement.frame.height)
+                    )
+                    .offset(
+                        x: CGFloat(placement.frame.minX),
+                        y: CGFloat(placement.frame.minY)
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: width, height: height, alignment: .topLeading)
+        .clipped()
+        .overlay(alignment: .topLeading) {
+            if isWorkspaceSelected,
+               isTabSelected,
+               tab.focusedPanelModeActive {
+                FocusModeViewportChrome()
+                    .allowsHitTesting(false)
+            } else if isWorkspaceSelected,
+                      isTabSelected,
+                      let frame = transientUnfocusHighlightFrame(
+                          workspaceID: workspace.id,
+                          tabID: tab.id,
+                          layoutTree: tab.layoutTree,
+                          projection: projection
+                      ) {
+                FocusModeViewportChrome(fillOpacity: 0.04)
+                    .opacity(transientUnfocusHighlightOpacity)
+                    .frame(
+                        width: CGFloat(frame.width),
+                        height: CGFloat(frame.height)
+                    )
+                    .offset(
+                        x: CGFloat(frame.minX),
+                        y: CGFloat(frame.minY)
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func rightAuxPanelSurface(
+        workspace: WorkspaceState,
+        tab: WorkspaceTabState,
+        isWorkspaceSelected: Bool,
+        isTabSelected: Bool,
+        targetWidth: CGFloat,
+        renderedWidth: CGFloat
+    ) -> some View {
+        let isVisible = isWorkspaceSelected && isTabSelected && tab.rightAuxPanel.isVisible
+
+        return RightAuxPanelView(
+            windowID: windowID,
+            workspace: workspace,
+            workspaceTab: tab,
+            isWorkspaceSelected: isWorkspaceSelected,
+            isWorkspaceTabSelected: isTabSelected,
+            store: store,
+            terminalProfileStore: terminalProfileStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            focusedPanelCommandController: focusedPanelCommandController,
+            openLocalFileSearch: openRightPanelFileSearch,
+            openBrowser: openRightPanelBrowser,
+            effectiveContentWidth: targetWidth,
+            windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
+            windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+            appIsActive: appIsActive
+        )
+        .frame(width: targetWidth)
+        .frame(width: renderedWidth, alignment: .leading)
+        .clipped()
+        .allowsHitTesting(isVisible && renderedWidth > 0)
+        .accessibilityHidden(!isVisible)
     }
 
     @ViewBuilder

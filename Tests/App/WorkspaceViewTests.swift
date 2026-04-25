@@ -149,6 +149,62 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testRenderedRightAuxPanelWidthUsesOwningTabVisibility() {
+        XCTAssertEqual(
+            WorkspaceView.renderedRightAuxPanelWidth(
+                for: RightAuxPanelState(isVisible: true, width: 520, hasCustomWidth: true),
+                availableWidth: 1_200
+            ),
+            520
+        )
+        XCTAssertEqual(
+            WorkspaceView.renderedRightAuxPanelWidth(
+                for: RightAuxPanelState(isVisible: false, width: 520, hasCustomWidth: true),
+                availableWidth: 1_200
+            ),
+            0
+        )
+    }
+
+    func testPrimaryContentWidthSubtractsOnlyTheOwningTabRightPanelWidth() {
+        XCTAssertEqual(
+            WorkspaceView.primaryContentWidth(
+                availableWidth: 1_200,
+                rightAuxPanelRenderedWidth: 360
+            ),
+            840
+        )
+        XCTAssertEqual(
+            WorkspaceView.primaryContentWidth(
+                availableWidth: 320,
+                rightAuxPanelRenderedWidth: 480
+            ),
+            0
+        )
+    }
+
+    func testRightAuxPanelVisibilityAnimationOnlyRunsForSelectedTabSurface() {
+        XCTAssertTrue(
+            WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: false
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
+                isWorkspaceSelected: false,
+                isWorkspaceTabSelected: true
+            )
+        )
+    }
+
     func testSingleTabWorkspaceStillInstallsTabContextMenu() {
         XCTAssertFalse(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 0))
         XCTAssertTrue(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 1))

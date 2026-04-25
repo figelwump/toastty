@@ -2,70 +2,6 @@ import AppKit
 import CoreState
 import SwiftUI
 
-struct RightAuxPanelStackView: View {
-    let windowID: UUID
-    let workspaceIDs: [UUID]
-    let selectedWorkspaceID: UUID?
-    let renderedWidth: CGFloat
-    let effectiveContentWidth: CGFloat
-    @ObservedObject var store: AppStore
-    @ObservedObject var terminalProfileStore: TerminalProfileStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
-    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
-    let focusedPanelCommandController: FocusedPanelCommandController
-    let openLocalFileSearch: @MainActor (UUID) -> Void
-    let openBrowser: @MainActor (UUID) -> Void
-    let windowFontPoints: Double
-    let windowMarkdownTextScale: Double
-    let appIsActive: Bool
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(workspaceIDs, id: \.self) { workspaceID in
-                if let workspace = store.state.workspacesByID[workspaceID] {
-                    ForEach(workspace.orderedTabs) { workspaceTab in
-                        let isSelectedWorkspace = selectedWorkspaceID == workspaceID
-                        let isSelectedTab = workspace.resolvedSelectedTabID == workspaceTab.id
-                        let isVisible = isSelectedWorkspace &&
-                            isSelectedTab &&
-                            workspaceTab.rightAuxPanel.isVisible
-                        let keepsMountedContentVisible = isVisible ||
-                            (isSelectedWorkspace &&
-                                isSelectedTab &&
-                                workspaceTab.rightAuxPanel.tabIDs.isEmpty == false)
-
-                        RightAuxPanelView(
-                            windowID: windowID,
-                            workspace: workspace,
-                            workspaceTab: workspaceTab,
-                            isWorkspaceSelected: isSelectedWorkspace,
-                            isWorkspaceTabSelected: isSelectedTab,
-                            store: store,
-                            terminalProfileStore: terminalProfileStore,
-                            terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                            focusedPanelCommandController: focusedPanelCommandController,
-                            openLocalFileSearch: openLocalFileSearch,
-                            openBrowser: openBrowser,
-                            effectiveContentWidth: effectiveContentWidth,
-                            windowFontPoints: windowFontPoints,
-                            windowMarkdownTextScale: windowMarkdownTextScale,
-                            appIsActive: appIsActive
-                        )
-                        .opacity(WorkspaceView.mountedContentOpacity(isVisible: keepsMountedContentVisible))
-                        .allowsHitTesting(isVisible && renderedWidth > 0)
-                        .accessibilityHidden(!isVisible)
-                        .zIndex(isVisible ? 1 : 0)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(renderedWidth > 0 ? ToastyTheme.surfaceBackground : Color.clear)
-        .accessibilityIdentifier("right-panel.stack")
-    }
-}
-
 struct RightAuxPanelView: View {
     let windowID: UUID
     let workspace: WorkspaceState
@@ -112,6 +48,11 @@ struct RightAuxPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ToastyTheme.surfaceBackground)
         .accessibilityIdentifier("right-panel.\(workspace.id.uuidString).\(workspaceTab.id.uuidString)")
+        .onChange(of: acceptsPanelInteraction) { _, isActive in
+            if isActive == false {
+                cancelResizeHandleInteraction()
+            }
+        }
     }
 
     private var resizeHandle: some View {
@@ -133,10 +74,12 @@ struct RightAuxPanelView: View {
                     ],
                     cursor: .resizeLeftRight,
                     onBegan: { _ in
+                        guard acceptsPanelInteraction else { return }
                         resizeStartWidth = Double(effectiveContentWidth)
                         updateResizeHandleInteraction(dragging: true)
                     },
                     onChanged: { value in
+                        guard acceptsPanelInteraction else { return }
                         let startingWidth = resizeStartWidth ?? Double(effectiveContentWidth)
                         resizeStartWidth = startingWidth
                         let nextWidth = startingWidth - Double(value.translation.width)
@@ -163,6 +106,10 @@ struct RightAuxPanelView: View {
         resizeHandleHovered || resizeHandleDragging
     }
 
+    private var acceptsPanelInteraction: Bool {
+        isWorkspaceSelected && isWorkspaceTabSelected && workspaceTab.rightAuxPanel.isVisible
+    }
+
     private var resizeHandleHighlightColor: Color {
         resizeHandleHighlighted
             ? ToastyTheme.accent.opacity(appIsActive ? 0.9 : 0.55)
@@ -177,6 +124,12 @@ struct RightAuxPanelView: View {
         let nextDragging = dragging ?? resizeHandleDragging
         resizeHandleHovered = nextHovered
         resizeHandleDragging = nextDragging
+    }
+
+    private func cancelResizeHandleInteraction() {
+        resizeStartWidth = nil
+        resizeHandleHovered = false
+        resizeHandleDragging = false
     }
 
     private func releaseResizeHandleInteraction() {
