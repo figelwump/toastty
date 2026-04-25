@@ -21,31 +21,38 @@ struct RightAuxPanelStackView: View {
         ZStack(alignment: .topLeading) {
             ForEach(workspaceIDs, id: \.self) { workspaceID in
                 if let workspace = store.state.workspacesByID[workspaceID] {
-                    let isSelected = selectedWorkspaceID == workspaceID
-                    let isVisible = isSelected &&
-                        workspace.rightAuxPanel.isVisible &&
-                        workspace.rightAuxPanel.tabIDs.isEmpty == false
-                    let keepsMountedContentVisible = isSelected &&
-                        workspace.rightAuxPanel.tabIDs.isEmpty == false
+                    ForEach(workspace.orderedTabs) { workspaceTab in
+                        let isSelectedWorkspace = selectedWorkspaceID == workspaceID
+                        let isSelectedTab = workspace.resolvedSelectedTabID == workspaceTab.id
+                        let isVisible = isSelectedWorkspace &&
+                            isSelectedTab &&
+                            workspaceTab.rightAuxPanel.isVisible &&
+                            workspaceTab.rightAuxPanel.tabIDs.isEmpty == false
+                        let keepsMountedContentVisible = isSelectedWorkspace &&
+                            isSelectedTab &&
+                            workspaceTab.rightAuxPanel.tabIDs.isEmpty == false
 
-                    RightAuxPanelView(
-                        windowID: windowID,
-                        workspace: workspace,
-                        isWorkspaceSelected: isSelected,
-                        store: store,
-                        terminalProfileStore: terminalProfileStore,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                        focusedPanelCommandController: focusedPanelCommandController,
-                        effectiveContentWidth: effectiveContentWidth,
-                        windowFontPoints: windowFontPoints,
-                        windowMarkdownTextScale: windowMarkdownTextScale,
-                        appIsActive: appIsActive
-                    )
-                    .opacity(WorkspaceView.mountedContentOpacity(isVisible: keepsMountedContentVisible))
-                    .allowsHitTesting(isVisible && renderedWidth > 0)
-                    .accessibilityHidden(!isVisible)
-                    .zIndex(isVisible ? 1 : 0)
+                        RightAuxPanelView(
+                            windowID: windowID,
+                            workspace: workspace,
+                            workspaceTab: workspaceTab,
+                            isWorkspaceSelected: isSelectedWorkspace,
+                            isWorkspaceTabSelected: isSelectedTab,
+                            store: store,
+                            terminalProfileStore: terminalProfileStore,
+                            terminalRuntimeRegistry: terminalRuntimeRegistry,
+                            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                            focusedPanelCommandController: focusedPanelCommandController,
+                            effectiveContentWidth: effectiveContentWidth,
+                            windowFontPoints: windowFontPoints,
+                            windowMarkdownTextScale: windowMarkdownTextScale,
+                            appIsActive: appIsActive
+                        )
+                        .opacity(WorkspaceView.mountedContentOpacity(isVisible: keepsMountedContentVisible))
+                        .allowsHitTesting(isVisible && renderedWidth > 0)
+                        .accessibilityHidden(!isVisible)
+                        .zIndex(isVisible ? 1 : 0)
+                    }
                 }
             }
         }
@@ -58,7 +65,9 @@ struct RightAuxPanelStackView: View {
 struct RightAuxPanelView: View {
     let windowID: UUID
     let workspace: WorkspaceState
+    let workspaceTab: WorkspaceTabState
     let isWorkspaceSelected: Bool
+    let isWorkspaceTabSelected: Bool
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -79,11 +88,11 @@ struct RightAuxPanelView: View {
             resizeHandle
 
             VStack(alignment: .leading, spacing: 0) {
-                if RightAuxPanelTabStrip.showsTabStrip(tabCount: workspace.rightAuxPanel.tabIDs.count) {
+                if RightAuxPanelTabStrip.showsTabStrip(tabCount: workspaceTab.rightAuxPanel.tabIDs.count) {
                     RightAuxPanelTabStrip(
                         workspaceID: workspace.id,
-                        tabs: workspace.rightAuxPanel.orderedTabs,
-                        activeTabID: workspace.rightAuxPanel.activeTabID,
+                        tabs: workspaceTab.rightAuxPanel.orderedTabs,
+                        activeTabID: workspaceTab.rightAuxPanel.activeTabID,
                         appIsActive: appIsActive,
                         store: store,
                         focusedPanelCommandController: focusedPanelCommandController,
@@ -97,7 +106,7 @@ struct RightAuxPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ToastyTheme.surfaceBackground)
-        .accessibilityIdentifier("right-panel.\(workspace.id.uuidString)")
+        .accessibilityIdentifier("right-panel.\(workspace.id.uuidString).\(workspaceTab.id.uuidString)")
     }
 
     private var resizeHandle: some View {
@@ -191,17 +200,17 @@ struct RightAuxPanelView: View {
 
     private var panelStack: some View {
         ZStack(alignment: .topLeading) {
-            ForEach(workspace.rightAuxPanel.orderedTabs) { tab in
-                let isActiveTab = workspace.rightAuxPanel.activeTabID == tab.id
+            ForEach(workspaceTab.rightAuxPanel.orderedTabs) { tab in
+                let isActiveTab = workspaceTab.rightAuxPanel.activeTabID == tab.id
 
                 PanelCardView(
                     workspaceID: workspace.id,
                     panelID: tab.panelID,
                     panelState: tab.panelState,
-                    isWorkspaceSelected: isWorkspaceSelected,
+                    isWorkspaceSelected: isWorkspaceSelected && isWorkspaceTabSelected,
                     isTabSelected: isActiveTab,
-                    focusedPanelID: workspace.rightAuxPanel.focusedPanelID,
-                    hasUnreadNotification: workspace.unreadPanelIDs.contains(tab.panelID),
+                    focusedPanelID: workspaceTab.rightAuxPanel.focusedPanelID,
+                    hasUnreadNotification: workspaceTab.unreadPanelIDs.contains(tab.panelID),
                     panelSessionStatus: nil,
                     shortcutNumber: nil,
                     windowFontPoints: windowFontPoints,
@@ -217,8 +226,8 @@ struct RightAuxPanelView: View {
                     terminalRuntimeContext: nil
                 )
                 .opacity(WorkspaceView.mountedContentOpacity(isVisible: isActiveTab))
-                .allowsHitTesting(isWorkspaceSelected && isActiveTab)
-                .accessibilityHidden(!(isWorkspaceSelected && isActiveTab))
+                .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isActiveTab)
+                .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isActiveTab))
                 .zIndex(isActiveTab ? 1 : 0)
                 .id(tab.id)
             }

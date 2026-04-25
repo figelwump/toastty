@@ -246,6 +246,10 @@ Browser already has concrete placement behavior:
 - internal URL opens default to `newTab`
 - alternate URL opens default to `rightPanel`
 
+`rightPanel` is scoped to the selected workspace tab. Its contents, visibility,
+active right-panel tab, focus, and width are part of that top tab's layout and
+swap immediately when the selected workspace tab changes.
+
 ### near-term rule
 
 For the next phase, placement precedence should stay simple:

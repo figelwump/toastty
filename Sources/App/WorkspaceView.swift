@@ -868,7 +868,6 @@ struct WorkspaceView: View {
         .frame(width: targetWidth)
         .frame(width: renderedWidth, alignment: .leading)
         .clipped()
-        .animation(.easeInOut(duration: 0.15), value: renderedWidth)
     }
 
     static func effectiveRightAuxPanelWidth(

@@ -43,7 +43,6 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var selectedTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: WorkspaceTabState]
-    public var rightAuxPanel: RightAuxPanelState
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -63,7 +62,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         selectedTabID: UUID?,
         tabIDs: [UUID],
         tabsByID: [UUID: WorkspaceTabState],
-        rightAuxPanel: RightAuxPanelState = RightAuxPanelState(),
+        rightAuxPanel: RightAuxPanelState? = nil,
         unreadWorkspaceNotificationCount: Int = 0
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
@@ -71,14 +70,18 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             tabIDs: tabIDs,
             tabsByID: tabsByID
         )
+        var seededTabsByID = sanitizedTabs.tabsByID
+        if let rightAuxPanel,
+           var selectedTab = seededTabsByID[sanitizedTabs.selectedTabID] {
+            selectedTab.rightAuxPanel = rightAuxPanel
+            seededTabsByID[sanitizedTabs.selectedTabID] = selectedTab
+        }
         self.id = id
         self.title = title
         self.hasBeenVisited = hasBeenVisited
         self.selectedTabID = sanitizedTabs.selectedTabID
         self.tabIDs = sanitizedTabs.tabIDs
-        self.tabsByID = sanitizedTabs.tabsByID
-        self.rightAuxPanel = rightAuxPanel
-        self.rightAuxPanel.repairTransientState()
+        self.tabsByID = seededTabsByID
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
     }
 
@@ -95,7 +98,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         unreadPanelIDs: Set<UUID> = [],
         unreadWorkspaceNotificationCount: Int = 0,
         recentlyClosedPanels: [ClosedPanelRecord] = [],
-        rightAuxPanel: RightAuxPanelState = RightAuxPanelState()
+        rightAuxPanel: RightAuxPanelState? = nil
     ) {
         let tab = WorkspaceTabState(
             id: UUID(),
@@ -106,7 +109,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             focusModeRootNodeID: focusModeRootNodeID,
             selectedPanelIDs: selectedPanelIDs,
             unreadPanelIDs: unreadPanelIDs,
-            recentlyClosedPanels: recentlyClosedPanels
+            recentlyClosedPanels: recentlyClosedPanels,
+            rightAuxPanel: rightAuxPanel ?? RightAuxPanelState()
         )
         self.init(
             id: id,
@@ -115,7 +119,6 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             selectedTabID: tab.id,
             tabIDs: [tab.id],
             tabsByID: [tab.id: tab],
-            rightAuxPanel: rightAuxPanel,
             unreadWorkspaceNotificationCount: unreadWorkspaceNotificationCount
         )
     }
@@ -203,18 +206,23 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         set { updateSelectedTab { $0.recentlyClosedPanels = newValue } }
     }
 
+    public var rightAuxPanel: RightAuxPanelState {
+        get { selectedTab?.rightAuxPanel ?? RightAuxPanelState() }
+        set { updateSelectedTab { $0.rightAuxPanel = newValue } }
+    }
+
     public var selectedTabDisplayTitle: String {
         selectedTab?.displayTitle ?? "Tab"
     }
 
     public var allPanelsByID: [UUID: PanelState] {
-        var panelsByID = orderedTabs.reduce(into: [UUID: PanelState]()) { partialResult, tab in
+        let panelsByID = orderedTabs.reduce(into: [UUID: PanelState]()) { partialResult, tab in
             for (panelID, panelState) in tab.panels {
                 partialResult[panelID] = panelState
             }
-        }
-        for tab in rightAuxPanel.orderedTabs {
-            panelsByID[tab.panelID] = tab.panelState
+            for rightAuxTab in tab.rightAuxPanel.orderedTabs {
+                partialResult[rightAuxTab.panelID] = rightAuxTab.panelState
+            }
         }
         return panelsByID
     }
@@ -237,17 +245,46 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             return panelState
         }
 
+        if let panelState = selectedTab?.rightAuxPanel.panelState(for: panelID) {
+            return panelState
+        }
+
         for tab in orderedTabs where tab.id != resolvedSelectedTabID {
             if let panelState = tab.panels[panelID] {
                 return panelState
             }
+            if let panelState = tab.rightAuxPanel.panelState(for: panelID) {
+                return panelState
+            }
         }
 
-        return rightAuxPanel.panelState(for: panelID)
+        return nil
     }
 
     public func rightAuxPanelTabID(containingPanelID panelID: UUID) -> UUID? {
-        rightAuxPanel.tabID(containingPanelID: panelID)
+        rightAuxPanelTabLocation(containingPanelID: panelID)?.rightAuxTabID
+    }
+
+    public func rightAuxPanelTabLocation(containingRightAuxTabID rightAuxTabID: UUID) -> (
+        mainTabID: UUID,
+        rightAuxTabID: UUID
+    )? {
+        for tab in orderedTabs where tab.rightAuxPanel.tabsByID[rightAuxTabID] != nil {
+            return (tab.id, rightAuxTabID)
+        }
+        return nil
+    }
+
+    public func rightAuxPanelTabLocation(containingPanelID panelID: UUID) -> (
+        mainTabID: UUID,
+        rightAuxTabID: UUID
+    )? {
+        for tab in orderedTabs {
+            if let rightAuxTabID = tab.rightAuxPanel.tabID(containingPanelID: panelID) {
+                return (tab.id, rightAuxTabID)
+            }
+        }
+        return nil
     }
 
     public func tabID(containingPanelID panelID: UUID) -> UUID? {
@@ -337,7 +374,6 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case selectedTabID
         case tabIDs
         case tabsByID
-        case rightAuxPanel
         case layoutTree
         case panels
         case focusedPanelID
@@ -355,7 +391,6 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         let decodedSelectedTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTabID)
         let decodedTabIDs = try container.decodeIfPresent([UUID].self, forKey: .tabIDs)
         let decodedTabsByID = try container.decodeIfPresent([UUID: WorkspaceTabState].self, forKey: .tabsByID)
-        rightAuxPanel = try container.decodeIfPresent(RightAuxPanelState.self, forKey: .rightAuxPanel) ?? RightAuxPanelState()
 
         if let decodedTabIDs, let decodedTabsByID, decodedTabsByID.isEmpty == false {
             let sanitizedTabs = Self.sanitizedTabs(
@@ -399,7 +434,6 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(resolvedSelectedTabID, forKey: .selectedTabID)
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
-        try container.encode(rightAuxPanel, forKey: .rightAuxPanel)
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

@@ -108,7 +108,14 @@ struct StateValidatorTests {
             selectedWindowID: window.id
         )
 
-        #expect(throws: StateInvariantViolation.missingRightAuxPanelTab(workspaceID: workspace.id, tabID: missingTabID)) {
+        let mainTabID = try #require(workspace.resolvedSelectedTabID)
+        #expect(
+            throws: StateInvariantViolation.missingRightAuxPanelTab(
+                workspaceID: workspace.id,
+                mainTabID: mainTabID,
+                tabID: missingTabID
+            )
+        ) {
             try StateValidator.validate(state)
         }
     }

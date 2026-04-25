@@ -675,13 +675,14 @@ Result:
 - `tabIDs: [UUID string]`
 - `slotCount: Int`
 - `layoutPanelCount: Int`
-- `panelCount: Int` (layout panels plus right-panel tabs)
+- `panelCount: Int` (layout panels plus right-panel tabs across the workspace)
 - `focusedPanelID: UUID string | null`
 - `rootSplitRatio: Double | null`
 - `slotIDs: [UUID string]`
 - `slotPanelIDs: [UUID string]`
 - `slotMappings: [{ slotID, panelID }]`
 - `rightPanel: { isVisible, width, hasCustomWidth, tabCount, activeTabID, activePanelID, focusedPanelID, tabIDs, panelIDs, tabs }`
+  - describes the selected workspace tab's right panel; switching workspace tabs changes this object with the selected tab
   - `width` is the stored custom width. When `hasCustomWidth` is false, the visible panel width is resolved responsively from the workspace width.
 - `layoutSignature: String`
 

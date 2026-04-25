@@ -161,10 +161,13 @@ public struct AppReducer {
 
         case .focusPanel(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            if let rightAuxTabID = workspace.rightAuxPanelTabID(containingPanelID: panelID) {
-                workspace.rightAuxPanel.activeTabID = rightAuxTabID
-                workspace.rightAuxPanel.isVisible = true
-                workspace.rightAuxPanel.focusedPanelID = panelID
+            if let rightAuxLocation = workspace.rightAuxPanelTabLocation(containingPanelID: panelID) {
+                workspace.selectedTabID = rightAuxLocation.mainTabID
+                _ = workspace.updateTab(id: rightAuxLocation.mainTabID) { tab in
+                    tab.rightAuxPanel.activeTabID = rightAuxLocation.rightAuxTabID
+                    tab.rightAuxPanel.isVisible = true
+                    tab.rightAuxPanel.focusedPanelID = panelID
+                }
                 commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
                 return true
             }
@@ -353,7 +356,8 @@ public struct AppReducer {
             if let rightAuxLocation = locateRightAuxPanel(panelID, in: state) {
                 return closeRightAuxPanelTab(
                     workspaceID: rightAuxLocation.workspaceID,
-                    tabID: rightAuxLocation.tabID,
+                    mainTabID: rightAuxLocation.mainTabID,
+                    rightAuxTabID: rightAuxLocation.rightAuxTabID,
                     state: &state
                 )
             }
@@ -550,33 +554,41 @@ public struct AppReducer {
 
         case .selectRightAuxPanelTab(let workspaceID, let tabID, let focus):
             guard var workspace = state.workspacesByID[workspaceID],
-                  let tab = workspace.rightAuxPanel.tabsByID[tabID] else {
+                  let location = workspace.rightAuxPanelTabLocation(containingRightAuxTabID: tabID),
+                  var mainTab = workspace.tab(id: location.mainTabID),
+                  let tab = mainTab.rightAuxPanel.tabsByID[location.rightAuxTabID] else {
                 return false
             }
-            guard workspace.rightAuxPanel.activeTabID != tabID ||
-                workspace.rightAuxPanel.isVisible == false ||
-                (focus && workspace.rightAuxPanel.focusedPanelID != tab.panelID) else {
+            guard workspace.selectedTabID != location.mainTabID ||
+                mainTab.rightAuxPanel.activeTabID != location.rightAuxTabID ||
+                mainTab.rightAuxPanel.isVisible == false ||
+                (focus && mainTab.rightAuxPanel.focusedPanelID != tab.panelID) else {
                 return false
             }
-            workspace.rightAuxPanel.activeTabID = tabID
-            workspace.rightAuxPanel.isVisible = true
+            mainTab.rightAuxPanel.activeTabID = location.rightAuxTabID
+            mainTab.rightAuxPanel.isVisible = true
             if focus {
-                workspace.rightAuxPanel.focusedPanelID = tab.panelID
+                mainTab.rightAuxPanel.focusedPanelID = tab.panelID
             }
+            workspace.selectedTabID = location.mainTabID
+            workspace.tabsByID[location.mainTabID] = mainTab
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .closeRightAuxPanelTab(let workspaceID, let tabID):
-            return closeRightAuxPanelTab(workspaceID: workspaceID, tabID: tabID, state: &state)
+            return closeRightAuxPanelTab(workspaceID: workspaceID, rightAuxTabID: tabID, state: &state)
 
         case .focusRightAuxPanel(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID],
-                  let tabID = workspace.rightAuxPanelTabID(containingPanelID: panelID) else {
+                  let location = workspace.rightAuxPanelTabLocation(containingPanelID: panelID) else {
                 return false
             }
-            workspace.rightAuxPanel.activeTabID = tabID
-            workspace.rightAuxPanel.isVisible = true
-            workspace.rightAuxPanel.focusedPanelID = panelID
+            workspace.selectedTabID = location.mainTabID
+            _ = workspace.updateTab(id: location.mainTabID) { tab in
+                tab.rightAuxPanel.activeTabID = location.rightAuxTabID
+                tab.rightAuxPanel.isVisible = true
+                tab.rightAuxPanel.focusedPanelID = panelID
+            }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
@@ -796,8 +808,9 @@ public struct AppReducer {
         case .updateWebPanelMetadata(let panelID, let title, let url):
             if let location = locateRightAuxPanel(panelID, in: state) {
                 guard var workspace = state.workspacesByID[location.workspaceID],
-                      var tab = workspace.rightAuxPanel.tabsByID[location.tabID],
-                      case .web(var webState) = tab.panelState else {
+                      var mainTab = workspace.tab(id: location.mainTabID),
+                      var rightAuxTab = mainTab.rightAuxPanel.tabsByID[location.rightAuxTabID],
+                      case .web(var webState) = rightAuxTab.panelState else {
                     return false
                 }
 
@@ -805,8 +818,9 @@ public struct AppReducer {
                     return false
                 }
 
-                tab.panelState = .web(webState)
-                workspace.rightAuxPanel.tabsByID[location.tabID] = tab
+                rightAuxTab.panelState = .web(webState)
+                mainTab.rightAuxPanel.tabsByID[location.rightAuxTabID] = rightAuxTab
+                workspace.tabsByID[location.mainTabID] = mainTab
                 commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
                 return true
             }
@@ -965,8 +979,9 @@ public struct AppReducer {
     ) -> Bool {
         if let location = locateRightAuxPanel(panelID, in: state) {
             guard var workspace = state.workspacesByID[location.workspaceID],
-                  var tab = workspace.rightAuxPanel.tabsByID[location.tabID],
-                  case .web(var webState) = tab.panelState,
+                  var mainTab = workspace.tab(id: location.mainTabID),
+                  var rightAuxTab = mainTab.rightAuxPanel.tabsByID[location.rightAuxTabID],
+                  case .web(var webState) = rightAuxTab.panelState,
                   webState.definition == .browser else {
                 return false
             }
@@ -975,8 +990,9 @@ public struct AppReducer {
                 return false
             }
 
-            tab.panelState = .web(webState)
-            workspace.rightAuxPanel.tabsByID[location.tabID] = tab
+            rightAuxTab.panelState = .web(webState)
+            mainTab.rightAuxPanel.tabsByID[location.rightAuxTabID] = rightAuxTab
+            workspace.tabsByID[location.mainTabID] = mainTab
             commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
             return true
         }
@@ -1301,29 +1317,39 @@ public struct AppReducer {
 
     private static func locateRightAuxPanel(_ panelID: UUID, in state: AppState) -> RightAuxPanelLocation? {
         guard let selection = state.workspaceSelection(containingPanelID: panelID),
-              let tabID = selection.workspace.rightAuxPanelTabID(containingPanelID: panelID) else {
+              let location = selection.workspace.rightAuxPanelTabLocation(containingPanelID: panelID) else {
             return nil
         }
 
         return RightAuxPanelLocation(
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
-            tabID: tabID
+            mainTabID: location.mainTabID,
+            rightAuxTabID: location.rightAuxTabID
         )
     }
 
     @discardableResult
     private static func closeRightAuxPanelTab(
         workspaceID: UUID,
-        tabID: UUID,
+        mainTabID: UUID? = nil,
+        rightAuxTabID: UUID,
         state: inout AppState
     ) -> Bool {
-        guard var workspace = state.workspacesByID[workspaceID],
-              workspace.rightAuxPanel.tabsByID[tabID] != nil else {
+        guard var workspace = state.workspacesByID[workspaceID] else {
             return false
         }
 
-        workspace.rightAuxPanel.removeTab(id: tabID)
+        let targetMainTabID = mainTabID ??
+            workspace.rightAuxPanelTabLocation(containingRightAuxTabID: rightAuxTabID)?.mainTabID
+        guard let targetMainTabID,
+              var targetMainTab = workspace.tab(id: targetMainTabID),
+              targetMainTab.rightAuxPanel.tabsByID[rightAuxTabID] != nil else {
+            return false
+        }
+
+        targetMainTab.rightAuxPanel.removeTab(id: rightAuxTabID)
+        workspace.tabsByID[targetMainTabID] = targetMainTab
         commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
     }
@@ -1671,7 +1697,8 @@ private struct PanelLocation {
 private struct RightAuxPanelLocation {
     let windowID: UUID
     let workspaceID: UUID
-    let tabID: UUID
+    let mainTabID: UUID
+    let rightAuxTabID: UUID
 }
 
 private struct SlotLocation {

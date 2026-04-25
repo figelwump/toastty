@@ -115,10 +115,9 @@ extension WorkspaceState {
     }
 
     mutating func repairTransientTabState() {
-        rightAuxPanel.repairTransientState()
-
         for tabID in tabIDs {
             guard var tab = tabsByID[tabID] else { continue }
+            tab.rightAuxPanel.repairTransientState()
 
             let livePanelIDs = Set(tab.panels.keys)
             if let focusedPanelID = tab.focusedPanelID,
