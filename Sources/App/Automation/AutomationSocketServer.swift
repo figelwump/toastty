@@ -1987,6 +1987,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         let rightPanel: AutomationJSONValue = .object([
             "isVisible": .bool(workspace.rightAuxPanel.isVisible),
             "width": .double(workspace.rightAuxPanel.width),
+            "hasCustomWidth": .bool(workspace.rightAuxPanel.hasCustomWidth),
             "tabCount": .int(workspace.rightAuxPanel.tabIDs.count),
             "activeTabID": workspace.rightAuxPanel.activeTabID.map { .string($0.uuidString) } ?? .null,
             "activePanelID": workspace.rightAuxPanel.activePanelID.map { .string($0.uuidString) } ?? .null,

@@ -1632,6 +1632,38 @@ struct AppReducerTests {
     }
 
     @Test
+    func settingRightPanelWidthMarksWidthAsUserCustom() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .setRightAuxPanelWidth(
+                    workspaceID: workspaceID,
+                    width: RightAuxPanelState.defaultWidth
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfterResize = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterResize.rightAuxPanel.width == RightAuxPanelState.defaultWidth)
+        #expect(workspaceAfterResize.rightAuxPanel.hasCustomWidth)
+        #expect(
+            reducer.send(
+                .setRightAuxPanelWidth(
+                    workspaceID: workspaceID,
+                    width: RightAuxPanelState.defaultWidth
+                ),
+                state: &state
+            ) == false
+        )
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func closingFinalRightPanelTabHidesPanel() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

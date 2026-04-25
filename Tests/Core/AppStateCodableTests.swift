@@ -58,6 +58,7 @@ struct AppStateCodableTests {
         workspace.rightAuxPanel = RightAuxPanelState(
             isVisible: true,
             width: 420,
+            hasCustomWidth: true,
             activeTabID: tabID,
             tabIDs: [tabID],
             tabsByID: [
@@ -85,12 +86,32 @@ struct AppStateCodableTests {
 
         #expect(decodedRightPanel.isVisible)
         #expect(decodedRightPanel.width == 420)
+        #expect(decodedRightPanel.hasCustomWidth)
         #expect(decodedRightPanel.activeTabID == tabID)
         #expect(decodedRightPanel.tabIDs == [tabID])
         #expect(decodedRightPanel.focusedPanelID == nil)
         #expect(decodedRightPanel.panelState(for: panelID) != nil)
         #expect(decodedWorkspace.allPanelsByID[panelID] == decodedRightPanel.panelState(for: panelID))
         try StateValidator.validate(decoded)
+    }
+
+    @Test
+    func rightAuxPanelDecodingDefaultsMissingCustomWidthFlagToFalse() throws {
+        let encoded = Data(
+            """
+            {
+              "isVisible": false,
+              "width": 420,
+              "tabIDs": [],
+              "tabsByID": []
+            }
+            """.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(RightAuxPanelState.self, from: encoded)
+
+        #expect(decoded.width == 420)
+        #expect(decoded.hasCustomWidth == false)
     }
 
     @Test

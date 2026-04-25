@@ -99,6 +99,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
 
             let rightPanel = try XCTUnwrap(snapshotResponse.result["rightPanel"] as? [String: Any])
             XCTAssertEqual(rightPanel["isVisible"] as? Bool, true)
+            XCTAssertEqual(rightPanel["hasCustomWidth"] as? Bool, false)
             XCTAssertEqual(rightPanel["tabCount"] as? Int, 1)
             XCTAssertEqual((rightPanel["panelIDs"] as? [String])?.count, 1)
             XCTAssertEqual((rightPanel["tabIDs"] as? [String])?.count, 1)

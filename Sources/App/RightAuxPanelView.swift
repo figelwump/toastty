@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -6,6 +7,7 @@ struct RightAuxPanelStackView: View {
     let workspaceIDs: [UUID]
     let selectedWorkspaceID: UUID?
     let renderedWidth: CGFloat
+    let effectiveContentWidth: CGFloat
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -35,6 +37,7 @@ struct RightAuxPanelStackView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                         focusedPanelCommandController: focusedPanelCommandController,
+                        effectiveContentWidth: effectiveContentWidth,
                         windowFontPoints: windowFontPoints,
                         windowMarkdownTextScale: windowMarkdownTextScale,
                         appIsActive: appIsActive
@@ -61,11 +64,15 @@ struct RightAuxPanelView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
+    let effectiveContentWidth: CGFloat
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
     let appIsActive: Bool
 
     @State private var resizeStartWidth: Double?
+    @State private var resizeHandleHovered = false
+    @State private var resizeHandleDragging = false
+    @State private var resizeCursorPushed = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -99,26 +106,87 @@ struct RightAuxPanelView: View {
             .frame(width: 1)
             .overlay {
                 Rectangle()
+                    .fill(resizeHandleHighlightColor)
+                    .frame(width: 3)
+                    .animation(.easeOut(duration: 0.12), value: resizeHandleHighlighted)
+            }
+            .overlay {
+                Rectangle()
                     .fill(Color.clear)
-                    .frame(width: 8)
+                    .frame(width: 10)
                     .contentShape(Rectangle())
+                    .onHover { hovering in
+                        updateResizeHandleInteraction(hovered: hovering)
+                    }
                     .gesture(resizeGesture)
                     .accessibilityLabel("Resize Right Panel")
                     .accessibilityIdentifier("right-panel.resize")
+            }
+            .onDisappear {
+                releaseResizeHandleInteraction()
             }
     }
 
     private var resizeGesture: some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { value in
-                let startingWidth = resizeStartWidth ?? workspace.rightAuxPanel.width
+                if resizeHandleDragging == false {
+                    updateResizeHandleInteraction(dragging: true)
+                }
+                let startingWidth = resizeStartWidth ?? Double(effectiveContentWidth)
                 resizeStartWidth = startingWidth
                 let nextWidth = startingWidth - Double(value.translation.width)
                 _ = store.send(.setRightAuxPanelWidth(workspaceID: workspace.id, width: nextWidth))
             }
             .onEnded { _ in
                 resizeStartWidth = nil
+                updateResizeHandleInteraction(dragging: false)
             }
+    }
+
+    private var resizeHandleHighlighted: Bool {
+        resizeHandleHovered || resizeHandleDragging
+    }
+
+    private var resizeHandleHighlightColor: Color {
+        resizeHandleHighlighted
+            ? ToastyTheme.accent.opacity(appIsActive ? 0.9 : 0.55)
+            : Color.clear
+    }
+
+    private func updateResizeHandleInteraction(
+        hovered: Bool? = nil,
+        dragging: Bool? = nil
+    ) {
+        let nextHovered = hovered ?? resizeHandleHovered
+        let nextDragging = dragging ?? resizeHandleDragging
+        let shouldPushCursor = nextHovered || nextDragging
+
+        if shouldPushCursor != resizeCursorPushed {
+            if shouldPushCursor {
+                NSCursor.resizeLeftRight.push()
+            } else {
+                NSCursor.pop()
+            }
+            resizeCursorPushed = shouldPushCursor
+        }
+
+        resizeHandleHovered = nextHovered
+        resizeHandleDragging = nextDragging
+    }
+
+    private func releaseResizeHandleInteraction() {
+        guard resizeCursorPushed || resizeHandleHovered || resizeHandleDragging else { return }
+
+        if resizeCursorPushed {
+            NSCursor.pop()
+        }
+
+        DispatchQueue.main.async {
+            resizeCursorPushed = false
+            resizeHandleHovered = false
+            resizeHandleDragging = false
+        }
     }
 
     private var panelStack: some View {

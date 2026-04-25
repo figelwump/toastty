@@ -539,8 +539,12 @@ public struct AppReducer {
         case .setRightAuxPanelWidth(let workspaceID, let width):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             let clampedWidth = RightAuxPanelState.clampedWidth(width)
-            guard workspace.rightAuxPanel.width != clampedWidth else { return false }
+            guard workspace.rightAuxPanel.width != clampedWidth ||
+                workspace.rightAuxPanel.hasCustomWidth == false else {
+                return false
+            }
             workspace.rightAuxPanel.width = clampedWidth
+            workspace.rightAuxPanel.hasCustomWidth = true
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 

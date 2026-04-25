@@ -466,10 +466,13 @@ struct WorkspaceView: View {
             topBar
 
             if let window = store.window(id: windowID) {
-                HStack(spacing: 0) {
-                    workspaceStack(for: window)
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        workspaceStack(for: window)
 
-                    rightAuxPanelStack(for: window)
+                        rightAuxPanelStack(for: window, availableWidth: geometry.size.width)
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                 }
             } else {
                 EmptyStateView(onCreateWorkspace: createWorkspaceAction)
@@ -837,11 +840,14 @@ struct WorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func rightAuxPanelStack(for window: WindowState) -> some View {
+    private func rightAuxPanelStack(for window: WindowState, availableWidth: CGFloat) -> some View {
         let selectedWorkspace = store.selectedWorkspace(in: windowID)
         let selectedRightPanel = selectedWorkspace?.rightAuxPanel
         let isVisible = selectedRightPanel?.isVisible == true && selectedRightPanel?.tabIDs.isEmpty == false
-        let targetWidth = CGFloat(selectedRightPanel?.width ?? RightAuxPanelState.defaultWidth)
+        let targetWidth = Self.effectiveRightAuxPanelWidth(
+            for: selectedRightPanel,
+            availableWidth: availableWidth
+        )
         let renderedWidth = isVisible ? targetWidth : 0
 
         return RightAuxPanelStackView(
@@ -849,6 +855,7 @@ struct WorkspaceView: View {
             workspaceIDs: window.workspaceIDs,
             selectedWorkspaceID: store.selectedWorkspaceID(in: windowID),
             renderedWidth: renderedWidth,
+            effectiveContentWidth: targetWidth,
             store: store,
             terminalProfileStore: terminalProfileStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -862,6 +869,18 @@ struct WorkspaceView: View {
         .frame(width: renderedWidth, alignment: .leading)
         .clipped()
         .animation(.easeInOut(duration: 0.15), value: renderedWidth)
+    }
+
+    static func effectiveRightAuxPanelWidth(
+        for panel: RightAuxPanelState?,
+        availableWidth: CGFloat
+    ) -> CGFloat {
+        let availableWorkspaceWidth = Double(max(availableWidth, 0))
+        if let panel {
+            return CGFloat(panel.effectiveWidth(for: availableWorkspaceWidth))
+        }
+
+        return CGFloat(RightAuxPanelState.defaultWidth(for: availableWorkspaceWidth))
     }
 
     @ViewBuilder

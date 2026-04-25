@@ -681,7 +681,8 @@ Result:
 - `slotIDs: [UUID string]`
 - `slotPanelIDs: [UUID string]`
 - `slotMappings: [{ slotID, panelID }]`
-- `rightPanel: { isVisible, width, tabCount, activeTabID, activePanelID, focusedPanelID, tabIDs, panelIDs, tabs }`
+- `rightPanel: { isVisible, width, hasCustomWidth, tabCount, activeTabID, activePanelID, focusedPanelID, tabIDs, panelIDs, tabs }`
+  - `width` is the stored custom width. When `hasCustomWidth` is false, the visible panel width is resolved responsively from the workspace width.
 - `layoutSignature: String`
 
 `selectedTabIndex` is 1-based when present.

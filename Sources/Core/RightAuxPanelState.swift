@@ -3,10 +3,13 @@ import Foundation
 public struct RightAuxPanelState: Codable, Equatable, Sendable {
     public static let defaultWidth: Double = 360
     public static let minWidth: Double = 260
-    public static let maxWidth: Double = 640
+    public static let maxWidth: Double = 820
+    public static let defaultWidthFraction: Double = 0.40
+    public static let maximumVisibleWidthFraction: Double = 0.72
 
     public var isVisible: Bool
     public var width: Double
+    public var hasCustomWidth: Bool
     public var activeTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: RightAuxPanelTabState]
@@ -17,6 +20,7 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
     public init(
         isVisible: Bool = false,
         width: Double = Self.defaultWidth,
+        hasCustomWidth: Bool = false,
         activeTabID: UUID? = nil,
         tabIDs: [UUID] = [],
         tabsByID: [UUID: RightAuxPanelTabState] = [:],
@@ -24,6 +28,7 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
     ) {
         self.isVisible = isVisible
         self.width = Self.clampedWidth(width)
+        self.hasCustomWidth = hasCustomWidth
         self.activeTabID = activeTabID
         self.tabIDs = tabIDs
         self.tabsByID = tabsByID
@@ -50,6 +55,30 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
 
     public static func clampedWidth(_ width: Double) -> Double {
         min(max(width, minWidth), maxWidth)
+    }
+
+    public static func clampedWidth(_ width: Double, for availableWorkspaceWidth: Double) -> Double {
+        min(clampedWidth(width), maximumVisibleWidth(for: availableWorkspaceWidth))
+    }
+
+    public static func defaultWidth(for availableWorkspaceWidth: Double) -> Double {
+        guard availableWorkspaceWidth.isFinite,
+              availableWorkspaceWidth > 0 else {
+            return defaultWidth
+        }
+
+        return clampedWidth(
+            availableWorkspaceWidth * defaultWidthFraction,
+            for: availableWorkspaceWidth
+        )
+    }
+
+    public func effectiveWidth(for availableWorkspaceWidth: Double) -> Double {
+        let candidateWidth = hasCustomWidth
+            ? width
+            : Self.defaultWidth(for: availableWorkspaceWidth)
+
+        return Self.clampedWidth(candidateWidth, for: availableWorkspaceWidth)
     }
 
     public func tabID(containingPanelID panelID: UUID) -> UUID? {
@@ -155,6 +184,7 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case isVisible
         case width
+        case hasCustomWidth
         case activeTabID
         case tabIDs
         case tabsByID
@@ -164,6 +194,7 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isVisible = try container.decodeIfPresent(Bool.self, forKey: .isVisible) ?? false
         width = try container.decodeIfPresent(Double.self, forKey: .width) ?? Self.defaultWidth
+        hasCustomWidth = try container.decodeIfPresent(Bool.self, forKey: .hasCustomWidth) ?? false
         activeTabID = try container.decodeIfPresent(UUID.self, forKey: .activeTabID)
         tabIDs = try container.decodeIfPresent([UUID].self, forKey: .tabIDs) ?? []
         tabsByID = try container.decodeIfPresent([UUID: RightAuxPanelTabState].self, forKey: .tabsByID) ?? [:]
@@ -175,9 +206,22 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(isVisible, forKey: .isVisible)
         try container.encode(width, forKey: .width)
+        try container.encode(hasCustomWidth, forKey: .hasCustomWidth)
         try container.encodeIfPresent(activeTabID, forKey: .activeTabID)
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
+    }
+
+    private static func maximumVisibleWidth(for availableWorkspaceWidth: Double) -> Double {
+        guard availableWorkspaceWidth.isFinite,
+              availableWorkspaceWidth > 0 else {
+            return maxWidth
+        }
+
+        return min(
+            maxWidth,
+            max(minWidth, availableWorkspaceWidth * maximumVisibleWidthFraction)
+        )
     }
 }
 

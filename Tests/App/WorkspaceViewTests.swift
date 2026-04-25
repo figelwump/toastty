@@ -131,6 +131,24 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 2))
     }
 
+    @MainActor
+    func testEffectiveRightAuxPanelWidthUsesDynamicDefaultUntilCustomized() {
+        XCTAssertEqual(
+            WorkspaceView.effectiveRightAuxPanelWidth(
+                for: RightAuxPanelState(width: 360, hasCustomWidth: false),
+                availableWidth: 1_200
+            ),
+            480
+        )
+        XCTAssertEqual(
+            WorkspaceView.effectiveRightAuxPanelWidth(
+                for: RightAuxPanelState(width: 360, hasCustomWidth: true),
+                availableWidth: 1_200
+            ),
+            360
+        )
+    }
+
     func testSingleTabWorkspaceStillInstallsTabContextMenu() {
         XCTAssertFalse(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 0))
         XCTAssertTrue(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 1))
