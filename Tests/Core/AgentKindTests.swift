@@ -6,6 +6,7 @@ struct AgentKindTests {
     func displayNameUsesKnownAgentLabels() {
         #expect(AgentKind.codex.displayName == "Codex")
         #expect(AgentKind.claude.displayName == "Claude Code")
+        #expect(AgentKind.pi.displayName == "Pi")
     }
 
     @Test
@@ -39,6 +40,12 @@ struct AgentKindTests {
                 argv: ["scodex", "--dangerously-bypass-approvals-and-sandbox"]
             ) == 0
         )
+        #expect(
+            ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .pi,
+                argv: ["agent-safehouse", "pi", "--mode", "text"]
+            ) == 1
+        )
     }
 
     @Test
@@ -54,6 +61,12 @@ struct AgentKindTests {
                 commandName: "run-sandboxed.sh",
                 argv: ["run-sandboxed.sh", "--cwd", "/tmp/repo", "claude", "--dangerous"]
             ) == .claude
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "agent-safehouse",
+                argv: ["agent-safehouse", "--cwd", "/tmp/repo", "pi", "--mode", "text"]
+            ) == .pi
         )
         #expect(
             ManagedAgentCommandResolver.inferManagedAgent(
@@ -108,6 +121,12 @@ struct AgentKindTests {
                     manualCommandNames: ["sandbox-wrapper"]
                 ),
                 AgentProfile(
+                    id: "pi",
+                    displayName: "Pi",
+                    argv: ["pi"],
+                    manualCommandNames: ["safe-pi"]
+                ),
+                AgentProfile(
                     id: "gemini",
                     displayName: "Gemini",
                     argv: ["sandbox-wrapper", "gemini"],
@@ -120,7 +139,9 @@ struct AgentKindTests {
 
         #expect(shimCommandNames.contains("codex"))
         #expect(shimCommandNames.contains("claude"))
+        #expect(shimCommandNames.contains("pi"))
         #expect(shimCommandNames.contains("cdx"))
+        #expect(shimCommandNames.contains("safe-pi"))
         #expect(shimCommandNames.contains("agent-safehouse"))
         #expect(shimCommandNames.contains("sandbox-wrapper") == false)
     }

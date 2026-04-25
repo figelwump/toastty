@@ -20,7 +20,7 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         let installation = try XCTUnwrap(syncedInstallation)
 
         XCTAssertEqual(installation.directoryURL.path, runtimePaths.agentShimDirectoryURL.path)
-        for commandName in ["codex", "claude"] {
+        for commandName in ["codex", "claude", "pi"] {
             let linkURL = installation.directoryURL.appendingPathComponent(commandName, isDirectory: false)
             XCTAssertTrue(FileManager.default.fileExists(atPath: linkURL.path))
             XCTAssertEqual(
@@ -39,7 +39,7 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         )
         let installer = AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
-            managedCommandNames: ["codex", "claude", "run-sandboxed.sh", "agent-safehouse"],
+            managedCommandNames: ["codex", "claude", "pi", "run-sandboxed.sh", "agent-safehouse"],
             helperExecutablePathProvider: { helperURL.path }
         )
 
@@ -66,14 +66,14 @@ final class AgentCommandShimInstallerTests: XCTestCase {
 
         let initialInstaller = AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
-            managedCommandNames: ["codex", "claude", "run-sandboxed.sh"],
+            managedCommandNames: ["codex", "claude", "pi", "run-sandboxed.sh"],
             helperExecutablePathProvider: { helperURL.path }
         )
         _ = try initialInstaller.syncInstallation(enabled: true)
 
         let updatedInstaller = AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
-            managedCommandNames: ["codex", "claude"],
+            managedCommandNames: ["codex", "claude", "pi"],
             helperExecutablePathProvider: { helperURL.path }
         )
         _ = try updatedInstaller.syncInstallation(enabled: true)
@@ -96,6 +96,13 @@ final class AgentCommandShimInstallerTests: XCTestCase {
             FileManager.default.fileExists(
                 atPath: runtimePaths.agentShimDirectoryURL
                     .appendingPathComponent("claude", isDirectory: false)
+                    .path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: runtimePaths.agentShimDirectoryURL
+                    .appendingPathComponent("pi", isDirectory: false)
                     .path
             )
         )
@@ -163,7 +170,7 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         )
         let initialInstaller = AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
-            managedCommandNames: ["codex", "claude", "run-sandboxed.sh"],
+            managedCommandNames: ["codex", "claude", "pi", "run-sandboxed.sh"],
             helperExecutablePathProvider: { helperURL.path }
         )
         let installation = try XCTUnwrap(initialInstaller.syncInstallation(enabled: true))
@@ -177,7 +184,7 @@ final class AgentCommandShimInstallerTests: XCTestCase {
 
         let updatedInstaller = AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
-            managedCommandNames: ["codex", "claude"],
+            managedCommandNames: ["codex", "claude", "pi"],
             helperExecutablePathProvider: { helperURL.path }
         )
         _ = try updatedInstaller.syncInstallation(enabled: true)
@@ -225,8 +232,10 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         try FileManager.default.createDirectory(at: runtimePaths.agentShimDirectoryURL, withIntermediateDirectories: true)
         let codexURL = runtimePaths.agentShimDirectoryURL.appendingPathComponent("codex", isDirectory: false)
         let claudeURL = runtimePaths.agentShimDirectoryURL.appendingPathComponent("claude", isDirectory: false)
+        let piURL = runtimePaths.agentShimDirectoryURL.appendingPathComponent("pi", isDirectory: false)
         try "custom codex".write(to: codexURL, atomically: true, encoding: .utf8)
         try "custom claude".write(to: claudeURL, atomically: true, encoding: .utf8)
+        try "custom pi".write(to: piURL, atomically: true, encoding: .utf8)
         let installer = AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
             helperExecutablePathProvider: { nil }
@@ -236,6 +245,7 @@ final class AgentCommandShimInstallerTests: XCTestCase {
 
         XCTAssertEqual(try String(contentsOf: codexURL, encoding: .utf8), "custom codex")
         XCTAssertEqual(try String(contentsOf: claudeURL, encoding: .utf8), "custom claude")
+        XCTAssertEqual(try String(contentsOf: piURL, encoding: .utf8), "custom pi")
     }
 
     private func makeExecutableHelper(in directoryURL: URL) throws -> URL {

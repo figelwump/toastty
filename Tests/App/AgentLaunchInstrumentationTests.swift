@@ -3,6 +3,11 @@ import XCTest
 @testable import ToasttyApp
 
 final class AgentLaunchInstrumentationTests: XCTestCase {
+    override func tearDown() {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil
+        super.tearDown()
+    }
+
     func testPrepareClaudeLaunchMergesInlineSettingsArgument() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"
@@ -156,6 +161,123 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             ]
         )
         XCTAssertEqual(preparedLaunch.argv.last, "--dangerously-skip-permissions")
+    }
+
+    func testPreparePiLaunchInsertsToasttyExtensionAfterPiCommand() throws {
+        let fileManager = FileManager.default
+        let sessionID = "test-\(UUID().uuidString)"
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = {
+            "/Applications/Toastty.app/Contents/Resources/AgentExtensions/toastty-pi-extension.js"
+        }
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["agent-safehouse", "--cwd", "/tmp/repo", "pi", "--mode", "text"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        XCTAssertEqual(
+            preparedLaunch.argv,
+            [
+                "agent-safehouse",
+                "--cwd",
+                "/tmp/repo",
+                "pi",
+                "--extension",
+                "/Applications/Toastty.app/Contents/Resources/AgentExtensions/toastty-pi-extension.js",
+                "--mode",
+                "text",
+            ]
+        )
+        XCTAssertEqual(
+            preparedLaunch.environment["TOASTTY_PI_TELEMETRY_LOG_PATH"],
+            preparedLaunch.artifacts?.directoryURL.appendingPathComponent("pi-telemetry.jsonl").path
+        )
+    }
+
+    func testPreparePiLaunchPreservesUserExtensionAndAddsToasttyExtension() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["pi", "--extension", "/user/ext.js"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? FileManager.default.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        XCTAssertEqual(
+            preparedLaunch.argv,
+            ["pi", "--extension", "/toastty/pi-extension.js", "--extension", "/user/ext.js"]
+        )
+    }
+
+    func testPreparePiLaunchSkipsToasttyExtensionForNoExtensionsBeforeTerminator() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["pi", "--no-extensions", "--extension", "/user/ext.js"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? FileManager.default.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        XCTAssertEqual(preparedLaunch.argv, ["pi", "--no-extensions", "--extension", "/user/ext.js"])
+        XCTAssertNotNil(preparedLaunch.environment["TOASTTY_PI_TELEMETRY_LOG_PATH"])
+    }
+
+    func testPreparePiLaunchTreatsShortNoExtensionFlagAsOptOutBeforeTerminatorOnly() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+
+        let optedOutLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["pi", "-ne"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default
+        )
+        let terminatorLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["pi", "--", "--no-extensions"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default
+        )
+
+        defer {
+            for artifacts in [optedOutLaunch.artifacts, terminatorLaunch.artifacts].compactMap({ $0 }) {
+                try? FileManager.default.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        XCTAssertEqual(optedOutLaunch.argv, ["pi", "-ne"])
+        XCTAssertEqual(terminatorLaunch.argv, ["pi", "--extension", "/toastty/pi-extension.js", "--", "--no-extensions"])
     }
 
     func testPreparedClaudeHookScriptLogsTelemetryFailuresWithoutWritingToStdout() throws {

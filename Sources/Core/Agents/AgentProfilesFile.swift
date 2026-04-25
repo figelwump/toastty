@@ -70,7 +70,7 @@ public enum AgentProfilesFile {
         #   argv         — the exact command Toastty runs for that profile.
         #   manualCommandNames — (optional) extra executable basenames Toastty
         #                        should shim for typed launches of built-in
-        #                        Codex/Claude wrappers. Use basenames only,
+        #                        Codex/Claude/Pi wrappers. Use basenames only,
         #                        with no paths or spaces.
         #   shortcutKey  — (optional) single letter or digit; registers ⌘⌥<key>.
         #
@@ -86,6 +86,11 @@ public enum AgentProfilesFile {
         # displayName = "Claude Code"
         # argv = ["claude"]
         # manualCommandNames = ["run-sandboxed.sh"]
+        #
+        # [pi]
+        # displayName = "Pi"
+        # argv = ["pi"]
+        # manualCommandNames = ["agent-safehouse"]
         """
             + "\n"
     }
@@ -402,11 +407,11 @@ private enum AgentProfilesParser {
         line: Int,
         profileID: String
     ) throws -> [String] {
-        guard profileID == AgentKind.codex.rawValue || profileID == AgentKind.claude.rawValue else {
+        guard Self.builtInAgentIDsSupportingManualCommandNames.contains(profileID) else {
             guard rawNames.isEmpty else {
                 throw AgentProfilesParseError(
                     line: line,
-                    message: "[\(profileID)] manualCommandNames is supported only for [codex] and [claude]"
+                    message: "[\(profileID)] manualCommandNames is supported only for [codex], [claude], and [pi]"
                 )
             }
             return []
@@ -435,8 +440,7 @@ private enum AgentProfilesParser {
                 )
             }
             let normalizedName = trimmedName.lowercased()
-            guard normalizedName != AgentKind.codex.rawValue,
-                  normalizedName != AgentKind.claude.rawValue else {
+            guard Self.reservedManualCommandNames.contains(normalizedName) == false else {
                 throw AgentProfilesParseError(
                     line: line,
                     message: "[\(profileID)] manualCommandNames must not include built-in agent commands"
@@ -456,6 +460,14 @@ private enum AgentProfilesParser {
 
         return validatedNames
     }
+
+    private static let builtInAgentIDsSupportingManualCommandNames: Set<String> = [
+        AgentKind.codex.rawValue,
+        AgentKind.claude.rawValue,
+        AgentKind.pi.rawValue,
+    ]
+
+    private static let reservedManualCommandNames: Set<String> = builtInAgentIDsSupportingManualCommandNames
 }
 
 private func normalizedNonEmpty(_ value: String?) -> String? {

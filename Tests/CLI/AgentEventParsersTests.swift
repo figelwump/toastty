@@ -290,4 +290,83 @@ struct AgentEventParsersTests {
             )
         ])
     }
+
+    @Test
+    func piAgentStartMapsToWorkingStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"agent_start"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Pi is responding"
+            )
+        ])
+    }
+
+    @Test
+    func piToolExecutionMapsStatusAndChangedFiles() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"tool_execution_end","toolName":"edit","files":["Sources/App/ToasttyApp.swift","Sources/App/ToasttyApp.swift"],"isError":false}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Finished Edit"
+            ),
+            .sessionUpdateFiles(
+                sessionID: "sess-123",
+                panelID: nil,
+                files: ["Sources/App/ToasttyApp.swift"],
+                cwd: nil,
+                repoRoot: nil
+            ),
+        ])
+    }
+
+    @Test
+    func piExtensionRejectsOversizedPayload() throws {
+        let payload = Data(String(repeating: "x", count: 64 * 1024 + 1).utf8)
+
+        #expect(throws: PiExtensionEventParserError.payloadTooLarge) {
+            _ = try AgentEventIngestor.commands(
+                for: .piExtension,
+                sessionID: "sess-123",
+                panelID: nil,
+                payload: payload
+            )
+        }
+    }
+
+    @Test
+    func piExtensionIgnoresMissingOrMismatchedSessionRecords() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"other-session","event":"agent_start"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
 }
