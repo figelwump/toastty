@@ -37,7 +37,9 @@ struct RightAuxPanelView: View {
                         appIsActive: appIsActive,
                         store: store,
                         focusedPanelCommandController: focusedPanelCommandController,
-                        webPanelRuntimeRegistry: webPanelRuntimeRegistry
+                        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                        openLocalFileSearch: { openLocalFileSearch(windowID) },
+                        openBrowser: { openBrowser(windowID) }
                     )
                 }
 
@@ -298,6 +300,8 @@ struct RightAuxPanelTabStrip: View {
     @ObservedObject var store: AppStore
     let focusedPanelCommandController: FocusedPanelCommandController
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+    let openLocalFileSearch: @MainActor () -> Void
+    let openBrowser: @MainActor () -> Void
 
     @State private var hoveredTabID: UUID?
     @State private var hoveredCloseTabID: UUID?
@@ -306,9 +310,11 @@ struct RightAuxPanelTabStrip: View {
     nonisolated private static let idealTabWidth: CGFloat = 142
     nonisolated private static let minimumTabWidth: CGFloat = 82
     nonisolated private static let spacing: CGFloat = -1
+    nonisolated private static let addButtonContainerWidth: CGFloat = 38
+    nonisolated private static let addButtonSize: CGFloat = 22
 
     nonisolated static func showsTabStrip(tabCount: Int) -> Bool {
-        tabCount > 1
+        tabCount > 0
     }
 
     nonisolated static func resolvedTabWidth(availableWidth: CGFloat, tabCount: Int) -> CGFloat {
@@ -320,30 +326,53 @@ struct RightAuxPanelTabStrip: View {
         return min(idealTabWidth, max(minimumTabWidth, fittedWidth))
     }
 
+    nonisolated static func tabListAvailableWidth(totalWidth: CGFloat) -> CGFloat {
+        guard totalWidth.isFinite, totalWidth > 0 else { return 0 }
+
+        return max(0, totalWidth - addButtonContainerWidth)
+    }
+
     var body: some View {
         GeometryReader { geometry in
+            let tabListWidth = Self.tabListAvailableWidth(totalWidth: geometry.size.width)
             let tabWidth = Self.resolvedTabWidth(
-                availableWidth: geometry.size.width,
+                availableWidth: tabListWidth,
                 tabCount: tabs.count
             )
 
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Self.spacing) {
-                        ForEach(tabs) { tab in
-                            tabButton(tab)
-                                .frame(width: tabWidth, height: Self.height)
-                                .id(tab.id)
+            HStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: Self.spacing) {
+                            ForEach(tabs) { tab in
+                                tabButton(tab)
+                                    .frame(width: tabWidth, height: Self.height)
+                                    .id(tab.id)
+                            }
                         }
+                        .frame(height: Self.height, alignment: .leading)
                     }
-                    .frame(height: Self.height, alignment: .leading)
+                    .onAppear {
+                        scrollActiveTabIntoView(proxy: proxy)
+                    }
+                    .onChange(of: activeTabID) { _, _ in
+                        scrollActiveTabIntoView(proxy: proxy)
+                    }
                 }
-                .onAppear {
-                    scrollActiveTabIntoView(proxy: proxy)
-                }
-                .onChange(of: activeTabID) { _, _ in
-                    scrollActiveTabIntoView(proxy: proxy)
-                }
+                .frame(width: tabListWidth, height: Self.height, alignment: .leading)
+                .clipped()
+
+                addPanelMenu
+                    .frame(
+                        width: min(Self.addButtonContainerWidth, max(0, geometry.size.width)),
+                        height: Self.height
+                    )
+                    .background(ToastyTheme.chromeBackground)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(ToastyTheme.hairline)
+                            .frame(width: 1)
+                    }
             }
         }
         .frame(height: Self.height)
@@ -354,6 +383,38 @@ struct RightAuxPanelTabStrip: View {
                 .frame(height: 1)
         }
         .accessibilityIdentifier("right-panel.tabs")
+    }
+
+    private var addPanelMenu: some View {
+        Menu {
+            Button(action: openBrowser) {
+                Label("Open Browser", systemImage: "globe")
+            }
+            .accessibilityIdentifier("right-panel.tabs.add.open-browser")
+
+            Button(action: openLocalFileSearch) {
+                Label("Find Local File", systemImage: "magnifyingglass")
+            }
+            .accessibilityIdentifier("right-panel.tabs.add.find-local-file")
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(ToastyTheme.elevatedBackground)
+
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+            }
+            .frame(width: Self.addButtonSize, height: Self.addButtonSize)
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .help("Add to Right Panel")
+        .accessibilityLabel("Add to Right Panel")
+        .accessibilityIdentifier("right-panel.tabs.add")
     }
 
     private func tabButton(_ tab: RightAuxPanelTabState) -> some View {
