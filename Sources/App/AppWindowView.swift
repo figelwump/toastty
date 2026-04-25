@@ -15,6 +15,7 @@ struct AppWindowView: View {
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let toggleCommandPalette: @MainActor (UUID) -> Void
+    let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
@@ -61,6 +62,7 @@ struct AppWindowView: View {
                     agentLaunchService: agentLaunchService,
                     showAgentGetStartedFlow: presentAgentGetStartedFlow,
                     toggleCommandPalette: toggleCommandPalette,
+                    presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
                     sidebarVisible: sidebarVisible
                 )

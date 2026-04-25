@@ -92,14 +92,36 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             return true
         }
 
-        guard let originWindowID,
-              let store,
+        guard let originWindowID else {
+            return false
+        }
+
+        return present(originWindowID: originWindowID)
+    }
+
+    @discardableResult
+    func present(originWindowID: UUID, initialQuery: String? = nil) -> Bool {
+        guard let store,
               store.window(id: originWindowID) != nil,
               let originWindow = resolveWindow(id: originWindowID) else {
             return false
         }
 
-        show(originWindowID: originWindowID, originWindow: originWindow)
+        if isPresented {
+            guard self.originWindowID == originWindowID else {
+                dismiss(reason: .toggled)
+                return present(originWindowID: originWindowID, initialQuery: initialQuery)
+            }
+
+            if let initialQuery {
+                viewModel?.query = initialQuery
+            }
+            originWindow.makeKeyAndOrderFront(nil)
+            panel?.makeKeyAndOrderFront(nil)
+            return true
+        }
+
+        show(originWindowID: originWindowID, originWindow: originWindow, initialQuery: initialQuery)
         return true
     }
 
@@ -154,7 +176,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func show(originWindowID: UUID, originWindow: NSWindow) {
+    private func show(originWindowID: UUID, originWindow: NSWindow, initialQuery: String?) {
         self.originWindowID = originWindowID
         self.originWindow = originWindow
         previousFirstResponder = originWindow.firstResponder
@@ -162,6 +184,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
         let viewModel = CommandPaletteViewModel(
             originWindowID: originWindowID,
+            initialQuery: initialQuery ?? "",
             projectCommands: { [weak self] in
                 self?.projectCommands(originWindowID: originWindowID) ?? []
             },

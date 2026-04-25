@@ -105,6 +105,22 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.selectedResult)
     }
 
+    func testInitialQueryCanOpenFileMode() {
+        let viewModel = makeViewModel(
+            initialQuery: "@",
+            resolveFileSearchScope: { _ in
+                PaletteFileSearchScope(
+                    rootPath: "/tmp/toastty-project",
+                    kind: .workingDirectory
+                )
+            }
+        )
+
+        XCTAssertEqual(viewModel.query, "@")
+        XCTAssertEqual(viewModel.mode, .fileOpen)
+        XCTAssertEqual(viewModel.placeholder, "Open a local file...")
+    }
+
     func testScrollTargetIsNilWhenSelectedRowIsVisible() {
         XCTAssertNil(
             CommandPaletteScrollVisibility.scrollTarget(
@@ -1099,6 +1115,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
     private func makeViewModel(
         originWindowID: UUID = UUID(),
+        initialQuery: String = "",
         commands: [PaletteCommandDescriptor] = [],
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
         openFileResult: @escaping @MainActor (PaletteFileOpenDestination, PaletteFileOpenPlacement, UUID) -> Bool = { _, _, _ in true },
@@ -1116,6 +1133,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
     ) -> CommandPaletteViewModel {
         makeViewModel(
             originWindowID: originWindowID,
+            initialQuery: initialQuery,
             projectCommands: { commands },
             resolveFileSearchScope: resolveFileSearchScope,
             openFileResult: openFileResult,
@@ -1130,6 +1148,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
     private func makeViewModel(
         originWindowID: UUID = UUID(),
+        initialQuery: String = "",
         projectCommands: @escaping @MainActor () -> [PaletteCommandDescriptor],
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
         openFileResult: @escaping @MainActor (PaletteFileOpenDestination, PaletteFileOpenPlacement, UUID) -> Bool = { _, _, _ in true },
@@ -1147,6 +1166,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
     ) -> CommandPaletteViewModel {
         CommandPaletteViewModel(
             originWindowID: originWindowID,
+            initialQuery: initialQuery,
             projectCommands: projectCommands,
             executeCommand: executeCommand,
             resolveFileSearchScope: resolveFileSearchScope,

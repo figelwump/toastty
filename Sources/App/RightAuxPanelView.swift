@@ -13,6 +13,8 @@ struct RightAuxPanelStackView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
+    let openLocalFileSearch: @MainActor (UUID) -> Void
+    let openBrowser: @MainActor (UUID) -> Void
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
     let appIsActive: Bool
@@ -26,11 +28,11 @@ struct RightAuxPanelStackView: View {
                         let isSelectedTab = workspace.resolvedSelectedTabID == workspaceTab.id
                         let isVisible = isSelectedWorkspace &&
                             isSelectedTab &&
-                            workspaceTab.rightAuxPanel.isVisible &&
-                            workspaceTab.rightAuxPanel.tabIDs.isEmpty == false
-                        let keepsMountedContentVisible = isSelectedWorkspace &&
-                            isSelectedTab &&
-                            workspaceTab.rightAuxPanel.tabIDs.isEmpty == false
+                            workspaceTab.rightAuxPanel.isVisible
+                        let keepsMountedContentVisible = isVisible ||
+                            (isSelectedWorkspace &&
+                                isSelectedTab &&
+                                workspaceTab.rightAuxPanel.tabIDs.isEmpty == false)
 
                         RightAuxPanelView(
                             windowID: windowID,
@@ -43,6 +45,8 @@ struct RightAuxPanelStackView: View {
                             terminalRuntimeRegistry: terminalRuntimeRegistry,
                             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                             focusedPanelCommandController: focusedPanelCommandController,
+                            openLocalFileSearch: openLocalFileSearch,
+                            openBrowser: openBrowser,
                             effectiveContentWidth: effectiveContentWidth,
                             windowFontPoints: windowFontPoints,
                             windowMarkdownTextScale: windowMarkdownTextScale,
@@ -73,6 +77,8 @@ struct RightAuxPanelView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
+    let openLocalFileSearch: @MainActor (UUID) -> Void
+    let openBrowser: @MainActor (UUID) -> Void
     let effectiveContentWidth: CGFloat
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
@@ -183,40 +189,151 @@ struct RightAuxPanelView: View {
     }
 
     private var panelStack: some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(workspaceTab.rightAuxPanel.orderedTabs) { tab in
-                let isActiveTab = workspaceTab.rightAuxPanel.activeTabID == tab.id
-
-                PanelCardView(
-                    workspaceID: workspace.id,
-                    panelID: tab.panelID,
-                    panelState: tab.panelState,
-                    isWorkspaceSelected: isWorkspaceSelected && isWorkspaceTabSelected,
-                    isTabSelected: isActiveTab,
-                    focusedPanelID: workspaceTab.rightAuxPanel.focusedPanelID,
-                    hasUnreadNotification: workspaceTab.unreadPanelIDs.contains(tab.panelID),
-                    panelSessionStatus: nil,
-                    shortcutNumber: nil,
-                    windowFontPoints: windowFontPoints,
-                    windowMarkdownTextScale: windowMarkdownTextScale,
-                    appIsActive: appIsActive,
-                    unfocusedSplitStyle: .disabled,
-                    panelFlashOverlayOpacity: 0,
-                    store: store,
-                    terminalProfileStore: terminalProfileStore,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                    focusedPanelCommandController: focusedPanelCommandController,
-                    terminalRuntimeContext: nil
+        Group {
+            if workspaceTab.rightAuxPanel.tabIDs.isEmpty {
+                RightAuxPanelEmptyStateView(
+                    openLocalFileSearch: { openLocalFileSearch(windowID) },
+                    openBrowser: { openBrowser(windowID) }
                 )
-                .opacity(WorkspaceView.mountedContentOpacity(isVisible: isActiveTab))
-                .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isActiveTab)
-                .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isActiveTab))
-                .zIndex(isActiveTab ? 1 : 0)
-                .id(tab.id)
+            } else {
+                ZStack(alignment: .topLeading) {
+                    ForEach(workspaceTab.rightAuxPanel.orderedTabs) { tab in
+                        let isActiveTab = workspaceTab.rightAuxPanel.activeTabID == tab.id
+
+                        PanelCardView(
+                            workspaceID: workspace.id,
+                            panelID: tab.panelID,
+                            panelState: tab.panelState,
+                            isWorkspaceSelected: isWorkspaceSelected && isWorkspaceTabSelected,
+                            isTabSelected: isActiveTab,
+                            focusedPanelID: workspaceTab.rightAuxPanel.focusedPanelID,
+                            hasUnreadNotification: workspaceTab.unreadPanelIDs.contains(tab.panelID),
+                            panelSessionStatus: nil,
+                            shortcutNumber: nil,
+                            windowFontPoints: windowFontPoints,
+                            windowMarkdownTextScale: windowMarkdownTextScale,
+                            appIsActive: appIsActive,
+                            unfocusedSplitStyle: .disabled,
+                            panelFlashOverlayOpacity: 0,
+                            store: store,
+                            terminalProfileStore: terminalProfileStore,
+                            terminalRuntimeRegistry: terminalRuntimeRegistry,
+                            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                            focusedPanelCommandController: focusedPanelCommandController,
+                            terminalRuntimeContext: nil
+                        )
+                        .opacity(WorkspaceView.mountedContentOpacity(isVisible: isActiveTab))
+                        .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isActiveTab)
+                        .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isActiveTab))
+                        .zIndex(isActiveTab ? 1 : 0)
+                        .id(tab.id)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+struct RightAuxPanelEmptyStateView: View {
+    let openLocalFileSearch: @MainActor () -> Void
+    let openBrowser: @MainActor () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 24)
+
+            ToastCharacterView(size: 96)
+                .padding(.bottom, 18)
+
+            Text("A fresh slice on the side")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(ToastyTheme.primaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
+
+            Text("Nothing open here yet.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ToastyTheme.emptyStateMutedText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+
+            VStack(spacing: 10) {
+                RightAuxPanelEmptyStateActionButton(
+                    title: "Find local file",
+                    subtitle: "Open a document from this workspace.",
+                    systemImage: "magnifyingglass",
+                    action: openLocalFileSearch
+                )
+                .accessibilityIdentifier("right-panel.empty.find-local-file")
+
+                RightAuxPanelEmptyStateActionButton(
+                    title: "Open browser",
+                    subtitle: "Start with a blank page.",
+                    systemImage: "globe",
+                    action: openBrowser
+                )
+                .accessibilityIdentifier("right-panel.empty.open-browser")
+            }
+            .padding(.horizontal, 18)
+            .frame(maxWidth: 340)
+
+            Spacer(minLength: 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ToastyTheme.surfaceBackground)
+        .accessibilityIdentifier("right-panel.empty")
+    }
+}
+
+private struct RightAuxPanelEmptyStateActionButton: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let action: @MainActor () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isHovered ? ToastyTheme.accent : ToastyTheme.inactiveText)
+                    .frame(width: 18, height: 18)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.primaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Text(subtitle)
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isHovered ? ToastyTheme.elevatedBackground : ToastyTheme.chromeBackground)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isHovered ? ToastyTheme.subtleBorder : ToastyTheme.hairline, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 

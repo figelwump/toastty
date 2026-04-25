@@ -1030,6 +1030,7 @@ final class WorkspaceViewTests: XCTestCase {
             agentLaunchService: agentLaunchService,
             showAgentGetStartedFlow: {},
             toggleCommandPalette: { _ in },
+            presentCommandPalette: { _, _ in },
             terminalRuntimeContext: TerminalWindowRuntimeContext(
                 windowID: windowID,
                 runtimeRegistry: registry

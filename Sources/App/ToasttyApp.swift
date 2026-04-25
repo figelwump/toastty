@@ -2352,6 +2352,9 @@ struct ToasttyApp: App {
                 toggleCommandPalette: { [weak commandPaletteController] originWindowID in
                     _ = commandPaletteController?.toggle(originWindowID: originWindowID)
                 },
+                presentCommandPalette: { [weak commandPaletteController] originWindowID, initialQuery in
+                    _ = commandPaletteController?.present(originWindowID: originWindowID, initialQuery: initialQuery)
+                },
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,

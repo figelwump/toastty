@@ -258,10 +258,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     }
 
     func canToggleRightPanel(originWindowID: UUID) -> Bool {
-        guard let workspace = store?.commandSelection(preferredWindowID: originWindowID)?.workspace else {
-            return false
-        }
-        return workspace.rightAuxPanel.tabIDs.isEmpty == false
+        store?.commandSelection(preferredWindowID: originWindowID) != nil
     }
 
     func toggleRightPanel(originWindowID: UUID) -> Bool {

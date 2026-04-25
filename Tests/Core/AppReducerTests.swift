@@ -1842,7 +1842,81 @@ struct AppReducerTests {
     }
 
     @Test
-    func closingFinalRightPanelTabHidesPanel() throws {
+    func togglingEmptyRightPanelShowsAndHidesPanelShell() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleRightAuxPanel(workspaceID: workspaceID), state: &state))
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.tabIDs.isEmpty)
+
+        #expect(reducer.send(.toggleRightAuxPanel(workspaceID: workspaceID), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.isVisible == false)
+        #expect(workspace.rightAuxPanel.tabIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func settingEmptyRightPanelVisibilityShowsPanelShell() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.setRightAuxPanelVisibility(workspaceID: workspaceID, isVisible: true), state: &state))
+
+        let workspaceAfterShow = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterShow.rightAuxPanel.isVisible)
+        #expect(workspaceAfterShow.rightAuxPanel.tabIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func emptyRightPanelShellDoesNotLeakAcrossWorkspaceTabs() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let firstMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        #expect(reducer.send(.toggleRightAuxPanel(workspaceID: workspaceID), state: &state))
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.resolvedSelectedTabID == firstMainTabID)
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.tabIDs.isEmpty)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let secondMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        #expect(secondMainTabID != firstMainTabID)
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.resolvedSelectedTabID == secondMainTabID)
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.tabIDs.count == 1)
+
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: firstMainTabID), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.tabIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingFinalRightPanelTabKeepsPanelShellVisible() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -1862,7 +1936,7 @@ struct AppReducerTests {
         #expect(reducer.send(.closeRightAuxPanelTab(workspaceID: workspaceID, tabID: tabID), state: &state))
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfter.rightAuxPanel.isVisible == false)
+        #expect(workspaceAfter.rightAuxPanel.isVisible)
         #expect(workspaceAfter.rightAuxPanel.tabIDs.isEmpty)
         #expect(workspaceAfter.rightAuxPanel.activeTabID == nil)
 
@@ -1907,7 +1981,7 @@ struct AppReducerTests {
         let workspaceAfterClose = try #require(state.workspacesByID[workspaceID])
         #expect(workspaceAfterClose.resolvedSelectedTabID == secondMainTabID)
         #expect(workspaceAfterClose.tab(id: firstMainTabID)?.rightAuxPanel.tabIDs.isEmpty == true)
-        #expect(workspaceAfterClose.tab(id: firstMainTabID)?.rightAuxPanel.isVisible == false)
+        #expect(workspaceAfterClose.tab(id: firstMainTabID)?.rightAuxPanel.isVisible == true)
         #expect(workspaceAfterClose.tab(id: secondMainTabID)?.rightAuxPanel.tabIDs.count == 1)
 
         try StateValidator.validate(state)

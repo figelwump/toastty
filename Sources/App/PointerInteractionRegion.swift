@@ -113,7 +113,7 @@ final class PointerInteractionView: NSView {
         super.viewDidMoveToWindow()
         restoreHoverWindowMovementIfNeeded(reason: "window-changed")
         if window == nil {
-            setPointerInside(false, notify: false)
+            setPointerInside(false)
             if isTrackingPointerSequence == false {
                 restoreSequenceWindowMovementIfNeeded(reason: "removed-from-window")
             }
@@ -169,7 +169,7 @@ final class PointerInteractionView: NSView {
     func invalidate() {
         cancelPointerSequence(reason: "invalidate")
         restoreHoverWindowMovementIfNeeded(reason: "invalidate")
-        setPointerInside(false, notify: false)
+        setPointerInside(false)
         onBegan = nil
         onChanged = nil
         onEnded = nil

@@ -179,7 +179,7 @@ struct ToasttyCommandMenus: Commands {
     }
 
     private var canToggleCommandRightPanel: Bool {
-        commandWorkspace?.rightAuxPanel.tabIDs.isEmpty == false
+        commandWorkspace != nil
     }
 
     private var focusedLocalDocumentPanelSelection: FocusedLocalDocumentPanelCommandSelection? {

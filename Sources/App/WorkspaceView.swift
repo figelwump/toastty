@@ -88,6 +88,7 @@ struct WorkspaceView: View {
     let agentLaunchService: AgentLaunchService
     let showAgentGetStartedFlow: () -> Void
     let toggleCommandPalette: @MainActor (UUID) -> Void
+    let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
@@ -762,7 +763,6 @@ struct WorkspaceView: View {
 
     private func rightPanelToggle(identifier: String) -> some View {
         let isVisible = selectedWorkspace?.rightAuxPanel.isVisible == true
-        let hasTabs = selectedWorkspace?.rightAuxPanel.tabIDs.isEmpty == false
 
         return styledTopBarButton(active: isVisible) {
             guard let workspaceID = selectedWorkspace?.id else { return }
@@ -773,7 +773,7 @@ struct WorkspaceView: View {
                 .foregroundStyle(isVisible ? ToastyTheme.accent : ToastyTheme.inactiveText)
                 .frame(width: 16, height: 16)
         }
-        .disabled(!hasTabs)
+        .disabled(selectedWorkspace == nil)
         .help(
             ToasttyKeyboardShortcuts.toggleRightPanel.helpText(
                 ToasttyBuiltInCommand.toggleRightPanelTitle(rightPanelVisible: isVisible)
@@ -843,7 +843,7 @@ struct WorkspaceView: View {
     private func rightAuxPanelStack(for window: WindowState, availableWidth: CGFloat) -> some View {
         let selectedWorkspace = store.selectedWorkspace(in: windowID)
         let selectedRightPanel = selectedWorkspace?.rightAuxPanel
-        let isVisible = selectedRightPanel?.isVisible == true && selectedRightPanel?.tabIDs.isEmpty == false
+        let isVisible = selectedRightPanel?.isVisible == true
         let targetWidth = Self.effectiveRightAuxPanelWidth(
             for: selectedRightPanel,
             availableWidth: availableWidth
@@ -861,6 +861,8 @@ struct WorkspaceView: View {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             focusedPanelCommandController: focusedPanelCommandController,
+            openLocalFileSearch: openRightPanelFileSearch,
+            openBrowser: openRightPanelBrowser,
             windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
             windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
             appIsActive: appIsActive
@@ -880,6 +882,17 @@ struct WorkspaceView: View {
         }
 
         return CGFloat(RightAuxPanelState.defaultWidth(for: availableWorkspaceWidth))
+    }
+
+    private func openRightPanelFileSearch(originWindowID: UUID) {
+        presentCommandPalette(originWindowID, "@")
+    }
+
+    private func openRightPanelBrowser(originWindowID: UUID) {
+        _ = store.createBrowserPanelFromCommand(
+            preferredWindowID: originWindowID,
+            request: BrowserPanelCreateRequest(placementOverride: .rightPanel)
+        )
     }
 
     @ViewBuilder

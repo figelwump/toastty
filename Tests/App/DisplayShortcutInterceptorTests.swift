@@ -1074,6 +1074,19 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(store.state.workspacesByID[workspaceID]).rightAuxPanel.isVisible)
     }
 
+    func testToggleRightPanelActionCanOpenEmptyPanelShell() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.toggleRightPanel, appOwnedWindowID: windowID))
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertTrue(workspace.rightAuxPanel.isVisible)
+        XCTAssertTrue(workspace.rightAuxPanel.tabIDs.isEmpty)
+    }
+
     func testClosePanelActionPrefersFocusedRightPanelTab() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
@@ -1090,7 +1103,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
 
         let workspaceAfterClose = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertTrue(workspaceAfterClose.rightAuxPanel.tabIDs.isEmpty)
-        XCTAssertFalse(workspaceAfterClose.rightAuxPanel.isVisible)
+        XCTAssertTrue(workspaceAfterClose.rightAuxPanel.isVisible)
         XCTAssertEqual(workspaceAfterClose.focusedPanelID, mainFocusedPanelID)
         XCTAssertEqual(workspaceAfterClose.layoutTree.allSlotInfos.count, 1)
     }

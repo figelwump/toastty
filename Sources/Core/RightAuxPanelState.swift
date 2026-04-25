@@ -127,7 +127,6 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
         if tabIDs.isEmpty {
             activeTabID = nil
             focusedPanelID = nil
-            isVisible = false
         }
         return removedTab
     }
@@ -162,7 +161,6 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
         tabsByID = repairedTabsByID
 
         if tabIDs.isEmpty {
-            isVisible = false
             activeTabID = nil
             focusedPanelID = nil
             return

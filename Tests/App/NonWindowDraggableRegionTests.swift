@@ -122,6 +122,31 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
+    func testPointerInteractionViewReportsHoverExitWhenInvalidated() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+
+        var hoverStates: [Bool] = []
+        view.onHoverChanged = { hoverStates.append($0) }
+
+        view.mouseEntered(
+            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 40, y: 50), window: window)
+        )
+        view.invalidate()
+
+        XCTAssertEqual(hoverStates, [true, false])
+    }
+
+    @MainActor
     func testPointerInteractionViewReportsDragSequenceTranslation() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),

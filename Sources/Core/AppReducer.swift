@@ -521,7 +521,6 @@ public struct AppReducer {
 
         case .setRightAuxPanelVisibility(let workspaceID, let isVisible):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard workspace.rightAuxPanel.tabIDs.isEmpty == false || isVisible == false else { return false }
             guard workspace.rightAuxPanel.isVisible != isVisible else { return false }
             workspace.rightAuxPanel.isVisible = isVisible
             if isVisible == false {
@@ -532,7 +531,6 @@ public struct AppReducer {
 
         case .toggleRightAuxPanel(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard workspace.rightAuxPanel.tabIDs.isEmpty == false else { return false }
             workspace.rightAuxPanel.isVisible.toggle()
             if workspace.rightAuxPanel.isVisible == false {
                 workspace.rightAuxPanel.focusedPanelID = nil
