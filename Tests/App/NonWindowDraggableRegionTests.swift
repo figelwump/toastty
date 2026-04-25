@@ -68,6 +68,60 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
+    func testPointerInteractionViewStoresCursorForCursorRects() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+
+        view.cursor = .resizeLeftRight
+        XCTAssertTrue(view.cursor === NSCursor.resizeLeftRight)
+
+        view.resetCursorRects()
+        window.invalidateCursorRects(for: view)
+
+        view.cursor = nil
+        XCTAssertNil(view.cursor)
+    }
+
+    @MainActor
+    func testPointerInteractionViewReportsHoverChanges() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+
+        var hoverStates: [Bool] = []
+        view.onHoverChanged = { hoverStates.append($0) }
+
+        view.mouseEntered(
+            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 40, y: 50), window: window)
+        )
+        view.mouseEntered(
+            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 42, y: 52), window: window)
+        )
+        view.mouseExited(
+            with: try pointerMouseEvent(type: .mouseExited, location: NSPoint(x: 180, y: 90), window: window)
+        )
+
+        XCTAssertEqual(hoverStates, [true, false])
+    }
+
+    @MainActor
     func testPointerInteractionViewReportsDragSequenceTranslation() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
@@ -400,6 +454,23 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         location: NSPoint,
         window: NSWindow
     ) throws -> NSEvent {
+        if type == .mouseEntered || type == .mouseExited {
+            guard let event = NSEvent.enterExitEvent(
+                with: type,
+                location: location,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                trackingNumber: 0,
+                userData: nil
+            ) else {
+                throw NSError(domain: "NonWindowDraggableRegionTests", code: 1, userInfo: nil)
+            }
+            return event
+        }
+
         guard let event = NSEvent.mouseEvent(
             with: type,
             location: location,

@@ -11,22 +11,28 @@ struct PointerInteractionValue: Equatable {
 struct PointerInteractionRegion: NSViewRepresentable {
     var name: String
     var metadata: [String: String]
+    var cursor: NSCursor?
     var onBegan: (PointerInteractionValue) -> Void
     var onChanged: (PointerInteractionValue) -> Void
     var onEnded: (PointerInteractionValue) -> Void
+    var onHoverChanged: (Bool) -> Void
 
     init(
         name: String,
         metadata: [String: String] = [:],
+        cursor: NSCursor? = nil,
         onBegan: @escaping (PointerInteractionValue) -> Void = { _ in },
         onChanged: @escaping (PointerInteractionValue) -> Void,
-        onEnded: @escaping (PointerInteractionValue) -> Void
+        onEnded: @escaping (PointerInteractionValue) -> Void,
+        onHoverChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.name = name
         self.metadata = metadata
+        self.cursor = cursor
         self.onBegan = onBegan
         self.onChanged = onChanged
         self.onEnded = onEnded
+        self.onHoverChanged = onHoverChanged
     }
 
     func makeNSView(context _: Context) -> PointerInteractionView {
@@ -36,9 +42,11 @@ struct PointerInteractionRegion: NSViewRepresentable {
     func updateNSView(_ nsView: PointerInteractionView, context _: Context) {
         nsView.logName = name
         nsView.logMetadata = metadata
+        nsView.cursor = cursor
         nsView.onBegan = onBegan
         nsView.onChanged = onChanged
         nsView.onEnded = onEnded
+        nsView.onHoverChanged = onHoverChanged
     }
 
     static func dismantleNSView(_ nsView: PointerInteractionView, coordinator _: ()) {
@@ -55,8 +63,15 @@ final class PointerInteractionView: NSView {
     var onBegan: ((PointerInteractionValue) -> Void)?
     var onChanged: ((PointerInteractionValue) -> Void)?
     var onEnded: ((PointerInteractionValue) -> Void)?
+    var onHoverChanged: ((Bool) -> Void)?
+    var cursor: NSCursor? {
+        didSet {
+            invalidateCursorRectsIfPossible()
+        }
+    }
 
     private var hoverTrackingArea: NSTrackingArea?
+    private var isPointerInside = false
     private var isHoverSuppressingWindowMovement = false
     private var isSequenceSuppressingWindowMovement = false
     private var startWindowLocation: CGPoint?
@@ -87,14 +102,23 @@ final class PointerInteractionView: NSView {
         finishPointerSequence(with: event)
     }
 
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if let cursor {
+            addCursorRect(bounds, cursor: cursor)
+        }
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         restoreHoverWindowMovementIfNeeded(reason: "window-changed")
         if window == nil {
+            setPointerInside(false, notify: false)
             if isTrackingPointerSequence == false {
                 restoreSequenceWindowMovementIfNeeded(reason: "removed-from-window")
             }
         } else {
+            invalidateCursorRectsIfPossible()
             updateHoverWindowMovementSuppressionForCurrentMouseLocation()
         }
     }
@@ -117,11 +141,13 @@ final class PointerInteractionView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        setPointerInside(true)
         guard shouldSuppressWindowMovementForHover(event: event) else { return }
         suppressWindowMovementForHover(reason: "mouse-entered")
     }
 
     override func mouseExited(with _: NSEvent) {
+        setPointerInside(false)
         restoreHoverWindowMovementIfNeeded(reason: "mouse-exited")
     }
 
@@ -143,9 +169,23 @@ final class PointerInteractionView: NSView {
     func invalidate() {
         cancelPointerSequence(reason: "invalidate")
         restoreHoverWindowMovementIfNeeded(reason: "invalidate")
+        setPointerInside(false, notify: false)
         onBegan = nil
         onChanged = nil
         onEnded = nil
+        onHoverChanged = nil
+    }
+
+    private func setPointerInside(_ isInside: Bool, notify: Bool = true) {
+        guard isPointerInside != isInside else { return }
+        isPointerInside = isInside
+        if notify {
+            onHoverChanged?(isInside)
+        }
+    }
+
+    private func invalidateCursorRectsIfPossible() {
+        window?.invalidateCursorRects(for: self)
     }
 
     private func beginPointerSequence(with event: NSEvent) {

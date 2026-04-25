@@ -81,7 +81,6 @@ struct RightAuxPanelView: View {
     @State private var resizeStartWidth: Double?
     @State private var resizeHandleHovered = false
     @State private var resizeHandleDragging = false
-    @State private var resizeCursorPushed = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -120,36 +119,37 @@ struct RightAuxPanelView: View {
                     .animation(.easeOut(duration: 0.12), value: resizeHandleHighlighted)
             }
             .overlay {
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: 10)
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
+                PointerInteractionRegion(
+                    name: "right-panel-resize-handle",
+                    metadata: [
+                        "workspaceID": workspace.id.uuidString,
+                        "workspaceTabID": workspaceTab.id.uuidString,
+                    ],
+                    cursor: .resizeLeftRight,
+                    onBegan: { _ in
+                        resizeStartWidth = Double(effectiveContentWidth)
+                        updateResizeHandleInteraction(dragging: true)
+                    },
+                    onChanged: { value in
+                        let startingWidth = resizeStartWidth ?? Double(effectiveContentWidth)
+                        resizeStartWidth = startingWidth
+                        let nextWidth = startingWidth - Double(value.translation.width)
+                        _ = store.send(.setRightAuxPanelWidth(workspaceID: workspace.id, width: nextWidth))
+                    },
+                    onEnded: { _ in
+                        resizeStartWidth = nil
+                        updateResizeHandleInteraction(dragging: false)
+                    },
+                    onHoverChanged: { hovering in
                         updateResizeHandleInteraction(hovered: hovering)
                     }
-                    .gesture(resizeGesture)
+                )
+                    .frame(width: 10)
                     .accessibilityLabel("Resize Right Panel")
                     .accessibilityIdentifier("right-panel.resize")
             }
             .onDisappear {
                 releaseResizeHandleInteraction()
-            }
-    }
-
-    private var resizeGesture: some Gesture {
-        DragGesture(minimumDistance: 1)
-            .onChanged { value in
-                if resizeHandleDragging == false {
-                    updateResizeHandleInteraction(dragging: true)
-                }
-                let startingWidth = resizeStartWidth ?? Double(effectiveContentWidth)
-                resizeStartWidth = startingWidth
-                let nextWidth = startingWidth - Double(value.translation.width)
-                _ = store.send(.setRightAuxPanelWidth(workspaceID: workspace.id, width: nextWidth))
-            }
-            .onEnded { _ in
-                resizeStartWidth = nil
-                updateResizeHandleInteraction(dragging: false)
             }
     }
 
@@ -169,30 +169,14 @@ struct RightAuxPanelView: View {
     ) {
         let nextHovered = hovered ?? resizeHandleHovered
         let nextDragging = dragging ?? resizeHandleDragging
-        let shouldPushCursor = nextHovered || nextDragging
-
-        if shouldPushCursor != resizeCursorPushed {
-            if shouldPushCursor {
-                NSCursor.resizeLeftRight.push()
-            } else {
-                NSCursor.pop()
-            }
-            resizeCursorPushed = shouldPushCursor
-        }
-
         resizeHandleHovered = nextHovered
         resizeHandleDragging = nextDragging
     }
 
     private func releaseResizeHandleInteraction() {
-        guard resizeCursorPushed || resizeHandleHovered || resizeHandleDragging else { return }
-
-        if resizeCursorPushed {
-            NSCursor.pop()
-        }
+        guard resizeHandleHovered || resizeHandleDragging else { return }
 
         DispatchQueue.main.async {
-            resizeCursorPushed = false
             resizeHandleHovered = false
             resizeHandleDragging = false
         }
