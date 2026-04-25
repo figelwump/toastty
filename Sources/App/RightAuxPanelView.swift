@@ -23,6 +23,8 @@ struct RightAuxPanelStackView: View {
                     let isVisible = isSelected &&
                         workspace.rightAuxPanel.isVisible &&
                         workspace.rightAuxPanel.tabIDs.isEmpty == false
+                    let keepsMountedContentVisible = isSelected &&
+                        workspace.rightAuxPanel.tabIDs.isEmpty == false
 
                     RightAuxPanelView(
                         windowID: windowID,
@@ -37,7 +39,7 @@ struct RightAuxPanelStackView: View {
                         windowMarkdownTextScale: windowMarkdownTextScale,
                         appIsActive: appIsActive
                     )
-                    .opacity(WorkspaceView.mountedContentOpacity(isVisible: isVisible))
+                    .opacity(WorkspaceView.mountedContentOpacity(isVisible: keepsMountedContentVisible))
                     .allowsHitTesting(isVisible && renderedWidth > 0)
                     .accessibilityHidden(!isVisible)
                     .zIndex(isVisible ? 1 : 0)
@@ -284,13 +286,6 @@ struct RightAuxPanelTabStrip: View {
         .padding(.trailing, 5)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(tabBackground(isActive: isActive, isHovered: isHovered))
-        .overlay(alignment: .bottom) {
-            if isActive {
-                Rectangle()
-                    .fill(ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive))
-                    .frame(height: ToastyTheme.workspaceTabAccentLineHeight)
-            }
-        }
         .overlay {
             if !isActive {
                 Rectangle()

@@ -660,8 +660,6 @@ struct WorkspaceView: View {
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
-            rightPanelToggle(identifier: "topbar.toggle.right-panel")
-
             topBarFlashButton(icon: { highlighted in
                 SplitHorizontalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
             }) {
@@ -679,6 +677,8 @@ struct WorkspaceView: View {
             .disabled(isFocusedPanelModeActive)
             .help(ToasttyKeyboardShortcuts.splitVertical.helpText("Split Vertically"))
             .accessibilityIdentifier("workspace.split.vertical")
+
+            rightPanelToggle(identifier: "topbar.toggle.right-panel")
         }
     }
 
@@ -841,15 +841,14 @@ struct WorkspaceView: View {
         let selectedWorkspace = store.selectedWorkspace(in: windowID)
         let selectedRightPanel = selectedWorkspace?.rightAuxPanel
         let isVisible = selectedRightPanel?.isVisible == true && selectedRightPanel?.tabIDs.isEmpty == false
-        let width = isVisible
-            ? CGFloat(selectedRightPanel?.width ?? RightAuxPanelState.defaultWidth)
-            : 0
+        let targetWidth = CGFloat(selectedRightPanel?.width ?? RightAuxPanelState.defaultWidth)
+        let renderedWidth = isVisible ? targetWidth : 0
 
         return RightAuxPanelStackView(
             windowID: windowID,
             workspaceIDs: window.workspaceIDs,
             selectedWorkspaceID: store.selectedWorkspaceID(in: windowID),
-            renderedWidth: width,
+            renderedWidth: renderedWidth,
             store: store,
             terminalProfileStore: terminalProfileStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -859,10 +858,10 @@ struct WorkspaceView: View {
             windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
             appIsActive: appIsActive
         )
-        .frame(width: width)
+        .frame(width: targetWidth)
+        .frame(width: renderedWidth, alignment: .leading)
         .clipped()
-        .animation(.easeInOut(duration: 0.15), value: isVisible)
-        .animation(.easeInOut(duration: 0.15), value: width)
+        .animation(.easeInOut(duration: 0.15), value: renderedWidth)
     }
 
     @ViewBuilder
