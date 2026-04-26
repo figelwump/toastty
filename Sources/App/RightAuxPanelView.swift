@@ -136,6 +136,21 @@ struct RightAuxPanelView: View {
     ) {
         let nextHovered = hovered ?? resizeHandleHovered
         let nextDragging = dragging ?? resizeHandleDragging
+        if nextHovered != resizeHandleHovered || nextDragging != resizeHandleDragging {
+            ToasttyLog.info(
+                "right panel resize handle interaction changed",
+                category: .input,
+                metadata: [
+                    "workspaceID": workspace.id.uuidString,
+                    "workspaceTabID": workspaceTab.id.uuidString,
+                    "hovered": "\(nextHovered)",
+                    "dragging": "\(nextDragging)",
+                    "acceptsPanelInteraction": "\(acceptsPanelInteraction)",
+                    "appIsActive": "\(appIsActive)",
+                    "effectiveContentWidth": String(format: "%.1f", effectiveContentWidth),
+                ]
+            )
+        }
         resizeHandleHovered = nextHovered
         resizeHandleDragging = nextDragging
     }
@@ -326,7 +341,7 @@ struct RightAuxPanelTabStrip: View {
     nonisolated private static let addButtonSize: CGFloat = 22
 
     nonisolated static func showsTabStrip(tabCount: Int) -> Bool {
-        tabCount > 1
+        tabCount > 0
     }
 
     nonisolated static func resolvedTabWidth(availableWidth: CGFloat, tabCount: Int) -> CGFloat {

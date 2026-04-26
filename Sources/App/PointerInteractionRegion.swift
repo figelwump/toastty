@@ -74,6 +74,7 @@ final class PointerInteractionView: NSView {
             // re-apply the new cursor immediately so the change takes effect
             // without waiting for the next entry.
             if isPointerInside {
+                logCursorDiagnostic("cursor-did-set-reapply")
                 cursor?.set()
             }
         }
@@ -112,14 +113,17 @@ final class PointerInteractionView: NSView {
 
     override func cursorUpdate(with event: NSEvent) {
         if let cursor {
+            logCursorDiagnostic("cursor-update-set", event: event)
             cursor.set()
         } else {
+            logCursorDiagnostic("cursor-update-defer", event: event)
             super.cursorUpdate(with: event)
         }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        logCursorDiagnostic("view-did-move-to-window")
         if window == nil {
             setPointerInside(false)
             if isTrackingPointerSequence == false {
@@ -142,13 +146,16 @@ final class PointerInteractionView: NSView {
         )
         addTrackingArea(trackingArea)
         hoverTrackingArea = trackingArea
+        logCursorDiagnostic("tracking-area-updated")
     }
 
-    override func mouseEntered(with _: NSEvent) {
+    override func mouseEntered(with event: NSEvent) {
+        logCursorDiagnostic("mouse-entered", event: event)
         setPointerInside(true)
     }
 
-    override func mouseExited(with _: NSEvent) {
+    override func mouseExited(with event: NSEvent) {
+        logCursorDiagnostic("mouse-exited", event: event)
         setPointerInside(false)
     }
 
@@ -177,6 +184,7 @@ final class PointerInteractionView: NSView {
     private func setPointerInside(_ isInside: Bool, notify: Bool = true) {
         guard isPointerInside != isInside else { return }
         isPointerInside = isInside
+        logCursorDiagnostic(isInside ? "pointer-inside-set" : "pointer-outside-set")
         if notify {
             onHoverChanged?(isInside)
         }
@@ -374,6 +382,68 @@ final class PointerInteractionView: NSView {
         metadata["windowIsMovable"] = "\(window.isMovable)"
         metadata["sequenceSuppressionActive"] = "\(isSequenceSuppressingWindowMovement)"
         ToasttyLog.info("draggable pointer window movement suppression", category: .input, metadata: metadata)
+    }
+
+    private func logCursorDiagnostic(
+        _ phase: String,
+        event: NSEvent? = nil
+    ) {
+        guard shouldLogCursorDiagnostics else { return }
+
+        var metadata = logMetadata
+        metadata["name"] = logName
+        metadata["phase"] = phase
+        metadata["pointerInside"] = "\(isPointerInside)"
+        metadata["frame"] = DraggableInteractionLog.rectDescription(frame)
+        metadata["bounds"] = DraggableInteractionLog.rectDescription(bounds)
+        metadata["visibleRect"] = DraggableInteractionLog.rectDescription(visibleRect)
+        metadata["targetCursor"] = cursor.map(Self.cursorDescription) ?? "nil"
+        if let cursor {
+            metadata["currentCursorMatchesTarget"] = "\(NSCursor.current === cursor)"
+        }
+        if let event {
+            metadata["eventType"] = DraggableInteractionLog.eventTypeDescription(event.type)
+            metadata["eventWindowLocation"] = DraggableInteractionLog.pointDescription(event.locationInWindow)
+            metadata["eventLocalLocation"] = DraggableInteractionLog.pointDescription(convert(event.locationInWindow, from: nil))
+        }
+        if let window {
+            let windowMouseLocation = window.mouseLocationOutsideOfEventStream
+            let localMouseLocation = convert(windowMouseLocation, from: nil)
+            metadata["windowNumber"] = "\(window.windowNumber)"
+            metadata["windowCursorRectsEnabled"] = "\(window.areCursorRectsEnabled)"
+            metadata["windowMouseLocation"] = DraggableInteractionLog.pointDescription(windowMouseLocation)
+            metadata["localMouseLocation"] = DraggableInteractionLog.pointDescription(localMouseLocation)
+            metadata["localMouseInsideBounds"] = "\(bounds.contains(localMouseLocation))"
+        }
+
+        ToasttyLog.info(
+            "pointer cursor diagnostic",
+            category: .input,
+            metadata: metadata
+        )
+    }
+
+    private var shouldLogCursorDiagnostics: Bool {
+        logName == "right-panel-resize-handle"
+    }
+
+    private static func cursorDescription(_ cursor: NSCursor) -> String {
+        if cursor === NSCursor.arrow {
+            return "arrow"
+        }
+        if cursor === NSCursor.iBeam {
+            return "iBeam"
+        }
+        if cursor === NSCursor.pointingHand {
+            return "pointingHand"
+        }
+        if cursor === NSCursor.resizeLeftRight {
+            return "resizeLeftRight"
+        }
+        if cursor === NSCursor.resizeUpDown {
+            return "resizeUpDown"
+        }
+        return String(describing: cursor)
     }
 }
 

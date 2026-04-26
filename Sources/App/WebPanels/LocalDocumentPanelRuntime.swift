@@ -413,6 +413,8 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
+        webView.cursorDiagnosticPanelID = panelID
+        webView.cursorDiagnosticPanelKind = WebPanelDefinition.localDocument.rawValue
         #if DEBUG
         // Expose the panel to Safari Web Inspector for debug builds so reveal
         // measurements can be inspected directly in WKWebView rather than
