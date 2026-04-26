@@ -1996,6 +1996,13 @@ struct ToasttyApp: App {
                     placement: placement
                 )
             },
+            showScratchpadForCurrentSessionAction: { preferredWindowID in
+                store.showScratchpadForCurrentSession(
+                    preferredWindowID: preferredWindowID,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+                )
+            },
             processWatchCommandController: processWatchCommandController
         )
         let commandPaletteUsageTracker = CommandPaletteUsageTracker(runtimePaths: runtimePaths)

@@ -28,6 +28,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case openLocalFile
     case openLocalFileInTab
     case openLocalFileInSplit
+    case showScratchpadForCurrentSession
     case toggleSidebar
     case toggleFocusedPanelMode
     case watchRunningCommand
@@ -96,6 +97,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "local-document.open-tab"
         case .openLocalFileInSplit:
             return "local-document.open-split"
+        case .showScratchpadForCurrentSession:
+            return "scratchpad.show-current-session"
         case .toggleSidebar:
             return "window.toggle-sidebar"
         case .toggleFocusedPanelMode:
@@ -171,6 +174,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Open Local File in Tab"
         case .openLocalFileInSplit:
             return "Open Local File in Split"
+        case .showScratchpadForCurrentSession:
+            return "Show Scratchpad For Current Session"
         case .toggleSidebar:
             return Self.showSidebarTitle
         case .toggleFocusedPanelMode:
@@ -245,6 +250,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .openLocalFileInTab:
             return nil
         case .openLocalFileInSplit:
+            return nil
+        case .showScratchpadForCurrentSession:
             return nil
         case .toggleSidebar:
             return ToasttyKeyboardShortcuts.toggleSidebar
@@ -328,6 +335,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["open", "local", "file", "document", "tab", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
         case .openLocalFileInSplit:
             return ["open", "local", "file", "document", "split", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
+        case .showScratchpadForCurrentSession:
+            return ["scratchpad", "show", "current", "session", "agent", "visual"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
         case .toggleFocusedPanelMode:

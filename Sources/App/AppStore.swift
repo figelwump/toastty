@@ -130,6 +130,63 @@ enum LocalDocumentPanelOpenOutcome: Equatable {
     }
 }
 
+struct ScratchpadPanelSetContentRequest: Equatable, Sendable {
+    var sessionID: String
+    var title: String?
+    var content: String
+    var expectedRevision: Int?
+
+    init(
+        sessionID: String,
+        title: String? = nil,
+        content: String,
+        expectedRevision: Int? = nil
+    ) {
+        self.sessionID = sessionID
+        self.title = WebPanelState.normalizedTitle(title)
+        self.content = content
+        self.expectedRevision = expectedRevision
+    }
+}
+
+struct ScratchpadPanelSetContentOutcome: Equatable, Sendable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+    let documentID: UUID
+    let revision: Int
+    let created: Bool
+}
+
+enum ScratchpadPanelError: LocalizedError, Equatable {
+    case missingSession(String)
+    case missingSourcePanel(UUID)
+    case sourcePanelIsNotTerminal(UUID)
+    case createPanelFailed
+    case updatePanelFailed(UUID)
+    case missingScratchpadState(UUID)
+    case missingDocument(UUID)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingSession(let sessionID):
+            return "active session does not exist: \(sessionID)"
+        case .missingSourcePanel(let panelID):
+            return "source terminal panel does not exist: \(panelID.uuidString)"
+        case .sourcePanelIsNotTerminal(let panelID):
+            return "source panel is not a terminal panel: \(panelID.uuidString)"
+        case .createPanelFailed:
+            return "scratchpad panel could not be created"
+        case .updatePanelFailed(let panelID):
+            return "scratchpad panel could not be updated: \(panelID.uuidString)"
+        case .missingScratchpadState(let panelID):
+            return "scratchpad panel has no scratchpad state: \(panelID.uuidString)"
+        case .missingDocument(let documentID):
+            return "scratchpad document is missing: \(documentID.uuidString)"
+        }
+    }
+}
+
 struct FocusedBrowserPanelCommandSelection: Equatable {
     let windowID: UUID
     let workspaceID: UUID
@@ -599,6 +656,202 @@ final class AppStore: ObservableObject {
         return createLocalDocumentPanelOutcome(
             workspaceID: selection.workspace.id,
             request: request
+        )
+    }
+
+    func setScratchpadContentForSession(
+        request: ScratchpadPanelSetContentRequest,
+        sessionRuntimeStore: SessionRuntimeStore,
+        documentStore: ScratchpadDocumentStore
+    ) throws -> ScratchpadPanelSetContentOutcome {
+        guard let session = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: request.sessionID) else {
+            throw ScratchpadPanelError.missingSession(request.sessionID)
+        }
+
+        let sourcePanelID = session.panelID
+        guard let sourceSelection = state.workspaceSelection(containingPanelID: sourcePanelID) else {
+            throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
+        }
+        guard case .terminal = sourceSelection.workspace.panelState(for: sourcePanelID) else {
+            throw ScratchpadPanelError.sourcePanelIsNotTerminal(sourcePanelID)
+        }
+
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: session.sessionID,
+            agent: session.agent,
+            sourcePanelID: sourcePanelID,
+            sourceWorkspaceID: sourceSelection.workspaceID,
+            repoRoot: session.repoRoot,
+            cwd: session.cwd,
+            displayTitle: session.displayTitleOverride,
+            startedAt: session.startedAt
+        )
+
+        if let existing = linkedScratchpadPanel(sessionID: session.sessionID) {
+            guard let scratchpad = existing.webState.scratchpad else {
+                throw ScratchpadPanelError.missingScratchpadState(existing.panelID)
+            }
+            let document = try documentStore.replaceContent(
+                documentID: scratchpad.documentID,
+                title: request.title,
+                content: request.content,
+                expectedRevision: request.expectedRevision,
+                sessionLink: sessionLink
+            )
+            let nextScratchpad = ScratchpadState(
+                documentID: document.documentID,
+                sessionLink: sessionLink,
+                revision: document.revision
+            )
+            guard send(
+                .updateScratchpadPanelState(
+                    panelID: existing.panelID,
+                    scratchpad: nextScratchpad,
+                    title: request.title
+                )
+            ) else {
+                throw ScratchpadPanelError.updatePanelFailed(existing.panelID)
+            }
+            markScratchpadUpdatedIfUnfocused(
+                workspaceID: existing.workspaceID,
+                panelID: existing.panelID
+            )
+            return ScratchpadPanelSetContentOutcome(
+                windowID: existing.windowID,
+                workspaceID: existing.workspaceID,
+                panelID: existing.panelID,
+                documentID: document.documentID,
+                revision: document.revision,
+                created: false
+            )
+        }
+
+        if let expectedRevision = request.expectedRevision,
+           expectedRevision != 0 {
+            throw ScratchpadDocumentStoreError.staleRevision(
+                expectedRevision: expectedRevision,
+                currentRevision: 0
+            )
+        }
+
+        let document = try documentStore.createDocument(
+            title: request.title,
+            content: request.content,
+            sessionLink: sessionLink
+        )
+        let scratchpad = ScratchpadState(
+            documentID: document.documentID,
+            sessionLink: sessionLink,
+            revision: document.revision
+        )
+
+        guard focusPanel(containing: sourcePanelID) else {
+            throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
+        }
+        guard let focusedSourceSelection = state.workspaceSelection(containingPanelID: sourcePanelID) else {
+            throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
+        }
+
+        let previousPanelIDs = Set(focusedSourceSelection.workspace.panels.keys)
+        guard send(
+            .createWebPanel(
+                workspaceID: focusedSourceSelection.workspaceID,
+                panel: WebPanelState(
+                    definition: .scratchpad,
+                    title: document.title,
+                    scratchpad: scratchpad
+                ),
+                placement: .rootRight
+            )
+        ) else {
+            throw ScratchpadPanelError.createPanelFailed
+        }
+
+        guard let createdSelection = state.workspaceSelection(containingWorkspaceID: focusedSourceSelection.workspaceID),
+              let panelID = createdScratchpadPanelID(
+                  in: createdSelection.workspace,
+                  previousPanelIDs: previousPanelIDs
+              ) else {
+            throw ScratchpadPanelError.createPanelFailed
+        }
+
+        _ = focusPanel(containing: sourcePanelID)
+        markScratchpadUpdatedIfUnfocused(
+            workspaceID: createdSelection.workspaceID,
+            panelID: panelID
+        )
+
+        return ScratchpadPanelSetContentOutcome(
+            windowID: createdSelection.windowID,
+            workspaceID: createdSelection.workspaceID,
+            panelID: panelID,
+            documentID: document.documentID,
+            revision: document.revision,
+            created: true
+        )
+    }
+
+    @discardableResult
+    func showScratchpadForCurrentSession(
+        preferredWindowID: UUID?,
+        sessionRuntimeStore: SessionRuntimeStore,
+        documentStore: ScratchpadDocumentStore
+    ) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let focusedPanelID = selection.workspace.focusedPanelID,
+              let session = sessionRuntimeStore.sessionRegistry.activeSession(for: focusedPanelID),
+              case .terminal = selection.workspace.panelState(for: focusedPanelID) else {
+            return false
+        }
+
+        if let existing = linkedScratchpadPanel(sessionID: session.sessionID) {
+            return focusPanel(containing: existing.panelID)
+        }
+
+        if let selectedTabID = selection.workspace.resolvedSelectedTabID,
+           let selectedTab = selection.workspace.tab(id: selectedTabID),
+           let closedRecord = selectedTab.recentlyClosedPanels.last,
+           case .web(let webState) = closedRecord.panelState,
+           webState.definition == .scratchpad,
+           webState.scratchpad?.sessionLink?.sessionID == session.sessionID {
+            return send(.reopenLastClosedPanel(workspaceID: selection.workspace.id))
+        }
+
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: session.sessionID,
+            agent: session.agent,
+            sourcePanelID: focusedPanelID,
+            sourceWorkspaceID: selection.workspace.id,
+            repoRoot: session.repoRoot,
+            cwd: session.cwd,
+            displayTitle: session.displayTitleOverride,
+            startedAt: session.startedAt
+        )
+        let document: ScratchpadDocument
+        do {
+            document = try documentStore.createDocument(
+                title: nil,
+                content: "",
+                sessionLink: sessionLink
+            )
+        } catch {
+            return false
+        }
+
+        return send(
+            .createWebPanel(
+                workspaceID: selection.workspace.id,
+                panel: WebPanelState(
+                    definition: .scratchpad,
+                    title: document.title,
+                    scratchpad: ScratchpadState(
+                        documentID: document.documentID,
+                        sessionLink: sessionLink,
+                        revision: document.revision
+                    )
+                ),
+                placement: .rootRight
+            )
         )
     }
 
@@ -1344,6 +1597,58 @@ final class AppStore: ObservableObject {
             }
             return webState.definition == .localDocument
         }
+    }
+
+    private func createdScratchpadPanelID(
+        in workspace: WorkspaceState,
+        previousPanelIDs: Set<UUID>
+    ) -> UUID? {
+        let createdPanelIDs = Set(workspace.panels.keys).subtracting(previousPanelIDs)
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           createdPanelIDs.contains(focusedPanelID),
+           case .web(let webState)? = workspace.panels[focusedPanelID],
+           webState.definition == .scratchpad {
+            return focusedPanelID
+        }
+
+        return createdPanelIDs.first { panelID in
+            guard case .web(let webState)? = workspace.panels[panelID] else {
+                return false
+            }
+            return webState.definition == .scratchpad
+        }
+    }
+
+    private func linkedScratchpadPanel(
+        sessionID: String
+    ) -> (windowID: UUID, workspaceID: UUID, panelID: UUID, webState: WebPanelState)? {
+        for window in state.windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = state.workspacesByID[workspaceID] else {
+                    continue
+                }
+                for tab in workspace.orderedTabs {
+                    for (panelID, panelState) in tab.panels {
+                        guard case .web(let webState) = panelState,
+                              webState.definition == .scratchpad,
+                              webState.scratchpad?.sessionLink?.sessionID == sessionID else {
+                            continue
+                        }
+                        return (window.id, workspaceID, panelID, webState)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func markScratchpadUpdatedIfUnfocused(workspaceID: UUID, panelID: UUID) {
+        guard let workspace = state.workspacesByID[workspaceID],
+              workspace.focusedPanelID != panelID else {
+            return
+        }
+        _ = send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
     }
 
     private func requestSidebarFlashForExhaustedUnreadOrActiveJump(

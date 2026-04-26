@@ -114,6 +114,53 @@ extension LocalDocumentState {
     }
 }
 
+public struct ScratchpadSessionLink: Codable, Equatable, Sendable {
+    public var sessionID: String
+    public var agent: AgentKind
+    public var sourcePanelID: UUID
+    public var sourceWorkspaceID: UUID
+    public var repoRoot: String?
+    public var cwd: String?
+    public var displayTitle: String?
+    public var startedAt: Date?
+
+    public init(
+        sessionID: String,
+        agent: AgentKind,
+        sourcePanelID: UUID,
+        sourceWorkspaceID: UUID,
+        repoRoot: String? = nil,
+        cwd: String? = nil,
+        displayTitle: String? = nil,
+        startedAt: Date? = nil
+    ) {
+        self.sessionID = sessionID
+        self.agent = agent
+        self.sourcePanelID = sourcePanelID
+        self.sourceWorkspaceID = sourceWorkspaceID
+        self.repoRoot = normalizedWebPanelValue(repoRoot)
+        self.cwd = normalizedWebPanelValue(cwd)
+        self.displayTitle = normalizedWebPanelValue(displayTitle)
+        self.startedAt = startedAt
+    }
+}
+
+public struct ScratchpadState: Codable, Equatable, Sendable {
+    public var documentID: UUID
+    public var sessionLink: ScratchpadSessionLink?
+    public var revision: Int
+
+    public init(
+        documentID: UUID,
+        sessionLink: ScratchpadSessionLink? = nil,
+        revision: Int
+    ) {
+        self.documentID = documentID
+        self.sessionLink = sessionLink
+        self.revision = max(revision, 0)
+    }
+}
+
 public struct WebPanelState: Codable, Equatable, Sendable {
     public static let defaultBrowserPageZoom: Double = 1
     public static let minBrowserPageZoom: Double = 0.5
@@ -141,6 +188,7 @@ public struct WebPanelState: Codable, Equatable, Sendable {
     public var initialURL: String?
     public var currentURL: String?
     public var localDocument: LocalDocumentState?
+    public var scratchpad: ScratchpadState?
     public var browserPageZoom: Double?
 
     public init(
@@ -150,6 +198,7 @@ public struct WebPanelState: Codable, Equatable, Sendable {
         currentURL: String? = nil,
         filePath: String? = nil,
         localDocument: LocalDocumentState? = nil,
+        scratchpad: ScratchpadState? = nil,
         browserPageZoom: Double? = nil
     ) {
         self.definition = definition
@@ -163,6 +212,10 @@ public struct WebPanelState: Codable, Equatable, Sendable {
             definition: definition,
             filePath: filePath,
             localDocument: localDocument
+        )
+        self.scratchpad = Self.resolvedScratchpadState(
+            definition: definition,
+            scratchpad: scratchpad
         )
         self.browserPageZoom = Self.resolvedBrowserPageZoom(
             definition: definition,
@@ -279,6 +332,18 @@ public struct WebPanelState: Codable, Equatable, Sendable {
         return LocalDocumentState(filePath: normalizedLegacyFilePath)
     }
 
+    private static func resolvedScratchpadState(
+        definition: WebPanelDefinition,
+        scratchpad: ScratchpadState?
+    ) -> ScratchpadState? {
+        guard definition == .scratchpad else {
+            assert(scratchpad == nil, "Only scratchpad panels may carry scratchpad state.")
+            return nil
+        }
+
+        return scratchpad
+    }
+
     private static func resolvedBrowserPageZoom(
         definition: WebPanelDefinition,
         browserPageZoom: Double?
@@ -299,6 +364,7 @@ extension WebPanelState {
         case initialURL
         case currentURL
         case localDocument
+        case scratchpad
         case filePath
         case browserPageZoom
     }
@@ -318,6 +384,7 @@ extension WebPanelState {
                 definition: definition,
                 filePath: legacyFilePath
             ),
+            scratchpad: try container.decodeIfPresent(ScratchpadState.self, forKey: .scratchpad),
             browserPageZoom: try container.decodeIfPresent(Double.self, forKey: .browserPageZoom)
         )
     }
@@ -329,6 +396,7 @@ extension WebPanelState {
         try container.encodeIfPresent(initialURL, forKey: .initialURL)
         try container.encodeIfPresent(currentURL, forKey: .currentURL)
         try container.encodeIfPresent(localDocument, forKey: .localDocument)
+        try container.encodeIfPresent(scratchpad, forKey: .scratchpad)
         try container.encodeIfPresent(browserPageZoom, forKey: .browserPageZoom)
     }
 
