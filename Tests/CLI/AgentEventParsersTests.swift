@@ -314,6 +314,28 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func piAgentStartUsesProvidedDetailWhenAvailable() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"agent_start","detail":"Summarize the issue"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Summarize the issue"
+            )
+        ])
+    }
+
+    @Test
     func piBeforeAgentStartMapsPromptToWorkingStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .piExtension,
@@ -404,6 +426,28 @@ struct AgentEventParsersTests {
                 kind: .working,
                 summary: "Working",
                 detail: "Bash failed"
+            )
+        ])
+    }
+
+    @Test
+    func piAgentEndMapsAssistantSummaryToReadyStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"agent_end","summary":"Updated the Pi sidebar status behavior."}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Updated the Pi sidebar status behavior."
             )
         ])
     }

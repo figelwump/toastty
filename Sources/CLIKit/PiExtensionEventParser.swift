@@ -53,7 +53,7 @@ enum PiExtensionEventParser {
                     panelID: panelID,
                     kind: .working,
                     summary: "Working",
-                    detail: "Pi is responding"
+                    detail: normalizedString(object["detail"], limit: 160) ?? "Pi is responding"
                 )
             )
 
@@ -90,7 +90,7 @@ enum PiExtensionEventParser {
                     panelID: panelID,
                     kind: .ready,
                     summary: "Ready",
-                    detail: nil
+                    detail: normalizedString(object["summary"], limit: 160)
                 )
             )
 

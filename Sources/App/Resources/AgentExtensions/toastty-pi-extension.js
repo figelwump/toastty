@@ -138,6 +138,47 @@ function uniqueStrings(values) {
   return result;
 }
 
+function collectAssistantText(value, output = [], depth = 0) {
+  if (depth > 8 || value == null) return output;
+  if (typeof value === "string") {
+    output.push(value);
+    return output;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectAssistantText(entry, output, depth + 1);
+    return output;
+  }
+  if (typeof value !== "object") return output;
+
+  if (value.type === "text") {
+    collectAssistantText(value.text, output, depth + 1);
+    return output;
+  }
+  if (value.type === undefined && typeof value.text === "string") {
+    collectAssistantText(value.text, output, depth + 1);
+    return output;
+  }
+  if (value.type === undefined && value.content !== undefined) {
+    collectAssistantText(value.content, output, depth + 1);
+  }
+  return output;
+}
+
+function assistantSummaryFromMessage(message) {
+  if (!message || message.role !== "assistant") return undefined;
+  const chunks = collectAssistantText(message.content !== undefined ? message.content : message);
+  return cleanString(chunks.join(" "), 160);
+}
+
+function latestAssistantSummary(messages) {
+  if (!Array.isArray(messages)) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const summary = assistantSummaryFromMessage(messages[index]);
+    if (summary) return summary;
+  }
+  return undefined;
+}
+
 module.exports = function toasttyPiExtension(pi) {
   const sessionID = process.env.TOASTTY_SESSION_ID;
   const cliPath = process.env.TOASTTY_CLI_PATH;
@@ -146,6 +187,8 @@ module.exports = function toasttyPiExtension(pi) {
 
   const pendingIngestLines = [];
   let activeIngest = false;
+  let currentPrompt;
+  let lastAssistantSummary;
 
   function cliEnvironment() {
     const env = {
@@ -209,11 +252,19 @@ module.exports = function toasttyPiExtension(pi) {
   });
 
   pi.on("before_agent_start", (event) => {
-    emit("before_agent_start", { prompt: cleanString(event && event.prompt, 160) });
+    currentPrompt = cleanString(event && event.prompt, 160);
+    lastAssistantSummary = undefined;
+    emit("before_agent_start", { prompt: currentPrompt });
   });
 
   pi.on("agent_start", () => {
+    if (currentPrompt) return;
     emit("agent_start");
+  });
+
+  pi.on("message_end", (event) => {
+    const summary = assistantSummaryFromMessage(event && event.message);
+    if (summary) lastAssistantSummary = summary;
   });
 
   pi.on("tool_call", (event) => {
@@ -238,11 +289,16 @@ module.exports = function toasttyPiExtension(pi) {
     });
   });
 
-  pi.on("agent_end", () => {
-    emit("agent_end");
+  pi.on("agent_end", (event) => {
+    const summary = latestAssistantSummary(event && event.messages) || lastAssistantSummary;
+    emit("agent_end", { summary });
+    currentPrompt = undefined;
+    lastAssistantSummary = undefined;
   });
 
   pi.on("session_shutdown", (event) => {
+    currentPrompt = undefined;
+    lastAssistantSummary = undefined;
     emit("session_shutdown", { reason: cleanString(event && event.reason) });
   });
 };
