@@ -326,7 +326,7 @@ struct RightAuxPanelTabStrip: View {
     nonisolated private static let addButtonSize: CGFloat = 22
 
     nonisolated static func showsTabStrip(tabCount: Int) -> Bool {
-        tabCount > 0
+        tabCount > 1
     }
 
     nonisolated static func resolvedTabWidth(availableWidth: CGFloat, tabCount: Int) -> CGFloat {

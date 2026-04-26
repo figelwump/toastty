@@ -2,9 +2,9 @@ import XCTest
 @testable import ToasttyApp
 
 final class RightAuxPanelViewTests: XCTestCase {
-    func testTabStripShowsWhenAnyRightPanelTabExists() {
+    func testTabStripShowsOnlyWhenMultipleRightPanelTabsExist() {
         XCTAssertFalse(RightAuxPanelTabStrip.showsTabStrip(tabCount: 0))
-        XCTAssertTrue(RightAuxPanelTabStrip.showsTabStrip(tabCount: 1))
+        XCTAssertFalse(RightAuxPanelTabStrip.showsTabStrip(tabCount: 1))
         XCTAssertTrue(RightAuxPanelTabStrip.showsTabStrip(tabCount: 2))
     }
 
