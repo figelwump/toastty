@@ -2,11 +2,6 @@ import XCTest
 @testable import ToasttyApp
 
 final class RightAuxPanelViewTests: XCTestCase {
-    func testResizeHandleUsesDedicatedHoverTargetWiderThanVisualLine() {
-        XCTAssertEqual(RightAuxPanelView.resizeHandleHitWidth, 10)
-        XCTAssertGreaterThan(RightAuxPanelView.resizeHandleHitWidth, 1)
-    }
-
     func testTabStripShowsWhenAnyRightPanelTabExists() {
         XCTAssertFalse(RightAuxPanelTabStrip.showsTabStrip(tabCount: 0))
         XCTAssertTrue(RightAuxPanelTabStrip.showsTabStrip(tabCount: 1))

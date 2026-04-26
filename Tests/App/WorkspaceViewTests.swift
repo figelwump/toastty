@@ -215,6 +215,74 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testRightAuxPanelResizeHandleOnlyAppearsForVisibleSelectedTabSurface() {
+        XCTAssertTrue(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: false,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: false,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: false,
+                focusedPanelModeActive: false,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: true,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false,
+                renderedWidth: 0
+            )
+        )
+    }
+
+    func testRightAuxPanelResizeHandleStraddlesPrimaryPanelBoundary() {
+        let frame = WorkspaceView.rightAuxPanelResizeHandleFrame(
+            primaryContentWidth: 840,
+            height: 600
+        )
+
+        XCTAssertEqual(WorkspaceView.rightAuxPanelResizeHandleHitWidth, 10)
+        XCTAssertEqual(frame, CGRect(x: 835, y: 0, width: 10, height: 600))
+        XCTAssertEqual(frame.midX, 840)
+    }
+
     func testSingleTabWorkspaceStillInstallsTabContextMenu() {
         XCTAssertFalse(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 0))
         XCTAssertTrue(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 1))

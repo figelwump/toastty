@@ -3,10 +3,6 @@ import CoreState
 import SwiftUI
 
 struct RightAuxPanelView: View {
-    nonisolated static let resizeHandleHitWidth: CGFloat = 10
-    private nonisolated static let resizeHandleHairlineWidth: CGFloat = 1
-    private nonisolated static let resizeHandleHighlightWidth: CGFloat = 3
-
     let windowID: UUID
     let workspace: WorkspaceState
     let workspaceTab: WorkspaceTabState
@@ -19,157 +15,31 @@ struct RightAuxPanelView: View {
     let focusedPanelCommandController: FocusedPanelCommandController
     let openLocalFileSearch: @MainActor (UUID) -> Void
     let openBrowser: @MainActor (UUID) -> Void
-    let effectiveContentWidth: CGFloat
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
     let appIsActive: Bool
 
-    @State private var resizeStartWidth: Double?
-    @State private var resizeHandleHovered = false
-    @State private var resizeHandleDragging = false
-
     var body: some View {
-        HStack(spacing: 0) {
-            resizeHandle
-
-            VStack(alignment: .leading, spacing: 0) {
-                if RightAuxPanelTabStrip.showsTabStrip(tabCount: workspaceTab.rightAuxPanel.tabIDs.count) {
-                    RightAuxPanelTabStrip(
-                        workspaceID: workspace.id,
-                        tabs: workspaceTab.rightAuxPanel.orderedTabs,
-                        activeTabID: workspaceTab.rightAuxPanel.activeTabID,
-                        appIsActive: appIsActive,
-                        store: store,
-                        focusedPanelCommandController: focusedPanelCommandController,
-                        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                        openLocalFileSearch: { openLocalFileSearch(windowID) },
-                        openBrowser: { openBrowser(windowID) }
-                    )
-                }
-
-                panelStack
+        VStack(alignment: .leading, spacing: 0) {
+            if RightAuxPanelTabStrip.showsTabStrip(tabCount: workspaceTab.rightAuxPanel.tabIDs.count) {
+                RightAuxPanelTabStrip(
+                    workspaceID: workspace.id,
+                    tabs: workspaceTab.rightAuxPanel.orderedTabs,
+                    activeTabID: workspaceTab.rightAuxPanel.activeTabID,
+                    appIsActive: appIsActive,
+                    store: store,
+                    focusedPanelCommandController: focusedPanelCommandController,
+                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                    openLocalFileSearch: { openLocalFileSearch(windowID) },
+                    openBrowser: { openBrowser(windowID) }
+                )
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            panelStack
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ToastyTheme.surfaceBackground)
         .accessibilityIdentifier("right-panel.\(workspace.id.uuidString).\(workspaceTab.id.uuidString)")
-        .onChange(of: acceptsPanelInteraction) { _, isActive in
-            if isActive == false {
-                cancelResizeHandleInteraction()
-            }
-        }
-    }
-
-    private var resizeHandle: some View {
-        ZStack(alignment: .leading) {
-            Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(width: Self.resizeHandleHairlineWidth)
-                .allowsHitTesting(false)
-
-            Rectangle()
-                .fill(resizeHandleHighlightColor)
-                .frame(width: Self.resizeHandleHighlightWidth)
-                .animation(.easeOut(duration: 0.12), value: resizeHandleHighlighted)
-                .allowsHitTesting(false)
-
-            PointerInteractionRegion(
-                name: "right-panel-resize-handle",
-                metadata: [
-                    "workspaceID": workspace.id.uuidString,
-                    "workspaceTabID": workspaceTab.id.uuidString,
-                    "isWorkspaceSelected": "\(isWorkspaceSelected)",
-                    "isWorkspaceTabSelected": "\(isWorkspaceTabSelected)",
-                    "rightAuxPanelVisible": "\(workspaceTab.rightAuxPanel.isVisible)",
-                    "acceptsPanelInteraction": "\(acceptsPanelInteraction)",
-                    "effectiveContentWidth": String(format: "%.1f", effectiveContentWidth),
-                ],
-                cursor: .resizeLeftRight,
-                onBegan: { _ in
-                    guard acceptsPanelInteraction else { return }
-                    resizeStartWidth = Double(effectiveContentWidth)
-                    updateResizeHandleInteraction(dragging: true)
-                },
-                onChanged: { value in
-                    guard acceptsPanelInteraction else { return }
-                    let startingWidth = resizeStartWidth ?? Double(effectiveContentWidth)
-                    resizeStartWidth = startingWidth
-                    let nextWidth = startingWidth - Double(value.translation.width)
-                    _ = store.send(.setRightAuxPanelWidth(workspaceID: workspace.id, width: nextWidth))
-                },
-                onEnded: { _ in
-                    resizeStartWidth = nil
-                    updateResizeHandleInteraction(dragging: false)
-                },
-                onHoverChanged: { hovering in
-                    updateResizeHandleInteraction(hovered: hovering)
-                }
-            )
-            .frame(width: Self.resizeHandleHitWidth)
-            .frame(maxHeight: .infinity)
-            .accessibilityLabel("Resize Right Panel")
-            .accessibilityIdentifier("right-panel.resize")
-            .onDisappear {
-                releaseResizeHandleInteraction()
-            }
-        }
-        .frame(width: Self.resizeHandleHitWidth)
-        .frame(maxHeight: .infinity)
-    }
-
-    private var resizeHandleHighlighted: Bool {
-        resizeHandleHovered || resizeHandleDragging
-    }
-
-    private var acceptsPanelInteraction: Bool {
-        isWorkspaceSelected && isWorkspaceTabSelected && workspaceTab.rightAuxPanel.isVisible
-    }
-
-    private var resizeHandleHighlightColor: Color {
-        resizeHandleHighlighted
-            ? ToastyTheme.accent.opacity(appIsActive ? 0.9 : 0.55)
-            : Color.clear
-    }
-
-    private func updateResizeHandleInteraction(
-        hovered: Bool? = nil,
-        dragging: Bool? = nil
-    ) {
-        let nextHovered = hovered ?? resizeHandleHovered
-        let nextDragging = dragging ?? resizeHandleDragging
-        if nextHovered != resizeHandleHovered || nextDragging != resizeHandleDragging {
-            ToasttyLog.info(
-                "right panel resize handle interaction changed",
-                category: .input,
-                metadata: [
-                    "workspaceID": workspace.id.uuidString,
-                    "workspaceTabID": workspaceTab.id.uuidString,
-                    "hovered": "\(nextHovered)",
-                    "dragging": "\(nextDragging)",
-                    "acceptsPanelInteraction": "\(acceptsPanelInteraction)",
-                    "appIsActive": "\(appIsActive)",
-                    "effectiveContentWidth": String(format: "%.1f", effectiveContentWidth),
-                ]
-            )
-        }
-        resizeHandleHovered = nextHovered
-        resizeHandleDragging = nextDragging
-    }
-
-    private func cancelResizeHandleInteraction() {
-        resizeStartWidth = nil
-        resizeHandleHovered = false
-        resizeHandleDragging = false
-    }
-
-    private func releaseResizeHandleInteraction() {
-        guard resizeHandleHovered || resizeHandleDragging else { return }
-
-        DispatchQueue.main.async {
-            resizeHandleHovered = false
-            resizeHandleDragging = false
-        }
     }
 
     private var panelStack: some View {

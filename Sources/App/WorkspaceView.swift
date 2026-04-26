@@ -118,6 +118,9 @@ struct WorkspaceView: View {
     private static let workspaceTabStripSpacing: CGFloat = -1.5
     private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
+    nonisolated static let rightAuxPanelResizeHandleHitWidth: CGFloat = 10
+    fileprivate nonisolated static let rightAuxPanelResizeHandleHairlineWidth: CGFloat = 1
+    fileprivate nonisolated static let rightAuxPanelResizeHandleHighlightWidth: CGFloat = 3
     private nonisolated static let workspaceTabDragActivationDistance: CGFloat = 4
 
     nonisolated static func mountedContentOpacity(isVisible: Bool) -> Double {
@@ -896,6 +899,32 @@ struct WorkspaceView: View {
         isWorkspaceSelected && isWorkspaceTabSelected
     }
 
+    static func rightAuxPanelResizeHandleVisible(
+        isWorkspaceSelected: Bool,
+        isWorkspaceTabSelected: Bool,
+        rightAuxPanelVisible: Bool,
+        focusedPanelModeActive: Bool,
+        renderedWidth: CGFloat
+    ) -> Bool {
+        isWorkspaceSelected &&
+            isWorkspaceTabSelected &&
+            rightAuxPanelVisible &&
+            focusedPanelModeActive == false &&
+            renderedWidth > 0
+    }
+
+    static func rightAuxPanelResizeHandleFrame(
+        primaryContentWidth: CGFloat,
+        height: CGFloat
+    ) -> CGRect {
+        CGRect(
+            x: primaryContentWidth - (Self.rightAuxPanelResizeHandleHitWidth / 2),
+            y: 0,
+            width: Self.rightAuxPanelResizeHandleHitWidth,
+            height: height
+        )
+    }
+
     private func openRightPanelFileSearch(originWindowID: UUID) {
         presentCommandPalette(originWindowID, "@")
     }
@@ -974,30 +1003,55 @@ struct WorkspaceView: View {
                 isWorkspaceTabSelected: isTabSelected
             )
 
-            HStack(spacing: 0) {
-                workspaceTabPrimarySurface(
-                    workspace: workspace,
-                    tab: tab,
-                    isWorkspaceSelected: isWorkspaceSelected,
-                    isTabSelected: isTabSelected,
-                    renderedLayout: renderedLayout,
-                    width: primaryContentWidth,
-                    height: geometry.size.height,
-                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
-                    panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
-                )
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    workspaceTabPrimarySurface(
+                        workspace: workspace,
+                        tab: tab,
+                        isWorkspaceSelected: isWorkspaceSelected,
+                        isTabSelected: isTabSelected,
+                        renderedLayout: renderedLayout,
+                        width: primaryContentWidth,
+                        height: geometry.size.height,
+                        terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
+                        panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
+                    )
 
-                rightAuxPanelSurface(
-                    workspace: workspace,
-                    tab: tab,
+                    rightAuxPanelSurface(
+                        workspace: workspace,
+                        tab: tab,
+                        isWorkspaceSelected: isWorkspaceSelected,
+                        isTabSelected: isTabSelected,
+                        targetWidth: rightPanelTargetWidth,
+                        renderedWidth: rightPanelRenderedWidth
+                    )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
+
+                if Self.rightAuxPanelResizeHandleVisible(
                     isWorkspaceSelected: isWorkspaceSelected,
-                    isTabSelected: isTabSelected,
-                    targetWidth: rightPanelTargetWidth,
+                    isWorkspaceTabSelected: isTabSelected,
+                    rightAuxPanelVisible: tab.rightAuxPanel.isVisible,
+                    focusedPanelModeActive: tab.focusedPanelModeActive,
                     renderedWidth: rightPanelRenderedWidth
-                )
+                ) {
+                    RightAuxPanelResizeHandle(
+                        workspaceID: workspace.id,
+                        workspaceTabID: tab.id,
+                        targetWidth: rightPanelTargetWidth,
+                        appIsActive: appIsActive,
+                        store: store
+                    )
+                    .frame(
+                        width: Self.rightAuxPanelResizeHandleHitWidth,
+                        height: geometry.size.height,
+                        alignment: .topLeading
+                    )
+                    .position(x: primaryContentWidth, y: geometry.size.height / 2)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .clipped()
             .transaction { transaction in
                 if animatesRightPanelVisibility == false {
                     transaction.animation = nil
@@ -1127,7 +1181,6 @@ struct WorkspaceView: View {
             focusedPanelCommandController: focusedPanelCommandController,
             openLocalFileSearch: openRightPanelFileSearch,
             openBrowser: openRightPanelBrowser,
-            effectiveContentWidth: targetWidth,
             windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
             windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
             appIsActive: appIsActive
@@ -2317,6 +2370,110 @@ struct WorkspaceView: View {
             Text(title)
         }
         .buttonStyle(TopBarFlashTextButtonStyle())
+    }
+}
+
+private struct RightAuxPanelResizeHandle: View {
+    let workspaceID: UUID
+    let workspaceTabID: UUID
+    let targetWidth: CGFloat
+    let appIsActive: Bool
+    @ObservedObject var store: AppStore
+
+    @State private var resizeStartWidth: Double?
+    @State private var hovered = false
+    @State private var dragging = false
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(width: WorkspaceView.rightAuxPanelResizeHandleHairlineWidth)
+                .allowsHitTesting(false)
+
+            Rectangle()
+                .fill(highlightColor)
+                .frame(width: WorkspaceView.rightAuxPanelResizeHandleHighlightWidth)
+                .animation(.easeOut(duration: 0.12), value: highlighted)
+                .allowsHitTesting(false)
+
+            PointerInteractionRegion(
+                name: "right-panel-resize-handle",
+                metadata: [
+                    "workspaceID": workspaceID.uuidString,
+                    "workspaceTabID": workspaceTabID.uuidString,
+                    "source": "workspace-divider-overlay",
+                    "targetWidth": String(format: "%.1f", targetWidth),
+                ],
+                cursor: .resizeLeftRight,
+                onBegan: { _ in
+                    resizeStartWidth = Double(targetWidth)
+                    updateInteraction(dragging: true)
+                },
+                onChanged: { value in
+                    guard let startingWidth = resizeStartWidth else { return }
+                    let nextWidth = startingWidth - Double(value.translation.width)
+                    _ = store.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: nextWidth))
+                },
+                onEnded: { _ in
+                    resizeStartWidth = nil
+                    updateInteraction(dragging: false)
+                },
+                onHoverChanged: { hovering in
+                    updateInteraction(hovered: hovering)
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityLabel("Resize Right Panel")
+            .accessibilityIdentifier("right-panel.resize")
+            .onDisappear {
+                releaseInteraction()
+            }
+        }
+    }
+
+    private var highlighted: Bool {
+        hovered || dragging
+    }
+
+    private var highlightColor: Color {
+        highlighted
+            ? ToastyTheme.accent.opacity(appIsActive ? 0.9 : 0.55)
+            : Color.clear
+    }
+
+    private func updateInteraction(
+        hovered: Bool? = nil,
+        dragging: Bool? = nil
+    ) {
+        let nextHovered = hovered ?? self.hovered
+        let nextDragging = dragging ?? self.dragging
+        if nextHovered != self.hovered || nextDragging != self.dragging {
+            ToasttyLog.info(
+                "right panel resize handle interaction changed",
+                category: .input,
+                metadata: [
+                    "workspaceID": workspaceID.uuidString,
+                    "workspaceTabID": workspaceTabID.uuidString,
+                    "hovered": "\(nextHovered)",
+                    "dragging": "\(nextDragging)",
+                    "source": "workspace-divider-overlay",
+                    "appIsActive": "\(appIsActive)",
+                    "targetWidth": String(format: "%.1f", targetWidth),
+                ]
+            )
+        }
+        self.hovered = nextHovered
+        self.dragging = nextDragging
+    }
+
+    private func releaseInteraction() {
+        guard hovered || dragging else { return }
+
+        DispatchQueue.main.async {
+            hovered = false
+            dragging = false
+        }
     }
 }
 
