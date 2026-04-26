@@ -26,7 +26,7 @@ struct RightAuxPanelView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            resizeHandle
+            resizeHandleVisual
 
             VStack(alignment: .leading, spacing: 0) {
                 if RightAuxPanelTabStrip.showsTabStrip(tabCount: workspaceTab.rightAuxPanel.tabIDs.count) {
@@ -49,6 +49,14 @@ struct RightAuxPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ToastyTheme.surfaceBackground)
+        // Place the resize hit zone in an outer overlay so its NSView is a
+        // later sibling than the panel content's hosts (terminal/web panels).
+        // AppKit z-orders later siblings on top, which means cursorUpdate and
+        // hit testing land on this view first instead of being shadowed by
+        // the panel content's hosts where the 10pt hit zone overlaps them.
+        .overlay(alignment: .leading) {
+            resizeHitZone
+        }
         .accessibilityIdentifier("right-panel.\(workspace.id.uuidString).\(workspaceTab.id.uuidString)")
         .onChange(of: acceptsPanelInteraction) { _, isActive in
             if isActive == false {
@@ -57,7 +65,7 @@ struct RightAuxPanelView: View {
         }
     }
 
-    private var resizeHandle: some View {
+    private var resizeHandleVisual: some View {
         Rectangle()
             .fill(ToastyTheme.hairline)
             .frame(width: 1)
@@ -67,41 +75,45 @@ struct RightAuxPanelView: View {
                     .frame(width: 3)
                     .animation(.easeOut(duration: 0.12), value: resizeHandleHighlighted)
             }
-            .overlay {
-                PointerInteractionRegion(
-                    name: "right-panel-resize-handle",
-                    metadata: [
-                        "workspaceID": workspace.id.uuidString,
-                        "workspaceTabID": workspaceTab.id.uuidString,
-                    ],
-                    cursor: .resizeLeftRight,
-                    onBegan: { _ in
-                        guard acceptsPanelInteraction else { return }
-                        resizeStartWidth = Double(effectiveContentWidth)
-                        updateResizeHandleInteraction(dragging: true)
-                    },
-                    onChanged: { value in
-                        guard acceptsPanelInteraction else { return }
-                        let startingWidth = resizeStartWidth ?? Double(effectiveContentWidth)
-                        resizeStartWidth = startingWidth
-                        let nextWidth = startingWidth - Double(value.translation.width)
-                        _ = store.send(.setRightAuxPanelWidth(workspaceID: workspace.id, width: nextWidth))
-                    },
-                    onEnded: { _ in
-                        resizeStartWidth = nil
-                        updateResizeHandleInteraction(dragging: false)
-                    },
-                    onHoverChanged: { hovering in
-                        updateResizeHandleInteraction(hovered: hovering)
-                    }
-                )
-                    .frame(width: 10)
-                    .accessibilityLabel("Resize Right Panel")
-                    .accessibilityIdentifier("right-panel.resize")
+    }
+
+    private var resizeHitZone: some View {
+        PointerInteractionRegion(
+            name: "right-panel-resize-handle",
+            metadata: [
+                "workspaceID": workspace.id.uuidString,
+                "workspaceTabID": workspaceTab.id.uuidString,
+            ],
+            cursor: .resizeLeftRight,
+            onBegan: { _ in
+                guard acceptsPanelInteraction else { return }
+                resizeStartWidth = Double(effectiveContentWidth)
+                updateResizeHandleInteraction(dragging: true)
+            },
+            onChanged: { value in
+                guard acceptsPanelInteraction else { return }
+                let startingWidth = resizeStartWidth ?? Double(effectiveContentWidth)
+                resizeStartWidth = startingWidth
+                let nextWidth = startingWidth - Double(value.translation.width)
+                _ = store.send(.setRightAuxPanelWidth(workspaceID: workspace.id, width: nextWidth))
+            },
+            onEnded: { _ in
+                resizeStartWidth = nil
+                updateResizeHandleInteraction(dragging: false)
+            },
+            onHoverChanged: { hovering in
+                updateResizeHandleInteraction(hovered: hovering)
             }
-            .onDisappear {
-                releaseResizeHandleInteraction()
-            }
+        )
+        // 10pt-wide hit zone, shifted so it straddles the 1pt hairline at the
+        // panel's leading edge instead of sitting flush against it.
+        .frame(width: 10)
+        .offset(x: -5)
+        .accessibilityLabel("Resize Right Panel")
+        .accessibilityIdentifier("right-panel.resize")
+        .onDisappear {
+            releaseResizeHandleInteraction()
+        }
     }
 
     private var resizeHandleHighlighted: Bool {
