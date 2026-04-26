@@ -1624,6 +1624,7 @@ public struct AppReducer {
                 workspace.rightAuxPanel.tabsByID[existingTabID] = existingTab
                 workspace.rightAuxPanel.activeTabID = existingTabID
                 workspace.rightAuxPanel.isVisible = true
+                workspace.rightAuxPanel.focusActiveTab()
                 commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
                 return true
             }
@@ -1635,6 +1636,7 @@ public struct AppReducer {
                 panelState: .web(panel)
             )
             workspace.rightAuxPanel.appendTab(tab)
+            workspace.rightAuxPanel.focusActiveTab()
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 

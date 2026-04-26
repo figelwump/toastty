@@ -540,12 +540,13 @@ final class AppStore: ObservableObject {
             if request.resolvedPlacement == .rightPanel,
                let existingTabID = workspace.rightAuxPanelTabID(containingPanelID: existingPanelID) {
                 if workspace.rightAuxPanel.activeTabID != existingTabID ||
-                    workspace.rightAuxPanel.isVisible == false {
+                    workspace.rightAuxPanel.isVisible == false ||
+                    workspace.rightAuxPanel.focusedPanelID != existingPanelID {
                     guard send(
                         .selectRightAuxPanelTab(
                             workspaceID: workspaceID,
                             tabID: existingTabID,
-                            focus: false
+                            focus: true
                         )
                     ) else {
                         return nil

@@ -73,4 +73,72 @@ struct RightAuxPanelStateTests {
         #expect(panel.activeTabID == nil)
         #expect(panel.focusedPanelID == nil)
     }
+
+    @Test
+    func removingFocusedTabFocusesSuccessorTab() throws {
+        let firstTabID = UUID()
+        let firstPanelID = UUID()
+        let secondTabID = UUID()
+        let secondPanelID = UUID()
+        var panel = RightAuxPanelState(
+            isVisible: true,
+            activeTabID: firstTabID,
+            tabIDs: [firstTabID, secondTabID],
+            tabsByID: [
+                firstTabID: RightAuxPanelTabState(
+                    id: firstTabID,
+                    identity: .browserSession(firstPanelID),
+                    panelID: firstPanelID,
+                    panelState: .web(WebPanelState(definition: .browser))
+                ),
+                secondTabID: RightAuxPanelTabState(
+                    id: secondTabID,
+                    identity: .browserSession(secondPanelID),
+                    panelID: secondPanelID,
+                    panelState: .web(WebPanelState(definition: .browser))
+                ),
+            ],
+            focusedPanelID: firstPanelID
+        )
+
+        let removedTab = panel.removeTab(id: firstTabID)
+
+        #expect(removedTab?.id == firstTabID)
+        #expect(panel.activeTabID == secondTabID)
+        #expect(panel.focusedPanelID == secondPanelID)
+    }
+
+    @Test
+    func removingUnfocusedTabPreservesFocusedTab() throws {
+        let firstTabID = UUID()
+        let firstPanelID = UUID()
+        let secondTabID = UUID()
+        let secondPanelID = UUID()
+        var panel = RightAuxPanelState(
+            isVisible: true,
+            activeTabID: firstTabID,
+            tabIDs: [firstTabID, secondTabID],
+            tabsByID: [
+                firstTabID: RightAuxPanelTabState(
+                    id: firstTabID,
+                    identity: .browserSession(firstPanelID),
+                    panelID: firstPanelID,
+                    panelState: .web(WebPanelState(definition: .browser))
+                ),
+                secondTabID: RightAuxPanelTabState(
+                    id: secondTabID,
+                    identity: .browserSession(secondPanelID),
+                    panelID: secondPanelID,
+                    panelState: .web(WebPanelState(definition: .browser))
+                ),
+            ],
+            focusedPanelID: firstPanelID
+        )
+
+        let removedTab = panel.removeTab(id: secondTabID)
+
+        #expect(removedTab?.id == secondTabID)
+        #expect(panel.activeTabID == firstTabID)
+        #expect(panel.focusedPanelID == firstPanelID)
+    }
 }

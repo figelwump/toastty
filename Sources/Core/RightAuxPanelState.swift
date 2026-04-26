@@ -106,6 +106,10 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
         repairTransientState()
     }
 
+    public mutating func focusActiveTab() {
+        focusedPanelID = isVisible ? activeTab?.panelID : nil
+    }
+
     @discardableResult
     public mutating func removeTab(id tabID: UUID) -> RightAuxPanelTabState? {
         guard let removedTab = tabsByID.removeValue(forKey: tabID),
@@ -113,6 +117,7 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
             return nil
         }
 
+        let removedTabWasFocused = focusedPanelID == removedTab.panelID
         tabIDs.remove(at: tabIndex)
         if activeTabID == tabID {
             if tabIDs.indices.contains(tabIndex) {
@@ -121,12 +126,11 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
                 activeTabID = tabIDs.last
             }
         }
-        if focusedPanelID == removedTab.panelID {
-            focusedPanelID = nil
-        }
         if tabIDs.isEmpty {
             activeTabID = nil
             focusedPanelID = nil
+        } else if removedTabWasFocused {
+            focusActiveTab()
         }
         return removedTab
     }

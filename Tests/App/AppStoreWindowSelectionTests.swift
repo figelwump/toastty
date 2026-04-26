@@ -695,6 +695,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         XCTAssertNil(webState.initialURL)
         XCTAssertNil(webState.currentURL)
+        XCTAssertEqual(workspace.rightAuxPanel.focusedPanelID, tab.panelID)
         XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.windowID, sourceWindowID)
         XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.workspaceID, workspaceID)
         XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.panelID, tab.panelID)
@@ -721,6 +722,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         }
 
         XCTAssertEqual(webState.initialURL, "https://example.com")
+        XCTAssertEqual(workspace.rightAuxPanel.focusedPanelID, tab.panelID)
         XCTAssertNil(store.pendingBrowserLocationFocusRequest)
     }
 
@@ -789,6 +791,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md")
         XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertEqual(workspace.rightAuxPanel.focusedPanelID, tab.panelID)
         XCTAssertEqual(
             webState.localDocument,
             LocalDocumentState(filePath: fixture.canonicalPath, format: .markdown)
@@ -1050,14 +1053,14 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, existingPanelID)
     }
 
-    func testCreateLocalDocumentRightPanelDedupesWithoutChangingMainFocus() throws {
+    func testCreateLocalDocumentRightPanelDedupesAndFocusesExistingTabWithoutChangingMainFocus() throws {
         let fixture = try makeMarkdownFixture()
         let state = AppState.bootstrap()
         let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
         let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let workspaceBefore = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
-        let focusedPanelIDBefore = workspaceBefore.focusedPanelID
+        let focusedPanelIDBefore = try XCTUnwrap(workspaceBefore.focusedPanelID)
 
         let openedOutcome = store.createLocalDocumentPanelFromCommandOutcome(
             preferredWindowID: sourceWindowID,
@@ -1070,6 +1073,10 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             XCTFail("expected opened panel outcome")
             return
         }
+
+        XCTAssertTrue(store.send(.focusPanel(workspaceID: sourceWorkspaceID, panelID: focusedPanelIDBefore)))
+        let workspaceAfterMainRefocus = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertNil(workspaceAfterMainRefocus.rightAuxPanel.focusedPanelID)
 
         let dedupedOutcome = store.createLocalDocumentPanelFromCommandOutcome(
             preferredWindowID: sourceWindowID,
@@ -1084,7 +1091,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, focusedPanelIDBefore)
         XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.tabIDs.count, 1)
         XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.activePanelID, openedPanelID)
-        XCTAssertNil(workspaceAfterDedupedOpen.rightAuxPanel.focusedPanelID)
+        XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.focusedPanelID, openedPanelID)
     }
 
     func testCreateLocalDocumentPanelFromCommandOpensTextFilesAsCodeDocuments() throws {
