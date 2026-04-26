@@ -240,6 +240,13 @@ struct ToasttyCommandMenus: Commands {
         return panelID
     }
 
+    private var canShowScratchpadForCurrentSession: Bool {
+        guard let commandFocusedTerminalPanelID else {
+            return false
+        }
+        return sessionRuntimeStore.sessionRegistry.activeSession(for: commandFocusedTerminalPanelID) != nil
+    }
+
     private var commandFocusedTerminalSearchState: TerminalSearchState? {
         guard let panelID = commandFocusedTerminalPanelID else {
             return nil
@@ -567,6 +574,13 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
+            Button(ToasttyBuiltInCommand.showScratchpadForCurrentSession.title) {
+                showScratchpadForCurrentSession(preferredWindowID)
+            }
+            .disabled(canShowScratchpadForCurrentSession == false)
+
+            Divider()
+
             Button(ToasttyBuiltInCommand.closePanel.title) {
                 closeFocusedPanelFromCommandSelection()
             }
@@ -706,6 +720,14 @@ struct ToasttyCommandMenus: Commands {
 
     private func closeFocusedPanelFromCommandSelection() {
         _ = focusedPanelCommandController.closeFocusedPanel(in: commandWorkspace?.id)
+    }
+
+    private func showScratchpadForCurrentSession(_ preferredWindowID: UUID?) {
+        _ = store.showScratchpadForCurrentSession(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore,
+            documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+        )
     }
 
     private func startFindFromCommandSelection() {

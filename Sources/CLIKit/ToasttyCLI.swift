@@ -299,7 +299,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
-      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-notify [--session <id>] [--panel <id>]
+      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-notify|pi-extension [--session <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
@@ -374,7 +374,7 @@ public enum ToasttyCLI {
         case "run":
             let parsed = try parseCommandArguments(
                 remainingArguments,
-                valueOptions: ["--window", "--workspace", "--panel"]
+                valueOptions: ["--window", "--workspace", "--panel", "--stdin"]
             )
             guard let id = parsed.positionals.first, id.isEmpty == false else {
                 throw ToasttyCLIError.usage("\(kind.rawValue) run requires <id>\n\n\(usage)")
@@ -394,6 +394,13 @@ public enum ToasttyCLI {
             for argument in parsed.positionals.dropFirst() {
                 let assignment = try parseKeyValueAssignment(argument)
                 recordAppControlValue(.string(assignment.value), for: assignment.key, in: &args)
+            }
+            if let stdinKey = parsed.singleValue("--stdin") {
+                let stdinData = FileHandle.standardInput.readDataToEndOfFile()
+                guard let stdinValue = String(data: stdinData, encoding: .utf8) else {
+                    throw ToasttyCLIError.usage("stdin must be valid UTF-8\n\n\(usage)")
+                }
+                recordAppControlValue(.string(stdinValue), for: stdinKey, in: &args)
             }
 
             return .appControlRun(kind: kind, id: id, args: args)
@@ -611,7 +618,7 @@ public enum ToasttyCLI {
 
             let sourceValue = try requireValue("--source", in: parsed)
             guard let source = AgentEventSource(rawValue: sourceValue) else {
-                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-notify")
+                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-notify, pi-extension")
             }
 
             return .sessionIngestAgentEvent(
@@ -990,6 +997,13 @@ public enum ToasttyCLI {
 
         case .codexNotify:
             return "type=\(normalizedEventField(object["type"]) ?? "unknown")"
+
+        case .piExtension:
+            var components = ["event=\(normalizedEventField(object["event"]) ?? "unknown")"]
+            if let toolName = normalizedEventField(object["toolName"]) {
+                components.append("tool_name=\(toolName)")
+            }
+            return components.joined(separator: " ")
         }
     }
 

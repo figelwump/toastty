@@ -27,6 +27,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFile.id, "local-document.open")
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInTab.id, "local-document.open-tab")
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInSplit.id, "local-document.open-split")
+        XCTAssertEqual(ToasttyBuiltInCommand.showScratchpadForCurrentSession.id, "scratchpad.show-current-session")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleRightPanel.id, "window.toggle-right-panel")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
@@ -63,6 +64,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.openLocalFile.id,
                 ToasttyBuiltInCommand.openLocalFileInTab.id,
                 ToasttyBuiltInCommand.openLocalFileInSplit.id,
+                ToasttyBuiltInCommand.showScratchpadForCurrentSession.id,
                 ToasttyBuiltInCommand.toggleSidebar.id,
                 ToasttyBuiltInCommand.toggleRightPanel.id,
                 ToasttyBuiltInCommand.toggleFocusedPanelMode.id,
@@ -110,6 +112,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.canEqualizeSplitsValue = false
         actions.canCreateBrowserValue = false
         actions.canOpenLocalDocumentValue = false
+        actions.canShowScratchpadForCurrentSessionValue = false
         actions.canToggleRightPanelValue = false
         actions.canWatchRunningCommandValue = false
         actions.canReloadValue = false
@@ -119,6 +122,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.equalizeSplits.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.newBrowser.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.openLocalFile.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.toggleRightPanel.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.reloadConfiguration.id }))
@@ -238,12 +242,14 @@ final class CommandPaletteCatalogTests: XCTestCase {
         )
 
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.newWindow.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "workspace.switch.\(workspaceID.uuidString)" })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "agent.run.codex" })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "terminal-profile.zmx.split-right" })).invocation, originWindowID: originWindowID))
 
         XCTAssertEqual(actions.createdWindowIDs, [originWindowID])
+        XCTAssertEqual(actions.shownScratchpadWindowIDs, [originWindowID])
         XCTAssertEqual(actions.watchedRunningCommandWindowIDs, [originWindowID])
         XCTAssertEqual(
             actions.workspaceSwitchCalls,
@@ -386,6 +392,50 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectNextTab.id }))
     }
 
+    func testCatalogShowsScratchpadOnlyForFocusedManagedSession() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let selection = try XCTUnwrap(store.state.selectedWorkspaceSelection())
+        let sourcePanelID = try XCTUnwrap(selection.workspace.focusedPanelID)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        var shownScratchpadWindowIDs: [UUID] = []
+        let actions = try makeLiveActions(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            showScratchpadForCurrentSessionAction: { windowID in
+                if let windowID {
+                    shownScratchpadWindowIDs.append(windowID)
+                }
+                return true
+            }
+        )
+
+        XCTAssertFalse(
+            makeCommands(originWindowID: selection.windowID, actions: actions)
+                .contains(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id })
+        )
+
+        sessionRuntimeStore.startSession(
+            sessionID: "sess-palette-scratchpad",
+            agent: .codex,
+            panelID: sourcePanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            displayTitleOverride: "Codex",
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 100)
+        )
+
+        let commands = makeCommands(originWindowID: selection.windowID, actions: actions)
+        let scratchpadCommand = try XCTUnwrap(
+            commands.first(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id })
+        )
+
+        XCTAssertEqual(scratchpadCommand.title, ToasttyBuiltInCommand.showScratchpadForCurrentSession.title)
+        XCTAssertTrue(actions.execute(scratchpadCommand.invocation, originWindowID: selection.windowID))
+        XCTAssertEqual(shownScratchpadWindowIDs, [selection.windowID])
+    }
+
     private func makeCommands(
         originWindowID: UUID = UUID(),
         actions: CommandPaletteActionHandling = CommandPaletteActionSpy(),
@@ -428,11 +478,15 @@ final class CommandPaletteCatalogTests: XCTestCase {
         )
     }
 
-    private func makeLiveActions(store: AppStore) throws -> CommandPaletteActionHandler {
+    private func makeLiveActions(
+        store: AppStore,
+        sessionRuntimeStore providedSessionRuntimeStore: SessionRuntimeStore? = nil,
+        showScratchpadForCurrentSessionAction: @escaping @MainActor (UUID?) -> Bool = { _ in false }
+    ) throws -> CommandPaletteActionHandler {
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
 
-        let sessionRuntimeStore = SessionRuntimeStore()
+        let sessionRuntimeStore = providedSessionRuntimeStore ?? SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         runtimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
 
@@ -474,7 +528,8 @@ final class CommandPaletteCatalogTests: XCTestCase {
             terminalProfilesMenuController: terminalProfilesMenuController,
             supportsConfigurationReload: { true },
             reloadConfigurationAction: {},
-            openLocalDocumentAction: { _, _ in false }
+            openLocalDocumentAction: { _, _ in false },
+            showScratchpadForCurrentSessionAction: showScratchpadForCurrentSessionAction
         )
     }
 }

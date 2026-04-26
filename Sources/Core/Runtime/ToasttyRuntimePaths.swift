@@ -16,6 +16,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let historyDirectoryName = "history"
     private static let paneHistoryDirectoryName = "panes"
     private static let paneJournalDirectoryName = "pane-journals"
+    private static let scratchpadDocumentsDirectoryName = "scratchpad-documents"
     private static let artifactsDirectoryName = "artifacts"
     private static let devRunsDirectoryName = "dev-runs"
     private static let worktreeRuntimePrefix = "worktree-"
@@ -131,6 +132,20 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         )
     }
 
+    public var scratchpadDocumentsDirectoryURL: URL {
+        configDirectoryURL.appending(
+            path: Self.scratchpadDocumentsDirectoryName,
+            directoryHint: .isDirectory
+        )
+    }
+
+    public func scratchpadDocumentFileURL(for documentID: UUID) -> URL {
+        scratchpadDocumentsDirectoryURL.appending(
+            path: "\(documentID.uuidString).json",
+            directoryHint: .notDirectory
+        )
+    }
+
     public var instanceFileURL: URL? {
         runtimeHomeURL?.appending(path: Self.instanceFileName, directoryHint: .notDirectory)
     }
@@ -193,6 +208,10 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         )
         try fileManager.createDirectory(
             at: paneJournalDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: scratchpadDocumentsDirectoryURL,
             withIntermediateDirectories: true
         )
         if let automationSocketFileURL {

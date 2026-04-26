@@ -20,6 +20,12 @@ enum AgentEventIngestor {
                 panelID: panelID,
                 payload: payload
             )
+        case .piExtension:
+            try PiExtensionEventParser.parse(
+                sessionID: sessionID,
+                panelID: panelID,
+                payload: payload
+            )
         }
     }
 }

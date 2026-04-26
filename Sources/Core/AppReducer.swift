@@ -835,6 +835,33 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
             return true
 
+        case .updateScratchpadPanelState(let panelID, let scratchpad, let title):
+            guard let location = locatePanel(panelID, in: state) else { return false }
+            guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
+            guard let tabID = workspace.tabID(containingPanelID: panelID),
+                  case .web(var webState) = workspace.tab(id: tabID)?.panels[panelID],
+                  webState.definition == .scratchpad else { return false }
+
+            var didMutate = false
+
+            if webState.scratchpad != scratchpad {
+                webState.scratchpad = scratchpad
+                didMutate = true
+            }
+
+            if let normalizedTitle = WebPanelState.normalizedTitle(title),
+               webState.title != normalizedTitle {
+                webState.title = normalizedTitle
+                didMutate = true
+            }
+
+            guard didMutate else { return false }
+            _ = workspace.updateTab(id: tabID) { tab in
+                tab.panels[panelID] = .web(webState)
+            }
+            commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
+            return true
+
         case .recordDesktopNotification(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             if let panelID {

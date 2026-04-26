@@ -24,6 +24,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func createBrowser(placement: WebPanelPlacement, originWindowID: UUID) -> Bool
     func canOpenLocalDocument(originWindowID: UUID) -> Bool
     func openLocalDocument(placement: WebPanelPlacement, originWindowID: UUID) -> Bool
+    func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool
+    func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool
     func canToggleSidebar(originWindowID: UUID) -> Bool
     func toggleSidebar(originWindowID: UUID) -> Bool
     func sidebarTitle(originWindowID: UUID) -> String
@@ -75,6 +77,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let supportsConfigurationReload: @MainActor () -> Bool
     private let reloadConfigurationAction: @MainActor () -> Void
     private let openLocalDocumentAction: @MainActor (UUID?, WebPanelPlacement) -> Bool
+    private let showScratchpadForCurrentSessionAction: @MainActor (UUID?) -> Bool
 
     init(
         store: AppStore,
@@ -88,6 +91,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         supportsConfigurationReload: @escaping @MainActor () -> Bool,
         reloadConfigurationAction: @escaping @MainActor () -> Void,
         openLocalDocumentAction: @escaping @MainActor (UUID?, WebPanelPlacement) -> Bool,
+        showScratchpadForCurrentSessionAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         processWatchCommandController: ProcessWatchCommandController? = nil
     ) {
         self.store = store
@@ -106,6 +110,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         self.supportsConfigurationReload = supportsConfigurationReload
         self.reloadConfigurationAction = reloadConfigurationAction
         self.openLocalDocumentAction = openLocalDocumentAction
+        self.showScratchpadForCurrentSessionAction = showScratchpadForCurrentSessionAction
     }
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -237,6 +242,24 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
 
     func openLocalDocument(placement: WebPanelPlacement, originWindowID: UUID) -> Bool {
         openLocalDocumentAction(originWindowID, placement)
+    }
+
+    func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
+        guard let selection = store?.commandSelection(preferredWindowID: originWindowID),
+              let focusedPanelID = selection.workspace.focusedPanelID,
+              selection.workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil,
+              case .terminal = selection.workspace.panelState(for: focusedPanelID) else {
+            return false
+        }
+
+        return sessionRuntimeStore.sessionRegistry.activeSession(for: focusedPanelID) != nil
+    }
+
+    func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
+        guard canShowScratchpadForCurrentSession(originWindowID: originWindowID) else {
+            return false
+        }
+        return showScratchpadForCurrentSessionAction(originWindowID)
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {
@@ -516,6 +539,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
         case .openLocalFileInSplit:
             return openLocalDocument(placement: .splitRight, originWindowID: originWindowID)
+        case .showScratchpadForCurrentSession:
+            return showScratchpadForCurrentSession(originWindowID: originWindowID)
         case .toggleSidebar:
             return toggleSidebar(originWindowID: originWindowID)
         case .toggleRightPanel:

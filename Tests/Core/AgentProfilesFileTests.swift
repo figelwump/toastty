@@ -78,10 +78,10 @@ struct AgentProfilesFileTests {
     @Test
     func loadParsesManualCommandNamesForBuiltInProfiles() throws {
         let contents = """
-        [claude]
-        displayName = "Claude Code"
-        argv = ["run-sandboxed.sh", "claude", "--dangerously-skip-permissions"]
-        manualCommandNames = ["run-sandboxed.sh", "agent-safehouse"]
+        [pi]
+        displayName = "Pi"
+        argv = ["agent-safehouse", "pi"]
+        manualCommandNames = ["agent-safehouse", "pi-safe"]
         """
 
         let fileManager = InMemoryFileManager(templateContents: contents)
@@ -90,7 +90,7 @@ struct AgentProfilesFileTests {
             homeDirectoryPath: fileManager.rootURL.path
         )
 
-        #expect(catalog.profiles.first?.manualCommandNames == ["run-sandboxed.sh", "agent-safehouse"])
+        #expect(catalog.profiles.first?.manualCommandNames == ["agent-safehouse", "pi-safe"])
     }
 
     @Test
@@ -205,7 +205,7 @@ struct AgentProfilesFileTests {
         #expect(
             throws: AgentProfilesParseError(
                 line: 1,
-                message: "[gemini] manualCommandNames is supported only for [codex] and [claude]"
+                message: "[gemini] manualCommandNames is supported only for [codex], [claude], and [pi]"
             )
         ) {
             _ = try AgentProfilesFile.load(
@@ -267,7 +267,7 @@ struct AgentProfilesFileTests {
         [codex]
         displayName = "Codex"
         argv = ["codex"]
-        manualCommandNames = ["codex"]
+        manualCommandNames = ["pi"]
         """
         let fileManager = InMemoryFileManager(templateContents: contents)
 

@@ -3256,6 +3256,18 @@ struct PanelCardView: View {
                 maxHeight: .infinity,
                 alignment: .topLeading
             )
+        } else if state.definition == .scratchpad {
+            ScratchpadPanelView(
+                webState: state,
+                runtime: webPanelRuntimeRegistry.scratchpadRuntime(for: panelID),
+                isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
+                isActivePanel: isFocused
+            )
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: .infinity,
+                alignment: .topLeading
+            )
         } else {
             webPanelPlaceholder(state: state)
         }

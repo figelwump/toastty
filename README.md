@@ -117,16 +117,21 @@ shortcutKey = "c"
 [claude]
 displayName = "Claude Code"
 argv = ["claude"]
+
+[pi]
+displayName = "Pi"
+argv = ["pi"]
 ```
 
 Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. `shortcutKey` is optional; when set, Toastty binds `Cmd+Opt+<key>` to launch that profile.
 
 ### Profile IDs and special behavior
 
-The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes two well-known IDs that receive first-party instrumentation:
+The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes three well-known IDs that receive first-party instrumentation:
 
 - **`codex`** — Injects Codex session recording, notification hooks, and a log watcher that surfaces live status (working, needs approval, idle) in the sidebar
 - **`claude`** — Injects Claude Code lifecycle hooks that report session state back to the sidebar automatically
+- **`pi`** — Injects Toastty's bundled Pi extension for session, tool, and changed-file telemetry while preserving user Pi extensions
 
 This matching is keyed on **the profile ID**, not on the command in `argv`:
 
@@ -141,7 +146,7 @@ argv = ["/my/codex-wrapper"]  # (ID is "codex", regardless of argv)
 argv = ["codex"]              # (ID is "my-codex", not "codex")
 ```
 
-Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
+For Pi, Toastty adds its own `--extension <toastty-pi-extension.js>` argument after the actual `pi` executable. User `--extension` arguments remain additive; `pi --no-extensions` or `pi -ne` disables Toastty's injected extension for that launch too. Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
 
 ## CLI
 
@@ -194,7 +199,7 @@ Use `Toastty > Manage Config…` to open or create the live config file inside T
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local terminal UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
-- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
+- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations (`codex`, `claude`, and `pi`) inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
 - the `View` menu uses contextual labels for this shortcut family: focused terminals and local documents show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
 
 Example:

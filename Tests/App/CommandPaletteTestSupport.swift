@@ -17,6 +17,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canResizeSplitValue = true
     var canCreateBrowserValue = true
     var canOpenLocalDocumentValue = true
+    var canShowScratchpadForCurrentSessionValue = true
     var canToggleSidebarValue = true
     var canToggleRightPanelValue = true
     var canToggleFocusedPanelModeValue = true
@@ -41,6 +42,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var resizeSplitResult = true
     var createBrowserResult = true
     var openLocalDocumentResult = true
+    var showScratchpadForCurrentSessionResult = true
     var toggleSidebarResult = true
     var toggleRightPanelResult = true
     var toggleFocusedPanelModeResult = true
@@ -68,6 +70,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var resizeSplitCalls: [RecordedPaletteResizeSplitCall] = []
     var browserCalls: [RecordedPaletteBrowserCall] = []
     var localDocumentCalls: [RecordedPaletteLocalDocumentCall] = []
+    var shownScratchpadWindowIDs: [UUID] = []
     var toggledSidebarWindowIDs: [UUID] = []
     var toggledRightPanelWindowIDs: [UUID] = []
     var toggledFocusedPanelModeWindowIDs: [UUID] = []
@@ -198,6 +201,16 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
             RecordedPaletteLocalDocumentCall(placement: placement, originWindowID: originWindowID)
         )
         return openLocalDocumentResult
+    }
+
+    func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canShowScratchpadForCurrentSessionValue
+    }
+
+    func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
+        shownScratchpadWindowIDs.append(originWindowID)
+        return showScratchpadForCurrentSessionResult
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {
@@ -435,6 +448,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
             case .openLocalFileInSplit:
                 return openLocalDocument(placement: .splitRight, originWindowID: originWindowID)
+            case .showScratchpadForCurrentSession:
+                return showScratchpadForCurrentSession(originWindowID: originWindowID)
             case .toggleSidebar:
                 return toggleSidebar(originWindowID: originWindowID)
             case .toggleRightPanel:
