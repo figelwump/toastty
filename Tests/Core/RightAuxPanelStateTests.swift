@@ -7,7 +7,7 @@ struct RightAuxPanelStateTests {
     func defaultWidthTracksWorkspaceWidthWithinBounds() {
         #expect(RightAuxPanelState.defaultWidth(for: 1_200) == 480)
         #expect(RightAuxPanelState.defaultWidth(for: 500) == RightAuxPanelState.minWidth)
-        #expect(RightAuxPanelState.defaultWidth(for: 3_000) == RightAuxPanelState.maxWidth)
+        #expect(RightAuxPanelState.defaultWidth(for: 3_000) == 1_200)
     }
 
     @Test
@@ -25,8 +25,8 @@ struct RightAuxPanelStateTests {
     func effectiveWidthKeepsCustomWidthWithinVisibleWorkspaceBounds() {
         let panel = RightAuxPanelState(width: 900, hasCustomWidth: true)
 
-        #expect(panel.width == RightAuxPanelState.maxWidth)
-        #expect(panel.effectiveWidth(for: 1_000) == 720)
+        #expect(panel.width == 900)
+        #expect(panel.effectiveWidth(for: 1_000) == 800)
     }
 
     @Test

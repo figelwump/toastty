@@ -3,9 +3,8 @@ import Foundation
 public struct RightAuxPanelState: Codable, Equatable, Sendable {
     public static let defaultWidth: Double = 360
     public static let minWidth: Double = 260
-    public static let maxWidth: Double = 820
     public static let defaultWidthFraction: Double = 0.40
-    public static let maximumVisibleWidthFraction: Double = 0.72
+    public static let maximumVisibleWidthFraction: Double = 0.80
 
     public var isVisible: Bool
     public var width: Double
@@ -54,7 +53,7 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
     }
 
     public static func clampedWidth(_ width: Double) -> Double {
-        min(max(width, minWidth), maxWidth)
+        max(width, minWidth)
     }
 
     public static func clampedWidth(_ width: Double, for availableWorkspaceWidth: Double) -> Double {
@@ -217,13 +216,10 @@ public struct RightAuxPanelState: Codable, Equatable, Sendable {
     private static func maximumVisibleWidth(for availableWorkspaceWidth: Double) -> Double {
         guard availableWorkspaceWidth.isFinite,
               availableWorkspaceWidth > 0 else {
-            return maxWidth
+            return .greatestFiniteMagnitude
         }
 
-        return min(
-            maxWidth,
-            max(minWidth, availableWorkspaceWidth * maximumVisibleWidthFraction)
-        )
+        return max(minWidth, availableWorkspaceWidth * maximumVisibleWidthFraction)
     }
 }
 
