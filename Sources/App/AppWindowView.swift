@@ -175,7 +175,7 @@ struct AppWindowView: View {
             store.send(.toggleSidebar(windowID: windowID))
         } label: {
             SidebarToggleIconView(
-                color: sidebarVisible ? ToastyTheme.inactiveText : ToastyTheme.accent,
+                color: sidebarVisible ? ToastyTheme.accent : ToastyTheme.inactiveText,
                 sidebarVisible: sidebarVisible,
                 hasUnread: sidebarToggleHasUnreadBadge
             )
