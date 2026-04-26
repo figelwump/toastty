@@ -850,9 +850,10 @@ struct WorkspaceView: View {
 
     static func renderedRightAuxPanelWidth(
         for panel: RightAuxPanelState,
-        availableWidth: CGFloat
+        availableWidth: CGFloat,
+        focusedPanelModeActive: Bool = false
     ) -> CGFloat {
-        panel.isVisible
+        panel.isVisible && focusedPanelModeActive == false
             ? effectiveRightAuxPanelWidth(for: panel, availableWidth: availableWidth)
             : 0
     }
@@ -937,7 +938,8 @@ struct WorkspaceView: View {
             )
             let rightPanelRenderedWidth = Self.renderedRightAuxPanelWidth(
                 for: tab.rightAuxPanel,
-                availableWidth: geometry.size.width
+                availableWidth: geometry.size.width,
+                focusedPanelModeActive: tab.focusedPanelModeActive
             )
             let primaryContentWidth = Self.primaryContentWidth(
                 availableWidth: geometry.size.width,
@@ -1083,7 +1085,10 @@ struct WorkspaceView: View {
         targetWidth: CGFloat,
         renderedWidth: CGFloat
     ) -> some View {
-        let isVisible = isWorkspaceSelected && isTabSelected && tab.rightAuxPanel.isVisible
+        let isVisible = isWorkspaceSelected &&
+            isTabSelected &&
+            tab.rightAuxPanel.isVisible &&
+            tab.focusedPanelModeActive == false
 
         return RightAuxPanelView(
             windowID: windowID,
