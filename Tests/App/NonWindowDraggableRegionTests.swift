@@ -68,7 +68,7 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
-    func testPointerInteractionViewStoresCursorForCursorRects() {
+    func testPointerInteractionViewTrackingAreaRequestsCursorUpdateEvents() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
             styleMask: [.titled],
@@ -81,14 +81,32 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         window.contentView = view
         window.makeKeyAndOrderFront(nil)
 
+        view.updateTrackingAreas()
+
+        // Cursor delivery relies on the tracking area subscribing to cursor
+        // update events — verify that contract here so a future regression
+        // (e.g., dropping the option) fails fast instead of silently leaving
+        // the resize cursor unset.
+        let trackingArea = try XCTUnwrap(
+            view.trackingAreas.first(where: { $0.options.contains(.cursorUpdate) })
+        )
+        XCTAssertTrue(trackingArea.options.contains(.mouseEnteredAndExited))
+        XCTAssertTrue(trackingArea.options.contains(.inVisibleRect))
+
         view.cursor = .resizeLeftRight
         XCTAssertTrue(view.cursor === NSCursor.resizeLeftRight)
 
-        view.resetCursorRects()
-        window.invalidateCursorRects(for: view)
+        // cursorUpdate(with:) must not crash and must be safe to call when no
+        // cursor is set.
+        let cursorUpdateEvent = try cursorUpdateMouseEvent(
+            location: NSPoint(x: 50, y: 60),
+            window: window
+        )
+        view.cursorUpdate(with: cursorUpdateEvent)
 
         view.cursor = nil
         XCTAssertNil(view.cursor)
+        view.cursorUpdate(with: cursorUpdateEvent)
     }
 
     @MainActor
@@ -471,6 +489,27 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         }
 
         return nil
+    }
+
+    @MainActor
+    private func cursorUpdateMouseEvent(
+        location: NSPoint,
+        window: NSWindow
+    ) throws -> NSEvent {
+        guard let event = NSEvent.enterExitEvent(
+            with: .cursorUpdate,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        ) else {
+            throw NSError(domain: "NonWindowDraggableRegionTests", code: 1, userInfo: nil)
+        }
+        return event
     }
 
     @MainActor

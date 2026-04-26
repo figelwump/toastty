@@ -66,7 +66,16 @@ final class PointerInteractionView: NSView {
     var onHoverChanged: ((Bool) -> Void)?
     var cursor: NSCursor? {
         didSet {
-            invalidateCursorRectsIfPossible()
+            // Cursor rects in this view rely on z-order to apply, but the
+            // resize-handle's hit zone overlaps a sibling subtree (the right
+            // panel content) that sits on top in NSView z-order. We rely on
+            // tracking-area cursorUpdate events instead, which fire based on
+            // the tracking area's bounds. If the pointer is already inside,
+            // re-apply the new cursor immediately so the change takes effect
+            // without waiting for the next entry.
+            if isPointerInside {
+                cursor?.set()
+            }
         }
     }
 
@@ -102,10 +111,11 @@ final class PointerInteractionView: NSView {
         finishPointerSequence(with: event)
     }
 
-    override func resetCursorRects() {
-        super.resetCursorRects()
+    override func cursorUpdate(with event: NSEvent) {
         if let cursor {
-            addCursorRect(bounds, cursor: cursor)
+            cursor.set()
+        } else {
+            super.cursorUpdate(with: event)
         }
     }
 
@@ -118,7 +128,6 @@ final class PointerInteractionView: NSView {
                 restoreSequenceWindowMovementIfNeeded(reason: "removed-from-window")
             }
         } else {
-            invalidateCursorRectsIfPossible()
             updateHoverWindowMovementSuppressionForCurrentMouseLocation()
         }
     }
@@ -131,7 +140,7 @@ final class PointerInteractionView: NSView {
 
         let trackingArea = NSTrackingArea(
             rect: .zero,
-            options: [.activeAlways, .enabledDuringMouseDrag, .inVisibleRect, .mouseEnteredAndExited],
+            options: [.activeAlways, .enabledDuringMouseDrag, .inVisibleRect, .mouseEnteredAndExited, .cursorUpdate],
             owner: self,
             userInfo: nil
         )
@@ -182,10 +191,6 @@ final class PointerInteractionView: NSView {
         if notify {
             onHoverChanged?(isInside)
         }
-    }
-
-    private func invalidateCursorRectsIfPossible() {
-        window?.invalidateCursorRects(for: self)
     }
 
     private func beginPointerSequence(with event: NSEvent) {
