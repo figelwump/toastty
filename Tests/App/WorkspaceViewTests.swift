@@ -314,6 +314,42 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testResolvedWorkspaceTabStripWidthUsesIdealWidthWhenThereIsRoom() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabStripWidth(
+                availableWidth: 900,
+                tabCount: 1,
+                trailingAccessoryWidth: 20,
+                trailingAccessorySpacing: 10
+            ),
+            ToastyTheme.workspaceTabWidth + 30
+        )
+    }
+
+    func testResolvedWorkspaceTabStripWidthUsesAvailableWidthWhenCompressed() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabStripWidth(
+                availableWidth: 180,
+                tabCount: 1,
+                trailingAccessoryWidth: 20,
+                trailingAccessorySpacing: 10
+            ),
+            180
+        )
+    }
+
+    func testResolvedWorkspaceTabStripWidthStopsAtMinimumWidth() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabStripWidth(
+                availableWidth: 40,
+                tabCount: 1,
+                trailingAccessoryWidth: 20,
+                trailingAccessorySpacing: 10
+            ),
+            ToastyTheme.workspaceTabMinimumWidth + 30
+        )
+    }
+
     func testWorkspaceTabReorderTargetIndexHandlesBeforeFirstBoundary() {
         let first = UUID()
         let second = UUID()
@@ -1025,6 +1061,11 @@ final class WorkspaceViewTests: XCTestCase {
 
         XCTAssertFalse(tabStripHost.mouseDownCanMoveWindow)
         XCTAssertGreaterThan(tabStripContainer.frame.width, 0)
+        XCTAssertEqual(
+            tabStripContainer.frame.width,
+            ToastyTheme.workspaceTabWidth + 30,
+            accuracy: 1
+        )
         XCTAssertEqual(tabStripContainer.frame.height, ToastyTheme.workspaceTabHeight, accuracy: 0.5)
     }
 

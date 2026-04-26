@@ -384,6 +384,30 @@ struct WorkspaceView: View {
         )
     }
 
+    nonisolated static func resolvedWorkspaceTabStripWidth(
+        availableWidth: CGFloat,
+        tabCount: Int,
+        spacing: CGFloat = 0,
+        trailingAccessoryWidth: CGFloat = 0,
+        trailingAccessorySpacing: CGFloat = 0
+    ) -> CGFloat {
+        let idealWidth = workspaceTabIdealTotalWidth(
+            tabCount: tabCount,
+            spacing: spacing,
+            trailingAccessoryWidth: trailingAccessoryWidth,
+            trailingAccessorySpacing: trailingAccessorySpacing
+        )
+        guard availableWidth.isFinite else { return idealWidth }
+
+        let minimumWidth = workspaceTabMinimumTotalWidth(
+            tabCount: tabCount,
+            spacing: spacing,
+            trailingAccessoryWidth: trailingAccessoryWidth,
+            trailingAccessorySpacing: trailingAccessorySpacing
+        )
+        return min(max(availableWidth, minimumWidth), idealWidth)
+    }
+
     nonisolated private static func workspaceTabTotalWidth(
         tabCount: Int,
         tabWidth: CGFloat,
@@ -2474,7 +2498,14 @@ private struct WorkspaceHeaderLayout: Layout {
 
         let tabsX = bounds.minX + titleColumnWidth + titleSpacing
         let tabsMaxX = max(tabsX, trailingX - trailingSpacing)
-        let tabsWidth = max(0, tabsMaxX - tabsX)
+        let tabsAvailableWidth = max(0, tabsMaxX - tabsX)
+        let tabsWidth = WorkspaceView.resolvedWorkspaceTabStripWidth(
+            availableWidth: tabsAvailableWidth,
+            tabCount: tabCount,
+            spacing: tabSpacing,
+            trailingAccessoryWidth: tabAccessoryWidth,
+            trailingAccessorySpacing: tabAccessorySpacing
+        )
 
         subviews[2].place(
             at: CGPoint(x: tabsX, y: bounds.maxY),
@@ -2524,7 +2555,7 @@ private struct WorkspaceTabStripLayout: Layout {
             return CGSize(width: idealWidth, height: height)
         }
 
-        return CGSize(width: max(proposedWidth, minimumWidth), height: height)
+        return CGSize(width: min(max(proposedWidth, minimumWidth), idealWidth), height: height)
     }
 
     func placeSubviews(

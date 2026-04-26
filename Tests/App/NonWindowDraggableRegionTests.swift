@@ -140,6 +140,31 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
+    func testPointerInteractionViewHoverDoesNotSuppressWindowMovement() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+
+        XCTAssertTrue(window.isMovable)
+        view.mouseEntered(
+            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 40, y: 50), window: window)
+        )
+        XCTAssertTrue(window.isMovable)
+
+        view.frame = NSRect(x: 160, y: 30, width: 120, height: 40)
+        view.updateTrackingAreas()
+        XCTAssertTrue(window.isMovable)
+    }
+
+    @MainActor
     func testPointerInteractionViewReportsHoverExitWhenInvalidated() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
