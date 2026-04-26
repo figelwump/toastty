@@ -9,7 +9,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+N` | New window |
 | `Cmd+T` | New tab |
 | `Cmd+B` | Show or hide the sidebar |
-| `Cmd+Opt+B` | Show or hide the right panel |
+| `Cmd+Shift+B` | Show or hide the right panel |
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |
 | `Option+Shift+E` | Rename tab |

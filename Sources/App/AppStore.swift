@@ -462,7 +462,7 @@ final class AppStore: ObservableObject {
         }
 
         let existingPanelIDs = Set(existingWorkspace.allPanelsByID.keys)
-        let shouldRequestLocationFocus = request.initialURL == nil && request.resolvedPlacement != .rightPanel
+        let shouldRequestLocationFocus = request.initialURL == nil
 
         guard send(
             .createWebPanel(

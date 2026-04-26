@@ -672,13 +672,14 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
     func testCreateBrowserPanelUsesDefaultPlacementWhenNoOverrideIsProvided() throws {
         let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
         let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
         XCTAssertTrue(
             store.createBrowserPanel(
                 workspaceID: workspaceID,
-                request: BrowserPanelCreateRequest(initialURL: "https://example.com")
+                request: BrowserPanelCreateRequest()
             )
         )
 
@@ -692,8 +693,34 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(webState.initialURL, "https://example.com")
+        XCTAssertNil(webState.initialURL)
         XCTAssertNil(webState.currentURL)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.windowID, sourceWindowID)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.workspaceID, workspaceID)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.panelID, tab.panelID)
+        XCTAssertNotNil(store.pendingBrowserLocationFocusRequest?.requestID)
+    }
+
+    func testCreateBrowserPanelWithInitialURLDoesNotRequestLocationFocusInRightPanel() throws {
+        let state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createBrowserPanel(
+                workspaceID: workspaceID,
+                request: BrowserPanelCreateRequest(initialURL: "https://example.com")
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let tab = try XCTUnwrap(workspace.rightAuxPanel.activeTab)
+        guard case .web(let webState) = tab.panelState else {
+            XCTFail("expected active right-panel tab to be web-backed browser")
+            return
+        }
+
+        XCTAssertEqual(webState.initialURL, "https://example.com")
         XCTAssertNil(store.pendingBrowserLocationFocusRequest)
     }
 

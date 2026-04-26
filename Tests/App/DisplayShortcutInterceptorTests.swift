@@ -309,17 +309,19 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isNewBrowserTabShortcut(repeatedEvent))
     }
 
-    func testToggleRightPanelShortcutMatchesCommandOptionBOnly() throws {
-        let matchingEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .option], keyCode: 0x0B)
+    func testToggleRightPanelShortcutMatchesCommandShiftBOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "B", modifiers: [.command, .shift], keyCode: 0x0B)
+        let oldRightPanelEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .option], keyCode: 0x0B)
         let browserEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .control], keyCode: 0x0B)
         let repeatedEvent = try makeKeyEvent(
-            characters: "b",
-            modifiers: [.command, .option],
+            characters: "B",
+            modifiers: [.command, .shift],
             keyCode: 0x0B,
             isARepeat: true
         )
 
         XCTAssertTrue(DisplayShortcutInterceptor.isToggleRightPanelShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isToggleRightPanelShortcut(oldRightPanelEvent))
         XCTAssertFalse(DisplayShortcutInterceptor.isToggleRightPanelShortcut(browserEvent))
         XCTAssertFalse(DisplayShortcutInterceptor.isToggleRightPanelShortcut(repeatedEvent))
     }
@@ -1061,7 +1063,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
-        let event = try makeKeyEvent(characters: "b", modifiers: [.command, .option], keyCode: 0x0B)
+        let event = try makeKeyEvent(characters: "B", modifiers: [.command, .shift], keyCode: 0x0B)
         let interceptor = makeInterceptor(store: store)
 
         XCTAssertTrue(interceptor.handle(.createBrowser, appOwnedWindowID: windowID))

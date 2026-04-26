@@ -1235,7 +1235,9 @@ struct WorkspaceView: View {
               request.windowID == windowID,
               let workspace = selectedWorkspace,
               workspace.id == request.workspaceID,
-              workspace.focusedPanelID == request.panelID || workspace.rightAuxPanel.focusedPanelID == request.panelID,
+              workspace.focusedPanelID == request.panelID ||
+              workspace.rightAuxPanel.focusedPanelID == request.panelID ||
+              workspace.rightAuxPanel.activePanelID == request.panelID,
               case .web(let webState)? = workspace.panelState(for: request.panelID),
               webState.definition == .browser else {
             return

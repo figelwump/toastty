@@ -53,6 +53,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+N` | New window |
 | `Cmd+B` | Show or hide sidebar |
 | `Cmd+T` | New tab |
+| `Cmd+Shift+B` | Show or hide the right panel |
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |
 | `Option+Shift+E` | Rename tab |

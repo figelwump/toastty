@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-final class PaletteTextField: NSTextField {}
+final class PaletteTextField: NSTextField, NSTextViewDelegate {}
 
 struct PaletteSearchField: NSViewRepresentable {
     @Binding var text: String
@@ -180,7 +180,7 @@ struct PaletteSearchField: NSViewRepresentable {
         ) {
             guard pendingFocusRequestID == requestID else { return }
 
-            if focusAndSelectAll(in: textField) {
+            if focusAndApplyInitialSelection(in: textField) {
                 pendingFocusRequestID = nil
                 lastHandledFocusRequestID = requestID
                 return
@@ -202,13 +202,13 @@ struct PaletteSearchField: NSViewRepresentable {
         }
 
         @discardableResult
-        private func focusAndSelectAll(in textField: NSTextField) -> Bool {
+        func focusAndApplyInitialSelection(in textField: NSTextField) -> Bool {
             guard let window = textField.window else {
                 return false
             }
 
             if let editor = currentEditor(in: window, for: textField) {
-                editor.selectAll(nil)
+                applyInitialSelection(in: editor)
                 return true
             }
 
@@ -217,8 +217,16 @@ struct PaletteSearchField: NSViewRepresentable {
                 return false
             }
 
-            editor.selectAll(nil)
+            applyInitialSelection(in: editor)
             return true
+        }
+
+        private func applyInitialSelection(in editor: NSTextView) {
+            if editor.string == "@" {
+                editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
+            } else {
+                editor.selectAll(nil)
+            }
         }
 
         private func isEditing(_ textField: NSTextField) -> Bool {

@@ -935,6 +935,33 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
+    func testBlankRightPanelBrowserCreationConsumesPendingLocationFocusRequestWhenBrowserBecomesVisible() throws {
+        let harness = try makeWorkspaceHarness()
+
+        XCTAssertTrue(
+            harness.store.createBrowserPanelFromCommand(
+                preferredWindowID: harness.windowID,
+                request: BrowserPanelCreateRequest(placementOverride: .rightPanel)
+            )
+        )
+
+        let workspace = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
+        let browserPanelID = try XCTUnwrap(workspace.rightAuxPanel.activePanelID)
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.store.pendingBrowserLocationFocusRequest)
+        XCTAssertNotNil(
+            harness.webPanelRuntimeRegistry
+                .browserRuntime(for: browserPanelID)
+                .locationFieldFocusRequestID
+        )
+
+        harness.window.orderOut(nil)
+    }
+
+    @MainActor
     func testLocalDocumentHeaderSearchAppearsWhenRuntimeStartsSearch() throws {
         let documentURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)

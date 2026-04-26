@@ -960,7 +960,7 @@ final class DisplayShortcutInterceptor {
             return false
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        return modifiers == [.command, .option]
+        return modifiers == [.command, .shift]
     }
 
     static func isSaveShortcut(_ event: NSEvent) -> Bool {
