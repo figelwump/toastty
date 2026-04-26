@@ -12,6 +12,89 @@ function cleanString(value, limit = MAX_FIELD_LENGTH) {
   return collapsed.length > limit ? `${collapsed.slice(0, Math.max(0, limit - 3))}...` : collapsed;
 }
 
+function lastPathComponent(path) {
+  const cleaned = cleanString(path, 160);
+  if (!cleaned) return undefined;
+  const parts = cleaned.split(/[\\/]/).filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : cleaned;
+}
+
+function compactPath(path) {
+  return lastPathComponent(path) || cleanString(path, 120);
+}
+
+function commandPreview(command) {
+  return cleanString(command, 120);
+}
+
+function bashDetail(command) {
+  const preview = commandPreview(command);
+  if (!preview) return "Running a shell command";
+  const lower = preview.toLowerCase();
+  if (
+    /\bxcodebuild\b.*\btest\b/.test(lower) ||
+    /\b(swift test|tuist test|npm test|npm run test|pnpm test|yarn test|bun test|pytest|pytest3|go test|cargo test|ctest)\b/.test(lower)
+  ) {
+    return "Running tests";
+  }
+  if (/\b(xcodebuild|swift build|tuist build|npm run build|pnpm build|yarn build|bun run build|make|ninja|cmake)\b/.test(lower)) {
+    return "Building project";
+  }
+  if (/\b(git status|git diff|git log|git show|git rev-parse|git branch)\b/.test(lower)) {
+    return "Checking git state";
+  }
+  if (/\b(rg|grep|ag|ack)\b/.test(lower)) {
+    return "Searching the workspace";
+  }
+  if (/\b(ls|find|fd|tree)\b/.test(lower)) {
+    return "Listing files";
+  }
+  return "Running a shell command";
+}
+
+function toolDetail(toolName, input) {
+  const name = cleanString(toolName, 80);
+  switch (name) {
+    case "bash":
+      return bashDetail(input && input.command);
+    case "read": {
+      const target = compactPath(input && input.path);
+      return target ? `Reading ${target}` : "Reading files";
+    }
+    case "edit": {
+      const target = compactPath(input && input.path);
+      return target ? `Editing ${target}` : "Editing files";
+    }
+    case "write": {
+      const target = compactPath(input && input.path);
+      return target ? `Writing ${target}` : "Writing a file";
+    }
+    case "grep": {
+      const pattern = cleanString(input && input.pattern, 80);
+      return pattern ? `Searching for ${pattern}` : "Searching the workspace";
+    }
+    case "find": {
+      const pattern = cleanString(input && input.pattern, 80);
+      return pattern ? `Finding ${pattern}` : "Finding files";
+    }
+    case "ls": {
+      const target = compactPath(input && input.path);
+      return target ? `Listing ${target}` : "Listing files";
+    }
+    default:
+      return name ? `Using ${displayToolName(name)}` : "Pi is using a tool";
+  }
+}
+
+function displayToolName(raw) {
+  return raw
+    .replace(/[_-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
+
 function collectPaths(value, output = []) {
   if (output.length >= MAX_PATHS || value == null) return output;
   if (typeof value === "string") {
@@ -125,33 +208,32 @@ module.exports = function toasttyPiExtension(pi) {
     emit("session_start", { reason: cleanString(event && event.reason) });
   });
 
+  pi.on("before_agent_start", (event) => {
+    emit("before_agent_start", { prompt: cleanString(event && event.prompt, 160) });
+  });
+
   pi.on("agent_start", () => {
     emit("agent_start");
   });
 
-  pi.on("tool_execution_start", (event) => {
-    emit("tool_execution_start", {
+  pi.on("tool_call", (event) => {
+    const input = event && event.input;
+    emit("tool_call", {
       toolCallID: cleanString(event && event.toolCallId, 120),
       toolName: cleanString(event && event.toolName, 120),
-      files: uniqueStrings(collectPaths(event && event.args)),
+      detail: toolDetail(event && event.toolName, input),
+      files: uniqueStrings(collectPaths(input)),
     });
   });
 
-  pi.on("tool_execution_update", (event) => {
-    emit("tool_execution_update", {
-      toolCallID: cleanString(event && event.toolCallId, 120),
-      toolName: cleanString(event && event.toolName, 120),
-    });
-  });
-
-  pi.on("tool_execution_end", (event) => {
-    emit("tool_execution_end", {
+  pi.on("tool_result", (event) => {
+    emit("tool_result", {
       toolCallID: cleanString(event && event.toolCallId, 120),
       toolName: cleanString(event && event.toolName, 120),
       isError: Boolean(event && event.isError),
       files: uniqueStrings([
-        ...collectPaths(event && event.args),
-        ...collectPaths(event && event.result),
+        ...collectPaths(event && event.input),
+        ...collectPaths(event && event.details),
       ]),
     });
   });

@@ -35,6 +35,17 @@ enum PiExtensionEventParser {
                 )
             )
 
+        case "before_agent_start":
+            commands.append(
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .working,
+                    summary: "Working",
+                    detail: normalizedString(object["prompt"], limit: 160) ?? "Responding to your prompt"
+                )
+            )
+
         case "agent_start":
             commands.append(
                 .sessionStatus(
@@ -46,27 +57,31 @@ enum PiExtensionEventParser {
                 )
             )
 
-        case "tool_execution_start", "tool_execution_update":
+        case "tool_call", "tool_execution_start", "tool_execution_update":
             commands.append(
                 .sessionStatus(
                     sessionID: sessionID,
                     panelID: panelID,
                     kind: .working,
                     summary: "Working",
-                    detail: toolDetail(from: object) ?? "Pi is using a tool"
+                    detail: normalizedString(object["detail"], limit: 160)
+                        ?? toolDetail(from: object)
+                        ?? "Pi is using a tool"
                 )
             )
 
-        case "tool_execution_end":
-            commands.append(
-                .sessionStatus(
-                    sessionID: sessionID,
-                    panelID: panelID,
-                    kind: .working,
-                    summary: "Working",
-                    detail: toolEndDetail(from: object) ?? "Pi finished a tool"
+        case "tool_result", "tool_execution_end":
+            if boolValue(object["isError"]) == true {
+                commands.append(
+                    .sessionStatus(
+                        sessionID: sessionID,
+                        panelID: panelID,
+                        kind: .working,
+                        summary: "Working",
+                        detail: toolFailureDetail(from: object) ?? "Tool failed"
+                    )
                 )
-            )
+            }
 
         case "agent_end":
             commands.append(
@@ -75,7 +90,7 @@ enum PiExtensionEventParser {
                     panelID: panelID,
                     kind: .ready,
                     summary: "Ready",
-                    detail: "Turn complete"
+                    detail: nil
                 )
             )
 
@@ -175,15 +190,11 @@ private extension PiExtensionEventParser {
         return "Using \(displayToolName(toolName))"
     }
 
-    static func toolEndDetail(from object: [String: Any]) -> String? {
+    static func toolFailureDetail(from object: [String: Any]) -> String? {
         guard let toolName = normalizedString(object["toolName"], limit: 80) else {
             return nil
         }
-        let displayName = displayToolName(toolName)
-        if boolValue(object["isError"]) == true {
-            return "\(displayName) failed"
-        }
-        return "Finished \(displayName)"
+        return "\(displayToolName(toolName)) failed"
     }
 
     static func boolValue(_ value: Any?) -> Bool {

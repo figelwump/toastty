@@ -314,13 +314,13 @@ struct AgentEventParsersTests {
     }
 
     @Test
-    func piToolExecutionMapsStatusAndChangedFiles() throws {
+    func piBeforeAgentStartMapsPromptToWorkingStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .piExtension,
             sessionID: "sess-123",
             panelID: nil,
             payload: Data(
-                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"tool_execution_end","toolName":"edit","files":["Sources/App/ToasttyApp.swift","Sources/App/ToasttyApp.swift"],"isError":false}"#.utf8
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"before_agent_start","prompt":"Investigate the Pi sidebar status updates"}"#.utf8
             )
         )
 
@@ -330,8 +330,52 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 kind: .working,
                 summary: "Working",
-                detail: "Finished Edit"
+                detail: "Investigate the Pi sidebar status updates"
+            )
+        ])
+    }
+
+    @Test
+    func piToolCallUsesSemanticDetailAndChangedFiles() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"tool_call","toolName":"grep","detail":"Searching for AgentKind","files":["Sources/Core/Sessions"]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Searching for AgentKind"
             ),
+            .sessionUpdateFiles(
+                sessionID: "sess-123",
+                panelID: nil,
+                files: ["Sources/Core/Sessions"],
+                cwd: nil,
+                repoRoot: nil
+            ),
+        ])
+    }
+
+    @Test
+    func piSuccessfulToolResultOnlyUpdatesChangedFiles() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"tool_result","toolName":"edit","files":["Sources/App/ToasttyApp.swift","Sources/App/ToasttyApp.swift"],"isError":false}"#.utf8
+            )
+        )
+
+        #expect(commands == [
             .sessionUpdateFiles(
                 sessionID: "sess-123",
                 panelID: nil,
@@ -339,6 +383,50 @@ struct AgentEventParsersTests {
                 cwd: nil,
                 repoRoot: nil
             ),
+        ])
+    }
+
+    @Test
+    func piFailedToolResultMapsToFailureStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"tool_result","toolName":"bash","isError":true}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Bash failed"
+            )
+        ])
+    }
+
+    @Test
+    func piAgentEndClearsTurnCompleteDetail() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"agent_end"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: nil
+            )
         ])
     }
 

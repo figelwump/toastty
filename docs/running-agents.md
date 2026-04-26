@@ -170,7 +170,7 @@ When the profile ID is `pi`, Toastty:
 1. **Injects a bundled Toastty-owned Pi extension** with `--extension <toastty-pi-extension.js>`. Toastty does not install files into Pi's user extension directories.
 2. **Preserves user extensions**. User-provided `--extension` / `-e` arguments remain in `argv`; Pi treats extensions as additive, so Toastty adds its extension alongside them.
 3. **Respects Pi extension opt-out flags**. If `--no-extensions` or `-ne` appears before `--`, Toastty does not inject its Pi extension for that launch.
-4. **Reports compact telemetry** through `toastty session ingest-agent-event --source pi-extension`, covering session start/shutdown, agent start/end, tool progress, tool errors, and changed-file paths when Pi exposes them.
+4. **Reports compact telemetry** through `toastty session ingest-agent-event --source pi-extension`, covering the submitted prompt, semantic tool-call progress, tool errors, and changed-file paths when Pi exposes them. Successful tool results update changed-file metadata without replacing the sidebar with generic `Finished ...` messages.
 5. **Avoids prompt and tool-output forwarding**. The extension records bounded metadata only and is a no-op outside Toastty when required `TOASTTY_*` environment variables are absent.
 
 ## Launch flow
