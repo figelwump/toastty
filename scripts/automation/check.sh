@@ -42,6 +42,7 @@ resolve_app_path() {
       -workspace toastty.xcworkspace \
       -scheme "$scheme" \
       -configuration "$configuration" \
+      -destination "platform=macOS,arch=${ARCH}" \
       -showBuildSettings
   )"
   target_build_dir="$(printf '%s\n' "$build_settings" | awk -F ' = ' '/ TARGET_BUILD_DIR = / { print $2; exit }')"
@@ -53,6 +54,89 @@ resolve_app_path() {
   fi
 
   printf '%s/%s\n' "$target_build_dir" "$full_product_name"
+}
+
+resolve_app_target_build_dir() {
+  local scheme="$1"
+  local configuration="$2"
+  local build_settings
+  local target_build_dir
+
+  build_settings="$(
+    xcodebuild \
+      -workspace toastty.xcworkspace \
+      -scheme "$scheme" \
+      -configuration "$configuration" \
+      -destination "platform=macOS,arch=${ARCH}" \
+      -showBuildSettings
+  )"
+  target_build_dir="$(printf '%s\n' "$build_settings" | awk -F ' = ' '/ TARGET_BUILD_DIR = / { print $2; exit }')"
+
+  if [[ -z "$target_build_dir" ]]; then
+    echo "error: failed to resolve build products directory for scheme ${scheme} (${configuration})" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$target_build_dir"
+}
+
+verify_bundled_helper_match() {
+  local label="$1"
+  local source_path="$2"
+  local bundled_path="$3"
+
+  if [[ ! -x "$source_path" ]]; then
+    echo "error: expected built ${label} at ${source_path}" >&2
+    return 1
+  fi
+
+  if [[ ! -x "$bundled_path" ]]; then
+    echo "error: expected bundled ${label} at ${bundled_path}" >&2
+    return 1
+  fi
+
+  if ! cmp -s "$source_path" "$bundled_path"; then
+    echo "error: bundled ${label} does not match the freshly built product" >&2
+    shasum -a 256 "$source_path" "$bundled_path" >&2 || true
+    return 1
+  fi
+}
+
+verify_bundled_helper_executables() {
+  local scheme="$1"
+  local configuration="$2"
+  local app_path
+  local target_build_dir
+  local cli_source_path
+  local cli_bundled_path
+  local shim_source_path
+  local shim_bundled_path
+
+  app_path="$(resolve_app_path "$scheme" "$configuration")" || return 1
+  target_build_dir="$(resolve_app_target_build_dir "$scheme" "$configuration")" || return 1
+
+  cli_source_path="$target_build_dir/toastty"
+  cli_bundled_path="$app_path/Contents/Helpers/toastty"
+  verify_bundled_helper_match "Toastty CLI" "$cli_source_path" "$cli_bundled_path" || return 1
+
+  shim_source_path="$target_build_dir/toastty-agent-shim"
+  if [[ ! -x "$shim_source_path" ]]; then
+    shim_source_path="$target_build_dir/toastty_agent_shim"
+  fi
+  shim_bundled_path="$app_path/Contents/Helpers/toastty-agent-shim"
+  verify_bundled_helper_match "agent shim" "$shim_source_path" "$shim_bundled_path" || return 1
+}
+
+build_app_scheme_for_verification() {
+  local scheme="$1"
+  local configuration="$2"
+
+  xcodebuild \
+    -workspace toastty.xcworkspace \
+    -scheme "$scheme" \
+    -configuration "$configuration" \
+    -destination "platform=macOS,arch=${ARCH}" \
+    build
 }
 
 verify_child_process_tcc_metadata() {
@@ -151,11 +235,27 @@ if ! run_tuist build; then
   exit 10
 fi
 
+if ! build_app_scheme_for_verification "ToasttyApp" "Debug"; then
+  exit 10
+fi
+
 if ! verify_child_process_tcc_metadata "ToasttyApp" "Debug"; then
   exit 10
 fi
 
+if ! verify_bundled_helper_executables "ToasttyApp" "Debug"; then
+  exit 10
+fi
+
+if ! build_app_scheme_for_verification "ToasttyApp-Release" "Release"; then
+  exit 10
+fi
+
 if ! verify_child_process_tcc_metadata "ToasttyApp-Release" "Release"; then
+  exit 10
+fi
+
+if ! verify_bundled_helper_executables "ToasttyApp-Release" "Release"; then
   exit 10
 fi
 

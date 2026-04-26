@@ -157,8 +157,69 @@ func applyGhosttyVariantLinkSettings(
 
 var appDependencies: [TargetDependency] = [
     .target(name: "CoreState"),
+    .target(name: "toastty"),
+    .target(name: "toastty-agent-shim"),
     .external(name: "Sparkle"),
 ]
+
+let bundleToasttyHelpersScript = """
+set -euo pipefail
+
+helpers_dir="${CODESIGNING_FOLDER_PATH}/Contents/Helpers"
+mkdir -p "$helpers_dir"
+
+sign_helper_if_needed() {
+  local helper_path="$1"
+
+  if [[ "${CODE_SIGNING_ALLOWED:-NO}" != "YES" ]]; then
+    return
+  fi
+
+  local sign_identity="${EXPANDED_CODE_SIGN_IDENTITY:-}"
+  if [[ -z "$sign_identity" ]]; then
+    sign_identity="${CODE_SIGN_IDENTITY:-}"
+  fi
+  if [[ -z "$sign_identity" || "$sign_identity" == "Don't Code Sign" ]]; then
+    return
+  fi
+
+  /usr/bin/codesign --force --sign "$sign_identity" --timestamp=none "$helper_path"
+}
+
+copy_helper() {
+  local label="$1"
+  local destination_name="$2"
+  shift 2
+
+  local source_path=""
+  local source_name
+  for source_name in "$@"; do
+    local candidate="${BUILT_PRODUCTS_DIR}/${source_name}"
+    if [[ -x "$candidate" ]]; then
+      source_path="$candidate"
+      break
+    fi
+  done
+
+  if [[ -z "$source_path" ]]; then
+    echo "error: expected built ${label} at one of:" >&2
+    for source_name in "$@"; do
+      echo "  ${BUILT_PRODUCTS_DIR}/${source_name}" >&2
+    done
+    exit 1
+  fi
+
+  local destination_path="${helpers_dir}/${destination_name}"
+  chmod 755 "$source_path"
+  sign_helper_if_needed "$source_path"
+  rm -f "$destination_path"
+  ditto "$source_path" "$destination_path"
+  chmod 755 "$destination_path"
+}
+
+copy_helper "Toastty CLI" "toastty" "toastty"
+copy_helper "agent shim" "toastty-agent-shim" "toastty-agent-shim" "toastty_agent_shim"
+"""
 
 var appTestTargetSettingsBase: SettingsDictionary = [
     "CODE_SIGNING_ALLOWED": "YES",
@@ -303,6 +364,13 @@ let project = Project(
                 ),
                 .folderReference(path: "Sources/App/Resources/WebPanels"),
                 "docs/keyboard-shortcuts.md",
+            ],
+            scripts: [
+                .post(
+                    script: bundleToasttyHelpersScript,
+                    name: "Bundle Toastty Helper Executables",
+                    basedOnDependencyAnalysis: false
+                ),
             ],
             dependencies: appDependencies,
             settings: appTargetSettings
