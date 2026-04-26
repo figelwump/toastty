@@ -79,6 +79,11 @@ struct RightAuxPanelView: View {
                 metadata: [
                     "workspaceID": workspace.id.uuidString,
                     "workspaceTabID": workspaceTab.id.uuidString,
+                    "isWorkspaceSelected": "\(isWorkspaceSelected)",
+                    "isWorkspaceTabSelected": "\(isWorkspaceTabSelected)",
+                    "rightAuxPanelVisible": "\(workspaceTab.rightAuxPanel.isVisible)",
+                    "acceptsPanelInteraction": "\(acceptsPanelInteraction)",
+                    "effectiveContentWidth": String(format: "%.1f", effectiveContentWidth),
                 ],
                 cursor: .resizeLeftRight,
                 onBegan: { _ in
