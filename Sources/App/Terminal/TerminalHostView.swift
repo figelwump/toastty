@@ -31,7 +31,7 @@ final class TerminalHostView: NSView {
     var requestFirstResponderIfNeeded: (() -> Void)?
     var handleLocalInterruptKey: ((TerminalLocalInterruptKind) -> Void)?
     private var pendingImageFileDrop: PreparedImageFileDrop?
-    private var pendingVisibilitySyncTask: Task<Void, Never>?
+    private var pendingVisibilitySyncGeneration = 0
     private var mouseTrackingArea: NSTrackingArea?
     private weak var observedWindow: NSWindow?
     private var windowOcclusionObserver: NSObjectProtocol?
@@ -291,11 +291,15 @@ final class TerminalHostView: NSView {
         }
     }
 
-    @MainActor deinit {
+    deinit {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        pendingVisibilitySyncTask?.cancel()
-        if let windowOcclusionObserver {
-            NotificationCenter.default.removeObserver(windowOcclusionObserver)
+        // Keep the deinitializer synchronous. The back-deployed @MainActor
+        // deinit path has crashed during XCTest host teardown on macOS.
+        MainActor.assumeIsolated {
+            invalidatePendingVisibilitySync()
+            if let windowOcclusionObserver {
+                NotificationCenter.default.removeObserver(windowOcclusionObserver)
+            }
         }
         #endif
     }
@@ -491,8 +495,7 @@ final class TerminalHostView: NSView {
             return
         }
 
-        pendingVisibilitySyncTask?.cancel()
-        pendingVisibilitySyncTask = nil
+        invalidatePendingVisibilitySync()
         applySurfaceVisibility(visible: visible, reason: reason)
     }
 
@@ -510,16 +513,23 @@ final class TerminalHostView: NSView {
     }
 
     private func scheduleDeferredVisibilitySync() {
-        pendingVisibilitySyncTask?.cancel()
-        pendingVisibilitySyncTask = Task { @MainActor [weak self] in
-            await Task.yield()
-            guard let self else { return }
-            self.pendingVisibilitySyncTask = nil
+        invalidatePendingVisibilitySync()
+        let generation = pendingVisibilitySyncGeneration
+        // Use a generation token instead of storing a Swift Task so teardown
+        // does not have to destroy task-local state from NSView deallocation.
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.pendingVisibilitySyncGeneration == generation else { return }
+            self.invalidatePendingVisibilitySync()
             self.applySurfaceVisibility(
                 visible: self.resolvedSurfaceVisibility(includeTransparentAncestors: false),
                 reason: "deferred_window_reattach_check"
             )
         }
+    }
+
+    private func invalidatePendingVisibilitySync() {
+        pendingVisibilitySyncGeneration &+= 1
     }
 
     private var alphaChainIsEffectivelyTransparent: Bool {

@@ -5,9 +5,9 @@
 - **Install packages:** `tuist install` after cloning and whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes. Repo scripts do this automatically where needed.
 - **Fresh worktree bootstrap:** `./scripts/dev/bootstrap-worktree.sh` links local Ghostty artifacts from another Toastty worktree when needed, then runs `tuist install` and `tuist generate --no-open`.
 - **Regenerate:** `tuist generate` after any project/dependency/build-setting change, or after source file adds/renames/deletes or branch switches. The generated `.xcodeproj`/`.xcworkspace` are gitignored and never updated by Git, leaving Xcode with stale references (symptom: `Build input file cannot be found`).
-- **Build:** `ARCH="$(uname -m)"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
+- **Build:** `ARCH="${ARCH:-$(if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then echo arm64; else uname -m; fi)}"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
 - **Full gate:** `./scripts/automation/check.sh` (generate + build + test)
-- If Rosetta is active, set `ARCH` explicitly. Prefer invocation-scoped overrides (`ARCHS`, `ONLY_ACTIVE_ARCH=YES`) over mutating project settings.
+- Avoid deriving `ARCH` from `uname -m` in translated shells or inside `sv exec`; it may report `x86_64` on arm64 hosts. Set `ARCH=arm64` explicitly for agent/remote runs unless intentionally validating Rosetta. Prefer invocation-scoped overrides (`ARCHS`, `ONLY_ACTIVE_ARCH=YES`) over mutating project settings.
 
 ## Release Workflow
 - **Ghostty release provenance:** install release artifacts with `GHOSTTY_BUILD_FLAGS=... ./scripts/ghostty/install-local-xcframework.sh`; the installer writes ignored sidecar metadata under `Dependencies/GhosttyKit.Release.metadata.env`.
@@ -29,7 +29,7 @@ sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui --require-remote
 **Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 - Committed planning docs belong in `docs/plans/`, not under `artifacts/`.
 - Agent-driven smoke validation should start with `sv exec -- scripts/remote/validate.sh --smoke-test ...`. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI env is injected there. Supported smoke tests are `smoke-ui`, `workspace-tabs`, `shortcut-hints`, and `shortcut-trace`. Use `--require-remote` when the remote path itself must succeed. Use `--scope`, `--ref`, and `--run-label` when you need a non-default export scope or stable artifact label.
-- Agent-driven `xcodebuild test` runs should start with `sv exec -- scripts/remote/test.sh -- ...`, not direct local `xcodebuild test`. Pass `xcodebuild` flags after `--`; the wrapper defaults workspace/scheme/configuration/destination when omitted and owns the `test` action plus `-derivedDataPath` and `-resultBundlePath`. Use `--scope`, `--ref`, and `--run-label` as needed.
+- Agent-driven `xcodebuild test` runs should start with `sv exec -- scripts/remote/test.sh -- ...`, not direct local `xcodebuild test`. Pass `xcodebuild` flags after `--`; the wrapper defaults workspace/scheme/configuration/destination when omitted and owns the `test` action plus `-derivedDataPath` and `-resultBundlePath`. Prefer omitting `-destination` for remote tests, or set `arch=arm64` explicitly; do not derive the destination from `uname -m` inside `sv exec`, because that shell may report `x86_64` while the remote Mac is arm64. Remote `x86_64` test destinations are blocked by default after Rosetta hangs left orphaned `xcodebuild`/test-host processes; only override with `TOASTTY_ALLOW_REMOTE_X86_64_TESTS=1` when you are intentionally validating Rosetta. Use `--scope`, `--ref`, and `--run-label` as needed.
 - Use local smoke helpers only when the user explicitly wants a local run, the check is local-only, or the remote wrapper path has already fallen back or failed and you are intentionally continuing locally. The local helper roles are listed once in `Automation Details` below.
 - For live UI validation of a running app instance, use `.agents/skills/toastty-dev-run/SKILL.md` together with the global `peekaboo` skill. Do not invent an ad-hoc launch flow when the skill applies.
 - Use `peekaboo` for menus, shortcuts, focus, window state, and visual inspection of a running Toastty instance. Do not use it for build verification, log inspection, or checks that automation/unit tests already cover.
@@ -87,13 +87,16 @@ sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui --require-remote
   - `--scope working-tree|head|ref`, `--ref <git-ref>`, and `--run-label <label>` control export scope and artifact labeling.
 - **`test.sh`** — runs `xcodebuild test` on the remote macOS host over SSH, then copies the remote logs and `.xcresult` bundle back locally. Run it under `sv exec --`. Key usage:
   - pass `xcodebuild` flags after `--`
+  - prefer omitting `-destination`; if a destination is required for the remote Mac, use `platform=macOS,arch=arm64` unless intentionally testing Rosetta with `TOASTTY_ALLOW_REMOTE_X86_64_TESTS=1`
   - use `--scope working-tree|head|ref`, `--ref <git-ref>`, and `--run-label <label>` when needed
   - the wrapper always owns the `test` action, `-derivedDataPath`, and `-resultBundlePath`
+  - remote `xcodebuild` is killed after `TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS` seconds (default 3600; set `0` to disable) and the wrapper cleans up the spawned process tree on timeout or interruption
 - **Smoke env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`
 - **CLI live-control smoke env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `ARCH`, `TOASTTY_CLI_LIVE_RESTORE_FRONT_APP`
 - **Shortcut-hints env:** `RUN_ID`, `FIXTURE`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`, `TOASTTY_SHORTCUT_HINTS_RESTORE_FRONT_APP`
 - **Shortcut-trace env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`, `TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE`
 - **Remote GUI env:** `TOASTTY_REMOTE_GUI_HOST`, `TOASTTY_REMOTE_GUI_REPO_ROOT`, `TOASTTY_REMOTE_GUI_ROOT`
+- **Remote test env:** `TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS` (default `3600`, `0` disables), `TOASTTY_ALLOW_REMOTE_X86_64_TESTS` (set `1` only for intentional Rosetta validation)
 - **Manual/Xcode env:** `TOASTTY_RUNTIME_HOME` or `TOASTTY_DEV_WORKTREE_ROOT`, plus `TOASTTY_SOCKET_PATH` if you need a specific socket path
 
 ## Logging

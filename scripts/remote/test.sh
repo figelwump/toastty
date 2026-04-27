@@ -9,6 +9,8 @@ RUN_LABEL="${RUN_LABEL:-test-$(date +%Y%m%d-%H%M%S)}"
 VALIDATION_SCOPE="working-tree"
 REF_SPEC=""
 KEEP_REMOTE=0
+SETUP_ERROR_EXIT_CODE=78
+DEFAULT_REMOTE_TEST_TIMEOUT_SECONDS=3600
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
 REMOTE_HOST="${TOASTTY_REMOTE_GUI_HOST:-}"
@@ -36,6 +38,10 @@ Options:
   --run-label <label>                   Stable label used for local and remote artifacts
   --keep-remote                         Keep the remote worktree and run directory after completion
   --remote-exec                         Internal mode used on the remote host
+
+Optional environment:
+  TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS    Remote xcodebuild timeout in seconds (default: 3600, 0 disables)
+  TOASTTY_ALLOW_REMOTE_X86_64_TESTS      Set to 1 to allow Rosetta x86_64 remote test destinations
   -h, --help                            Show this help
 
 Xcodebuild options:
@@ -297,6 +303,33 @@ assert_supported_xcodebuild_args() {
   done
 }
 
+xcodebuild_args_request_x86_64_macos() {
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == *"platform=macOS"* && "$arg" == *"arch=x86_64"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_non_negative_integer() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+kill_process_tree() {
+  local root_pid="$1"
+  local signal_name="${2:-TERM}"
+  local child_pid
+
+  while IFS= read -r child_pid; do
+    [[ -n "$child_pid" ]] || continue
+    kill_process_tree "$child_pid" "$signal_name"
+  done < <(pgrep -P "$root_pid" 2>/dev/null || true)
+
+  kill "-$signal_name" "$root_pid" >/dev/null 2>&1 || true
+}
+
 copy_remote_result() {
   local remote_run_root="$1"
   log "Copying remote artifacts back"
@@ -310,6 +343,8 @@ wait_for_remote_completion() {
   local remote_worktree_dir="$1"
   local remote_run_root="$2"
   local xcodebuild_args_b64="$3"
+  local remote_timeout_seconds="${TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS:-$DEFAULT_REMOTE_TEST_TIMEOUT_SECONDS}"
+  local allow_remote_x86_64_tests="${TOASTTY_ALLOW_REMOTE_X86_64_TESTS:-0}"
   local remote_stdout="$LOCAL_ARTIFACTS_DIR/remote-stdout.log"
   local remote_stderr="$LOCAL_ARTIFACTS_DIR/remote-stderr.log"
   local ssh_exit_code=0
@@ -320,6 +355,8 @@ wait_for_remote_completion() {
       "$remote_worktree_dir" \
       "$SCRIPT_PATH" \
       "$xcodebuild_args_b64" \
+      "$remote_timeout_seconds" \
+      "$allow_remote_x86_64_tests" \
       > >(tee "$remote_stdout") \
       2> >(tee "$remote_stderr" >&2) <<'EOF'; then
 set -euo pipefail
@@ -328,10 +365,14 @@ remote_run_root="$2"
 remote_worktree_dir="$3"
 script_path="$4"
 xcodebuild_args_b64="$5"
+remote_timeout_seconds="$6"
+allow_remote_x86_64_tests="$7"
 export TOASTTY_REMOTE_TEST_RUN_LABEL="$run_label"
 export TOASTTY_REMOTE_TEST_REMOTE_RUN_ROOT="$remote_run_root"
 export TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR="$remote_worktree_dir"
 export TOASTTY_REMOTE_TEST_XCODEBUILD_ARGS_B64="$xcodebuild_args_b64"
+export TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS="$remote_timeout_seconds"
+export TOASTTY_ALLOW_REMOTE_X86_64_TESTS="$allow_remote_x86_64_tests"
 cd "$remote_worktree_dir"
 /bin/bash "$script_path" --remote-exec
 EOF
@@ -533,33 +574,113 @@ EOF
   local runtime_home="$remote_run_root/runtime-home"
   local result_bundle="$remote_run_root/TestResults.xcresult"
   local xcodebuild_log="$remote_run_root/xcodebuild.log"
+  local timeout_marker="$remote_run_root/xcodebuild.timeout"
   local xcodebuild_command
   xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
   local exit_code=0
   local status="pass"
   local failure_summary=""
+  local remote_arch
+  remote_arch="$(uname -m)"
+  local timeout_seconds="${TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS:-$DEFAULT_REMOTE_TEST_TIMEOUT_SECONDS}"
+  local allow_remote_x86_64_tests="${TOASTTY_ALLOW_REMOTE_X86_64_TESTS:-0}"
+  local xcodebuild_pid=""
+  local tail_pid=""
+  local watchdog_pid=""
 
   mkdir -p "$remote_run_root" "$runtime_home"
-  rm -rf "$derived_path" "$result_bundle"
+  rm -rf "$derived_path" "$result_bundle" "$timeout_marker"
+  : >"$xcodebuild_log"
 
-  ./scripts/dev/bootstrap-worktree.sh >/dev/null
+  cleanup_remote_xcodebuild() {
+    local cleanup_exit_code=$?
+    if [[ -n "${watchdog_pid:-}" ]]; then
+      kill "$watchdog_pid" >/dev/null 2>&1 || true
+      wait "$watchdog_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${tail_pid:-}" ]]; then
+      kill "$tail_pid" >/dev/null 2>&1 || true
+      wait "$tail_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${xcodebuild_pid:-}" ]] && kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+      kill_process_tree "$xcodebuild_pid" TERM
+      sleep 2
+      if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+        kill_process_tree "$xcodebuild_pid" KILL
+      fi
+      wait "$xcodebuild_pid" >/dev/null 2>&1 || true
+    fi
+    return "$cleanup_exit_code"
+  }
+  trap cleanup_remote_xcodebuild EXIT HUP INT TERM
 
-  if (
-    set -o pipefail
-    cd "$remote_worktree_dir"
-    TOASTTY_RUNTIME_HOME="$runtime_home" \
-    TOASTTY_DEV_WORKTREE_ROOT="$remote_worktree_dir" \
-    xcodebuild \
-      "${xcodebuild_args[@]}" \
-      -derivedDataPath "$derived_path" \
-      -resultBundlePath "$result_bundle" \
-      test 2>&1 | tee "$xcodebuild_log"
-  ); then
-    :
+  if [[ "$remote_arch" == "arm64" && "$allow_remote_x86_64_tests" != "1" ]] &&
+     xcodebuild_args_request_x86_64_macos "${xcodebuild_args[@]}"; then
+    exit_code=$SETUP_ERROR_EXIT_CODE
+    status="setup_error"
+    failure_summary="Remote xcodebuild test requested macOS x86_64 on an arm64 host; this has been observed to leave orphaned Rosetta xcodebuild/test-host processes. Use arch=arm64 or set TOASTTY_ALLOW_REMOTE_X86_64_TESTS=1."
+  elif ! is_non_negative_integer "$timeout_seconds"; then
+    exit_code=$SETUP_ERROR_EXIT_CODE
+    status="setup_error"
+    failure_summary="TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS must be a non-negative integer: ${timeout_seconds}"
   else
-    exit_code=$?
-    status="fail"
-    failure_summary="Remote xcodebuild test exited with status ${exit_code}"
+    ./scripts/dev/bootstrap-worktree.sh >/dev/null
+
+    tail -n +1 -f "$xcodebuild_log" &
+    tail_pid=$!
+
+    (
+      cd "$remote_worktree_dir"
+      TOASTTY_RUNTIME_HOME="$runtime_home" \
+      TOASTTY_DEV_WORKTREE_ROOT="$remote_worktree_dir" \
+      xcodebuild \
+        "${xcodebuild_args[@]}" \
+        -derivedDataPath "$derived_path" \
+        -resultBundlePath "$result_bundle" \
+        test >"$xcodebuild_log" 2>&1
+    ) &
+    xcodebuild_pid=$!
+
+    if [[ "$timeout_seconds" != "0" ]]; then
+      (
+        sleep "$timeout_seconds"
+        if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+          printf 'error: remote xcodebuild test timed out after %s seconds\n' "$timeout_seconds" >>"$xcodebuild_log"
+          : >"$timeout_marker"
+          kill_process_tree "$xcodebuild_pid" TERM
+          sleep 5
+          if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
+            kill_process_tree "$xcodebuild_pid" KILL
+          fi
+        fi
+      ) &
+      watchdog_pid=$!
+    fi
+
+    if wait "$xcodebuild_pid"; then
+      :
+    else
+      exit_code=$?
+      status="fail"
+      if [[ -f "$timeout_marker" ]]; then
+        exit_code=124
+        failure_summary="Remote xcodebuild test timed out after ${timeout_seconds} seconds"
+      else
+        failure_summary="Remote xcodebuild test exited with status ${exit_code}"
+      fi
+    fi
+
+    xcodebuild_pid=""
+    if [[ -n "$watchdog_pid" ]]; then
+      kill "$watchdog_pid" >/dev/null 2>&1 || true
+      wait "$watchdog_pid" >/dev/null 2>&1 || true
+      watchdog_pid=""
+    fi
+    if [[ -n "$tail_pid" ]]; then
+      kill "$tail_pid" >/dev/null 2>&1 || true
+      wait "$tail_pid" >/dev/null 2>&1 || true
+      tail_pid=""
+    fi
   fi
 
   local ended_at
