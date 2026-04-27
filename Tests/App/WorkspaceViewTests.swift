@@ -61,6 +61,31 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceAgentTopBarModel.addAgentsTitle, "Get Started…")
     }
 
+    func testWorkspaceAgentTopBarModelHidesAllButtonsWhenDisabled() {
+        let catalog = AgentCatalog(
+            profiles: [
+                AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"])
+            ],
+            showsTopBarButtons: false
+        )
+
+        let model = WorkspaceAgentTopBarModel(
+            catalog: catalog,
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: catalog)
+        )
+
+        XCTAssertFalse(model.showsTopBarButtons)
+        XCTAssertTrue(model.actions.isEmpty)
+        XCTAssertFalse(model.showsAddAgentsButton)
+
+        let emptyHiddenCatalog = AgentCatalog(profiles: [], showsTopBarButtons: false)
+        let emptyHiddenModel = WorkspaceAgentTopBarModel(
+            catalog: emptyHiddenCatalog,
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog)
+        )
+        XCTAssertFalse(emptyHiddenModel.showsAddAgentsButton)
+    }
+
     func testWorkspaceTabTrailingAccessoryUsesCloseButtonWhenHovered() {
         XCTAssertEqual(
             WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: true, showsCloseAffordance: true),

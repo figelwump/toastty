@@ -2781,15 +2781,22 @@ struct WorkspaceAgentTopBarModel: Equatable {
     }
 
     let actions: [Action]
+    let showsTopBarButtons: Bool
 
     var showsAddAgentsButton: Bool {
-        actions.isEmpty
+        showsTopBarButtons && actions.isEmpty
     }
 
     init(
         catalog: AgentCatalog,
         profileShortcutRegistry: ProfileShortcutRegistry
     ) {
+        showsTopBarButtons = catalog.showsTopBarButtons
+        guard catalog.showsTopBarButtons else {
+            actions = []
+            return
+        }
+
         actions = catalog.profiles.map { profile in
             let helpTextBase = "Run \(profile.displayName)"
             let helpText = profileShortcutRegistry.chord(
