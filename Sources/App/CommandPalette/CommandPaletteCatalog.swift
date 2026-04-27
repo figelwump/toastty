@@ -68,6 +68,9 @@ enum CommandPaletteCatalog {
             (.selectPreviousTab, actions.canSelectAdjacentTab(direction: .previous, originWindowID: originWindowID)),
             (.selectNextTab, actions.canSelectAdjacentTab(direction: .next, originWindowID: originWindowID)),
             (.jumpToNextActive, actions.canJumpToNextActive(originWindowID: originWindowID)),
+            (.manageConfig, actions.canManageConfig(originWindowID: originWindowID)),
+            (.manageTerminalProfiles, actions.canManageTerminalProfiles(originWindowID: originWindowID)),
+            (.manageAgents, actions.canManageAgents(originWindowID: originWindowID)),
             (.reloadConfiguration, actions.canReloadConfiguration()),
         ]
 

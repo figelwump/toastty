@@ -50,6 +50,12 @@ protocol CommandPaletteActionHandling: AnyObject {
     func launchAgent(profileID: String, originWindowID: UUID) -> Bool
     func canSplitWithTerminalProfile(originWindowID: UUID) -> Bool
     func splitWithTerminalProfile(profileID: String, direction: SlotSplitDirection, originWindowID: UUID) -> Bool
+    func canManageConfig(originWindowID: UUID) -> Bool
+    func manageConfig(originWindowID: UUID) -> Bool
+    func canManageTerminalProfiles(originWindowID: UUID) -> Bool
+    func manageTerminalProfiles(originWindowID: UUID) -> Bool
+    func canManageAgents(originWindowID: UUID) -> Bool
+    func manageAgents(originWindowID: UUID) -> Bool
     func canReloadConfiguration() -> Bool
     func reloadConfiguration() -> Bool
     func openFileResult(
@@ -75,6 +81,9 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let reloadConfigurationAction: @MainActor () -> Void
     private let openLocalDocumentAction: @MainActor (UUID?, WebPanelPlacement) -> Bool
     private let showScratchpadForCurrentSessionAction: @MainActor (UUID?) -> Bool
+    private let openManageConfigAction: @MainActor (UUID) -> Bool
+    private let openTerminalProfilesConfigurationAction: @MainActor (UUID) -> Bool
+    private let openAgentProfilesConfigurationAction: @MainActor (UUID) -> Bool
 
     init(
         store: AppStore,
@@ -89,6 +98,9 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         reloadConfigurationAction: @escaping @MainActor () -> Void,
         openLocalDocumentAction: @escaping @MainActor (UUID?, WebPanelPlacement) -> Bool,
         showScratchpadForCurrentSessionAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
+        openManageConfigAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        openTerminalProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        openAgentProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
         processWatchCommandController: ProcessWatchCommandController? = nil
     ) {
         self.store = store
@@ -108,6 +120,9 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         self.reloadConfigurationAction = reloadConfigurationAction
         self.openLocalDocumentAction = openLocalDocumentAction
         self.showScratchpadForCurrentSessionAction = showScratchpadForCurrentSessionAction
+        self.openManageConfigAction = openManageConfigAction
+        self.openTerminalProfilesConfigurationAction = openTerminalProfilesConfigurationAction
+        self.openAgentProfilesConfigurationAction = openAgentProfilesConfigurationAction
     }
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -410,6 +425,39 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         )
     }
 
+    func canManageConfig(originWindowID: UUID) -> Bool {
+        canOpenManagedConfiguration(originWindowID: originWindowID)
+    }
+
+    func manageConfig(originWindowID: UUID) -> Bool {
+        guard canManageConfig(originWindowID: originWindowID) else {
+            return false
+        }
+        return openManageConfigAction(originWindowID)
+    }
+
+    func canManageTerminalProfiles(originWindowID: UUID) -> Bool {
+        canOpenManagedConfiguration(originWindowID: originWindowID)
+    }
+
+    func manageTerminalProfiles(originWindowID: UUID) -> Bool {
+        guard canManageTerminalProfiles(originWindowID: originWindowID) else {
+            return false
+        }
+        return openTerminalProfilesConfigurationAction(originWindowID)
+    }
+
+    func canManageAgents(originWindowID: UUID) -> Bool {
+        canOpenManagedConfiguration(originWindowID: originWindowID)
+    }
+
+    func manageAgents(originWindowID: UUID) -> Bool {
+        guard canManageAgents(originWindowID: originWindowID) else {
+            return false
+        }
+        return openAgentProfilesConfigurationAction(originWindowID)
+    }
+
     func canReloadConfiguration() -> Bool {
         supportsConfigurationReload()
     }
@@ -538,6 +586,12 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return selectAdjacentTab(direction: .next, originWindowID: originWindowID)
         case .jumpToNextActive:
             return jumpToNextActive(originWindowID: originWindowID)
+        case .manageConfig:
+            return manageConfig(originWindowID: originWindowID)
+        case .manageTerminalProfiles:
+            return manageTerminalProfiles(originWindowID: originWindowID)
+        case .manageAgents:
+            return manageAgents(originWindowID: originWindowID)
         case .reloadConfiguration:
             return reloadConfiguration()
         }
@@ -557,6 +611,10 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             preferringUnreadSessionPanelIn: sessionRuntimeStore
         )
         return true
+    }
+
+    private func canOpenManagedConfiguration(originWindowID: UUID) -> Bool {
+        store?.commandSelection(preferredWindowID: originWindowID) != nil
     }
 
     private func paletteFilePlacementOverride(

@@ -39,6 +39,9 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case selectPreviousTab
     case selectNextTab
     case jumpToNextActive
+    case manageConfig
+    case manageTerminalProfiles
+    case manageAgents
     case reloadConfiguration
 
     private static let showSidebarTitle = "Show Sidebar"
@@ -119,6 +122,12 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "workspace.tab.select-next"
         case .jumpToNextActive:
             return "panel.focus-next-unread-or-active"
+        case .manageConfig:
+            return "app.config.manage"
+        case .manageTerminalProfiles:
+            return "terminal.profiles.manage"
+        case .manageAgents:
+            return "agent.profiles.manage"
         case .reloadConfiguration:
             return "app.reload-configuration"
         }
@@ -196,6 +205,12 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Select Next Tab"
         case .jumpToNextActive:
             return "Jump to Next Active"
+        case .manageConfig:
+            return "Manage Config"
+        case .manageTerminalProfiles:
+            return "Manage Terminal Profiles"
+        case .manageAgents:
+            return "Manage Agents"
         case .reloadConfiguration:
             return "Reload Configuration"
         }
@@ -273,6 +288,12 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ToasttyKeyboardShortcuts.selectNextTab
         case .jumpToNextActive:
             return ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel
+        case .manageConfig:
+            return nil
+        case .manageTerminalProfiles:
+            return nil
+        case .manageAgents:
+            return nil
         case .reloadConfiguration:
             return nil
         }
@@ -357,6 +378,12 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["tab", "next", "right", "forward"]
         case .jumpToNextActive:
             return ["jump", "next", "active", "unread", "attention", "panel"]
+        case .manageConfig:
+            return ["manage", "open", "configuration", "config", "settings", "preferences", "toastty", "toml"]
+        case .manageTerminalProfiles:
+            return ["manage", "open", "terminal", "profiles", "config", "toml"]
+        case .manageAgents:
+            return ["manage", "open", "agents", "agent", "profiles", "config", "toml"]
         case .reloadConfiguration:
             return ["reload", "configuration", "config", "preferences"]
         }

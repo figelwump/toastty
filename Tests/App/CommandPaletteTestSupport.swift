@@ -30,6 +30,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canLaunchAgentValue = true
     var allowedAgentProfileIDs: Set<String>?
     var canSplitWithTerminalProfileValue = true
+    var canManageConfigValue = true
+    var canManageTerminalProfilesValue = true
+    var canManageAgentsValue = true
     var canReloadValue = true
 
     var createWindowResult = true
@@ -53,6 +56,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var jumpToNextActiveResult = true
     var launchAgentResult = true
     var splitWithTerminalProfileResult = true
+    var manageConfigResult = true
+    var manageTerminalProfilesResult = true
+    var manageAgentsResult = true
     var reloadConfigurationResult = true
 
     var sidebarTitleValue = ToasttyBuiltInCommand.toggleSidebar.title
@@ -81,6 +87,9 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var launchedAgentCalls: [RecordedPaletteAgentLaunchCall] = []
     var terminalProfileSplitCalls: [RecordedPaletteTerminalProfileSplitCall] = []
     var openedFileResults: [RecordedPaletteFileOpenCall] = []
+    var managedConfigWindowIDs: [UUID] = []
+    var managedTerminalProfilesWindowIDs: [UUID] = []
+    var managedAgentsWindowIDs: [UUID] = []
     var reloadConfigurationCount = 0
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -353,6 +362,36 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return splitWithTerminalProfileResult
     }
 
+    func canManageConfig(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canManageConfigValue
+    }
+
+    func manageConfig(originWindowID: UUID) -> Bool {
+        managedConfigWindowIDs.append(originWindowID)
+        return manageConfigResult
+    }
+
+    func canManageTerminalProfiles(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canManageTerminalProfilesValue
+    }
+
+    func manageTerminalProfiles(originWindowID: UUID) -> Bool {
+        managedTerminalProfilesWindowIDs.append(originWindowID)
+        return manageTerminalProfilesResult
+    }
+
+    func canManageAgents(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canManageAgentsValue
+    }
+
+    func manageAgents(originWindowID: UUID) -> Bool {
+        managedAgentsWindowIDs.append(originWindowID)
+        return manageAgentsResult
+    }
+
     func canReloadConfiguration() -> Bool {
         canReloadValue
     }
@@ -451,6 +490,12 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return selectAdjacentTab(direction: .next, originWindowID: originWindowID)
             case .jumpToNextActive:
                 return jumpToNextActive(originWindowID: originWindowID)
+            case .manageConfig:
+                return manageConfig(originWindowID: originWindowID)
+            case .manageTerminalProfiles:
+                return manageTerminalProfiles(originWindowID: originWindowID)
+            case .manageAgents:
+                return manageAgents(originWindowID: originWindowID)
             case .reloadConfiguration:
                 return reloadConfiguration()
             }

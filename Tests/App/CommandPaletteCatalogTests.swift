@@ -30,6 +30,9 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.showScratchpadForCurrentSession.id, "scratchpad.show-current-session")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
+        XCTAssertEqual(ToasttyBuiltInCommand.manageConfig.id, "app.config.manage")
+        XCTAssertEqual(ToasttyBuiltInCommand.manageTerminalProfiles.id, "terminal.profiles.manage")
+        XCTAssertEqual(ToasttyBuiltInCommand.manageAgents.id, "agent.profiles.manage")
         XCTAssertEqual(ToasttyBuiltInCommand.reloadConfiguration.id, "app.reload-configuration")
     }
 
@@ -74,6 +77,9 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.selectPreviousTab.id,
                 ToasttyBuiltInCommand.selectNextTab.id,
                 ToasttyBuiltInCommand.jumpToNextActive.id,
+                ToasttyBuiltInCommand.manageConfig.id,
+                ToasttyBuiltInCommand.manageTerminalProfiles.id,
+                ToasttyBuiltInCommand.manageAgents.id,
                 ToasttyBuiltInCommand.reloadConfiguration.id,
             ]
         )
@@ -107,6 +113,9 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.canOpenLocalDocumentValue = false
         actions.canShowScratchpadForCurrentSessionValue = false
         actions.canWatchRunningCommandValue = false
+        actions.canManageConfigValue = false
+        actions.canManageTerminalProfilesValue = false
+        actions.canManageAgentsValue = false
         actions.canReloadValue = false
 
         let commands = makeCommands(actions: actions)
@@ -116,6 +125,9 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.openLocalFile.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.manageConfig.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.manageTerminalProfiles.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.manageAgents.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.reloadConfiguration.id }))
     }
 
@@ -235,6 +247,9 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.newWindow.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageConfig.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageTerminalProfiles.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageAgents.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "workspace.switch.\(workspaceID.uuidString)" })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "agent.run.codex" })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "terminal-profile.zmx.split-right" })).invocation, originWindowID: originWindowID))
@@ -242,6 +257,9 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(actions.createdWindowIDs, [originWindowID])
         XCTAssertEqual(actions.shownScratchpadWindowIDs, [originWindowID])
         XCTAssertEqual(actions.watchedRunningCommandWindowIDs, [originWindowID])
+        XCTAssertEqual(actions.managedConfigWindowIDs, [originWindowID])
+        XCTAssertEqual(actions.managedTerminalProfilesWindowIDs, [originWindowID])
+        XCTAssertEqual(actions.managedAgentsWindowIDs, [originWindowID])
         XCTAssertEqual(
             actions.workspaceSwitchCalls,
             [RecordedPaletteWorkspaceSwitchCall(workspaceID: workspaceID, originWindowID: originWindowID)]
@@ -254,6 +272,38 @@ final class CommandPaletteCatalogTests: XCTestCase {
             actions.terminalProfileSplitCalls,
             [RecordedPaletteTerminalProfileSplitCall(profileID: "zmx", direction: .right, originWindowID: originWindowID)]
         )
+    }
+
+    func testCatalogExecutesManagedConfigurationCommandsThroughActionHandler() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        var managedConfigWindowIDs: [UUID] = []
+        var managedTerminalProfilesWindowIDs: [UUID] = []
+        var managedAgentsWindowIDs: [UUID] = []
+        let actions = try makeLiveActions(
+            store: store,
+            openManageConfigAction: { windowID in
+                managedConfigWindowIDs.append(windowID)
+                return true
+            },
+            openTerminalProfilesConfigurationAction: { windowID in
+                managedTerminalProfilesWindowIDs.append(windowID)
+                return true
+            },
+            openAgentProfilesConfigurationAction: { windowID in
+                managedAgentsWindowIDs.append(windowID)
+                return true
+            }
+        )
+        let commands = makeCommands(originWindowID: originWindowID, actions: actions)
+
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageConfig.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageTerminalProfiles.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageAgents.id })).invocation, originWindowID: originWindowID))
+
+        XCTAssertEqual(managedConfigWindowIDs, [originWindowID])
+        XCTAssertEqual(managedTerminalProfilesWindowIDs, [originWindowID])
+        XCTAssertEqual(managedAgentsWindowIDs, [originWindowID])
     }
 
     func testCatalogDoesNotExecuteNewWorkspaceAfterOriginWindowCloses() throws {
@@ -472,7 +522,10 @@ final class CommandPaletteCatalogTests: XCTestCase {
     private func makeLiveActions(
         store: AppStore,
         sessionRuntimeStore providedSessionRuntimeStore: SessionRuntimeStore? = nil,
-        showScratchpadForCurrentSessionAction: @escaping @MainActor (UUID?) -> Bool = { _ in false }
+        showScratchpadForCurrentSessionAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
+        openManageConfigAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        openTerminalProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        openAgentProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false }
     ) throws -> CommandPaletteActionHandler {
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
@@ -520,7 +573,10 @@ final class CommandPaletteCatalogTests: XCTestCase {
             supportsConfigurationReload: { true },
             reloadConfigurationAction: {},
             openLocalDocumentAction: { _, _ in false },
-            showScratchpadForCurrentSessionAction: showScratchpadForCurrentSessionAction
+            showScratchpadForCurrentSessionAction: showScratchpadForCurrentSessionAction,
+            openManageConfigAction: openManageConfigAction,
+            openTerminalProfilesConfigurationAction: openTerminalProfilesConfigurationAction,
+            openAgentProfilesConfigurationAction: openAgentProfilesConfigurationAction
         )
     }
 }

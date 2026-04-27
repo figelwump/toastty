@@ -1939,15 +1939,9 @@ struct ToasttyApp: App {
                 )
             },
             openProfilesConfigurationAction: { [store] in
-                ToasttyMenuActions.openTerminalProfilesConfiguration(
-                    openManagedLocalDocument: { fileURL, format in
-                        openManagedLocalDocumentInToastty(
-                            store: store,
-                            fileURL: fileURL,
-                            format: format,
-                            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
-                        )
-                    }
+                Self.openTerminalProfilesConfiguration(
+                    store: store,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
                 )
             }
         )
@@ -2002,6 +1996,15 @@ struct ToasttyApp: App {
                     sessionRuntimeStore: sessionRuntimeStore,
                     documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
                 )
+            },
+            openManageConfigAction: { [store] originWindowID in
+                Self.openManageConfig(store: store, preferredWindowID: originWindowID)
+            },
+            openTerminalProfilesConfigurationAction: { [store] originWindowID in
+                Self.openTerminalProfilesConfiguration(store: store, preferredWindowID: originWindowID)
+            },
+            openAgentProfilesConfigurationAction: { [store] originWindowID in
+                Self.openAgentProfilesConfiguration(store: store, preferredWindowID: originWindowID)
             },
             processWatchCommandController: processWatchCommandController
         )
@@ -2525,9 +2528,30 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openAgentProfilesConfiguration() {
-        switch openAgentProfilesConfigurationResult() {
+        Self.openAgentProfilesConfiguration(
+            store: store,
+            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    private static func openAgentProfilesConfiguration(
+        store: AppStore,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        switch ToasttyMenuActions.openAgentProfilesConfigurationResult(
+            openManagedLocalDocument: { fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: preferredWindowID
+                )
+            }
+        ) {
         case .success:
-            return
+            return true
         case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Agent Profiles"
@@ -2535,6 +2559,7 @@ struct ToasttyApp: App {
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
+            return false
         }
     }
 
@@ -2571,18 +2596,30 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openManageConfig() {
+        Self.openManageConfig(
+            store: store,
+            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    private static func openManageConfig(
+        store: AppStore,
+        preferredWindowID: UUID?
+    ) -> Bool {
         switch ToasttyMenuActions.openToasttyConfigResult(
-            openManagedLocalDocument: { [store] fileURL, format in
+            openManagedLocalDocument: { fileURL, format in
                 openManagedLocalDocumentInToastty(
                     store: store,
                     fileURL: fileURL,
                     format: format,
-                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                    preferredWindowID: preferredWindowID
                 )
             }
         ) {
         case .success:
-            return
+            return true
         case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Config"
@@ -2590,6 +2627,36 @@ struct ToasttyApp: App {
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private static func openTerminalProfilesConfiguration(
+        store: AppStore,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        switch ToasttyMenuActions.openTerminalProfilesConfigurationResult(
+            openManagedLocalDocument: { fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: preferredWindowID
+                )
+            }
+        ) {
+        case .success:
+            return true
+        case .failure(let error):
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Terminal Profiles"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return false
         }
     }
 
