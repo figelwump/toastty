@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class TerminalCommandClickTargetResolverTests: XCTestCase {
-    func testResolveTreatsFileURLMarkdownAsNewTab() throws {
+    func testResolveTreatsFileURLMarkdownAsRightPanel() throws {
         let fixture = try makeFixture()
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -15,11 +15,11 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
-    func testResolveTreatsRelativeMarkdownPathAsRightPanelWhenAlternateOpenIsRequested() throws {
+    func testResolveTreatsRelativeMarkdownPathAsNewTabWhenAlternateOpenIsRequested() throws {
         let fixture = try makeFixture()
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -30,7 +30,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -57,7 +57,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -72,7 +72,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -87,7 +87,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -102,7 +102,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -117,7 +117,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -132,7 +132,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -147,7 +147,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .rightPanel)
         )
     }
 
@@ -162,7 +162,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .rightPanel)
         )
     }
 
@@ -234,7 +234,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -249,7 +249,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -264,7 +264,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -282,7 +282,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -297,7 +297,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -312,7 +312,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .rightPanel)
         )
     }
 
@@ -327,7 +327,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.documentPath, lineNumber: 89, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.documentPath, lineNumber: 89, placement: .rightPanel)
         )
     }
 
@@ -355,7 +355,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .rightPanel)
         )
     }
 
@@ -371,7 +371,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .rightPanel)
         )
     }
 
@@ -386,7 +386,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -431,7 +431,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             expectedLocalDocumentTarget(
                 path: fixture.markdownPath,
                 lineNumber: 42,
-                placement: .newTab
+                placement: .rightPanel
             )
         )
     }

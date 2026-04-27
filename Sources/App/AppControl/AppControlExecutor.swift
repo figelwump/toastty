@@ -1085,6 +1085,23 @@ private extension AppControlExecutor {
            webState.definition == .scratchpad {
             return (workspaceID, focusedPanelID, webState)
         }
+        if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
+           webState.definition == .scratchpad {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .scratchpad {
+            return (workspaceID, activePanelID, webState)
+        }
+        for rightAuxTab in workspace.rightAuxPanel.orderedTabs {
+            guard case .web(let webState) = rightAuxTab.panelState,
+                  webState.definition == .scratchpad else {
+                continue
+            }
+            return (workspaceID, rightAuxTab.panelID, webState)
+        }
         for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
             guard let panelState = workspace.panels[panelID],

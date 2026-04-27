@@ -6,6 +6,7 @@ struct ToasttyConfig: Equatable {
     var defaultTerminalProfileID: String?
     var enableAgentCommandShims = true
     var urlRoutingPreferences = URLRoutingPreferences()
+    var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
 }
 
 enum ToasttyConfigStore {
@@ -15,6 +16,8 @@ enum ToasttyConfigStore {
     private static let urlOpeningDestinationKey = "url-opening-destination"
     private static let urlOpeningBrowserPlacementKey = "url-opening-browser-placement"
     private static let urlOpeningAlternateBrowserPlacementKey = "url-opening-alternate-browser-placement"
+    private static let localDocumentOpeningPlacementKey = "local-document-opening-placement"
+    private static let localDocumentOpeningAlternatePlacementKey = "local-document-opening-alternate-placement"
     private static let configDirectoryName = ".toastty"
     private static let legacyConfigDirectoryName = ".config/toastty"
     private static let configFileName = "config"
@@ -156,6 +159,16 @@ enum ToasttyConfigStore {
                       let parsed = URLBrowserOpenPlacement(rawValue: parsedValue) else { continue }
                 config.urlRoutingPreferences.alternateBrowserPlacement = parsed
 
+            case localDocumentOpeningPlacementKey:
+                guard let parsedValue = parseString(value),
+                      let parsed = LocalDocumentOpenPlacement(rawValue: parsedValue) else { continue }
+                config.localDocumentRoutingPreferences.openingPlacement = parsed
+
+            case localDocumentOpeningAlternatePlacementKey:
+                guard let parsedValue = parseString(value),
+                      let parsed = LocalDocumentOpenPlacement(rawValue: parsedValue) else { continue }
+                config.localDocumentRoutingPreferences.alternateOpeningPlacement = parsed
+
             default:
                 continue
             }
@@ -200,21 +213,36 @@ enum ToasttyConfigStore {
             "# internally opened browser panels for default opens such as",
             "# terminal Cmd-click links.",
             "# Supported values: rightPanel, newTab. Legacy rootRight is still accepted.",
-            "# The default is newTab.",
-            "# url-opening-browser-placement = newTab",
+            "# The default is rightPanel.",
+            "# url-opening-browser-placement = rightPanel",
             "",
             "# url-opening-alternate-browser-placement controls how Toastty",
             "# places alternate browser opens such as terminal",
             "# Cmd+Shift+click links.",
             "# Supported values: rightPanel, newTab. Legacy rootRight is still accepted.",
+            "# The default is newTab.",
+            "# url-opening-alternate-browser-placement = newTab",
+            "",
+            "# local-document-opening-placement controls how Toastty places",
+            "# default local document opens such as terminal Cmd-click file links",
+            "# and managed Toastty config/profile files.",
+            "# Supported values: rightPanel, newTab. Legacy rootRight is still accepted.",
             "# The default is rightPanel.",
-            "# url-opening-alternate-browser-placement = rightPanel",
+            "# local-document-opening-placement = rightPanel",
+            "",
+            "# local-document-opening-alternate-placement controls how Toastty",
+            "# places alternate local document opens such as terminal",
+            "# Cmd+Shift+click file links.",
+            "# Supported values: rightPanel, newTab. Legacy rootRight is still accepted.",
+            "# The default is newTab.",
+            "# local-document-opening-alternate-placement = newTab",
         ]
 
         if config.terminalFontSizePoints != nil
             || config.defaultTerminalProfileID != nil
             || config.enableAgentCommandShims == false
-            || config.urlRoutingPreferences != URLRoutingPreferences() {
+            || config.urlRoutingPreferences != URLRoutingPreferences()
+            || config.localDocumentRoutingPreferences != LocalDocumentRoutingPreferences() {
             lines.append("")
         }
 
@@ -236,15 +264,27 @@ enum ToasttyConfigStore {
             )
         }
 
-        if config.urlRoutingPreferences.browserPlacement != .newTab {
+        if config.urlRoutingPreferences.browserPlacement != URLRoutingPreferences().browserPlacement {
             lines.append(
                 "\(urlOpeningBrowserPlacementKey) = \(config.urlRoutingPreferences.browserPlacement.rawValue)"
             )
         }
 
-        if config.urlRoutingPreferences.alternateBrowserPlacement != .rightPanel {
+        if config.urlRoutingPreferences.alternateBrowserPlacement != URLRoutingPreferences().alternateBrowserPlacement {
             lines.append(
                 "\(urlOpeningAlternateBrowserPlacementKey) = \(config.urlRoutingPreferences.alternateBrowserPlacement.rawValue)"
+            )
+        }
+
+        if config.localDocumentRoutingPreferences.openingPlacement != LocalDocumentRoutingPreferences().openingPlacement {
+            lines.append(
+                "\(localDocumentOpeningPlacementKey) = \(config.localDocumentRoutingPreferences.openingPlacement.rawValue)"
+            )
+        }
+
+        if config.localDocumentRoutingPreferences.alternateOpeningPlacement != LocalDocumentRoutingPreferences().alternateOpeningPlacement {
+            lines.append(
+                "\(localDocumentOpeningAlternatePlacementKey) = \(config.localDocumentRoutingPreferences.alternateOpeningPlacement.rawValue)"
             )
         }
 

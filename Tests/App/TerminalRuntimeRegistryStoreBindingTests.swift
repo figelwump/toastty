@@ -308,21 +308,15 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         let firstWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspace.id])
         let secondWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
-        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspace.tabIDs.count + 1)
+        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspace.tabIDs.count)
+        XCTAssertEqual(firstWorkspaceAfter.panels.count, firstWorkspace.panels.count)
+        XCTAssertEqual(firstWorkspaceAfter.rightAuxPanel.tabIDs.count, 1)
         XCTAssertEqual(secondWorkspaceAfter.panels.count, secondWorkspace.panels.count)
         XCTAssertEqual(secondWorkspaceAfter.tabIDs.count, secondWorkspace.tabIDs.count)
 
-        let browserTabID = try XCTUnwrap(firstWorkspaceAfter.resolvedSelectedTabID)
-        XCTAssertNotEqual(browserTabID, firstWorkspace.resolvedSelectedTabID)
-        let browserTab = try XCTUnwrap(firstWorkspaceAfter.tabsByID[browserTabID])
-        XCTAssertEqual(browserTab.panels.count, 1)
-        let originalTabID = try XCTUnwrap(firstWorkspace.resolvedSelectedTabID)
-        let originalTabAfter = try XCTUnwrap(firstWorkspaceAfter.tabsByID[originalTabID])
-        XCTAssertEqual(originalTabAfter.panels.count, firstWorkspace.panels.count)
-
-        guard let browserPanelID = browserTab.focusedPanelID,
-              case .web(let webState) = browserTab.panels[browserPanelID] else {
-            XCTFail("expected browser panel in source workspace")
+        let rightPanelTab = try XCTUnwrap(firstWorkspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel browser panel in source workspace")
             return
         }
         XCTAssertEqual(webState.definition, .browser)
@@ -330,7 +324,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testAlternateOpenCommandClickLinkUsesConfiguredAlternatePlacement() throws {
+    func testAlternateOpenCommandClickLinkUsesConfiguredAlternateNewTabPlacement() throws {
         let workspace = WorkspaceState.bootstrap(title: "One")
         let windowID = UUID()
         let state = AppState(
@@ -349,8 +343,8 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         store.setURLRoutingPreferences(
             URLRoutingPreferences(
                 destination: .toasttyBrowser,
-                browserPlacement: .newTab,
-                alternateBrowserPlacement: .rightPanel
+                browserPlacement: .rightPanel,
+                alternateBrowserPlacement: .newTab
             )
         )
         let registry = TerminalRuntimeRegistry()
@@ -359,27 +353,27 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         XCTAssertTrue(
             registry.openCommandClickLink(
-                URL(string: "https://example.com/root-right")!,
+                URL(string: "https://example.com/new-tab")!,
                 useAlternatePlacement: true,
                 from: sourcePanelID
             )
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspace.id])
-        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
-        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count)
-        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
-        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
-        guard case .web(let webState) = rightPanelTab.panelState else {
-            XCTFail("expected right-panel browser panel in source workspace")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected browser panel in new tab")
             return
         }
         XCTAssertEqual(webState.definition, .browser)
-        XCTAssertEqual(webState.initialURL, "https://example.com/root-right")
+        XCTAssertEqual(webState.initialURL, "https://example.com/new-tab")
         try StateValidator.validate(store.state)
     }
 
-    func testOpenCommandClickMarkdownRelativePathOpensMarkdownTabInTerminalOwningWindow() throws {
+    func testOpenCommandClickMarkdownRelativePathOpensMarkdownInRightPanelInTerminalOwningWindow() throws {
         let fixture = try makeMarkdownFixture()
         let firstWorkspace = WorkspaceState(
             id: UUID(),
@@ -442,14 +436,14 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         let firstWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspaceWithTerminal.id])
         let secondWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
-        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspaceWithTerminal.tabIDs.count + 1)
+        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(firstWorkspaceAfter.panels.count, firstWorkspaceWithTerminal.panels.count)
+        XCTAssertEqual(firstWorkspaceAfter.rightAuxPanel.tabIDs.count, 1)
         XCTAssertEqual(secondWorkspaceAfter.tabIDs.count, secondWorkspace.tabIDs.count)
 
-        let selectedTabID = try XCTUnwrap(firstWorkspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(firstWorkspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected local document panel in source workspace")
+        let rightPanelTab = try XCTUnwrap(firstWorkspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document panel in source workspace")
             return
         }
 
@@ -459,7 +453,56 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testOpenCommandClickYamlRelativePathOpensLocalDocumentTabInTerminalOwningWindow() throws {
+    func testOpenCommandClickMarkdownRelativePathUsesConfiguredLocalDocumentPlacement() throws {
+        let fixture = try makeMarkdownFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        store.setLocalDocumentRoutingPreferences(
+            LocalDocumentRoutingPreferences(
+                openingPlacement: .newTab,
+                alternateOpeningPlacement: .rightPanel
+            )
+        )
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 0)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected configured local document placement to open a new tab")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickYamlRelativePathOpensLocalDocumentInRightPanelInTerminalOwningWindow() throws {
         let fixture = try makeMarkdownFixture(
             fileName: "config.yaml",
             content: "version: 1\nmode: smoke\n"
@@ -524,11 +567,12 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspaceWithTerminal.id])
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected local document panel in source workspace")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, firstWorkspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, firstWorkspaceWithTerminal.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document panel in source workspace")
             return
         }
 
@@ -667,7 +711,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testAlternateOpenCommandClickMarkdownFileURLUsesRightPanelPlacement() throws {
+    func testAlternateOpenCommandClickMarkdownFileURLUsesNewTabPlacement() throws {
         let fixture = try makeMarkdownFixture()
         let workspace = WorkspaceState(
             id: UUID(),
@@ -720,12 +764,12 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
-        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
-        XCTAssertEqual(workspaceAfter.panels.count, workspaceWithTerminal.panels.count)
-        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
-        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
-        guard case .web(let webState) = rightPanelTab.panelState else {
-            XCTFail("expected right-panel local document panel in source workspace")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count + 1)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected local document panel in new tab")
             return
         }
 
@@ -787,12 +831,12 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
-        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count + 1)
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected local document panel in source workspace")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspaceWithTerminal.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document panel in source workspace")
             return
         }
 
@@ -931,9 +975,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        let panelID = try XCTUnwrap(workspaceAfter.rightAuxPanel.activePanelID)
         let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: panelID)
 
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 17)
@@ -996,9 +1038,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        let panelID = try XCTUnwrap(workspaceAfter.rightAuxPanel.activePanelID)
         let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: panelID)
 
         XCTAssertEqual(runtime.automationState().pendingRevealLine, 17)
@@ -1061,11 +1101,9 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected recovered nested-child link to open a local document panel")
+        let panelID = try XCTUnwrap(workspaceAfter.rightAuxPanel.activePanelID)
+        guard case .web(let webState)? = workspaceAfter.rightAuxPanel.panelState(for: panelID) else {
+            XCTFail("expected recovered nested-child link to open a right-panel local document")
             return
         }
 
@@ -1220,7 +1258,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testOpenSearchSelectionURLAlwaysUsesToasttyNewTabPlacement() throws {
+    func testOpenSearchSelectionURLUsesConfiguredURLPlacement() throws {
         let workspace = WorkspaceState.bootstrap(title: "One")
         let windowID = UUID()
         let state = AppState(
@@ -1238,9 +1276,9 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         store.setURLRoutingPreferences(
             URLRoutingPreferences(
-                destination: .systemBrowser,
+                destination: .toasttyBrowser,
                 browserPlacement: .rightPanel,
-                alternateBrowserPlacement: .rightPanel
+                alternateBrowserPlacement: .newTab
             )
         )
         let registry = TerminalRuntimeRegistry()
@@ -1255,12 +1293,11 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspace.id])
-        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected search selection to open in a Toastty browser tab")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected search selection to open in a right-panel Toastty browser")
             return
         }
         XCTAssertEqual(webState.definition, .browser)

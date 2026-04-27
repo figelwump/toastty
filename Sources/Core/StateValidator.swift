@@ -100,7 +100,9 @@ public enum StateValidator {
                     }
                 }
 
-                for unreadPanelID in tab.unreadPanelIDs where tab.panels[unreadPanelID] == nil {
+                for unreadPanelID in tab.unreadPanelIDs
+                    where tab.panels[unreadPanelID] == nil &&
+                    tab.rightAuxPanel.panelState(for: unreadPanelID) == nil {
                     throw StateInvariantViolation.unreadPanelMissing(workspaceID: workspace.id, panelID: unreadPanelID)
                 }
 

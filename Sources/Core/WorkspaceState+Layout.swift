@@ -120,6 +120,7 @@ extension WorkspaceState {
             tab.rightAuxPanel.repairTransientState()
 
             let livePanelIDs = Set(tab.panels.keys)
+            let liveUnreadPanelIDs = livePanelIDs.union(tab.rightAuxPanel.panelIDs)
             if let focusedPanelID = tab.focusedPanelID,
                tab.panels[focusedPanelID] == nil || tab.layoutTree.slotContaining(panelID: focusedPanelID) == nil {
                 tab.focusedPanelID = tab.resolvedFocusedPanelID
@@ -128,6 +129,7 @@ extension WorkspaceState {
             }
 
             tab.selectedPanelIDs.formIntersection(livePanelIDs)
+            tab.unreadPanelIDs.formIntersection(liveUnreadPanelIDs)
 
             if tab.focusedPanelModeActive {
                 let effectiveRootNodeID = WorkspaceSplitTree(root: tab.layoutTree).effectiveFocusModeRootNodeID(

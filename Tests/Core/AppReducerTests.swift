@@ -1956,6 +1956,97 @@ struct AppReducerTests {
     }
 
     @Test
+    func updateScratchpadPanelStateMutatesRightPanelScratchpad() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let sourcePanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        let initialScratchpad = ScratchpadState(documentID: UUID(), revision: 1)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(
+                        definition: .scratchpad,
+                        title: "Initial Scratchpad",
+                        scratchpad: initialScratchpad
+                    ),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let panelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        let nextScratchpad = ScratchpadState(
+            documentID: initialScratchpad.documentID,
+            sessionLink: ScratchpadSessionLink(
+                sessionID: "session-1",
+                agent: .codex,
+                sourcePanelID: sourcePanelID,
+                sourceWorkspaceID: workspaceID
+            ),
+            revision: 2
+        )
+
+        #expect(
+            reducer.send(
+                .updateScratchpadPanelState(
+                    panelID: panelID,
+                    scratchpad: nextScratchpad,
+                    title: "Updated Scratchpad"
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfterUpdate = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterUpdate.panels[panelID] == nil)
+        guard case .web(let webState)? = workspaceAfterUpdate.rightAuxPanel.panelState(for: panelID) else {
+            Issue.record("expected right-panel scratchpad web state")
+            return
+        }
+        #expect(webState.title == "Updated Scratchpad")
+        #expect(webState.scratchpad == nextScratchpad)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingRightPanelTabClearsUnreadNotificationForPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let rightTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        let panelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(
+            reducer.send(
+                .recordDesktopNotification(workspaceID: workspaceID, panelID: panelID),
+                state: &state
+            )
+        )
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadPanelIDs == [panelID])
+
+        #expect(reducer.send(.closeRightAuxPanelTab(workspaceID: workspaceID, tabID: rightTabID), state: &state))
+        let workspaceAfterClose = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterClose.unreadPanelIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func settingRightPanelWidthMarksWidthAsUserCustom() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

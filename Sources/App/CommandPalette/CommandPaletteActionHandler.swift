@@ -450,10 +450,9 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         placement: PaletteFileOpenPlacement,
         originWindowID: UUID
     ) -> Bool {
-        let placementOverride = paletteFilePlacementOverride(for: placement)
-
         switch destination {
         case .localDocument(let filePath):
+            let placementOverride = localDocumentFilePlacementOverride(for: placement)
             return store?.createLocalDocumentPanelFromCommand(
                 preferredWindowID: originWindowID,
                 request: LocalDocumentPanelCreateRequest(
@@ -462,6 +461,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
                 )
             ) ?? false
         case .browser(let fileURLString):
+            let placementOverride = paletteBrowserFilePlacementOverride(for: placement)
             return store?.createBrowserPanelFromCommand(
                 preferredWindowID: originWindowID,
                 request: BrowserPanelCreateRequest(
@@ -534,7 +534,10 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         case .newBrowserSplit:
             return createBrowser(placement: .splitRight, originWindowID: originWindowID)
         case .openLocalFile:
-            return openLocalDocument(placement: .rightPanel, originWindowID: originWindowID)
+            return openLocalDocument(
+                placement: store?.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement ?? .rightPanel,
+                originWindowID: originWindowID
+            )
         case .openLocalFileInTab:
             return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
         case .openLocalFileInSplit:
@@ -584,7 +587,18 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return true
     }
 
-    private func paletteFilePlacementOverride(
+    private func localDocumentFilePlacementOverride(
+        for placement: PaletteFileOpenPlacement
+    ) -> WebPanelPlacement? {
+        switch placement {
+        case .default:
+            return store?.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement
+        case .alternate:
+            return store?.localDocumentRoutingPreferences.alternateOpeningPlacement.webPanelPlacement ?? .newTab
+        }
+    }
+
+    private func paletteBrowserFilePlacementOverride(
         for placement: PaletteFileOpenPlacement
     ) -> WebPanelPlacement? {
         switch placement {

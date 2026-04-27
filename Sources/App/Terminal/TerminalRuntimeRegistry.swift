@@ -1009,7 +1009,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         let target = TerminalCommandClickTargetResolver.resolve(
             hoveredURL: url,
             cwd: cwd,
-            useAlternatePlacement: useAlternatePlacement
+            useAlternatePlacement: useAlternatePlacement,
+            localDocumentPreferences: store.localDocumentRoutingPreferences
         )
 
         let result: Bool
@@ -1130,10 +1131,13 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     func openSearchSelectionURL(_ url: URL, from panelID: UUID) -> Bool {
         guard let store else { return false }
         let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
-        return store.openURLInBrowser(
+        return AppURLRouter.open(
+            url,
             preferredWindowID: preferredWindowID,
-            url: url,
-            placement: .newTab
+            appStore: store,
+            requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
+                self?.webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+            }
         )
     }
 

@@ -264,6 +264,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var hasEverLaunchedAgent: Bool
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
+    @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
 
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
@@ -765,7 +766,7 @@ final class AppStore: ObservableObject {
             throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
         }
 
-        let previousPanelIDs = Set(focusedSourceSelection.workspace.panels.keys)
+        let previousPanelIDs = Set(focusedSourceSelection.workspace.allPanelsByID.keys)
         guard send(
             .createWebPanel(
                 workspaceID: focusedSourceSelection.workspaceID,
@@ -774,7 +775,7 @@ final class AppStore: ObservableObject {
                     title: document.title,
                     scratchpad: scratchpad
                 ),
-                placement: .rootRight
+                placement: .rightPanel
             )
         ) else {
             throw ScratchpadPanelError.createPanelFailed
@@ -863,7 +864,7 @@ final class AppStore: ObservableObject {
                         revision: document.revision
                     )
                 ),
-                placement: .rootRight
+                placement: .rightPanel
             )
         )
     }
@@ -1265,6 +1266,10 @@ final class AppStore: ObservableObject {
         urlRoutingPreferences = preferences
     }
 
+    func setLocalDocumentRoutingPreferences(_ preferences: LocalDocumentRoutingPreferences) {
+        localDocumentRoutingPreferences = preferences
+    }
+
     @discardableResult
     func openURLInBrowser(
         preferredWindowID: UUID?,
@@ -1630,7 +1635,14 @@ final class AppStore: ObservableObject {
         in workspace: WorkspaceState,
         previousPanelIDs: Set<UUID>
     ) -> UUID? {
-        let createdPanelIDs = Set(workspace.panels.keys).subtracting(previousPanelIDs)
+        let createdPanelIDs = Set(workspace.allPanelsByID.keys).subtracting(previousPanelIDs)
+
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           createdPanelIDs.contains(activePanelID),
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .scratchpad {
+            return activePanelID
+        }
 
         if let focusedPanelID = workspace.focusedPanelID,
            createdPanelIDs.contains(focusedPanelID),
@@ -1640,7 +1652,7 @@ final class AppStore: ObservableObject {
         }
 
         return createdPanelIDs.first { panelID in
-            guard case .web(let webState)? = workspace.panels[panelID] else {
+            guard case .web(let webState)? = workspace.allPanelsByID[panelID] else {
                 return false
             }
             return webState.definition == .scratchpad
@@ -1655,15 +1667,13 @@ final class AppStore: ObservableObject {
                 guard let workspace = state.workspacesByID[workspaceID] else {
                     continue
                 }
-                for tab in workspace.orderedTabs {
-                    for (panelID, panelState) in tab.panels {
-                        guard case .web(let webState) = panelState,
-                              webState.definition == .scratchpad,
-                              webState.scratchpad?.sessionLink?.sessionID == sessionID else {
-                            continue
-                        }
-                        return (window.id, workspaceID, panelID, webState)
+                for (panelID, panelState) in workspace.allPanelsByID {
+                    guard case .web(let webState) = panelState,
+                          webState.definition == .scratchpad,
+                          webState.scratchpad?.sessionLink?.sessionID == sessionID else {
+                        continue
                     }
+                    return (window.id, workspaceID, panelID, webState)
                 }
             }
         }
@@ -1671,8 +1681,11 @@ final class AppStore: ObservableObject {
     }
 
     private func markScratchpadUpdatedIfUnfocused(workspaceID: UUID, panelID: UUID) {
-        guard let workspace = state.workspacesByID[workspaceID],
-              workspace.focusedPanelID != panelID else {
+        guard let workspace = state.workspacesByID[workspaceID] else {
+            return
+        }
+        guard workspace.focusedPanelID != panelID,
+              workspace.rightAuxPanel.focusedPanelID != panelID else {
             return
         }
         _ = send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))

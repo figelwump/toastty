@@ -34,7 +34,9 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         self.focusedPanelModeActive = focusedPanelModeActive
         self.focusModeRootNodeID = focusModeRootNodeID
         self.selectedPanelIDs = selectedPanelIDs.intersection(Set(panels.keys))
-        self.unreadPanelIDs = unreadPanelIDs.intersection(Set(panels.keys))
+        self.unreadPanelIDs = unreadPanelIDs.intersection(
+            Self.validUnreadPanelIDs(panels: panels, rightAuxPanel: rightAuxPanel)
+        )
         self.recentlyClosedPanels = recentlyClosedPanels
         self.rightAuxPanel = rightAuxPanel
         self.rightAuxPanel.repairTransientState()
@@ -88,7 +90,7 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
     }
 
     public var allPanelIDs: Set<UUID> {
-        Set(panels.keys)
+        Self.validUnreadPanelIDs(panels: panels, rightAuxPanel: rightAuxPanel)
     }
 
     public var resolvedFocusedPanelID: UUID? {
@@ -136,10 +138,10 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         layoutTree = try container.decode(LayoutNode.self, forKey: .layoutTree)
         panels = try container.decode([UUID: PanelState].self, forKey: .panels)
         focusedPanelID = try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
-        unreadPanelIDs = (try container.decodeIfPresent(Set<UUID>.self, forKey: .unreadPanelIDs) ?? [])
-            .intersection(Set(panels.keys))
         recentlyClosedPanels = try container.decodeIfPresent([ClosedPanelRecord].self, forKey: .recentlyClosedPanels) ?? []
         rightAuxPanel = try container.decodeIfPresent(RightAuxPanelState.self, forKey: .rightAuxPanel) ?? RightAuxPanelState()
+        unreadPanelIDs = (try container.decodeIfPresent(Set<UUID>.self, forKey: .unreadPanelIDs) ?? [])
+            .intersection(Self.validUnreadPanelIDs(panels: panels, rightAuxPanel: rightAuxPanel))
         // Focus mode is a transient UI/runtime flag and should never persist across decode boundaries.
         focusedPanelModeActive = false
         focusModeRootNodeID = nil
@@ -156,6 +158,13 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(unreadPanelIDs, forKey: .unreadPanelIDs)
         try container.encode(recentlyClosedPanels, forKey: .recentlyClosedPanels)
         try container.encode(rightAuxPanel, forKey: .rightAuxPanel)
+    }
+
+    private static func validUnreadPanelIDs(
+        panels: [UUID: PanelState],
+        rightAuxPanel: RightAuxPanelState
+    ) -> Set<UUID> {
+        Set(panels.keys).union(rightAuxPanel.panelIDs)
     }
 
     private static func normalizedCustomTitle(_ customTitle: String?) -> String? {

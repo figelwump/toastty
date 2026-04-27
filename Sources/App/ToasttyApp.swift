@@ -75,7 +75,7 @@ private func openManagedLocalDocumentInToastty(
         preferredWindowID: preferredWindowID,
         request: LocalDocumentPanelCreateRequest(
             filePath: normalizedFilePath,
-            placementOverride: .newTab,
+            placementOverride: store.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement,
             formatOverride: format
         )
     )
@@ -2396,7 +2396,7 @@ struct ToasttyApp: App {
                 openLocalDocumentFile: { preferredWindowID in
                     self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
-                        placement: WebPanelPlacement.rightPanel
+                        placement: store.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement
                     )
                 },
                 openLocalDocumentFileInTab: { preferredWindowID in
@@ -2463,6 +2463,7 @@ struct ToasttyApp: App {
 
         let toasttyConfig = ToasttyConfigStore.load()
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
+        store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
@@ -2712,6 +2713,7 @@ struct ToasttyApp: App {
         legacyTerminalFontSizePoints: Double?
     ) {
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
+        store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
         applyConfiguredDefaultTerminalProfile(
             to: store,
             terminalProfileCatalog: terminalProfileCatalog,

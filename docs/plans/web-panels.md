@@ -243,8 +243,8 @@ Browser already has concrete placement behavior:
 - `New Browser` uses `rightPanel`
 - `New Browser Tab` uses `newTab`
 - `New Browser Split` uses `splitRight`
-- internal URL opens default to `newTab`
-- alternate URL opens default to `rightPanel`
+- internal URL opens default to `rightPanel`
+- alternate URL opens default to `newTab`
 
 `rightPanel` is scoped to the selected workspace tab. Its contents, visibility,
 active right-panel tab, focus, and width are part of that top tab's layout and

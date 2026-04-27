@@ -47,11 +47,58 @@ enum URLBrowserOpenPlacement: Equatable, RawRepresentable {
 
 struct URLRoutingPreferences: Equatable {
     var destination: URLOpenDestination = .toasttyBrowser
-    var browserPlacement: URLBrowserOpenPlacement = .newTab
-    var alternateBrowserPlacement: URLBrowserOpenPlacement = .rightPanel
+    var browserPlacement: URLBrowserOpenPlacement = .rightPanel
+    var alternateBrowserPlacement: URLBrowserOpenPlacement = .newTab
 
     func resolvedBrowserPlacement(alternateOpen: Bool) -> URLBrowserOpenPlacement {
         alternateOpen ? alternateBrowserPlacement : browserPlacement
+    }
+}
+
+enum LocalDocumentOpenPlacement: Equatable, RawRepresentable {
+    case rightPanel
+    case newTab
+
+    static var rootRight: LocalDocumentOpenPlacement {
+        .rightPanel
+    }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "rightPanel", "rootRight":
+            self = .rightPanel
+        case "newTab":
+            self = .newTab
+        default:
+            return nil
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .rightPanel:
+            return "rightPanel"
+        case .newTab:
+            return "newTab"
+        }
+    }
+
+    var webPanelPlacement: WebPanelPlacement {
+        switch self {
+        case .rightPanel:
+            return .rightPanel
+        case .newTab:
+            return .newTab
+        }
+    }
+}
+
+struct LocalDocumentRoutingPreferences: Equatable {
+    var openingPlacement: LocalDocumentOpenPlacement = .rightPanel
+    var alternateOpeningPlacement: LocalDocumentOpenPlacement = .newTab
+
+    func resolvedPlacement(alternateOpen: Bool) -> LocalDocumentOpenPlacement {
+        alternateOpen ? alternateOpeningPlacement : openingPlacement
     }
 }
 
@@ -88,10 +135,13 @@ enum AppURLRouter {
     static func route(
         for url: URL,
         preferences: URLRoutingPreferences,
+        localDocumentPreferences: LocalDocumentRoutingPreferences = LocalDocumentRoutingPreferences(),
         useAlternatePlacement: Bool = false
     ) -> AppURLRoute {
         if let localDocumentTarget = LocalFileLinkResolver.resolvedLocalDocumentTarget(for: url) {
-            let placement: WebPanelPlacement = useAlternatePlacement ? .rightPanel : .newTab
+            let placement = localDocumentPreferences
+                .resolvedPlacement(alternateOpen: useAlternatePlacement)
+                .webPanelPlacement
             return .localDocument(
                 LocalDocumentPanelCreateRequest(
                     filePath: localDocumentTarget.path,
@@ -125,6 +175,7 @@ enum AppURLRouter {
         let resolvedRoute = route(
             for: url,
             preferences: resolvedPreferences,
+            localDocumentPreferences: appStore.localDocumentRoutingPreferences,
             useAlternatePlacement: useAlternatePlacement
         )
         switch resolvedRoute {

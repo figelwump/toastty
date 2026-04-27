@@ -20,6 +20,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
         url-opening-destination = system-browser
         url-opening-browser-placement = newTab
         url-opening-alternate-browser-placement = newTab
+        local-document-opening-placement = newTab
+        local-document-opening-alternate-placement = rightPanel
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
         let config = ToasttyConfigStore.load(
@@ -36,6 +38,13 @@ final class ToasttyConfigStoreTests: XCTestCase {
                 destination: .systemBrowser,
                 browserPlacement: .newTab,
                 alternateBrowserPlacement: .newTab
+            )
+        )
+        XCTAssertEqual(
+            config.localDocumentRoutingPreferences,
+            LocalDocumentRoutingPreferences(
+                openingPlacement: .newTab,
+                alternateOpeningPlacement: .rightPanel
             )
         )
     }
@@ -64,6 +73,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.defaultTerminalProfileID, "ssh#prod")
         XCTAssertTrue(config.enableAgentCommandShims)
         XCTAssertEqual(config.urlRoutingPreferences, URLRoutingPreferences())
+        XCTAssertEqual(config.localDocumentRoutingPreferences, LocalDocumentRoutingPreferences())
     }
 
     func testLoadDefaultsAgentCommandShimsToEnabledWhenKeyIsMissing() throws {
@@ -87,6 +97,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
 
         XCTAssertTrue(config.enableAgentCommandShims)
         XCTAssertEqual(config.urlRoutingPreferences, URLRoutingPreferences())
+        XCTAssertEqual(config.localDocumentRoutingPreferences, LocalDocumentRoutingPreferences())
     }
 
     func testEnsureTemplateExistsWritesCommentedExamples() throws {
@@ -134,15 +145,29 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # internally opened browser panels for default opens such as
             # terminal Cmd-click links.
             # Supported values: rightPanel, newTab. Legacy rootRight is still accepted.
-            # The default is newTab.
-            # url-opening-browser-placement = newTab
+            # The default is rightPanel.
+            # url-opening-browser-placement = rightPanel
 
             # url-opening-alternate-browser-placement controls how Toastty
             # places alternate browser opens such as terminal
             # Cmd+Shift+click links.
             # Supported values: rightPanel, newTab. Legacy rootRight is still accepted.
+            # The default is newTab.
+            # url-opening-alternate-browser-placement = newTab
+
+            # local-document-opening-placement controls how Toastty places
+            # default local document opens such as terminal Cmd-click file links
+            # and managed Toastty config/profile files.
+            # Supported values: rightPanel, newTab. Legacy rootRight is still accepted.
             # The default is rightPanel.
-            # url-opening-alternate-browser-placement = rightPanel
+            # local-document-opening-placement = rightPanel
+
+            # local-document-opening-alternate-placement controls how Toastty
+            # places alternate local document opens such as terminal
+            # Cmd+Shift+click file links.
+            # Supported values: rightPanel, newTab. Legacy rootRight is still accepted.
+            # The default is newTab.
+            # local-document-opening-alternate-placement = newTab
 
             """
         )
@@ -207,6 +232,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertTrue(contents.contains("# url-opening-destination"))
         XCTAssertTrue(contents.contains("# url-opening-browser-placement"))
         XCTAssertTrue(contents.contains("# url-opening-alternate-browser-placement"))
+        XCTAssertTrue(contents.contains("# local-document-opening-placement"))
+        XCTAssertTrue(contents.contains("# local-document-opening-alternate-placement"))
     }
 
     func testWriteConfigReferenceOverwritesExistingFile() throws {
@@ -240,7 +267,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertEqual(referenceURL.path, "/tmp/toastty-runtime-home-tests/ref-runtime/config-reference")
     }
 
-    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserInNewTabWithRightPanelAlternate() throws {
+    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserInRightPanelWithNewTabAlternate() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let configURL = ToasttyConfigStore.configFileURL(
             homeDirectoryPath: homeDirectoryURL.path,
@@ -263,8 +290,15 @@ final class ToasttyConfigStoreTests: XCTestCase {
             config.urlRoutingPreferences,
             URLRoutingPreferences(
                 destination: .toasttyBrowser,
-                browserPlacement: .newTab,
-                alternateBrowserPlacement: .rightPanel
+                browserPlacement: .rightPanel,
+                alternateBrowserPlacement: .newTab
+            )
+        )
+        XCTAssertEqual(
+            config.localDocumentRoutingPreferences,
+            LocalDocumentRoutingPreferences(
+                openingPlacement: .rightPanel,
+                alternateOpeningPlacement: .newTab
             )
         )
     }

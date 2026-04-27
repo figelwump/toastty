@@ -67,19 +67,10 @@ final class WebPanelRuntimeRegistry: ObservableObject {
                 }
 
                 let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
-                // Browser-native secondary opens intentionally bypass the
-                // general app-owned URL routing preferences: Cmd-click and
-                // popup-style browser opens should behave like browser tabs.
-                // AppURLRouter still sends non-http(s) URLs external.
                 return AppURLRouter.open(
                     url,
                     preferredWindowID: preferredWindowID,
                     appStore: store,
-                    preferences: URLRoutingPreferences(
-                        destination: .toasttyBrowser,
-                        browserPlacement: .newTab,
-                        alternateBrowserPlacement: .newTab
-                    ),
                     requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
                         self?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
                     }

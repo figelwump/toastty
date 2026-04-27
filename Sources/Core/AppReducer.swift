@@ -167,7 +167,9 @@ public struct AppReducer {
                     tab.rightAuxPanel.activeTabID = rightAuxLocation.rightAuxTabID
                     tab.rightAuxPanel.isVisible = true
                     tab.rightAuxPanel.focusedPanelID = panelID
+                    tab.unreadPanelIDs.remove(panelID)
                 }
+                workspace.unreadWorkspaceNotificationCount = 0
                 commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
                 return true
             }
@@ -567,6 +569,8 @@ public struct AppReducer {
             mainTab.rightAuxPanel.isVisible = true
             if focus {
                 mainTab.rightAuxPanel.focusedPanelID = tab.panelID
+                mainTab.unreadPanelIDs.remove(tab.panelID)
+                workspace.unreadWorkspaceNotificationCount = 0
             }
             workspace.selectedTabID = location.mainTabID
             workspace.tabsByID[location.mainTabID] = mainTab
@@ -586,7 +590,9 @@ public struct AppReducer {
                 tab.rightAuxPanel.activeTabID = location.rightAuxTabID
                 tab.rightAuxPanel.isVisible = true
                 tab.rightAuxPanel.focusedPanelID = panelID
+                tab.unreadPanelIDs.remove(panelID)
             }
+            workspace.unreadWorkspaceNotificationCount = 0
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
@@ -836,26 +842,36 @@ public struct AppReducer {
             return true
 
         case .updateScratchpadPanelState(let panelID, let scratchpad, let title):
+            if let location = locateRightAuxPanel(panelID, in: state) {
+                guard var workspace = state.workspacesByID[location.workspaceID],
+                      var mainTab = workspace.tab(id: location.mainTabID),
+                      var rightAuxTab = mainTab.rightAuxPanel.tabsByID[location.rightAuxTabID],
+                      case .web(var webState) = rightAuxTab.panelState,
+                      webState.definition == .scratchpad else {
+                    return false
+                }
+
+                guard updateScratchpadWebPanelState(&webState, scratchpad: scratchpad, title: title) else {
+                    return false
+                }
+
+                rightAuxTab.panelState = .web(webState)
+                mainTab.rightAuxPanel.tabsByID[location.rightAuxTabID] = rightAuxTab
+                workspace.tabsByID[location.mainTabID] = mainTab
+                commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
+                return true
+            }
+
             guard let location = locatePanel(panelID, in: state) else { return false }
             guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
             guard let tabID = workspace.tabID(containingPanelID: panelID),
                   case .web(var webState) = workspace.tab(id: tabID)?.panels[panelID],
                   webState.definition == .scratchpad else { return false }
 
-            var didMutate = false
-
-            if webState.scratchpad != scratchpad {
-                webState.scratchpad = scratchpad
-                didMutate = true
+            guard updateScratchpadWebPanelState(&webState, scratchpad: scratchpad, title: title) else {
+                return false
             }
 
-            if let normalizedTitle = WebPanelState.normalizedTitle(title),
-               webState.title != normalizedTitle {
-                webState.title = normalizedTitle
-                didMutate = true
-            }
-
-            guard didMutate else { return false }
             _ = workspace.updateTab(id: tabID) { tab in
                 tab.panels[panelID] = .web(webState)
             }
@@ -865,7 +881,9 @@ public struct AppReducer {
         case .recordDesktopNotification(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             if let panelID {
-                guard let tabID = workspace.tabID(containingPanelID: panelID) else { return false }
+                let tabID = workspace.tabID(containingPanelID: panelID)
+                    ?? workspace.rightAuxPanelTabLocation(containingPanelID: panelID)?.mainTabID
+                guard let tabID else { return false }
                 _ = workspace.updateTab(id: tabID) { tab in
                     tab.unreadPanelIDs.insert(panelID)
                 }
@@ -877,7 +895,9 @@ public struct AppReducer {
 
         case .markPanelNotificationsRead(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard let tabID = workspace.tabID(containingPanelID: panelID) else { return false }
+            let tabID = workspace.tabID(containingPanelID: panelID)
+                ?? workspace.rightAuxPanelTabLocation(containingPanelID: panelID)?.mainTabID
+            guard let tabID else { return false }
             let didMutate = workspace.updateTab(id: tabID) { tab in
                 _ = tab.unreadPanelIDs.remove(panelID)
             }
@@ -1060,6 +1080,27 @@ public struct AppReducer {
         let normalizedCurrentURL = WebPanelState.normalizedCurrentURL(url)
         if webState.currentURL != normalizedCurrentURL {
             webState.currentURL = normalizedCurrentURL
+            didMutate = true
+        }
+
+        return didMutate
+    }
+
+    private static func updateScratchpadWebPanelState(
+        _ webState: inout WebPanelState,
+        scratchpad: ScratchpadState,
+        title: String?
+    ) -> Bool {
+        var didMutate = false
+
+        if webState.scratchpad != scratchpad {
+            webState.scratchpad = scratchpad
+            didMutate = true
+        }
+
+        if let normalizedTitle = WebPanelState.normalizedTitle(title),
+           webState.title != normalizedTitle {
+            webState.title = normalizedTitle
             didMutate = true
         }
 
@@ -1373,7 +1414,10 @@ public struct AppReducer {
             return false
         }
 
-        targetMainTab.rightAuxPanel.removeTab(id: rightAuxTabID)
+        let removedTab = targetMainTab.rightAuxPanel.removeTab(id: rightAuxTabID)
+        if let removedPanelID = removedTab?.panelID {
+            targetMainTab.unreadPanelIDs.remove(removedPanelID)
+        }
         workspace.tabsByID[targetMainTabID] = targetMainTab
         commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true

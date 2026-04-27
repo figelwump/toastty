@@ -75,7 +75,7 @@ final class CommandPaletteFileOpenIntegrationTests: XCTestCase {
             return
         }
 
-        XCTAssertNil(store.focusedBrowserPanelSelection(preferredWindowID: originWindowID))
+        XCTAssertEqual(store.focusedBrowserPanelSelection(preferredWindowID: originWindowID)?.panelID, tab.panelID)
         XCTAssertEqual(webState.definition, .browser)
         XCTAssertEqual(webState.initialURL, fileURL.absoluteString)
     }
@@ -169,6 +169,49 @@ final class CommandPaletteFileOpenIntegrationTests: XCTestCase {
         XCTAssertEqual(
             webState.localDocument,
             LocalDocumentState(filePath: fileURL.path, format: .code)
+        )
+    }
+
+    func testOpenFileResultDefaultPlacementUsesConfiguredLocalDocumentPlacement() throws {
+        let scopeURL = try makeDirectoryScope()
+        let fileURL = scopeURL.appendingPathComponent("README.md")
+        try writeFixtureFile(at: fileURL, contents: "# Toastty\n")
+
+        let state = makeStateWithFocusedTerminalCWD(scopeURL.path)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        store.setLocalDocumentRoutingPreferences(
+            LocalDocumentRoutingPreferences(
+                openingPlacement: .newTab,
+                alternateOpeningPlacement: .rightPanel
+            )
+        )
+        let actions = try makeLiveActions(store: store)
+        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+
+        XCTAssertTrue(
+            actions.openFileResult(
+                .localDocument(filePath: fileURL.path),
+                placement: .default,
+                originWindowID: originWindowID
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 2)
+        XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 0)
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected tab panel to be local-document-backed")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: fileURL.path, format: .markdown)
         )
     }
 
