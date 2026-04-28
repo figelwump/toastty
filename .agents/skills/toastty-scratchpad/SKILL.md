@@ -1,15 +1,39 @@
 ---
 name: toastty-scratchpad
-description: Use this skill when an agent should show information visually in a Toastty Scratchpad panel - architecture diagrams, data/control flow, data visualization, charts, tables, UI/UX wireframes, state machines, timelines, comparison grids, visual plans, spatial workflows, or text that is clearer when laid out visually. Use when the input is current thread context, a referenced file, or a user-provided prompt asking for a visual Scratchpad artifact.
+description: Use this skill when an agent should read, inspect, review, summarize, or update a Toastty Scratchpad panel, or show information visually in one. Use for current-session Scratchpad artifacts, architecture diagrams, data/control flow, data visualization, charts, tables, UI/UX wireframes, state machines, timelines, comparison grids, visual plans, spatial workflows, or text that is clearer when laid out visually.
 ---
 
 # Toastty Scratchpad
 
-Use Scratchpad when a visual surface will communicate better than terminal prose. Open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots as the artifact takes shape, then publish the finished self-contained HTML artifact.
+Use Scratchpad when a visual surface will communicate better than terminal prose. If the user asks to read or review an existing Scratchpad, export the current session-linked Scratchpad and answer from that content without replacing it. If the user asks to create or update a visual artifact, open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots as the artifact takes shape, then publish the finished self-contained HTML artifact.
+
+## Read Existing Scratchpad
+
+When the user asks to read, inspect, review, summarize, or propose changes based on the current Scratchpad, do not publish a loading screen and do not replace Scratchpad content.
+
+The current Scratchpad is the one linked to the current managed agent session. Prefer the session-bound path; do not scan the workspace to guess which Scratchpad is relevant.
+
+1. Confirm `TOASTTY_CLI_PATH` and `TOASTTY_SESSION_ID` are available.
+2. Export the linked Scratchpad directly:
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+  "sessionID=${TOASTTY_SESSION_ID}"
+```
+
+3. Read the returned `filePath` and answer from that content.
+4. If diagnostics or runtime metadata are needed, query the returned `panelID`:
+
+```bash
+"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.state \
+  "panelID=<panel-id>"
+```
+
+Only fall back to panel/workspace targeting when `TOASTTY_SESSION_ID` is missing, the current session has no linked Scratchpad, or the user explicitly asks for a different Scratchpad. If `panel.scratchpad.export` is unavailable in the running app, say so briefly and use the best available panel-targeted fallback rather than guessing silently.
 
 ## Open First
 
-When this skill triggers and a Toastty-managed session is available, publish a quick loading screen before doing deeper analysis, reading large files, or building the final artifact. The loading screen tells the user that a visual artifact is being prepared.
+When creating or replacing a visual Scratchpad artifact and a Toastty-managed session is available, publish a quick loading screen before doing deeper analysis, reading large files, or building the final artifact. The loading screen tells the user that a visual artifact is being prepared.
 
 The loading screen is intentionally minimal: a title (if known) and a subtle animated indicator. Do not pre-mock the structure of the final artifact. Pre-mocking biases the design toward the same look every time and flattens visual variety across runs.
 
@@ -27,6 +51,7 @@ Then do the needed thread/file/prompt analysis and publish updates over the same
 - **Thread context**: publish a loading screen, then synthesize the visual from the current conversation, implementation plan, bug investigation, or decision tradeoff.
 - **File input**: publish a loading screen before deep reading, then read the referenced file, extract the structure that matters, and create a visual representation. Do not dump a long file verbatim into the panel.
 - **Manual prompt**: publish a loading screen from the prompt, then follow the prompt as the design brief. If the prompt is broad, choose a compact final visual that answers the likely need.
+- **Existing Scratchpad**: export the Scratchpad linked to `TOASTTY_SESSION_ID`, read the exported HTML, and answer in chat unless the user explicitly asks you to republish an updated artifact.
 
 ## Good Uses
 
