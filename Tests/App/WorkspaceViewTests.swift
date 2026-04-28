@@ -150,6 +150,10 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(opacity, 0.01)
     }
 
+    func testScratchpadBindingLabelShowsUnboundWithoutSessionLink() {
+        XCTAssertEqual(PanelCardView.scratchpadBindingLabel(for: nil), "Unbound")
+    }
+
     func testEffectivePrimaryFocusedPanelIDClearsWhenVisibleRightPanelIsFocused() {
         let mainPanelID = UUID()
         let rightPanelID = UUID()

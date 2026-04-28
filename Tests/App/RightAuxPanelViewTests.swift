@@ -280,8 +280,7 @@ final class RightAuxPanelViewTests: XCTestCase {
         XCTAssertEqual(candidates[1].label, "Claude - right split")
     }
 
-    func testScratchpadActionsMenuSnapshotsCandidateAndDocumentPayloads() throws {
-        let documentID = UUID()
+    func testScratchpadBindingMenuEntriesIncludeCandidatesAndUnbind() {
         let current = ScratchpadAgentBindCandidate(
             sessionID: "sess-current",
             agent: .codex,
@@ -297,63 +296,70 @@ final class RightAuxPanelViewTests: XCTestCase {
             isCurrent: false
         )
 
+        let entries = ScratchpadBindingMenuEntry.entries(
+            candidates: [current, destination],
+            isBound: true
+        )
+
+        XCTAssertEqual(entries, [
+            .candidate(current),
+            .candidate(destination),
+            .separator,
+            .unbind,
+        ])
+    }
+
+    func testScratchpadBindingMenuEntriesShowNoActiveSessionsFallback() {
+        XCTAssertEqual(
+            ScratchpadBindingMenuEntry.entries(candidates: [], isBound: false),
+            [.noActiveSessions("No active sessions in this tab")]
+        )
+        XCTAssertEqual(
+            ScratchpadBindingMenuEntry.entries(candidates: [], isBound: true),
+            [
+                .noActiveSessions("No active sessions in this tab"),
+                .separator,
+                .unbind,
+            ]
+        )
+    }
+
+    func testScratchpadActionsMenuContainsDocumentActionsOnly() throws {
+        let documentID = UUID()
+
         let menu = ScratchpadActionsMenuBuilder.menu(
             documentID: documentID,
-            candidates: [current, destination],
             target: nil,
-            rebindAction: nil,
             exportAction: nil,
             openInBrowserAction: nil
         )
 
-        let bindItem = menu.items[0]
-        let bindSubmenu = try XCTUnwrap(bindItem.submenu)
-        XCTAssertTrue(bindItem.isEnabled)
-        XCTAssertEqual(bindSubmenu.items[0].state, .on)
-        XCTAssertFalse(bindSubmenu.items[0].isEnabled)
-
-        let destinationPayload = try XCTUnwrap(
-            bindSubmenu.items[1].representedObject as? ScratchpadCandidateMenuPayload
-        )
-        XCTAssertEqual(destinationPayload.candidate, destination)
+        XCTAssertEqual(menu.items.map(\.title), ["Export to File...", "Open in Browser"])
+        XCTAssertTrue(menu.items.allSatisfy { $0.submenu == nil })
 
         let exportPayload = try XCTUnwrap(
-            menu.items[2].representedObject as? ScratchpadDocumentMenuPayload
+            menu.items[0].representedObject as? ScratchpadDocumentMenuPayload
         )
         XCTAssertEqual(exportPayload.documentID, documentID)
         let openPayload = try XCTUnwrap(
-            menu.items[3].representedObject as? ScratchpadDocumentMenuPayload
+            menu.items[1].representedObject as? ScratchpadDocumentMenuPayload
         )
         XCTAssertEqual(openPayload.documentID, documentID)
     }
 
-    func testScratchpadActionsMenuDisablesBindWhenNoAlternativeCandidates() throws {
-        let current = ScratchpadAgentBindCandidate(
-            sessionID: "sess-current",
-            agent: .codex,
-            panelID: UUID(),
-            label: "Codex - current binding",
-            isCurrent: true
-        )
-
+    func testScratchpadActionsMenuDisablesDocumentActionsWithoutDocumentID() {
         let menu = ScratchpadActionsMenuBuilder.menu(
             documentID: nil,
-            candidates: [current],
             target: nil,
-            rebindAction: nil,
             exportAction: nil,
             openInBrowserAction: nil
         )
 
-        let bindItem = menu.items[0]
-        let bindSubmenu = try XCTUnwrap(bindItem.submenu)
-        XCTAssertFalse(bindItem.isEnabled)
-        XCTAssertEqual(bindSubmenu.items.map(\.title), ["No other agents in this tab"])
-        XCTAssertFalse(bindSubmenu.items[0].isEnabled)
-        XCTAssertFalse(menu.items[2].isEnabled)
-        XCTAssertNil(menu.items[2].representedObject)
-        XCTAssertFalse(menu.items[3].isEnabled)
-        XCTAssertNil(menu.items[3].representedObject)
+        XCTAssertEqual(menu.items.map(\.title), ["Export to File...", "Open in Browser"])
+        XCTAssertFalse(menu.items[0].isEnabled)
+        XCTAssertNil(menu.items[0].representedObject)
+        XCTAssertFalse(menu.items[1].isEnabled)
+        XCTAssertNil(menu.items[1].representedObject)
     }
 }
 

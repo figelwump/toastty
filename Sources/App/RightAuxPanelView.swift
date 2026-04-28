@@ -15,6 +15,7 @@ struct RightAuxPanelView: View {
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let openLocalFileSearch: @MainActor (UUID) -> Void
+    let createBlankScratchpad: @MainActor (UUID) -> Void
     let openBrowser: @MainActor (UUID) -> Void
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
@@ -54,6 +55,7 @@ struct RightAuxPanelView: View {
                     focusedPanelCommandController: focusedPanelCommandController,
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     openLocalFileSearch: { openLocalFileSearch(windowID) },
+                    createBlankScratchpad: { createBlankScratchpad(workspace.id) },
                     openBrowser: { openBrowser(windowID) }
                 )
             }
@@ -75,6 +77,7 @@ struct RightAuxPanelView: View {
         if workspaceTab.rightAuxPanel.tabIDs.isEmpty {
             RightAuxPanelEmptyStateView(
                 openLocalFileSearch: { openLocalFileSearch(windowID) },
+                createBlankScratchpad: { createBlankScratchpad(workspace.id) },
                 openBrowser: { openBrowser(windowID) }
             )
         } else {
@@ -123,6 +126,7 @@ struct RightAuxPanelView: View {
 
 struct RightAuxPanelEmptyStateView: View {
     let openLocalFileSearch: @MainActor () -> Void
+    let createBlankScratchpad: @MainActor () -> Void
     let openBrowser: @MainActor () -> Void
 
     private static let dailyHeadlines = [
@@ -167,6 +171,14 @@ struct RightAuxPanelEmptyStateView: View {
                     action: openLocalFileSearch
                 )
                 .accessibilityIdentifier("right-panel.empty.find-local-file")
+
+                RightAuxPanelEmptyStateActionButton(
+                    title: "New scratchpad",
+                    subtitle: "Start a blank, unbound scratchpad.",
+                    systemImage: "square.and.pencil",
+                    action: createBlankScratchpad
+                )
+                .accessibilityIdentifier("right-panel.empty.new-scratchpad")
 
                 RightAuxPanelEmptyStateActionButton(
                     title: "Open browser",
@@ -247,6 +259,7 @@ struct RightAuxPanelTabStrip: View {
     let focusedPanelCommandController: FocusedPanelCommandController
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let openLocalFileSearch: @MainActor () -> Void
+    let createBlankScratchpad: @MainActor () -> Void
     let openBrowser: @MainActor () -> Void
 
     @State private var hoveredTabID: UUID?
@@ -363,15 +376,20 @@ struct RightAuxPanelTabStrip: View {
 
     private var addPanelMenu: some View {
         Menu {
-            Button(action: openBrowser) {
-                Label("Open Browser", systemImage: "globe")
-            }
-            .accessibilityIdentifier("right-panel.tabs.add.open-browser")
-
             Button(action: openLocalFileSearch) {
                 Label("Find Local File", systemImage: "magnifyingglass")
             }
             .accessibilityIdentifier("right-panel.tabs.add.find-local-file")
+
+            Button(action: createBlankScratchpad) {
+                Label("New Scratchpad", systemImage: "square.and.pencil")
+            }
+            .accessibilityIdentifier("right-panel.tabs.add.new-scratchpad")
+
+            Button(action: openBrowser) {
+                Label("Open Browser", systemImage: "globe")
+            }
+            .accessibilityIdentifier("right-panel.tabs.add.open-browser")
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 5)

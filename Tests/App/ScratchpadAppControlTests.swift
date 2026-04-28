@@ -217,6 +217,80 @@ struct ScratchpadAppControlTests {
     }
 
     @Test
+    func createBlankScratchpadCreatesUnboundRightPanelDocument() throws {
+        let fixture = try ScratchpadAppControlFixture()
+
+        let outcome = try fixture.store.createBlankScratchpadPanel(
+            workspaceID: fixture.workspaceID,
+            documentStore: fixture.documentStore
+        )
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let selectedTab = try #require(workspace.selectedTab)
+        let panelState = try #require(workspace.panelState(for: outcome.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should be a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: outcome.documentID))
+
+        #expect(outcome.windowID == fixture.windowID)
+        #expect(outcome.workspaceID == fixture.workspaceID)
+        #expect(outcome.revision == 1)
+        #expect(selectedTab.panels[outcome.panelID] == nil)
+        #expect(selectedTab.rightAuxPanel.isVisible)
+        #expect(selectedTab.rightAuxPanel.activePanelID == outcome.panelID)
+        #expect(webState.definition == .scratchpad)
+        #expect(webState.title == "Scratchpad")
+        #expect(webState.scratchpad?.documentID == outcome.documentID)
+        #expect(webState.scratchpad?.revision == 1)
+        #expect(webState.scratchpad?.sessionLink == nil)
+        #expect(document.content == "")
+        #expect(document.title == nil)
+        #expect(document.sessionLink == nil)
+    }
+
+    @Test
+    func unbindScratchpadClearsPanelAndDocumentSessionLink() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let initial = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Initial</p>"),
+                "title": .string("Notes"),
+            ]
+        )
+        let initialResult = try #require(initial.result)
+        let scratchpadPanelIDString = try #require(initialResult.string("panelID"))
+        let scratchpadPanelID = try #require(UUID(uuidString: scratchpadPanelIDString))
+        let documentIDString = try #require(initialResult.string("documentID"))
+        let documentID = try #require(UUID(uuidString: documentIDString))
+
+        let outcome = try fixture.store.unbindScratchpadPanel(
+            panelID: scratchpadPanelID,
+            documentStore: fixture.documentStore
+        )
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspace.panelState(for: scratchpadPanelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: documentID))
+
+        #expect(outcome.windowID == fixture.windowID)
+        #expect(outcome.workspaceID == fixture.workspaceID)
+        #expect(outcome.panelID == scratchpadPanelID)
+        #expect(outcome.documentID == documentID)
+        #expect(outcome.revision == 1)
+        #expect(webState.scratchpad?.documentID == documentID)
+        #expect(webState.scratchpad?.revision == 1)
+        #expect(webState.scratchpad?.sessionLink == nil)
+        #expect(document.content == "<p>Initial</p>")
+        #expect(document.sessionLink == nil)
+    }
+
+    @Test
     func exportWritesSessionLinkedScratchpadToDeterministicFile() throws {
         let fixture = try ScratchpadAppControlFixture()
         let response = try fixture.executor.runAction(
