@@ -2,6 +2,82 @@
 import XCTest
 
 final class ToasttyAppDefaultsTests: XCTestCase {
+    func testAppKitDefaultPreferencesRegistersFasterToolTipDelay() throws {
+        let suiteName = "toastty-appkit-defaults-tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        AppKitDefaultPreferences.registerToolTipTiming(in: defaults)
+
+        XCTAssertEqual(
+            defaults.integer(forKey: AppKitDefaultPreferences.initialToolTipDelayKey),
+            AppKitDefaultPreferences.initialToolTipDelayMilliseconds
+        )
+        XCTAssertNil(
+            defaults.persistentDomain(forName: suiteName)?[AppKitDefaultPreferences.initialToolTipDelayKey]
+        )
+    }
+
+    func testAppKitDefaultPreferencesDoesNotOverrideExplicitToolTipDelay() throws {
+        let suiteName = "toastty-appkit-defaults-override-tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        defaults.set(900, forKey: AppKitDefaultPreferences.initialToolTipDelayKey)
+
+        AppKitDefaultPreferences.registerToolTipTiming(in: defaults)
+
+        XCTAssertEqual(defaults.integer(forKey: AppKitDefaultPreferences.initialToolTipDelayKey), 900)
+    }
+
+    func testAppKitDefaultPreferencesRegistersToolTipDelayForStandardDefaultsWhenUsingIsolatedSuite() throws {
+        let isolatedSuiteName = "toastty-appkit-defaults-isolated-tests-\(UUID().uuidString)"
+        let standardSuiteName = "toastty-appkit-defaults-standard-tests-\(UUID().uuidString)"
+        let isolatedDefaults = try XCTUnwrap(UserDefaults(suiteName: isolatedSuiteName))
+        let standardDefaults = try XCTUnwrap(UserDefaults(suiteName: standardSuiteName))
+        isolatedDefaults.removePersistentDomain(forName: isolatedSuiteName)
+        standardDefaults.removePersistentDomain(forName: standardSuiteName)
+        defer {
+            isolatedDefaults.removePersistentDomain(forName: isolatedSuiteName)
+            standardDefaults.removePersistentDomain(forName: standardSuiteName)
+        }
+
+        AppKitDefaultPreferences.apply(to: isolatedDefaults, standardDefaults: standardDefaults)
+
+        XCTAssertEqual(
+            isolatedDefaults.integer(forKey: AppKitDefaultPreferences.initialToolTipDelayKey),
+            AppKitDefaultPreferences.initialToolTipDelayMilliseconds
+        )
+        XCTAssertEqual(
+            standardDefaults.integer(forKey: AppKitDefaultPreferences.initialToolTipDelayKey),
+            AppKitDefaultPreferences.initialToolTipDelayMilliseconds
+        )
+        XCTAssertEqual(
+            isolatedDefaults.bool(forKey: AppKitDefaultPreferences.applePersistenceIgnoreStateKey),
+            true
+        )
+        XCTAssertEqual(
+            isolatedDefaults.bool(forKey: AppKitDefaultPreferences.quitAlwaysKeepsWindowsKey),
+            false
+        )
+        XCTAssertNil(
+            standardDefaults.persistentDomain(forName: standardSuiteName)?[
+                AppKitDefaultPreferences.applePersistenceIgnoreStateKey
+            ]
+        )
+        XCTAssertNil(
+            standardDefaults.persistentDomain(forName: standardSuiteName)?[
+                AppKitDefaultPreferences.quitAlwaysKeepsWindowsKey
+            ]
+        )
+    }
+
     func testRuntimeHomeUsesIsolatedDefaultsSuite() {
         let key = "toastty-app-defaults-tests-\(UUID().uuidString)"
         let runtimeOne = "/tmp/toastty-runtime-home-tests/defaults-runtime-a"

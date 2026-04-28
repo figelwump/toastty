@@ -59,6 +59,29 @@ enum KeyboardShortcutsReferenceLocator {
 
 typealias ManagedLocalDocumentOpener = @MainActor (URL, LocalDocumentFormat) -> Bool
 
+enum AppKitDefaultPreferences {
+    static let initialToolTipDelayKey = "NSInitialToolTipDelay"
+    static let initialToolTipDelayMilliseconds = 250
+    static let applePersistenceIgnoreStateKey = "ApplePersistenceIgnoreState"
+    static let quitAlwaysKeepsWindowsKey = "NSQuitAlwaysKeepsWindows"
+
+    static func apply(to defaults: UserDefaults, standardDefaults: UserDefaults = .standard) {
+        registerToolTipTiming(in: defaults)
+        if defaults !== standardDefaults {
+            registerToolTipTiming(in: standardDefaults)
+        }
+
+        defaults.set(true, forKey: applePersistenceIgnoreStateKey)
+        defaults.set(false, forKey: quitAlwaysKeepsWindowsKey)
+    }
+
+    static func registerToolTipTiming(in defaults: UserDefaults) {
+        defaults.register(defaults: [
+            initialToolTipDelayKey: initialToolTipDelayMilliseconds,
+        ])
+    }
+}
+
 @MainActor
 private func openManagedLocalDocumentInToastty(
     store: AppStore,
@@ -2868,9 +2891,7 @@ struct ToasttyApp: App {
 
         // Toastty persists window/workspace state explicitly, so AppKit's
         // saved-state restoration only adds stale SwiftUI scene identifiers.
-        let defaults = ToasttyAppDefaults.current
-        defaults.set(true, forKey: "ApplePersistenceIgnoreState")
-        defaults.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+        AppKitDefaultPreferences.apply(to: ToasttyAppDefaults.current)
     }
 
     private static func prepareRuntimeEnvironment(processInfo: ProcessInfo) {
