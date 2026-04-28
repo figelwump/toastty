@@ -1448,10 +1448,48 @@ public struct AppReducer {
             return false
         }
 
+        let splitTree = WorkspaceSplitTree(root: workspace.layoutTree)
+        let rightAuxPanelOwnsResize = workspace.focusedPanelModeActive == false &&
+            workspace.rightAuxPanel.isVisible &&
+            workspace.rightAuxPanel.focusedPanelID != nil
+        let focusedSlotTouchesRightPanelBoundary =
+            rightAuxPanelResizeDirection(direction) &&
+            workspace.focusedPanelModeActive == false &&
+            workspace.rightAuxPanel.isVisible &&
+            splitTree.slotTouchesRightEdge(slotID: focusResolution.slot.slotID)
+
+        if rightAuxPanelOwnsResize || focusedSlotTouchesRightPanelBoundary {
+            guard resizeRightAuxPanel(workspace: &workspace, direction: direction, amount: amount) else {
+                ToasttyLog.debug(
+                    "Resize right panel rejected",
+                    category: .reducer,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "direction": direction.rawValue,
+                        "amount": String(amount),
+                    ]
+                )
+                return false
+            }
+
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            ToasttyLog.debug(
+                "Resize right panel applied",
+                category: .reducer,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "direction": direction.rawValue,
+                    "amount": String(amount),
+                    "width": String(workspace.rightAuxPanel.width),
+                ]
+            )
+            return true
+        }
+
         let updatedLayoutTree: LayoutNode
         if workspace.focusedPanelModeActive {
             guard let rootNodeID = workspace.effectiveFocusModeRootNodeID,
-                  let focusModeSubtree = WorkspaceSplitTree(root: workspace.layoutTree).focusedSubtree(rootNodeID: rootNodeID),
+                  let focusModeSubtree = splitTree.focusedSubtree(rootNodeID: rootNodeID),
                   let resizedSubtree = focusModeSubtree.resized(
                     focusedSlotID: focusResolution.slot.slotID,
                     direction: direction,
@@ -1474,7 +1512,7 @@ public struct AppReducer {
                 return false
             }
             updatedLayoutTree = replacedLayoutTree
-        } else if let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).resized(
+        } else if let updatedSplitTree = splitTree.resized(
             focusedSlotID: focusResolution.slot.slotID,
             direction: direction,
             amount: amount
@@ -1505,6 +1543,53 @@ public struct AppReducer {
             ]
         )
         return true
+    }
+
+    private static func resizeRightAuxPanel(
+        workspace: inout WorkspaceState,
+        direction: SplitResizeDirection,
+        amount: Int
+    ) -> Bool {
+        guard rightAuxPanelResizeDirection(direction),
+              workspace.focusedPanelModeActive == false,
+              workspace.rightAuxPanel.isVisible else {
+            return false
+        }
+
+        let nextWidth = RightAuxPanelState.clampedWidth(
+            workspace.rightAuxPanel.width + rightAuxPanelResizeDelta(direction: direction, amount: amount)
+        )
+        guard abs(nextWidth - workspace.rightAuxPanel.width) > 0.0001 else {
+            return false
+        }
+
+        workspace.rightAuxPanel.width = nextWidth
+        workspace.rightAuxPanel.hasCustomWidth = true
+        return true
+    }
+
+    private static func rightAuxPanelResizeDirection(_ direction: SplitResizeDirection) -> Bool {
+        switch direction {
+        case .left, .right:
+            return true
+        case .up, .down:
+            return false
+        }
+    }
+
+    private static func rightAuxPanelResizeDelta(direction: SplitResizeDirection, amount: Int) -> Double {
+        let clampedAmount = max(1, min(amount, 60))
+        // Keep the keyboard step close to split resizing's 0.5%-per-amount feel
+        // for a typical 1000 pt workspace while remaining deterministic in state.
+        let magnitude = Double(clampedAmount) * 5
+        switch direction {
+        case .left:
+            return magnitude
+        case .right:
+            return -magnitude
+        case .up, .down:
+            return 0
+        }
     }
 
     private static func equalizeLayoutSplits(workspaceID: UUID, state: inout AppState) -> Bool {

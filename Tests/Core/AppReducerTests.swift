@@ -2978,6 +2978,234 @@ struct AppReducerTests {
     }
 
     @Test
+    func resizeFocusedSlotSplitAdjustsFocusedRightPanelWidth() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let initialWidth = workspaceBefore.rightAuxPanel.width
+        let initialLayoutTree = workspaceBefore.layoutTree
+        #expect(workspaceBefore.rightAuxPanel.focusedPanelID != nil)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .left, amount: 2),
+                state: &state
+            )
+        )
+
+        var workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.rightAuxPanel.width == initialWidth + 10)
+        #expect(workspaceAfter.rightAuxPanel.hasCustomWidth)
+        #expect(workspaceAfter.layoutTree == initialLayoutTree)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 1),
+                state: &state
+            )
+        )
+
+        workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.rightAuxPanel.width == initialWidth + 5)
+        #expect(workspaceAfter.layoutTree == initialLayoutTree)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedSlotSplitDoesNotResizeMainLayoutVerticallyWhenRightPanelFocused() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical), state: &state))
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceBefore.rightAuxPanel.focusedPanelID != nil)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .up, amount: 2),
+                state: &state
+            ) == false
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.layoutTree == workspaceBefore.layoutTree)
+        #expect(workspaceAfter.rightAuxPanel.width == workspaceBefore.rightAuxPanel.width)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedSlotSplitIgnoresPreservedRightPanelFocusInFocusedPanelMode() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+
+        let focusedPanelID = UUID()
+        let siblingPanelID = UUID()
+        let focusedSlotID = UUID()
+        let siblingSlotID = UUID()
+        let rootNodeID = UUID()
+        workspace.panels = [
+            focusedPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
+            siblingPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
+        ]
+        workspace.layoutTree = .split(
+            nodeID: rootNodeID,
+            orientation: .vertical,
+            ratio: 0.5,
+            first: .slot(slotID: focusedSlotID, panelID: focusedPanelID),
+            second: .slot(slotID: siblingSlotID, panelID: siblingPanelID)
+        )
+        workspace.focusedPanelID = focusedPanelID
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = rootNodeID
+
+        let rightAuxPanelID = UUID()
+        let rightAuxTabID = UUID()
+        let webState = WebPanelState(definition: .browser, title: "Docs")
+        workspace.rightAuxPanel = RightAuxPanelState(
+            isVisible: true,
+            activeTabID: rightAuxTabID,
+            tabIDs: [rightAuxTabID],
+            tabsByID: [
+                rightAuxTabID: RightAuxPanelTabState(
+                    id: rightAuxTabID,
+                    identity: RightAuxPanelTabIdentity.identity(for: webState, panelID: rightAuxPanelID),
+                    panelID: rightAuxPanelID,
+                    panelState: .web(webState)
+                ),
+            ],
+            focusedPanelID: rightAuxPanelID
+        )
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .down, amount: 2),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, _, let resizedRatio, _, _) = workspaceAfter.layoutTree else {
+            Issue.record("expected vertical split root after resize")
+            return
+        }
+        #expect(resizedRatio > 0.5)
+        #expect(workspaceAfter.rightAuxPanel.width == workspace.rightAuxPanel.width)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedSlotSplitAdjustsRightPanelWidthFromSingleAdjacentMainPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let mainPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: mainPanelID), state: &state))
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let initialWidth = workspaceBefore.rightAuxPanel.width
+        let initialLayoutTree = workspaceBefore.layoutTree
+        #expect(workspaceBefore.rightAuxPanel.focusedPanelID == nil)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 2),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.rightAuxPanel.width == initialWidth - 10)
+        #expect(workspaceAfter.rightAuxPanel.hasCustomWidth)
+        #expect(workspaceAfter.layoutTree == initialLayoutTree)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedSlotSplitPrefersRightPanelBoundaryForRightEdgeMainPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        let mainRightPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: mainRightPanelID), state: &state))
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let initialWidth = workspaceBefore.rightAuxPanel.width
+        guard case .split(_, _, let initialRatio, _, _) = workspaceBefore.layoutTree else {
+            Issue.record("expected horizontal split root before resize")
+            return
+        }
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 2),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, _, let resizedRatio, _, _) = workspaceAfter.layoutTree else {
+            Issue.record("expected horizontal split root after resize")
+            return
+        }
+
+        #expect(workspaceAfter.rightAuxPanel.width == initialWidth - 10)
+        #expect(workspaceAfter.rightAuxPanel.hasCustomWidth)
+        #expect(resizedRatio == initialRatio)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func resizeFocusedSlotSplitUsesNearestMatchingAncestor() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

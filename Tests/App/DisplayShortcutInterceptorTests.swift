@@ -1122,6 +1122,26 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertTrue(workspace.rightAuxPanel.tabIDs.isEmpty)
     }
 
+    func testRightPanelFocusedResizeShortcutAdjustsRightPanelWidth() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.createBrowser, appOwnedWindowID: windowID))
+
+        let workspaceBefore = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let initialWidth = workspaceBefore.rightAuxPanel.width
+        XCTAssertNotNil(workspaceBefore.rightAuxPanel.focusedPanelID)
+
+        XCTAssertTrue(interceptor.handle(.resizeSplit(.left), appOwnedWindowID: windowID))
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertGreaterThan(workspaceAfter.rightAuxPanel.width, initialWidth)
+        XCTAssertTrue(workspaceAfter.rightAuxPanel.hasCustomWidth)
+        XCTAssertEqual(workspaceAfter.layoutTree, workspaceBefore.layoutTree)
+    }
+
     func testRightPanelTabNavigationShortcutUsesDedicatedActionAndMovesFocus() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
