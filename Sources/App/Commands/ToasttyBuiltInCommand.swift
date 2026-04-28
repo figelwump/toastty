@@ -39,6 +39,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case renameTab
     case selectPreviousTab
     case selectNextTab
+    case selectPreviousRightPanelTab
+    case selectNextRightPanelTab
     case jumpToNextActive
     case reloadConfiguration
 
@@ -122,6 +124,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "workspace.tab.select-previous"
         case .selectNextTab:
             return "workspace.tab.select-next"
+        case .selectPreviousRightPanelTab:
+            return "right-panel.tab.select-previous"
+        case .selectNextRightPanelTab:
+            return "right-panel.tab.select-next"
         case .jumpToNextActive:
             return "panel.focus-next-unread-or-active"
         case .reloadConfiguration:
@@ -201,6 +207,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Select Previous Tab"
         case .selectNextTab:
             return "Select Next Tab"
+        case .selectPreviousRightPanelTab:
+            return "Select Previous Right Panel Tab"
+        case .selectNextRightPanelTab:
+            return "Select Next Right Panel Tab"
         case .jumpToNextActive:
             return "Jump to Next Active"
         case .reloadConfiguration:
@@ -280,6 +290,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ToasttyKeyboardShortcuts.selectPreviousTab
         case .selectNextTab:
             return ToasttyKeyboardShortcuts.selectNextTab
+        case .selectPreviousRightPanelTab:
+            return ToasttyKeyboardShortcuts.selectPreviousRightPanelTab
+        case .selectNextRightPanelTab:
+            return ToasttyKeyboardShortcuts.selectNextRightPanelTab
         case .jumpToNextActive:
             return ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel
         case .reloadConfiguration:
@@ -366,6 +380,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["tab", "previous", "left", "back"]
         case .selectNextTab:
             return ["tab", "next", "right", "forward"]
+        case .selectPreviousRightPanelTab:
+            return ["right", "panel", "tab", "previous", "left", "back"]
+        case .selectNextRightPanelTab:
+            return ["right", "panel", "tab", "next", "right", "forward"]
         case .jumpToNextActive:
             return ["jump", "next", "active", "unread", "attention", "panel"]
         case .reloadConfiguration:

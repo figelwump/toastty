@@ -195,6 +195,24 @@ final class WorkspaceTabCommandController {
         )
     }
 
+    func canSelectAdjacentRightPanelTab() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID)
+    }
+
+    @discardableResult
+    func selectAdjacentRightPanelTab(_ direction: PanelTabNavigationDirection) -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.selectAdjacentRightAuxPanelTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
+        )
+    }
+
     func canFocusNextUnreadOrActivePanel() -> Bool {
         guard let preferredWindowID = currentKeyWindowID() else {
             return false
@@ -303,6 +321,8 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         static let renameTab = ToasttyBuiltInCommand.renameTab.title
         static let selectPreviousTab = ToasttyBuiltInCommand.selectPreviousTab.title
         static let selectNextTab = ToasttyBuiltInCommand.selectNextTab.title
+        static let selectPreviousRightPanelTab = ToasttyBuiltInCommand.selectPreviousRightPanelTab.title
+        static let selectNextRightPanelTab = ToasttyBuiltInCommand.selectNextRightPanelTab.title
         static let jumpToNextUnreadOrActive = ToasttyBuiltInCommand.jumpToNextActive.title
     }
 
@@ -376,6 +396,16 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
             in: workspaceMenu
         )
         configureItem(
+            titled: ItemTitle.selectPreviousRightPanelTab,
+            action: #selector(selectPreviousRightPanelTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.selectNextRightPanelTab,
+            action: #selector(selectNextRightPanelTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
             titled: ItemTitle.jumpToNextUnreadOrActive,
             action: #selector(focusNextUnreadOrActivePanel(_:)),
             in: workspaceMenu
@@ -429,6 +459,16 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     @objc
+    func selectPreviousRightPanelTab(_: Any?) {
+        _ = workspaceTabCommandController.selectAdjacentRightPanelTab(.previous)
+    }
+
+    @objc
+    func selectNextRightPanelTab(_: Any?) {
+        _ = workspaceTabCommandController.selectAdjacentRightPanelTab(.next)
+    }
+
+    @objc
     func focusNextUnreadOrActivePanel(_: Any?) {
         _ = workspaceTabCommandController.focusNextUnreadOrActivePanel()
     }
@@ -456,6 +496,10 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         case #selector(selectPreviousTab(_:)),
             #selector(selectNextTab(_:)):
             return workspaceTabCommandController.canSelectAdjacentTab()
+
+        case #selector(selectPreviousRightPanelTab(_:)),
+            #selector(selectNextRightPanelTab(_:)):
+            return workspaceTabCommandController.canSelectAdjacentRightPanelTab()
 
         case #selector(focusNextUnreadOrActivePanel(_:)):
             return workspaceTabCommandController.canFocusNextUnreadOrActivePanel()

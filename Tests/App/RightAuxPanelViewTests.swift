@@ -29,4 +29,33 @@ final class RightAuxPanelViewTests: XCTestCase {
             82
         )
     }
+
+    func testUnreadDotShowsForPanelInUnreadSet() {
+        let unreadPanelID = UUID()
+        let readPanelID = UUID()
+
+        XCTAssertTrue(
+            RightAuxPanelTabStrip.showsUnreadDot(
+                unreadPanelIDs: [unreadPanelID],
+                panelID: unreadPanelID
+            )
+        )
+        XCTAssertFalse(
+            RightAuxPanelTabStrip.showsUnreadDot(
+                unreadPanelIDs: [unreadPanelID],
+                panelID: readPanelID
+            )
+        )
+    }
+
+    func testTabAccessibilityLabelIncludesUnreadState() {
+        XCTAssertEqual(
+            RightAuxPanelTabStrip.tabAccessibilityLabel(title: "Scratchpad", hasUnread: true),
+            "Scratchpad, unread"
+        )
+        XCTAssertEqual(
+            RightAuxPanelTabStrip.tabAccessibilityLabel(title: "Scratchpad", hasUnread: false),
+            "Scratchpad"
+        )
+    }
 }

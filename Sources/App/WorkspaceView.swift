@@ -133,6 +133,14 @@ struct WorkspaceView: View {
         return 0.001
     }
 
+    nonisolated static func effectivePrimaryFocusedPanelID(
+        focusedPanelID: UUID?,
+        rightAuxPanelFocusedPanelID: UUID?,
+        rightAuxPanelVisible: Bool
+    ) -> UUID? {
+        rightAuxPanelVisible && rightAuxPanelFocusedPanelID != nil ? nil : focusedPanelID
+    }
+
     nonisolated static func resolvedWorkspaceTitleWidth(
         preferredWidth: CGFloat,
         availableWidth: CGFloat,
@@ -1002,6 +1010,11 @@ struct WorkspaceView: View {
                 isWorkspaceSelected: isWorkspaceSelected,
                 isWorkspaceTabSelected: isTabSelected
             )
+            let primaryFocusedPanelID = Self.effectivePrimaryFocusedPanelID(
+                focusedPanelID: tab.focusedPanelID,
+                rightAuxPanelFocusedPanelID: tab.rightAuxPanel.focusedPanelID,
+                rightAuxPanelVisible: tab.rightAuxPanel.isVisible
+            )
 
             ZStack(alignment: .topLeading) {
                 HStack(spacing: 0) {
@@ -1013,6 +1026,7 @@ struct WorkspaceView: View {
                         renderedLayout: renderedLayout,
                         width: primaryContentWidth,
                         height: geometry.size.height,
+                        focusedPanelID: primaryFocusedPanelID,
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
                         panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
                     )
@@ -1072,6 +1086,7 @@ struct WorkspaceView: View {
         renderedLayout: WorkspaceRenderedLayout,
         width: CGFloat,
         height: CGFloat,
+        focusedPanelID: UUID?,
         terminalShortcutNumbersByPanelID: [UUID: Int],
         panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus]
     ) -> some View {
@@ -1102,6 +1117,7 @@ struct WorkspaceView: View {
                     terminalRuntimeContext: terminalRuntimeContext,
                     windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
                     windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+                    focusedPanelID: focusedPanelID,
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
@@ -1183,6 +1199,7 @@ struct WorkspaceView: View {
             openBrowser: openRightPanelBrowser,
             windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
             windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+            isRightAuxPanelVisible: isVisible,
             appIsActive: appIsActive
         )
         .frame(width: targetWidth)
@@ -2832,6 +2849,7 @@ private struct SlotPlacementView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
+    let focusedPanelID: UUID?
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
@@ -2847,7 +2865,7 @@ private struct SlotPlacementView: View {
                     panelState: panelState,
                     isWorkspaceSelected: isWorkspaceSelected,
                     isTabSelected: isTabSelected,
-                    focusedPanelID: tab.focusedPanelID,
+                    focusedPanelID: focusedPanelID,
                     hasUnreadNotification: tab.unreadPanelIDs.contains(placement.panelID),
                     panelSessionStatus: panelSessionStatusesByPanelID[placement.panelID],
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
@@ -3266,7 +3284,11 @@ struct PanelCardView: View {
         } else if state.definition == .scratchpad {
             ScratchpadPanelView(
                 webState: state,
-                runtime: webPanelRuntimeRegistry.scratchpadRuntime(for: panelID),
+                runtime: webPanelRuntimeRegistry.scratchpadRuntime(
+                    for: panelID,
+                    requestSource: "PanelCardView.webPanelBody",
+                    isEffectivelyVisible: isWorkspaceSelected && isTabSelected
+                ),
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
                 isActivePanel: isFocused
             )

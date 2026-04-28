@@ -17,6 +17,7 @@ struct RightAuxPanelView: View {
     let openBrowser: @MainActor (UUID) -> Void
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
+    let isRightAuxPanelVisible: Bool
     let appIsActive: Bool
 
     var body: some View {
@@ -26,6 +27,7 @@ struct RightAuxPanelView: View {
                     workspaceID: workspace.id,
                     tabs: workspaceTab.rightAuxPanel.orderedTabs,
                     activeTabID: workspaceTab.rightAuxPanel.activeTabID,
+                    unreadPanelIDs: workspaceTab.unreadPanelIDs,
                     appIsActive: appIsActive,
                     store: store,
                     focusedPanelCommandController: focusedPanelCommandController,
@@ -58,7 +60,7 @@ struct RightAuxPanelView: View {
                             workspaceID: workspace.id,
                             panelID: tab.panelID,
                             panelState: tab.panelState,
-                            isWorkspaceSelected: isWorkspaceSelected && isWorkspaceTabSelected,
+                            isWorkspaceSelected: isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible,
                             isTabSelected: isActiveTab,
                             focusedPanelID: workspaceTab.rightAuxPanel.focusedPanelID,
                             hasUnreadNotification: workspaceTab.unreadPanelIDs.contains(tab.panelID),
@@ -77,8 +79,8 @@ struct RightAuxPanelView: View {
                             terminalRuntimeContext: nil
                         )
                         .opacity(WorkspaceView.mountedContentOpacity(isVisible: isActiveTab))
-                        .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isActiveTab)
-                        .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isActiveTab))
+                        .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible && isActiveTab)
+                        .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible && isActiveTab))
                         .zIndex(isActiveTab ? 1 : 0)
                         .id(tab.id)
                     }
@@ -93,6 +95,19 @@ struct RightAuxPanelEmptyStateView: View {
     let openLocalFileSearch: @MainActor () -> Void
     let openBrowser: @MainActor () -> Void
 
+    private static let dailyHeadlines = [
+        "A fresh slice on the side",
+        "Pop something in",
+        "Crumb-free and ready",
+        "Side dish, freshly toasted"
+    ]
+
+    private static func dailyHeadline(for date: Date = Date(), calendar: Calendar = .current) -> String {
+        let dayOrdinal = calendar.ordinality(of: .day, in: .era, for: date) ?? 1
+        let index = (max(dayOrdinal, 1) - 1) % dailyHeadlines.count
+        return dailyHeadlines[index]
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 24)
@@ -100,7 +115,7 @@ struct RightAuxPanelEmptyStateView: View {
             ToastCharacterView(size: 96)
                 .padding(.bottom, 18)
 
-            Text("A fresh slice on the side")
+            Text(Self.dailyHeadline())
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(ToastyTheme.primaryText)
                 .multilineTextAlignment(.center)
@@ -195,6 +210,7 @@ struct RightAuxPanelTabStrip: View {
     let workspaceID: UUID
     let tabs: [RightAuxPanelTabState]
     let activeTabID: UUID?
+    let unreadPanelIDs: Set<UUID>
     let appIsActive: Bool
     @ObservedObject var store: AppStore
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -229,6 +245,14 @@ struct RightAuxPanelTabStrip: View {
         guard totalWidth.isFinite, totalWidth > 0 else { return 0 }
 
         return max(0, totalWidth - addButtonContainerWidth)
+    }
+
+    nonisolated static func showsUnreadDot(unreadPanelIDs: Set<UUID>, panelID: UUID) -> Bool {
+        unreadPanelIDs.contains(panelID)
+    }
+
+    nonisolated static func tabAccessibilityLabel(title: String, hasUnread: Bool) -> String {
+        hasUnread ? "\(title), unread" : title
     }
 
     var body: some View {
@@ -320,6 +344,7 @@ struct RightAuxPanelTabStrip: View {
         let isActive = activeTabID == tab.id
         let isHovered = appIsActive && hoveredTabID == tab.id
         let showsClose = isHovered
+        let hasUnread = Self.showsUnreadDot(unreadPanelIDs: unreadPanelIDs, panelID: tab.panelID)
 
         return ZStack(alignment: .trailing) {
             Button {
@@ -331,7 +356,7 @@ struct RightAuxPanelTabStrip: View {
                     )
                 )
             } label: {
-                tabChrome(tab: tab, isActive: isActive, isHovered: isHovered)
+                tabChrome(tab: tab, isActive: isActive, isHovered: isHovered, hasUnread: hasUnread)
             }
             .buttonStyle(.plain)
 
@@ -351,17 +376,32 @@ struct RightAuxPanelTabStrip: View {
                 }
             }
         }
-        .accessibilityLabel(tab.panelState.notificationLabel)
+        .accessibilityLabel(
+            Self.tabAccessibilityLabel(
+                title: tab.panelState.notificationLabel,
+                hasUnread: hasUnread
+            )
+        )
         .accessibilityIdentifier("right-panel.tab.\(tab.id.uuidString)")
     }
 
     private func tabChrome(
         tab: RightAuxPanelTabState,
         isActive: Bool,
-        isHovered: Bool
+        isHovered: Bool,
+        hasUnread: Bool
     ) -> some View {
         HStack(spacing: 6) {
             tabIcon(for: tab)
+
+            if hasUnread {
+                Circle()
+                    .fill(ToastyTheme.workspaceTabUnreadDot)
+                    .frame(
+                        width: ToastyTheme.workspaceTabUnreadDotDiameter,
+                        height: ToastyTheme.workspaceTabUnreadDotDiameter
+                    )
+            }
 
             Text(tab.panelState.notificationLabel)
                 .font(ToastyTheme.fontWorkspaceTab)

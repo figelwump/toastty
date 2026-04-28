@@ -27,6 +27,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canCloseWorkspaceValue = true
     var canRenameTabValue = true
     var canSelectAdjacentTabValue = true
+    var canSelectAdjacentRightPanelTabValue = true
     var canJumpToNextActiveValue = true
     var canLaunchAgentValue = true
     var allowedAgentProfileIDs: Set<String>?
@@ -52,6 +53,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var closeWorkspaceResult = true
     var renameTabResult = true
     var selectAdjacentTabResult = true
+    var selectAdjacentRightPanelTabResult = true
     var jumpToNextActiveResult = true
     var launchAgentResult = true
     var splitWithTerminalProfileResult = true
@@ -80,6 +82,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var closedWorkspaceWindowIDs: [UUID] = []
     var renamedTabWindowIDs: [UUID] = []
     var tabSelectionCalls: [RecordedPaletteTabSelectionCall] = []
+    var rightPanelTabSelectionCalls: [RecordedPaletteRightPanelTabSelectionCall] = []
     var jumpToNextActiveWindowIDs: [UUID] = []
     var workspaceSwitchCalls: [RecordedPaletteWorkspaceSwitchCall] = []
     var launchedAgentCalls: [RecordedPaletteAgentLaunchCall] = []
@@ -327,6 +330,25 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return selectAdjacentTabResult
     }
 
+    func canSelectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        _ = direction
+        _ = originWindowID
+        return canSelectAdjacentRightPanelTabValue
+    }
+
+    func selectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        rightPanelTabSelectionCalls.append(
+            RecordedPaletteRightPanelTabSelectionCall(direction: direction, originWindowID: originWindowID)
+        )
+        return selectAdjacentRightPanelTabResult
+    }
+
     func canJumpToNextActive(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return canJumpToNextActiveValue
@@ -470,6 +492,10 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return selectAdjacentTab(direction: .previous, originWindowID: originWindowID)
             case .selectNextTab:
                 return selectAdjacentTab(direction: .next, originWindowID: originWindowID)
+            case .selectPreviousRightPanelTab:
+                return selectAdjacentRightPanelTab(direction: .previous, originWindowID: originWindowID)
+            case .selectNextRightPanelTab:
+                return selectAdjacentRightPanelTab(direction: .next, originWindowID: originWindowID)
             case .jumpToNextActive:
                 return jumpToNextActive(originWindowID: originWindowID)
             case .reloadConfiguration:
@@ -522,6 +548,11 @@ struct RecordedPaletteLocalDocumentCall: Equatable {
 
 struct RecordedPaletteTabSelectionCall: Equatable {
     let direction: TabNavigationDirection
+    let originWindowID: UUID
+}
+
+struct RecordedPaletteRightPanelTabSelectionCall: Equatable {
+    let direction: PanelTabNavigationDirection
     let originWindowID: UUID
 }
 

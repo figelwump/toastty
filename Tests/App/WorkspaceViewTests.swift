@@ -150,6 +150,35 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(opacity, 0.01)
     }
 
+    func testEffectivePrimaryFocusedPanelIDClearsWhenVisibleRightPanelIsFocused() {
+        let mainPanelID = UUID()
+        let rightPanelID = UUID()
+
+        XCTAssertEqual(
+            WorkspaceView.effectivePrimaryFocusedPanelID(
+                focusedPanelID: mainPanelID,
+                rightAuxPanelFocusedPanelID: nil,
+                rightAuxPanelVisible: true
+            ),
+            mainPanelID
+        )
+        XCTAssertNil(
+            WorkspaceView.effectivePrimaryFocusedPanelID(
+                focusedPanelID: mainPanelID,
+                rightAuxPanelFocusedPanelID: rightPanelID,
+                rightAuxPanelVisible: true
+            )
+        )
+        XCTAssertEqual(
+            WorkspaceView.effectivePrimaryFocusedPanelID(
+                focusedPanelID: mainPanelID,
+                rightAuxPanelFocusedPanelID: rightPanelID,
+                rightAuxPanelVisible: false
+            ),
+            mainPanelID
+        )
+    }
+
     func testWorkspaceTabManagementAffordancesStayEnabledForVisibleTabs() {
         XCTAssertFalse(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 0))
         XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 1))

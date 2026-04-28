@@ -465,6 +465,28 @@ final class WindowCommandControllerTests: XCTestCase {
 
         XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: firstTabID)))
         XCTAssertTrue(store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: secondPanelID)))
+        XCTAssertTrue(
+            store.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First docs"),
+                    placement: .rightPanel
+                )
+            )
+        )
+        let firstRightPanelTabID = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        let firstRightPanelID = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        XCTAssertTrue(
+            store.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second docs"),
+                    placement: .rightPanel
+                )
+            )
+        )
+        let secondRightPanelTabID = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        XCTAssertNotEqual(secondRightPanelTabID, firstRightPanelTabID)
 
         let bridge = makeWorkspaceMenuBridge(store: store)
         let mainMenu = NSMenu(title: "Main")
@@ -480,6 +502,18 @@ final class WindowCommandControllerTests: XCTestCase {
         previousItem.keyEquivalentModifierMask = [.command, .shift]
         let nextItem = NSMenuItem(title: ToasttyBuiltInCommand.selectNextTab.title, action: nil, keyEquivalent: "]")
         nextItem.keyEquivalentModifierMask = [.command, .shift]
+        let previousRightPanelItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.selectPreviousRightPanelTab.title,
+            action: nil,
+            keyEquivalent: "["
+        )
+        previousRightPanelItem.keyEquivalentModifierMask = [.command, .control]
+        let nextRightPanelItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.selectNextRightPanelTab.title,
+            action: nil,
+            keyEquivalent: "]"
+        )
+        nextRightPanelItem.keyEquivalentModifierMask = [.command, .control]
         let unreadItem = NSMenuItem(
             title: ToasttyBuiltInCommand.jumpToNextActive.title,
             action: nil,
@@ -489,6 +523,8 @@ final class WindowCommandControllerTests: XCTestCase {
         workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(previousItem)
         workspaceMenu.addItem(nextItem)
+        workspaceMenu.addItem(previousRightPanelItem)
+        workspaceMenu.addItem(nextRightPanelItem)
         workspaceMenu.addItem(unreadItem)
         workspaceItem.submenu = workspaceMenu
         mainMenu.addItem(workspaceItem)
@@ -506,11 +542,17 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(previousItem.action, #selector(WorkspaceMenuBridge.selectPreviousTab(_:)))
         XCTAssertTrue(nextItem.target === bridge)
         XCTAssertEqual(nextItem.action, #selector(WorkspaceMenuBridge.selectNextTab(_:)))
+        XCTAssertTrue(previousRightPanelItem.target === bridge)
+        XCTAssertEqual(previousRightPanelItem.action, #selector(WorkspaceMenuBridge.selectPreviousRightPanelTab(_:)))
+        XCTAssertTrue(nextRightPanelItem.target === bridge)
+        XCTAssertEqual(nextRightPanelItem.action, #selector(WorkspaceMenuBridge.selectNextRightPanelTab(_:)))
         XCTAssertTrue(unreadItem.target === bridge)
         XCTAssertEqual(unreadItem.action, #selector(WorkspaceMenuBridge.focusNextUnreadOrActivePanel(_:)))
         XCTAssertTrue(bridge.validateMenuItem(renameTabItem))
         XCTAssertTrue(bridge.validateMenuItem(previousItem))
         XCTAssertTrue(bridge.validateMenuItem(nextItem))
+        XCTAssertTrue(bridge.validateMenuItem(previousRightPanelItem))
+        XCTAssertTrue(bridge.validateMenuItem(nextRightPanelItem))
         XCTAssertTrue(bridge.validateMenuItem(unreadItem))
 
         bridge.renameSelectedTab(nil)
@@ -525,6 +567,15 @@ final class WindowCommandControllerTests: XCTestCase {
 
         bridge.selectPreviousTab(nil)
         XCTAssertEqual(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID, firstTabID)
+
+        bridge.selectPreviousRightPanelTab(nil)
+        var workspaceAfterRightPanelTabSelection = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterRightPanelTabSelection.rightAuxPanel.activeTabID, firstRightPanelTabID)
+        XCTAssertEqual(workspaceAfterRightPanelTabSelection.rightAuxPanel.focusedPanelID, firstRightPanelID)
+
+        bridge.selectNextRightPanelTab(nil)
+        workspaceAfterRightPanelTabSelection = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterRightPanelTabSelection.rightAuxPanel.activeTabID, secondRightPanelTabID)
 
         bridge.focusNextUnreadOrActivePanel(nil)
 
@@ -768,6 +819,16 @@ final class WindowCommandControllerTests: XCTestCase {
             keyEquivalent: "["
         )
         let nextItem = NSMenuItem(title: ToasttyBuiltInCommand.selectNextTab.title, action: nil, keyEquivalent: "]")
+        let previousRightPanelItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.selectPreviousRightPanelTab.title,
+            action: nil,
+            keyEquivalent: "["
+        )
+        let nextRightPanelItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.selectNextRightPanelTab.title,
+            action: nil,
+            keyEquivalent: "]"
+        )
         let unreadItem = NSMenuItem(
             title: ToasttyBuiltInCommand.jumpToNextActive.title,
             action: nil,
@@ -781,6 +842,8 @@ final class WindowCommandControllerTests: XCTestCase {
         workspaceMenu.addItem(closeWorkspaceItem)
         workspaceMenu.addItem(previousItem)
         workspaceMenu.addItem(nextItem)
+        workspaceMenu.addItem(previousRightPanelItem)
+        workspaceMenu.addItem(nextRightPanelItem)
         workspaceMenu.addItem(unreadItem)
         workspaceItem.submenu = workspaceMenu
         mainMenu.addItem(workspaceItem)
@@ -800,6 +863,8 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertFalse(bridge.validateMenuItem(closeWorkspaceItem))
         XCTAssertFalse(bridge.validateMenuItem(previousItem))
         XCTAssertFalse(bridge.validateMenuItem(nextItem))
+        XCTAssertFalse(bridge.validateMenuItem(previousRightPanelItem))
+        XCTAssertFalse(bridge.validateMenuItem(nextRightPanelItem))
         XCTAssertFalse(bridge.validateMenuItem(unreadItem))
     }
 

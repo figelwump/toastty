@@ -68,6 +68,14 @@ enum CommandPaletteCatalog {
             (.renameTab, actions.canRenameTab(originWindowID: originWindowID)),
             (.selectPreviousTab, actions.canSelectAdjacentTab(direction: .previous, originWindowID: originWindowID)),
             (.selectNextTab, actions.canSelectAdjacentTab(direction: .next, originWindowID: originWindowID)),
+            (
+                .selectPreviousRightPanelTab,
+                actions.canSelectAdjacentRightPanelTab(direction: .previous, originWindowID: originWindowID)
+            ),
+            (
+                .selectNextRightPanelTab,
+                actions.canSelectAdjacentRightPanelTab(direction: .next, originWindowID: originWindowID)
+            ),
             (.jumpToNextActive, actions.canJumpToNextActive(originWindowID: originWindowID)),
             (.reloadConfiguration, actions.canReloadConfiguration()),
         ]

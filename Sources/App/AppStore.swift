@@ -937,6 +937,27 @@ final class AppStore: ObservableObject {
         return send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: tabs[nextIndex].id))
     }
 
+    func canSelectAdjacentRightAuxPanelTab(preferredWindowID: UUID?) -> Bool {
+        guard let workspace = commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
+            return false
+        }
+        return workspace.rightAuxPanel.isVisible &&
+            workspace.rightAuxPanel.focusedPanelID != nil &&
+            workspace.rightAuxPanel.tabIDs.count > 1
+    }
+
+    @discardableResult
+    func selectAdjacentRightAuxPanelTab(
+        preferredWindowID: UUID?,
+        direction: PanelTabNavigationDirection
+    ) -> Bool {
+        guard canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID),
+              let workspaceID = commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+        return send(.selectAdjacentRightAuxPanelTab(workspaceID: workspaceID, direction: direction))
+    }
+
     @discardableResult
     func createWindowFromCommand(preferredWindowID: UUID?) -> Bool {
         let selection = commandSelection(preferredWindowID: preferredWindowID)

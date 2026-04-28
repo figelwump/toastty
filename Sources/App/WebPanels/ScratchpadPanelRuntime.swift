@@ -61,6 +61,7 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
     private var currentAssetURL: URL?
     private var currentBootstrap: ScratchpadPanelBootstrap?
     private var pendingBootstrapScript: String?
+    private var pendingContentFocusRequest = false
     private var currentTheme: ScratchpadPanelTheme = .dark
     private var isPanelBridgeReady = false
     private var nextDiagnosticSequence = 0
@@ -87,17 +88,33 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
             }
         }
     ) {
+        let resolvedEntryURL = entryURL ?? ScratchpadPanelAssetLocator.entryURL(bundle: bundle)
+        let resolvedAssetDirectoryURL = resolvedEntryURL?.deletingLastPathComponent()
+        let capabilityProfile = WebPanelDefinition.scratchpad.capabilityProfile
         self.panelID = panelID
         self.documentStore = documentStore
         self.metadataDidChange = metadataDidChange
-        self.entryURL = entryURL ?? ScratchpadPanelAssetLocator.entryURL(bundle: bundle)
-        self.assetDirectoryURL = (entryURL ?? ScratchpadPanelAssetLocator.entryURL(bundle: bundle))?.deletingLastPathComponent()
+        self.entryURL = resolvedEntryURL
+        self.assetDirectoryURL = resolvedAssetDirectoryURL
         self.diagnosticLogger = diagnosticLogger
 
-        let configuration = Self.makeWebViewConfiguration(
-            for: WebPanelDefinition.scratchpad.capabilityProfile
+        let webViewInitializationStartTime = CFAbsoluteTimeGetCurrent()
+        ToasttyLog.info(
+            "Starting Scratchpad WKWebView initialization",
+            category: .state,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "capability_profile": capabilityProfile.rawValue,
+                "entry_path": resolvedEntryURL?.path ?? "",
+                "asset_directory_path": resolvedAssetDirectoryURL?.path ?? "",
+            ]
         )
+        let configuration = Self.makeWebViewConfiguration(
+            for: capabilityProfile
+        )
+        let webViewCreationStartTime = CFAbsoluteTimeGetCurrent()
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
+        let webViewCreationDuration = CFAbsoluteTimeGetCurrent() - webViewCreationStartTime
         webView.setValue(false, forKey: "drawsBackground")
         #if DEBUG
         webView.isInspectable = true
@@ -114,6 +131,16 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
         }
         webView.navigationDelegate = self
         webView.configuration.userContentController.add(self, name: Self.scriptMessageHandlerName)
+        ToasttyLog.info(
+            "Finished Scratchpad WKWebView initialization",
+            category: .state,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "web_view_creation_ms": String(format: "%.2f", webViewCreationDuration * 1_000),
+                "total_duration_ms": String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - webViewInitializationStartTime) * 1_000),
+                "uses_non_persistent_data_store": capabilityProfile == .localOnly ? "true" : "false",
+            ]
+        )
     }
 
     deinit {
@@ -225,12 +252,22 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
     @discardableResult
     func focusWebView() -> Bool {
         guard let window = webView.window else {
+            pendingContentFocusRequest = true
             return false
         }
-        return window.makeFirstResponder(webView)
+        guard window.makeFirstResponder(webView) else {
+            pendingContentFocusRequest = true
+            return false
+        }
+        pendingContentFocusRequest = true
+        pushPendingContentFocusIfPossible()
+        return true
     }
 
     func setEffectivelyVisible(_ visible: Bool) {
+        if visible == false {
+            pendingContentFocusRequest = false
+        }
         let shouldHideWebView = !visible
         guard webView.isHidden != shouldHideWebView else {
             return
@@ -312,6 +349,10 @@ final class ScratchpadPanelRuntime: NSObject, ObservableObject, PanelHostLifecyc
             return result.boolValue
         }
         return false
+    }
+
+    nonisolated static func focusActiveContentJavaScript() -> String {
+        bridgeCommandJavaScript(command: "return bridge.focusActiveContent();")
     }
 }
 
@@ -564,12 +605,41 @@ extension ScratchpadPanelRuntime {
         }
     }
 
+    func pushPendingContentFocusIfPossible() {
+        guard pendingContentFocusRequest,
+              isPanelBridgeReady else {
+            return
+        }
+
+        bridgeScriptEvaluator(Self.focusActiveContentJavaScript()) { [weak self] result, error in
+            guard let self,
+                  self.pendingContentFocusRequest else {
+                return
+            }
+
+            if error == nil, Self.bridgeCommandWasDelivered(result) {
+                self.pendingContentFocusRequest = false
+                self.logDiagnostic(.debug, "Focused Scratchpad generated content")
+                return
+            }
+
+            var metadata: [String: String] = [:]
+            if let error {
+                metadata["error"] = self.clampedDiagnosticValue(error.localizedDescription) ?? "unknown"
+            } else {
+                metadata["delivery_result"] = String(describing: result)
+            }
+            self.logDiagnostic(.debug, "Scratchpad generated content focus deferred", metadata: metadata)
+        }
+    }
+
     func handleBridgeEvent(_ event: BridgeEvent) {
         switch event {
         case .bridgeReady:
             isPanelBridgeReady = true
             logDiagnostic(.debug, "Scratchpad bridge ready")
             pushPendingBootstrapIfPossible()
+            pushPendingContentFocusIfPossible()
         case .consoleMessage(let level, let message, let diagnosticSource):
             let source = normalizedDiagnosticSource(diagnosticSource)
             let metadata = [
@@ -698,6 +768,7 @@ extension ScratchpadPanelRuntime {
                     "render_revision": revision.map(String.init) ?? "<none>",
                 ]
             )
+            pushPendingContentFocusIfPossible()
         }
     }
 

@@ -668,6 +668,30 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
 
+            Button(ToasttyBuiltInCommand.selectPreviousRightPanelTab.title) {
+                store.selectAdjacentRightAuxPanelTab(
+                    preferredWindowID: preferredWindowID,
+                    direction: .previous
+                )
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.selectPreviousRightPanelTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.selectPreviousRightPanelTab.requiredShortcut.modifiers
+            )
+            .disabled(store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID) == false)
+
+            Button(ToasttyBuiltInCommand.selectNextRightPanelTab.title) {
+                store.selectAdjacentRightAuxPanelTab(
+                    preferredWindowID: preferredWindowID,
+                    direction: .next
+                )
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.selectNextRightPanelTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.selectNextRightPanelTab.requiredShortcut.modifiers
+            )
+            .disabled(store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID) == false)
+
             Button(ToasttyBuiltInCommand.jumpToNextActive.title) {
                 store.focusNextUnreadOrActivePanelFromCommand(
                     preferredWindowID: commandSelection?.windowID ?? preferredWindowID,

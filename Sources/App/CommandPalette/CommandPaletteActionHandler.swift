@@ -47,6 +47,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func renameTab(originWindowID: UUID) -> Bool
     func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool
     func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool
+    func canSelectAdjacentRightPanelTab(direction: PanelTabNavigationDirection, originWindowID: UUID) -> Bool
+    func selectAdjacentRightPanelTab(direction: PanelTabNavigationDirection, originWindowID: UUID) -> Bool
     func canJumpToNextActive(originWindowID: UUID) -> Bool
     func jumpToNextActive(originWindowID: UUID) -> Bool
     func canLaunchAgent(profileID: String, originWindowID: UUID) -> Bool
@@ -386,6 +388,24 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         ) ?? false
     }
 
+    func canSelectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        _ = direction
+        return store?.canSelectAdjacentRightAuxPanelTab(preferredWindowID: originWindowID) ?? false
+    }
+
+    func selectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        store?.selectAdjacentRightAuxPanelTab(
+            preferredWindowID: originWindowID,
+            direction: direction
+        ) ?? false
+    }
+
     func canJumpToNextActive(originWindowID: UUID) -> Bool {
         store?.canFocusNextUnreadOrActivePanelFromCommand(
             preferredWindowID: originWindowID,
@@ -564,6 +584,10 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return selectAdjacentTab(direction: .previous, originWindowID: originWindowID)
         case .selectNextTab:
             return selectAdjacentTab(direction: .next, originWindowID: originWindowID)
+        case .selectPreviousRightPanelTab:
+            return selectAdjacentRightPanelTab(direction: .previous, originWindowID: originWindowID)
+        case .selectNextRightPanelTab:
+            return selectAdjacentRightPanelTab(direction: .next, originWindowID: originWindowID)
         case .jumpToNextActive:
             return jumpToNextActive(originWindowID: originWindowID)
         case .reloadConfiguration:

@@ -9,7 +9,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+N` | New window |
 | `Cmd+T` | New tab |
 | `Cmd+B` | Show or hide the sidebar |
-| `Cmd+Shift+B` | Show or hide the right panel |
+| `Cmd+Shift+B` | Show or hide the right panel; showing it focuses the active right-panel tab when one exists |
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |
 | `Option+Shift+E` | Rename tab |
@@ -29,10 +29,10 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+Ctrl+B` | New browser in the right panel |
 | `Cmd+Ctrl+Shift+B` | New browser tab |
-| `Cmd+[` | Focus previous pane |
-| `Cmd+]` | Focus next pane |
+| `Cmd+[` | Focus previous pane, including the active right-panel tab when visible |
+| `Cmd+]` | Focus next pane, including the active right-panel tab when visible |
 | `Cmd+Opt+Left Arrow` | Focus pane to the left |
-| `Cmd+Opt+Right Arrow` | Focus pane to the right |
+| `Cmd+Opt+Right Arrow` | Focus pane to the right, or the active right-panel tab from the right edge |
 | `Cmd+Opt+Up Arrow` | Focus pane above |
 | `Cmd+Opt+Down Arrow` | Focus pane below |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
@@ -52,6 +52,8 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+1`–`Cmd+9` | Switch tab |
 | `Cmd+Shift+[` | Previous tab |
 | `Cmd+Shift+]` | Next tab |
+| `Cmd+Ctrl+[` | Previous right-panel tab |
+| `Cmd+Ctrl+]` | Next right-panel tab |
 | `Option+Shift+[` | Previous tab (wrapping, terminal-proof) |
 | `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |

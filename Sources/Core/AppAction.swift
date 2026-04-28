@@ -16,6 +16,11 @@ public enum SlotFocusDirection: String, Codable, Equatable, Sendable {
     case right
 }
 
+public enum PanelTabNavigationDirection: String, Codable, Equatable, Sendable {
+    case previous
+    case next
+}
+
 public enum SplitResizeDirection: String, Codable, Equatable, Sendable {
     case up
     case down
@@ -49,6 +54,7 @@ public enum AppAction: Equatable, Sendable {
     case toggleRightAuxPanel(workspaceID: UUID)
     case setRightAuxPanelWidth(workspaceID: UUID, width: Double)
     case selectRightAuxPanelTab(workspaceID: UUID, tabID: UUID, focus: Bool)
+    case selectAdjacentRightAuxPanelTab(workspaceID: UUID, direction: PanelTabNavigationDirection)
     case closeRightAuxPanelTab(workspaceID: UUID, tabID: UUID)
     case focusRightAuxPanel(workspaceID: UUID, panelID: UUID)
     case clearRightAuxPanelFocus(workspaceID: UUID)
@@ -144,6 +150,8 @@ public extension AppAction {
             return "setRightAuxPanelWidth"
         case .selectRightAuxPanelTab:
             return "selectRightAuxPanelTab"
+        case .selectAdjacentRightAuxPanelTab:
+            return "selectAdjacentRightAuxPanelTab"
         case .closeRightAuxPanelTab:
             return "closeRightAuxPanelTab"
         case .focusRightAuxPanel:

@@ -21,7 +21,8 @@ struct BrowserPanelView: View {
             BrowserPanelHostView(
                 runtime: runtime,
                 webState: webState,
-                isEffectivelyVisible: isEffectivelyVisible
+                isEffectivelyVisible: isEffectivelyVisible,
+                shouldFocusWebView: isActivePanel && isEditingAddressField == false
             )
             .frame(
                 maxWidth: .infinity,

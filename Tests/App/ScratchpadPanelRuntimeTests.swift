@@ -287,6 +287,66 @@ final class ScratchpadPanelRuntimeTests: XCTestCase {
 
         XCTAssertTrue(runtime.automationState().recentDiagnostics.isEmpty)
     }
+
+    func testFocusActiveContentJavaScriptTargetsScratchpadBridge() {
+        let script = ScratchpadPanelRuntime.focusActiveContentJavaScript()
+
+        XCTAssertTrue(script.contains("window.ToasttyScratchpadPanel"))
+        XCTAssertTrue(script.contains("return bridge.focusActiveContent();"))
+    }
+
+    func testFocusWebViewDefersGeneratedContentFocusUntilRenderReady() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let entryURL = fixture.directoryURL.appendingPathComponent("scratchpad-test.html")
+        try Data("<!doctype html><html><body></body></html>".utf8).write(to: entryURL)
+        let recorder = ScratchpadBridgeScriptRecorder(results: [true, false, true])
+        let runtime = ScratchpadPanelRuntime(
+            panelID: UUID(),
+            documentStore: fixture.store,
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            bridgeScriptEvaluator: recorder.evaluate,
+            diagnosticLogger: { _, _, _ in }
+        )
+        let document = try fixture.store.createDocument(
+            title: "Sketch",
+            content: "<p>Focusable</p>",
+            sessionLink: nil
+        )
+        let webState = WebPanelState(
+            definition: .scratchpad,
+            title: "Scratchpad",
+            scratchpad: ScratchpadState(
+                documentID: document.documentID,
+                revision: document.revision
+            )
+        )
+        let window = ScratchpadFocusTestWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        window.contentView?.addSubview(container)
+        runtime.attachHost(to: container, attachment: PanelHostAttachmentToken.next())
+        runtime.reloadBootstrap(for: webState)
+
+        XCTAssertTrue(runtime.focusWebView())
+        XCTAssertEqual(window.makeFirstResponderCallCount, 1)
+        XCTAssertTrue(recorder.scripts.isEmpty)
+
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertEqual(recorder.scripts.count, 2)
+        XCTAssertTrue(recorder.scripts[0].contains("bridge.receiveBootstrap("))
+        XCTAssertTrue(recorder.scripts[1].contains("bridge.focusActiveContent()"))
+
+        runtime.simulateBridgeMessageForTesting([
+            "type": "renderReady",
+            "displayName": "Sketch",
+            "revision": 1,
+        ])
+
+        XCTAssertEqual(recorder.scripts.count, 3)
+        XCTAssertTrue(recorder.scripts[2].contains("bridge.focusActiveContent()"))
+    }
 }
 
 private struct ScratchpadRuntimeFixture {
@@ -296,7 +356,49 @@ private struct ScratchpadRuntimeFixture {
     init() throws {
         directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         store = ScratchpadDocumentStore(directoryURL: directoryURL)
+    }
+}
+
+@MainActor
+private final class ScratchpadBridgeScriptRecorder {
+    private var results: [Any?]
+    private(set) var scripts: [String] = []
+
+    init(results: [Any?] = []) {
+        self.results = results
+    }
+
+    func evaluate(_ script: String, completion: @escaping ScratchpadPanelRuntime.BridgeScriptCompletion) {
+        scripts.append(script)
+        let result = results.isEmpty ? true : results.removeFirst()
+        completion(result, nil)
+    }
+}
+
+@MainActor
+private final class ScratchpadFocusTestWindow: NSWindow {
+    private(set) var makeFirstResponderCallCount = 0
+    private var storedFirstResponder: NSResponder?
+
+    override var firstResponder: NSResponder? {
+        storedFirstResponder
+    }
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+    }
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        makeFirstResponderCallCount += 1
+        storedFirstResponder = responder
+        return true
     }
 }
 

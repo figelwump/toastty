@@ -1,6 +1,11 @@
 import Foundation
 
 public struct AppReducer {
+    private enum FocusGraphTarget: Equatable {
+        case mainPanel(UUID)
+        case rightAuxPanel(UUID)
+    }
+
     private enum EmptyWorkspaceTabDisposition {
         case bootstrapReplacementTab
         case removeWorkspace(EmptyWindowDisposition)
@@ -525,7 +530,9 @@ public struct AppReducer {
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard workspace.rightAuxPanel.isVisible != isVisible else { return false }
             workspace.rightAuxPanel.isVisible = isVisible
-            if isVisible == false {
+            if isVisible {
+                workspace.rightAuxPanel.focusActiveTab()
+            } else {
                 workspace.rightAuxPanel.focusedPanelID = nil
             }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
@@ -534,7 +541,9 @@ public struct AppReducer {
         case .toggleRightAuxPanel(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             workspace.rightAuxPanel.isVisible.toggle()
-            if workspace.rightAuxPanel.isVisible == false {
+            if workspace.rightAuxPanel.isVisible {
+                workspace.rightAuxPanel.focusActiveTab()
+            } else {
                 workspace.rightAuxPanel.focusedPanelID = nil
             }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
@@ -576,6 +585,13 @@ public struct AppReducer {
             workspace.tabsByID[location.mainTabID] = mainTab
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
+
+        case .selectAdjacentRightAuxPanelTab(let workspaceID, let direction):
+            return selectAdjacentRightAuxPanelTab(
+                workspaceID: workspaceID,
+                direction: direction,
+                state: &state
+            )
 
         case .closeRightAuxPanelTab(let workspaceID, let tabID):
             return closeRightAuxPanelTab(workspaceID: workspaceID, rightAuxTabID: tabID, state: &state)
@@ -1189,27 +1205,201 @@ public struct AppReducer {
             return false
         }
 
-        guard let targetSlotID = workspace.focusTargetSlotIDWithinVisibleRoot(
-            from: focusResolution.slot.slotID,
-            direction: direction
-        ) else {
+        let rightAuxPanelID = focusableRightAuxPanelID(in: workspace)
+        let rightAuxPanelIsFocused = rightAuxPanelID != nil &&
+            workspace.rightAuxPanel.focusedPanelID == rightAuxPanelID
+
+        switch direction {
+        case .previous, .next:
+            let targets = focusGraphTargets(in: workspace, rightAuxPanelID: rightAuxPanelID)
+            guard targets.count > 1 else { return false }
+
+            let currentTarget: FocusGraphTarget
+            if rightAuxPanelIsFocused, let rightAuxPanelID {
+                currentTarget = .rightAuxPanel(rightAuxPanelID)
+            } else {
+                currentTarget = .mainPanel(focusResolution.panelID)
+            }
+
+            guard let currentIndex = targets.firstIndex(of: currentTarget) else {
+                return false
+            }
+
+            let targetIndex: Int
+            switch direction {
+            case .previous:
+                targetIndex = (currentIndex - 1 + targets.count) % targets.count
+            case .next:
+                targetIndex = (currentIndex + 1) % targets.count
+            case .up, .down, .left, .right:
+                return false
+            }
+            return focus(
+                targets[targetIndex],
+                workspaceID: workspaceID,
+                workspace: &workspace,
+                state: &state
+            )
+
+        case .left where rightAuxPanelIsFocused:
+            return focus(
+                .mainPanel(focusResolution.panelID),
+                workspaceID: workspaceID,
+                workspace: &workspace,
+                state: &state
+            )
+
+        case .up where rightAuxPanelIsFocused,
+            .down where rightAuxPanelIsFocused,
+            .right where rightAuxPanelIsFocused:
             return false
+
+        case .up, .down, .left, .right:
+            if let targetSlotID = workspace.focusTargetSlotIDWithinVisibleRoot(
+                from: focusResolution.slot.slotID,
+                direction: direction
+            ) {
+                guard targetSlotID != focusResolution.slot.slotID else {
+                    return false
+                }
+                guard let targetPanelID = workspace.panelID(forSlotID: targetSlotID) else {
+                    return false
+                }
+                guard targetPanelID != workspace.focusedPanelID else {
+                    return false
+                }
+
+                workspace.focusedPanelID = targetPanelID
+                workspace.rightAuxPanel.focusedPanelID = nil
+                workspace.selectedPanelIDs.removeAll()
+                _ = workspace.unreadPanelIDs.remove(targetPanelID)
+                workspace.unreadWorkspaceNotificationCount = 0
+                commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+                return true
+            }
+
+            guard direction == .right,
+                  let rightAuxPanelID else {
+                return false
+            }
+            return focus(
+                .rightAuxPanel(rightAuxPanelID),
+                workspaceID: workspaceID,
+                workspace: &workspace,
+                state: &state
+            )
         }
-        guard targetSlotID != focusResolution.slot.slotID else {
-            return false
+    }
+
+    private static func focusableRightAuxPanelID(in workspace: WorkspaceState) -> UUID? {
+        guard workspace.focusedPanelModeActive == false,
+              workspace.rightAuxPanel.isVisible,
+              let activePanelID = workspace.rightAuxPanel.activePanelID else {
+            return nil
         }
-        guard let targetPanelID = workspace.panelID(forSlotID: targetSlotID) else {
-            return false
+        return activePanelID
+    }
+
+    private static func focusGraphTargets(
+        in workspace: WorkspaceState,
+        rightAuxPanelID: UUID?
+    ) -> [FocusGraphTarget] {
+        let visibleRoot = workspace.focusModeSubtree?.root ?? workspace.layoutTree
+        var targets = visibleRoot.allSlotInfos.compactMap { slot -> FocusGraphTarget? in
+            guard workspace.panels[slot.panelID] != nil else {
+                return nil
+            }
+            return .mainPanel(slot.panelID)
         }
-        guard targetPanelID != workspace.focusedPanelID else {
+
+        if let rightAuxPanelID,
+           targets.contains(.rightAuxPanel(rightAuxPanelID)) == false {
+            targets.append(.rightAuxPanel(rightAuxPanelID))
+        }
+
+        return targets
+    }
+
+    @discardableResult
+    private static func focus(
+        _ target: FocusGraphTarget,
+        workspaceID: UUID,
+        workspace: inout WorkspaceState,
+        state: inout AppState
+    ) -> Bool {
+        switch target {
+        case .mainPanel(let targetPanelID):
+            guard targetPanelID != workspace.focusedPanelID ||
+                workspace.rightAuxPanel.focusedPanelID != nil else {
+                return false
+            }
+            guard workspace.panels[targetPanelID] != nil,
+                  workspace.layoutTree.slotContaining(panelID: targetPanelID) != nil else {
+                return false
+            }
+
+            workspace.focusedPanelID = targetPanelID
+            workspace.rightAuxPanel.focusedPanelID = nil
+            workspace.selectedPanelIDs.removeAll()
+            _ = workspace.unreadPanelIDs.remove(targetPanelID)
+            workspace.unreadWorkspaceNotificationCount = 0
+
+        case .rightAuxPanel(let targetPanelID):
+            guard focusableRightAuxPanelID(in: workspace) == targetPanelID else {
+                return false
+            }
+            guard workspace.rightAuxPanel.focusedPanelID != targetPanelID else {
+                return false
+            }
+
+            workspace.rightAuxPanel.focusedPanelID = targetPanelID
+            workspace.selectedPanelIDs.removeAll()
+            _ = workspace.unreadPanelIDs.remove(targetPanelID)
+            workspace.unreadWorkspaceNotificationCount = 0
+        }
+
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+        return true
+    }
+
+    @discardableResult
+    private static func selectAdjacentRightAuxPanelTab(
+        workspaceID: UUID,
+        direction: PanelTabNavigationDirection,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID],
+              let selectedTabID = workspace.resolvedSelectedTabID,
+              var selectedTab = workspace.tab(id: selectedTabID) else {
             return false
         }
 
-        workspace.focusedPanelID = targetPanelID
-        workspace.rightAuxPanel.focusedPanelID = nil
-        workspace.selectedPanelIDs.removeAll()
-        _ = workspace.unreadPanelIDs.remove(targetPanelID)
+        let rightAuxTabIDs = selectedTab.rightAuxPanel.tabIDs
+        guard selectedTab.rightAuxPanel.isVisible,
+              rightAuxTabIDs.count > 1,
+              let activeTabID = selectedTab.rightAuxPanel.activeTabID,
+              let activeIndex = rightAuxTabIDs.firstIndex(of: activeTabID) else {
+            return false
+        }
+
+        let targetIndex: Int
+        switch direction {
+        case .previous:
+            targetIndex = (activeIndex - 1 + rightAuxTabIDs.count) % rightAuxTabIDs.count
+        case .next:
+            targetIndex = (activeIndex + 1) % rightAuxTabIDs.count
+        }
+
+        let targetTabID = rightAuxTabIDs[targetIndex]
+        guard let targetTab = selectedTab.rightAuxPanel.tabsByID[targetTabID] else {
+            return false
+        }
+
+        selectedTab.rightAuxPanel.activeTabID = targetTabID
+        selectedTab.rightAuxPanel.focusedPanelID = targetTab.panelID
+        selectedTab.unreadPanelIDs.remove(targetTab.panelID)
         workspace.unreadWorkspaceNotificationCount = 0
+        workspace.tabsByID[selectedTabID] = selectedTab
         commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
     }

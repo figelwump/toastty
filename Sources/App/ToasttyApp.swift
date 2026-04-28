@@ -626,6 +626,7 @@ final class DisplayShortcutInterceptor {
         case renameSelectedTab
         case selectWorkspaceTab(Int)
         case selectAdjacentTab(TabNavigationDirection)
+        case selectAdjacentRightPanelTab(PanelTabNavigationDirection)
         case switchWorkspace(Int)
         case focusPanel(Int)
         case focusSplit(SlotFocusDirection)
@@ -702,6 +703,11 @@ final class DisplayShortcutInterceptor {
         if let direction = Self.tabNavigationDirection(for: event),
            appOwnedWindowID != nil {
             return .selectAdjacentTab(direction)
+        }
+
+        if let direction = Self.rightPanelTabNavigationDirection(for: event),
+           appOwnedWindowID != nil {
+            return .selectAdjacentRightPanelTab(direction)
         }
 
         if Self.isNewTabShortcut(event),
@@ -892,6 +898,8 @@ final class DisplayShortcutInterceptor {
             selectWorkspaceTab(shortcutNumber: shortcutNumber)
         case .selectAdjacentTab(let direction):
             selectAdjacentTab(direction: direction)
+        case .selectAdjacentRightPanelTab(let direction):
+            selectAdjacentRightPanelTab(direction: direction, preferredWindowID: appOwnedWindowID)
         case .switchWorkspace(let shortcutNumber):
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
@@ -1075,6 +1083,22 @@ final class DisplayShortcutInterceptor {
         guard event.type == .keyDown, event.isARepeat == false else { return nil }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers == [.command, .shift] else { return nil }
+
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_LeftBracket):
+            return .previous
+        case Int(kVK_ANSI_RightBracket):
+            return .next
+        default:
+            return nil
+        }
+    }
+
+    /// Detects Cmd+Ctrl+[ (previous right-panel tab) and Cmd+Ctrl+] (next right-panel tab).
+    static func rightPanelTabNavigationDirection(for event: NSEvent) -> PanelTabNavigationDirection? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command, .control] else { return nil }
 
         switch Int(event.keyCode) {
         case Int(kVK_ANSI_LeftBracket):
@@ -1494,6 +1518,21 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.selectAdjacentWorkspaceTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
+        )
+    }
+
+    private func selectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
+        guard store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return store.selectAdjacentRightAuxPanelTab(
             preferredWindowID: preferredWindowID,
             direction: direction
         )

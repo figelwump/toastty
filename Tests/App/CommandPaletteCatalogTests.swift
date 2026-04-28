@@ -31,6 +31,8 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.toggleRightPanel.id, "window.toggle-right-panel")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.watchRunningCommand.id, "panel.process-watch.create")
+        XCTAssertEqual(ToasttyBuiltInCommand.selectPreviousRightPanelTab.id, "right-panel.tab.select-previous")
+        XCTAssertEqual(ToasttyBuiltInCommand.selectNextRightPanelTab.id, "right-panel.tab.select-next")
         XCTAssertEqual(ToasttyBuiltInCommand.reloadConfiguration.id, "app.reload-configuration")
     }
 
@@ -75,6 +77,8 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.renameTab.id,
                 ToasttyBuiltInCommand.selectPreviousTab.id,
                 ToasttyBuiltInCommand.selectNextTab.id,
+                ToasttyBuiltInCommand.selectPreviousRightPanelTab.id,
+                ToasttyBuiltInCommand.selectNextRightPanelTab.id,
                 ToasttyBuiltInCommand.jumpToNextActive.id,
                 ToasttyBuiltInCommand.reloadConfiguration.id,
             ]
@@ -115,6 +119,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.canShowScratchpadForCurrentSessionValue = false
         actions.canToggleRightPanelValue = false
         actions.canWatchRunningCommandValue = false
+        actions.canSelectAdjacentRightPanelTabValue = false
         actions.canReloadValue = false
 
         let commands = makeCommands(actions: actions)
@@ -125,6 +130,8 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.toggleRightPanel.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousRightPanelTab.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectNextRightPanelTab.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.reloadConfiguration.id }))
     }
 
@@ -390,6 +397,17 @@ final class CommandPaletteCatalogTests: XCTestCase {
 
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousTab.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectNextTab.id }))
+    }
+
+    func testCatalogHidesRightPanelTabNavigationWithoutMultipleRightPanelTabs() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        let actions = try makeLiveActions(store: store)
+
+        let commands = makeCommands(originWindowID: originWindowID, actions: actions)
+
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousRightPanelTab.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectNextRightPanelTab.id }))
     }
 
     func testCatalogShowsScratchpadOnlyForFocusedManagedSession() throws {
