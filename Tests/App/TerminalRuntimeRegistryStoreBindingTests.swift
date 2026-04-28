@@ -373,6 +373,91 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenCommandClickHTMLRelativePathOpensBrowserInRightPanel() throws {
+        let fixture = try makeHTMLFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "artifacts/manual/scratchpad-context-menu-brainstorm.html")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel browser panel")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, URL(fileURLWithPath: fixture.htmlPath).absoluteString)
+        try StateValidator.validate(store.state)
+    }
+
+    func testAlternateOpenCommandClickHTMLRelativePathOpensBrowserInNewTab() throws {
+        let fixture = try makeHTMLFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "artifacts/manual/scratchpad-context-menu-brainstorm.html")),
+                useAlternatePlacement: true,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 0)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected browser panel in new tab")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, URL(fileURLWithPath: fixture.htmlPath).absoluteString)
+        try StateValidator.validate(store.state)
+    }
+
     func testOpenCommandClickMarkdownRelativePathOpensMarkdownInRightPanelInTerminalOwningWindow() throws {
         let fixture = try makeMarkdownFixture()
         let firstWorkspace = WorkspaceState(
@@ -1619,6 +1704,29 @@ private extension TerminalRuntimeRegistryStoreBindingTests {
         return (
             rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
             directoryPath: directoryURL.standardizedFileURL.path
+        )
+    }
+
+    func makeHTMLFixture() throws -> (rootPath: String, htmlPath: String, htmlURL: URL) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-registry-html-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let htmlURL = rootURL
+            .appendingPathComponent("artifacts", isDirectory: true)
+            .appendingPathComponent("manual", isDirectory: true)
+            .appendingPathComponent("scratchpad-context-menu-brainstorm.html", isDirectory: false)
+
+        try fileManager.createDirectory(at: htmlURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("<!doctype html><title>Scratchpad</title>\n".utf8).write(to: htmlURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let normalizedHTMLURL = htmlURL.standardizedFileURL.resolvingSymlinksInPath()
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            htmlPath: normalizedHTMLURL.path,
+            htmlURL: normalizedHTMLURL
         )
     }
 }

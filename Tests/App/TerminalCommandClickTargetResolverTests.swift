@@ -178,6 +178,112 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         XCTAssertEqual(target, .passthrough(url))
     }
 
+    func testResolveTreatsRelativeHTMLPathAsLocalBrowserFile() throws {
+        let fixture = try makeFixture(fileName: "scratchpad-context-menu-brainstorm.html")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/scratchpad-context-menu-brainstorm.html")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalBrowserFileTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveTreatsFileURLHTMLPathAsLocalBrowserFile() throws {
+        let fixture = try makeFixture(fileName: "scratchpad-context-menu-brainstorm.html")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalBrowserFileTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveRecoversTrailingPunctuationOnRelativeHTMLPath() throws {
+        let fixture = try makeFixture(fileName: "scratchpad-context-menu-brainstorm.html")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/scratchpad-context-menu-brainstorm.html,")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalBrowserFileTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveMissingRelativeHTMLPathPassesThrough() throws {
+        let fixture = try makeFixture()
+        let url = try XCTUnwrap(URL(string: "docs/missing.html"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(url))
+    }
+
+    func testResolveUnsupportedLocalFilePassesThrough() throws {
+        let fixture = try makeFixture(fileName: "archive.zip")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
+    }
+
+    func testResolveTreatsDirectoryNamedHTMLPathAsLocalDirectory() throws {
+        let fixture = try makeFixture(
+            fileName: "preview.html",
+            directoryNamedMarkdownFile: true
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDirectory(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveTreatsSymlinkedHTMLTargetAsLocalBrowserFile() throws {
+        let fixture = try makeFixture(
+            fileName: "linked-preview.html",
+            symlinkTargetName: "rendered.html"
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalBrowserFileTarget(path: fixture.markdownPath)
+        )
+    }
+
     func testResolveTreatsRelativeDirectoryPathAsLocalDirectory() throws {
         let fixture = try makeDirectoryFixture()
 
@@ -671,5 +777,9 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             lineNumber: lineNumber,
             placement: placement
         )
+    }
+
+    private func expectedLocalBrowserFileTarget(path: String) -> TerminalCommandClickTarget {
+        .localBrowserFile(URL(fileURLWithPath: path))
     }
 }
