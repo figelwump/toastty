@@ -1,6 +1,7 @@
 import AppKit
 import CoreState
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct WorkspaceView: View {
     struct FocusedUnreadClearCandidate: Equatable {
@@ -1112,6 +1113,7 @@ struct WorkspaceView: View {
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    sessionRuntimeStore: sessionRuntimeStore,
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
                     terminalRuntimeContext: terminalRuntimeContext,
@@ -1193,6 +1195,7 @@ struct WorkspaceView: View {
             store: store,
             terminalProfileStore: terminalProfileStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             focusedPanelCommandController: focusedPanelCommandController,
             openLocalFileSearch: openRightPanelFileSearch,
@@ -2844,6 +2847,7 @@ private struct SlotPlacementView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
@@ -2872,11 +2876,13 @@ private struct SlotPlacementView: View {
                     windowFontPoints: windowFontPoints,
                     windowMarkdownTextScale: windowMarkdownTextScale,
                     appIsActive: appIsActive,
+                    chromeContext: .mainSplit,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     panelFlashOverlayOpacity: panelFlashOverlayOpacity,
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    sessionRuntimeStore: sessionRuntimeStore,
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
                     terminalRuntimeContext: terminalRuntimeContext
@@ -2913,11 +2919,13 @@ struct PanelCardView: View {
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
     let appIsActive: Bool
+    let chromeContext: PanelCardChromeContext
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let panelFlashOverlayOpacity: Double
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
@@ -3148,7 +3156,19 @@ struct PanelCardView: View {
     }
 
     private var showsHoveredCloseAffordance: Bool {
-        appIsActive && isHovered
+        Self.showsHoveredCloseAffordance(
+            appIsActive: appIsActive,
+            isHovered: isHovered,
+            chromeContext: chromeContext
+        )
+    }
+
+    static func showsHoveredCloseAffordance(
+        appIsActive: Bool,
+        isHovered: Bool,
+        chromeContext: PanelCardChromeContext
+    ) -> Bool {
+        appIsActive && isHovered && chromeContext != .rightAuxPanel
     }
 
     private var resolvedPanelHeaderTrailingAccessory: WorkspaceView.PanelHeaderTrailingAccessory {
@@ -3344,6 +3364,10 @@ struct PanelCardView: View {
 
     @ViewBuilder
     private var panelHeaderTrailingContent: some View {
+        if let scratchpadHeaderAccessory {
+            scratchpadHeaderAccessory
+        }
+
         switch resolvedPanelHeaderTrailingAccessory {
         case .closeButton:
             panelHeaderCloseButton
@@ -3384,6 +3408,101 @@ struct PanelCardView: View {
         }
     }
 
+    private var scratchpadHeaderAccessory: ScratchpadHeaderAccessory? {
+        guard chromeContext == .rightAuxPanel,
+              case .web(let webState) = panelState,
+              webState.definition == .scratchpad else {
+            return nil
+        }
+        return ScratchpadHeaderAccessory(
+            bindingLabel: Self.scratchpadBindingLabel(for: webState.scratchpad?.sessionLink),
+            candidates: scratchpadBindCandidates,
+            rebind: rebindScratchpad(to:),
+            exportToFile: { exportScratchpadToFile(webState: webState) },
+            openInBrowser: { openScratchpadInBrowser(webState: webState) }
+        )
+    }
+
+    private var scratchpadBindCandidates: [ScratchpadAgentBindCandidate] {
+        guard let workspace = store.state.workspacesByID[workspaceID],
+              let location = workspace.rightAuxPanelTabLocation(containingPanelID: panelID),
+              let ownerTab = workspace.tab(id: location.mainTabID),
+              case .web(let webState) = panelState,
+              webState.definition == .scratchpad else {
+            return []
+        }
+
+        return ScratchpadAgentBindCandidateBuilder.candidates(
+            workspaceTab: ownerTab,
+            sessionRegistry: sessionRuntimeStore.sessionRegistry,
+            currentSessionID: webState.scratchpad?.sessionLink?.sessionID
+        )
+    }
+
+    static func scratchpadBindingLabel(for sessionLink: ScratchpadSessionLink?) -> String {
+        guard let sessionLink else {
+            return "Unbound"
+        }
+        let displayName = sessionLink.displayTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = displayName?.isEmpty == false ? displayName! : sessionLink.agent.displayName
+        return "Bound to \(label)"
+    }
+
+    private func rebindScratchpad(to candidate: ScratchpadAgentBindCandidate) {
+        do {
+            _ = try store.rebindScratchpadPanel(
+                panelID: panelID,
+                toSessionID: candidate.sessionID,
+                sessionRuntimeStore: sessionRuntimeStore,
+                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+            )
+        } catch {
+            NSLog("Scratchpad rebind failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func exportScratchpadToFile(webState: WebPanelState) {
+        guard let scratchpad = webState.scratchpad else { return }
+
+        let savePanel = NSSavePanel()
+        savePanel.title = "Export Scratchpad"
+        savePanel.nameFieldStringValue = ScratchpadDocumentExporter.defaultFileName(
+            title: webState.title,
+            documentID: scratchpad.documentID
+        )
+        savePanel.allowedContentTypes = [.html]
+        savePanel.canCreateDirectories = true
+
+        guard savePanel.runModal() == .OK,
+              let targetURL = savePanel.url else {
+            return
+        }
+
+        do {
+            _ = try ScratchpadDocumentExporter.export(
+                documentID: scratchpad.documentID,
+                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore,
+                to: targetURL
+            )
+        } catch {
+            NSLog("Scratchpad export failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func openScratchpadInBrowser(webState: WebPanelState) {
+        guard let scratchpad = webState.scratchpad else { return }
+
+        do {
+            let export = try ScratchpadDocumentExporter.exportToDefaultLocation(
+                documentID: scratchpad.documentID,
+                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+            )
+            NSWorkspace.shared.open(export.fileURL)
+        } catch {
+            NSLog("Scratchpad browser export failed: \(error.localizedDescription)")
+        }
+    }
+
     private func profileBadge(_ badge: TerminalProfileBadge) -> some View {
         Text(badge.label)
             .font(ToastyTheme.fontTerminalProfileBadge)
@@ -3408,6 +3527,153 @@ struct PanelCardView: View {
         if nextHoverState == false {
             isCloseButtonHovered = false
         }
+    }
+}
+
+enum PanelCardChromeContext: Equatable {
+    case mainSplit
+    case rightAuxPanel
+}
+
+struct ScratchpadAgentBindCandidate: Equatable, Identifiable {
+    let sessionID: String
+    let agent: AgentKind
+    let panelID: UUID
+    let label: String
+    let isCurrent: Bool
+
+    var id: String { sessionID }
+}
+
+enum ScratchpadAgentBindCandidateBuilder {
+    static func candidates(
+        workspaceTab: WorkspaceTabState,
+        sessionRegistry: SessionRegistry,
+        currentSessionID: String?
+    ) -> [ScratchpadAgentBindCandidate] {
+        let visiblePanelIDs = Set(workspaceTab.layoutTree.allSlotInfos.map(\.panelID))
+
+        return sessionRegistry.sessionOrder.compactMap { sessionID in
+            guard let record = sessionRegistry.activeSession(sessionID: sessionID),
+                  record.agent != .processWatch,
+                  visiblePanelIDs.contains(record.panelID),
+                  workspaceTab.panels[record.panelID] != nil else {
+                return nil
+            }
+
+            let isCurrent = record.sessionID == currentSessionID
+            return ScratchpadAgentBindCandidate(
+                sessionID: record.sessionID,
+                agent: record.agent,
+                panelID: record.panelID,
+                label: candidateLabel(
+                    for: record,
+                    in: workspaceTab,
+                    isCurrent: isCurrent
+                ),
+                isCurrent: isCurrent
+            )
+        }
+    }
+
+    private static func candidateLabel(
+        for record: SessionRecord,
+        in workspaceTab: WorkspaceTabState,
+        isCurrent: Bool
+    ) -> String {
+        let baseLabel = normalized(record.displayTitleOverride) ?? record.agent.displayName
+        if isCurrent {
+            return "\(baseLabel) - current binding"
+        }
+        if let locationLabel = splitLocationLabel(for: record.panelID, in: workspaceTab.layoutTree) {
+            return "\(baseLabel) - \(locationLabel)"
+        }
+        return baseLabel
+    }
+
+    private static func splitLocationLabel(for panelID: UUID, in node: LayoutNode) -> String? {
+        splitLocationPath(for: panelID, in: node)?.last
+    }
+
+    private static func splitLocationPath(for panelID: UUID, in node: LayoutNode) -> [String]? {
+        switch node {
+        case .slot(_, let slotPanelID):
+            return slotPanelID == panelID ? [] : nil
+        case .split(_, let orientation, _, let first, let second):
+            if let path = splitLocationPath(for: panelID, in: first) {
+                return [orientation == .horizontal ? "left split" : "top split"] + path
+            }
+            if let path = splitLocationPath(for: panelID, in: second) {
+                return [orientation == .horizontal ? "right split" : "bottom split"] + path
+            }
+            return nil
+        }
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private struct ScratchpadHeaderAccessory: View {
+    let bindingLabel: String
+    let candidates: [ScratchpadAgentBindCandidate]
+    let rebind: (ScratchpadAgentBindCandidate) -> Void
+    let exportToFile: () -> Void
+    let openInBrowser: () -> Void
+
+    private var hasAlternativeCandidates: Bool {
+        candidates.contains { $0.isCurrent == false }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(bindingLabel)
+                .font(ToastyTheme.fontSubtext)
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Menu {
+                Menu("Bind to Agent") {
+                    if hasAlternativeCandidates == false {
+                        Text("No other agents in this tab")
+                    } else {
+                        ForEach(candidates) { candidate in
+                            Button {
+                                rebind(candidate)
+                            } label: {
+                                if candidate.isCurrent {
+                                    Label(candidate.label, systemImage: "checkmark")
+                                } else {
+                                    Text(candidate.label)
+                                }
+                            }
+                            .disabled(candidate.isCurrent)
+                        }
+                    }
+                }
+                .disabled(hasAlternativeCandidates == false)
+
+                Divider()
+
+                Button("Export to File...", action: exportToFile)
+                Button("Open in Browser", action: openInBrowser)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .frame(width: 18, height: 18)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Scratchpad Actions")
+            .accessibilityIdentifier("panel.header.scratchpad.actions")
+            .help("Scratchpad Actions")
+        }
+        .frame(minWidth: 0)
     }
 }
 

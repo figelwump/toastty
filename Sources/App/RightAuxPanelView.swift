@@ -11,6 +11,7 @@ struct RightAuxPanelView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let openLocalFileSearch: @MainActor (UUID) -> Void
@@ -65,49 +66,58 @@ struct RightAuxPanelView: View {
     }
 
     private var panelStack: some View {
-        Group {
-            if workspaceTab.rightAuxPanel.tabIDs.isEmpty {
-                RightAuxPanelEmptyStateView(
-                    openLocalFileSearch: { openLocalFileSearch(windowID) },
-                    openBrowser: { openBrowser(windowID) }
-                )
-            } else {
-                ZStack(alignment: .topLeading) {
-                    ForEach(workspaceTab.rightAuxPanel.orderedTabs) { tab in
-                        let isActiveTab = workspaceTab.rightAuxPanel.activeTabID == tab.id
+        panelStackContent
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
 
-                        PanelCardView(
-                            workspaceID: workspace.id,
-                            panelID: tab.panelID,
-                            panelState: tab.panelState,
-                            isWorkspaceSelected: isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible,
-                            isTabSelected: isActiveTab,
-                            focusedPanelID: workspaceTab.rightAuxPanel.focusedPanelID,
-                            hasUnreadNotification: workspaceTab.unreadPanelIDs.contains(tab.panelID),
-                            panelSessionStatus: nil,
-                            shortcutNumber: nil,
-                            windowFontPoints: windowFontPoints,
-                            windowMarkdownTextScale: windowMarkdownTextScale,
-                            appIsActive: appIsActive,
-                            unfocusedSplitStyle: .disabled,
-                            panelFlashOverlayOpacity: 0,
-                            store: store,
-                            terminalProfileStore: terminalProfileStore,
-                            terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                            focusedPanelCommandController: focusedPanelCommandController,
-                            terminalRuntimeContext: nil
-                        )
-                        .opacity(WorkspaceView.mountedContentOpacity(isVisible: isActiveTab))
-                        .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible && isActiveTab)
-                        .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible && isActiveTab))
-                        .zIndex(isActiveTab ? 1 : 0)
-                        .id(tab.id)
-                    }
+    @ViewBuilder
+    private var panelStackContent: some View {
+        if workspaceTab.rightAuxPanel.tabIDs.isEmpty {
+            RightAuxPanelEmptyStateView(
+                openLocalFileSearch: { openLocalFileSearch(windowID) },
+                openBrowser: { openBrowser(windowID) }
+            )
+        } else {
+            ZStack(alignment: .topLeading) {
+                ForEach(workspaceTab.rightAuxPanel.orderedTabs, id: \RightAuxPanelTabState.id) { (tab: RightAuxPanelTabState) in
+                    rightAuxPanelCard(for: tab)
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func rightAuxPanelCard(for tab: RightAuxPanelTabState) -> some View {
+        let isActiveTab = workspaceTab.rightAuxPanel.activeTabID == tab.id
+
+        return PanelCardView(
+            workspaceID: workspace.id,
+            panelID: tab.panelID,
+            panelState: tab.panelState,
+            isWorkspaceSelected: isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible,
+            isTabSelected: isActiveTab,
+            focusedPanelID: workspaceTab.rightAuxPanel.focusedPanelID,
+            hasUnreadNotification: workspaceTab.unreadPanelIDs.contains(tab.panelID),
+            panelSessionStatus: nil,
+            shortcutNumber: nil,
+            windowFontPoints: windowFontPoints,
+            windowMarkdownTextScale: windowMarkdownTextScale,
+            appIsActive: appIsActive,
+            chromeContext: .rightAuxPanel,
+            unfocusedSplitStyle: .disabled,
+            panelFlashOverlayOpacity: 0,
+            store: store,
+            terminalProfileStore: terminalProfileStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            focusedPanelCommandController: focusedPanelCommandController,
+            terminalRuntimeContext: nil
+        )
+        .opacity(WorkspaceView.mountedContentOpacity(isVisible: isActiveTab))
+        .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible && isActiveTab)
+        .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible && isActiveTab))
+        .zIndex(isActiveTab ? 1 : 0)
+        .id(tab.id)
     }
 }
 

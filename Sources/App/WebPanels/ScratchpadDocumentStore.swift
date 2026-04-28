@@ -153,6 +153,23 @@ final class ScratchpadDocumentStore {
         }
     }
 
+    func updateSessionLink(
+        documentID: UUID,
+        sessionLink: ScratchpadSessionLink?,
+        now: Date = Date()
+    ) throws -> ScratchpadDocument {
+        try lock.withLock {
+            guard var document = try loadUnlocked(documentID: documentID) else {
+                throw ScratchpadDocumentStoreError.missingDocument(documentID)
+            }
+
+            document.sessionLink = sessionLink
+            document.updatedAt = now
+            try writeUnlocked(document)
+            return document
+        }
+    }
+
     private func validateContent(_ content: String) throws {
         let byteCount = content.utf8.count
         guard byteCount <= maxContentBytes else {

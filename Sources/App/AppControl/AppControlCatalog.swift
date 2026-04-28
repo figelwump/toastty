@@ -42,6 +42,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case panelCreateBrowser = "panel.create.browser"
     case panelCreateLocalDocument = "panel.create.local-document"
     case panelScratchpadSetContent = "panel.scratchpad.set-content"
+    case panelScratchpadRebind = "panel.scratchpad.rebind"
+    case panelScratchpadExport = "panel.scratchpad.export"
     case panelLocalDocumentSearchStart = "panel.local-document.search.start"
     case panelLocalDocumentSearchUpdateQuery = "panel.local-document.search.update-query"
     case panelLocalDocumentSearchNext = "panel.local-document.search.next"
@@ -85,6 +87,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return ["panel.create.localDocument", "panel.create.markdown"]
         case .panelScratchpadSetContent:
             return ["panel.scratchpad.setContent"]
+        case .panelScratchpadRebind:
+            return ["panel.scratchpad.bind"]
         case .panelLocalDocumentSearchStart:
             return ["panel.markdown.search.start"]
         case .panelLocalDocumentSearchUpdateQuery:
@@ -263,6 +267,23 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .expectedRevision(required: false),
                 ],
                 aliases: aliases
+            )
+        case .panelScratchpadRebind:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Rebind a Scratchpad panel to another active managed session in the same workspace tab.",
+                selectors: [.windowID, .workspaceID, .panelID],
+                parameters: [.sessionID(required: true)],
+                aliases: aliases
+            )
+        case .panelScratchpadExport:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Export Scratchpad HTML to an app-chosen local file path.",
+                selectors: [.windowID, .workspaceID, .panelID],
+                parameters: [.sessionID(required: false)]
             )
         case .panelLocalDocumentSearchStart:
             return .init(id: rawValue, kind: .action, summary: "Show find for a local-document panel.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)

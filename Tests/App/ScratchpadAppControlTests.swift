@@ -146,6 +146,109 @@ struct ScratchpadAppControlTests {
             )
         }
     }
+
+    @Test
+    func rebindMovesScratchpadOwnershipToDestinationSession() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let destination = try fixture.createDestinationSession()
+        let initial = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Initial</p>"),
+                "title": .string("Notes"),
+            ]
+        )
+        let initialResult = try #require(initial.result)
+        let scratchpadPanelIDString = try #require(initialResult.string("panelID"))
+        let scratchpadPanelID = try #require(UUID(uuidString: scratchpadPanelIDString))
+        let documentIDString = try #require(initialResult.string("documentID"))
+        let documentID = try #require(UUID(uuidString: documentIDString))
+
+        let rebind = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadRebind.rawValue,
+            args: [
+                "panelID": .string(scratchpadPanelIDString),
+                "sessionID": .string(destination.sessionID),
+            ]
+        )
+        let rebindResult = try #require(rebind.result)
+        let reboundDocument = try #require(try fixture.documentStore.load(documentID: documentID))
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let reboundPanelState = try #require(workspace.panelState(for: scratchpadPanelID))
+        guard case .web(let reboundWebState) = reboundPanelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+
+        #expect(rebind.didMutateState)
+        #expect(rebindResult.string("sessionID") == destination.sessionID)
+        #expect(rebindResult.int("revision") == 1)
+        #expect(reboundWebState.scratchpad?.revision == 1)
+        #expect(reboundWebState.scratchpad?.sessionLink?.sessionID == destination.sessionID)
+        #expect(reboundWebState.scratchpad?.sessionLink?.sourcePanelID == destination.panelID)
+        #expect(reboundDocument.revision == 1)
+        #expect(reboundDocument.content == "<p>Initial</p>")
+        #expect(reboundDocument.sessionLink?.sessionID == destination.sessionID)
+
+        let destinationWrite = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(destination.sessionID),
+                "content": .string("<p>Destination update</p>"),
+                "expectedRevision": .int(1),
+            ]
+        )
+        let destinationResult = try #require(destinationWrite.result)
+        #expect(destinationResult.string("panelID") == scratchpadPanelIDString)
+        #expect(destinationResult.bool("created") == false)
+        #expect(destinationResult.int("revision") == 2)
+
+        let sourceWrite = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Source update</p>"),
+            ]
+        )
+        let sourceResult = try #require(sourceWrite.result)
+        #expect(sourceResult.bool("created") == true)
+        #expect(sourceResult.string("panelID") != scratchpadPanelIDString)
+    }
+
+    @Test
+    func exportWritesSessionLinkedScratchpadToDeterministicFile() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let response = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<h1>Export me</h1>"),
+                "title": .string("Export me"),
+            ]
+        )
+        let result = try #require(response.result)
+        let panelIDString = try #require(result.string("panelID"))
+        let documentIDString = try #require(result.string("documentID"))
+
+        let export = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadExport.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+            ]
+        )
+        let exportResult = try #require(export.result)
+        let filePath = try #require(exportResult.string("filePath"))
+        let exportedHTML = try String(contentsOfFile: filePath, encoding: .utf8)
+
+        #expect(export.didMutateState == false)
+        #expect(exportResult.string("panelID") == panelIDString)
+        #expect(exportResult.string("documentID") == documentIDString)
+        #expect(exportResult.int("revision") == 1)
+        #expect(exportResult.string("title") == "Export me")
+        #expect(filePath.hasSuffix("\(documentIDString).html"))
+        #expect(exportedHTML == "<h1>Export me</h1>")
+    }
 }
 
 @MainActor
@@ -225,5 +328,30 @@ private final class ScratchpadAppControlFixture {
         let url = tempURL.appendingPathComponent("scratchpad.html")
         try content.write(to: url, atomically: true, encoding: .utf8)
         return url
+    }
+
+    func createDestinationSession() throws -> (panelID: UUID, sessionID: String) {
+        let workspaceBefore = try #require(store.state.workspacesByID[workspaceID])
+        let beforePanelIDs = Set(workspaceBefore.layoutTree.allSlotInfos.map(\.panelID))
+        #expect(store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical)))
+        let workspace = try #require(store.state.workspacesByID[workspaceID])
+        let panelID = try #require(
+            workspace.layoutTree.allSlotInfos
+                .map(\.panelID)
+                .first { beforePanelIDs.contains($0) == false }
+        )
+        let sessionID = "sess-destination"
+        sessionRuntimeStore.startSession(
+            sessionID: sessionID,
+            agent: .claude,
+            panelID: panelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            displayTitleOverride: "Claude",
+            cwd: tempURL.path,
+            repoRoot: tempURL.path,
+            at: Date(timeIntervalSince1970: 200)
+        )
+        return (panelID, sessionID)
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import CoreState
 import SwiftUI
 import XCTest
 @testable import ToasttyApp
@@ -177,6 +178,106 @@ final class RightAuxPanelViewTests: XCTestCase {
             ToastyTheme.rightAuxPanelTabAccentLineHeight,
             ToastyTheme.workspaceTabAccentLineHeight
         )
+    }
+
+    func testPanelCardSuppressesGenericHoverCloseInRightAuxPanel() {
+        XCTAssertTrue(
+            PanelCardView.showsHoveredCloseAffordance(
+                appIsActive: true,
+                isHovered: true,
+                chromeContext: .mainSplit
+            )
+        )
+        XCTAssertFalse(
+            PanelCardView.showsHoveredCloseAffordance(
+                appIsActive: true,
+                isHovered: true,
+                chromeContext: .rightAuxPanel
+            )
+        )
+    }
+
+    func testScratchpadBindCandidatesUseCurrentTabManagedSessionsOnly() {
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let currentPanelID = UUID()
+        let destinationPanelID = UUID()
+        let hiddenPanelID = UUID()
+        let processWatchPanelID = UUID()
+        let currentSlotID = UUID()
+        let destinationSlotID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: currentSlotID, panelID: currentPanelID),
+                second: .slot(slotID: destinationSlotID, panelID: destinationPanelID)
+            ),
+            panels: [
+                currentPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
+                destinationPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
+                hiddenPanelID: .terminal(TerminalPanelState(title: "Hidden", shell: "zsh", cwd: "/tmp")),
+                processWatchPanelID: .terminal(TerminalPanelState(title: "Watch", shell: "zsh", cwd: "/tmp")),
+            ],
+            focusedPanelID: currentPanelID
+        )
+        var registry = SessionRegistry()
+        registry.startSession(
+            sessionID: "sess-current",
+            agent: .codex,
+            panelID: currentPanelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            displayTitleOverride: "Codex",
+            cwd: "/tmp",
+            repoRoot: "/tmp",
+            at: Date(timeIntervalSince1970: 100)
+        )
+        registry.startSession(
+            sessionID: "sess-destination",
+            agent: .claude,
+            panelID: destinationPanelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            displayTitleOverride: "Claude",
+            cwd: "/tmp",
+            repoRoot: "/tmp",
+            at: Date(timeIntervalSince1970: 200)
+        )
+        registry.startSession(
+            sessionID: "sess-hidden",
+            agent: .pi,
+            panelID: hiddenPanelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            displayTitleOverride: "Pi",
+            cwd: "/tmp",
+            repoRoot: "/tmp",
+            at: Date(timeIntervalSince1970: 300)
+        )
+        registry.startSession(
+            sessionID: "sess-watch",
+            agent: .processWatch,
+            panelID: processWatchPanelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            displayTitleOverride: "npm test",
+            cwd: "/tmp",
+            repoRoot: "/tmp",
+            at: Date(timeIntervalSince1970: 400)
+        )
+
+        let candidates = ScratchpadAgentBindCandidateBuilder.candidates(
+            workspaceTab: tab,
+            sessionRegistry: registry,
+            currentSessionID: "sess-current"
+        )
+
+        XCTAssertEqual(candidates.map(\.sessionID), ["sess-current", "sess-destination"])
+        XCTAssertEqual(candidates[0].label, "Codex - current binding")
+        XCTAssertEqual(candidates[1].label, "Claude - right split")
     }
 }
 
