@@ -3760,6 +3760,7 @@ private struct ScratchpadBindingMenuChip: View {
                     .stroke(isHovered ? ToastyTheme.accent.opacity(0.7) : ToastyTheme.subtleBorder, lineWidth: 1)
             }
         }
+        .menuIndicator(.hidden)
         .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
         .help(isBound ? "Change Scratchpad Binding" : "Bind Scratchpad to a Session")
