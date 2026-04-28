@@ -20,7 +20,26 @@ struct RightAuxPanelView: View {
     let isRightAuxPanelVisible: Bool
     let appIsActive: Bool
 
+    nonisolated static func isRightAuxPanelFocused(
+        isWorkspaceSelected: Bool,
+        isWorkspaceTabSelected: Bool,
+        isRightAuxPanelVisible: Bool,
+        focusedPanelID: UUID?
+    ) -> Bool {
+        isWorkspaceSelected &&
+            isWorkspaceTabSelected &&
+            isRightAuxPanelVisible &&
+            focusedPanelID != nil
+    }
+
     var body: some View {
+        let isRightAuxPanelFocused = Self.isRightAuxPanelFocused(
+            isWorkspaceSelected: isWorkspaceSelected,
+            isWorkspaceTabSelected: isWorkspaceTabSelected,
+            isRightAuxPanelVisible: isRightAuxPanelVisible,
+            focusedPanelID: workspaceTab.rightAuxPanel.focusedPanelID
+        )
+
         VStack(alignment: .leading, spacing: 0) {
             if RightAuxPanelTabStrip.showsTabStrip(tabCount: workspaceTab.rightAuxPanel.tabIDs.count) {
                 RightAuxPanelTabStrip(
@@ -28,6 +47,7 @@ struct RightAuxPanelView: View {
                     tabs: workspaceTab.rightAuxPanel.orderedTabs,
                     activeTabID: workspaceTab.rightAuxPanel.activeTabID,
                     unreadPanelIDs: workspaceTab.unreadPanelIDs,
+                    isRightAuxPanelFocused: isRightAuxPanelFocused,
                     appIsActive: appIsActive,
                     store: store,
                     focusedPanelCommandController: focusedPanelCommandController,
@@ -211,6 +231,7 @@ struct RightAuxPanelTabStrip: View {
     let tabs: [RightAuxPanelTabState]
     let activeTabID: UUID?
     let unreadPanelIDs: Set<UUID>
+    let isRightAuxPanelFocused: Bool
     let appIsActive: Bool
     @ObservedObject var store: AppStore
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -253,6 +274,28 @@ struct RightAuxPanelTabStrip: View {
 
     nonisolated static func tabAccessibilityLabel(title: String, hasUnread: Bool) -> String {
         hasUnread ? "\(title), unread" : title
+    }
+
+    nonisolated static func selectedAccentColor(
+        isActive: Bool,
+        appIsActive: Bool,
+        isRightAuxPanelFocused: Bool
+    ) -> Color? {
+        guard isActive else { return nil }
+        return ToastyTheme.workspaceTabSelectedAccentColor(
+            appIsActive: appIsActive,
+            isFocused: isRightAuxPanelFocused
+        )
+    }
+
+    nonisolated static func tabBackgroundColor(isActive: Bool, isHovered: Bool) -> Color {
+        if isActive {
+            return ToastyTheme.rightAuxPanelTabSelectedBackground
+        }
+        if isHovered {
+            return ToastyTheme.rightAuxPanelTabHoverBackground
+        }
+        return ToastyTheme.chromeBackground
     }
 
     var body: some View {
@@ -417,6 +460,17 @@ struct RightAuxPanelTabStrip: View {
         .padding(.trailing, 5)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(tabBackground(isActive: isActive, isHovered: isHovered))
+        .overlay(alignment: .top) {
+            if let accentColor = Self.selectedAccentColor(
+                isActive: isActive,
+                appIsActive: appIsActive,
+                isRightAuxPanelFocused: isRightAuxPanelFocused
+            ) {
+                Rectangle()
+                    .fill(accentColor)
+                    .frame(height: ToastyTheme.rightAuxPanelTabAccentLineHeight)
+            }
+        }
         .overlay {
             if !isActive {
                 Rectangle()
@@ -480,13 +534,7 @@ struct RightAuxPanelTabStrip: View {
     }
 
     private func tabBackground(isActive: Bool, isHovered: Bool) -> Color {
-        if isActive {
-            return ToastyTheme.workspaceTabSelectedBackground
-        }
-        if isHovered {
-            return ToastyTheme.workspaceTabHoverBackground
-        }
-        return ToastyTheme.chromeBackground
+        Self.tabBackgroundColor(isActive: isActive, isHovered: isHovered)
     }
 
     private func tabTextColor(isActive: Bool, isHovered: Bool) -> Color {
