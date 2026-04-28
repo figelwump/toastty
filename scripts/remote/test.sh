@@ -11,6 +11,7 @@ REF_SPEC=""
 KEEP_REMOTE=0
 SETUP_ERROR_EXIT_CODE=78
 DEFAULT_REMOTE_TEST_TIMEOUT_SECONDS=3600
+DEFAULT_XCODEBUILD_ARGS_SENTINEL="__toastty_default_xcodebuild_args__"
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
 REMOTE_HOST="${TOASTTY_REMOTE_GUI_HOST:-}"
@@ -486,7 +487,10 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
 
   local xcodebuild_args_b64
   if [[ "${#XCODEBUILD_ARGS[@]}" == "0" ]]; then
-    xcodebuild_args_b64="$(serialize_xcodebuild_args)"
+    # SSH command argument forwarding can drop an empty positional argument.
+    # Use a sentinel for the default-arguments case so the remote side still
+    # receives the timeout and architecture guard arguments in their slots.
+    xcodebuild_args_b64="$DEFAULT_XCODEBUILD_ARGS_SENTINEL"
   else
     xcodebuild_args_b64="$(serialize_xcodebuild_args "${XCODEBUILD_ARGS[@]}")"
   fi
@@ -552,7 +556,11 @@ run_remote_mode() {
   local remote_worktree_dir="${TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR:?TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR is required}"
   local xcodebuild_args_b64="${TOASTTY_REMOTE_TEST_XCODEBUILD_ARGS_B64:-}"
   local decoded_args
-  decoded_args="$(decode_base64 "$xcodebuild_args_b64")"
+  if [[ "$xcodebuild_args_b64" == "$DEFAULT_XCODEBUILD_ARGS_SENTINEL" ]]; then
+    decoded_args=""
+  else
+    decoded_args="$(decode_base64 "$xcodebuild_args_b64")"
+  fi
 
   local xcodebuild_args=()
   if [[ -n "$decoded_args" ]]; then
