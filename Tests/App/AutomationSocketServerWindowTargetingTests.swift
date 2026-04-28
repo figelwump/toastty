@@ -55,7 +55,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
-    func testRightPanelBrowserActionDoesNotMutateMainLayoutFocusAndAppearsInSnapshot() async throws {
+    func testRightPanelBrowserActionPreservesMainLayoutFocusAndFocusesRightPanel() async throws {
         let fixture = makeSingleWindowFixture()
 
         try await withAutomationHarness(state: fixture.state) { harness in
@@ -83,7 +83,8 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             }
             XCTAssertEqual(workspace.layoutTree, initialLayoutTree)
             XCTAssertEqual(workspace.focusedPanelID, initialFocusedPanelID)
-            XCTAssertNil(workspace.rightAuxPanel.focusedPanelID)
+            let focusedRightPanelID = try XCTUnwrap(workspace.rightAuxPanel.focusedPanelID)
+            XCTAssertEqual(focusedRightPanelID, workspace.rightAuxPanel.activePanelID)
             XCTAssertTrue(workspace.rightAuxPanel.isVisible)
             XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
             XCTAssertEqual(workspace.panels.count, 1)
@@ -103,6 +104,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertEqual(rightPanel["tabCount"] as? Int, 1)
             XCTAssertEqual((rightPanel["panelIDs"] as? [String])?.count, 1)
             XCTAssertEqual((rightPanel["tabIDs"] as? [String])?.count, 1)
+            XCTAssertEqual(rightPanel["focusedPanelID"] as? String, focusedRightPanelID.uuidString)
         }
     }
 
