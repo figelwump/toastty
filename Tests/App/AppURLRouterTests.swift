@@ -13,10 +13,10 @@ final class AppURLRouterTests: XCTestCase {
                 for: url,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .newTab
+                    browserPlacement: .rightPanel
                 )
             ),
-            .toasttyBrowser(placement: .newTab)
+            .toasttyBrowser(placement: .rightPanel)
         )
     }
 
@@ -28,12 +28,12 @@ final class AppURLRouterTests: XCTestCase {
                 for: url,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .newTab,
-                    alternateBrowserPlacement: .rootRight
+                    browserPlacement: .rightPanel,
+                    alternateBrowserPlacement: .newTab
                 ),
                 useAlternatePlacement: true
             ),
-            .toasttyBrowser(placement: .rootRight)
+            .toasttyBrowser(placement: .newTab)
         )
     }
 
@@ -46,8 +46,31 @@ final class AppURLRouterTests: XCTestCase {
                 for: url,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .rootRight
+                    browserPlacement: .rightPanel
                 )
+            ),
+            .localDocument(
+                LocalDocumentPanelCreateRequest(
+                    filePath: fixture.filePath,
+                    placementOverride: .rightPanel
+                )
+            )
+        )
+    }
+
+    func testRouteUsesConfiguredAlternateLocalDocumentPlacementForAlternateOpen() throws {
+        let fixture = try makeTextFixture()
+        let url = fixture.fileURL
+
+        XCTAssertEqual(
+            AppURLRouter.route(
+                for: url,
+                preferences: URLRoutingPreferences(),
+                localDocumentPreferences: LocalDocumentRoutingPreferences(
+                    openingPlacement: .rightPanel,
+                    alternateOpeningPlacement: .newTab
+                ),
+                useAlternatePlacement: true
             ),
             .localDocument(
                 LocalDocumentPanelCreateRequest(
@@ -67,7 +90,7 @@ final class AppURLRouterTests: XCTestCase {
                 for: url,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .rootRight
+                    browserPlacement: .rightPanel
                 )
             ),
             .external
@@ -87,7 +110,7 @@ final class AppURLRouterTests: XCTestCase {
                 LocalDocumentPanelCreateRequest(
                     filePath: fixture.markdownPath,
                     lineNumber: 42,
-                    placementOverride: .newTab
+                    placementOverride: .rightPanel
                 )
             )
         )
@@ -105,7 +128,7 @@ final class AppURLRouterTests: XCTestCase {
             .localDocument(
                 LocalDocumentPanelCreateRequest(
                     filePath: fixture.markdownPath,
-                    placementOverride: .newTab
+                    placementOverride: .rightPanel
                 )
             )
         )
@@ -122,7 +145,7 @@ final class AppURLRouterTests: XCTestCase {
             .localDocument(
                 LocalDocumentPanelCreateRequest(
                     filePath: fixture.markdownPath,
-                    placementOverride: .newTab
+                    placementOverride: .rightPanel
                 )
             )
         )
@@ -136,7 +159,7 @@ final class AppURLRouterTests: XCTestCase {
                 for: url,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .rootRight
+                    browserPlacement: .rightPanel
                 )
             ),
             .external
@@ -158,7 +181,7 @@ final class AppURLRouterTests: XCTestCase {
                 appStore: store,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .rootRight
+                    browserPlacement: .rightPanel
                 ),
                 openExternally: { openedURL in
                     externallyOpenedURL = openedURL
@@ -252,7 +275,7 @@ final class AppURLRouterTests: XCTestCase {
 
     func testOpenUsesAlternatePlacementWhenRequested() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
-        let url = try XCTUnwrap(URL(string: "https://example.com/right-side"))
+        let url = try XCTUnwrap(URL(string: "https://example.com/new-tab"))
 
         XCTAssertTrue(
             AppURLRouter.open(
@@ -262,8 +285,8 @@ final class AppURLRouterTests: XCTestCase {
                 useAlternatePlacement: true,
                 preferences: URLRoutingPreferences(
                     destination: .toasttyBrowser,
-                    browserPlacement: .newTab,
-                    alternateBrowserPlacement: .rootRight
+                    browserPlacement: .rightPanel,
+                    alternateBrowserPlacement: .newTab
                 ),
                 openExternally: { _ in
                     XCTFail("router should not fall back to external open")
@@ -274,11 +297,12 @@ final class AppURLRouterTests: XCTestCase {
 
         let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
         let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
-        XCTAssertEqual(workspace.orderedTabs.count, 1)
-        XCTAssertEqual(workspace.panels.count, 2)
-        let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
-        guard case .web(let webState) = workspace.panels[focusedPanelID] else {
-            XCTFail("expected root-right browser panel")
+        XCTAssertEqual(workspace.orderedTabs.count, 2)
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected browser panel in new tab")
             return
         }
 
@@ -292,7 +316,7 @@ final class AppURLRouterTests: XCTestCase {
         store.setURLRoutingPreferences(
             URLRoutingPreferences(
                 destination: .systemBrowser,
-                browserPlacement: .rootRight
+                browserPlacement: .rightPanel
             )
         )
         let url = try XCTUnwrap(URL(string: "https://example.com/external"))
@@ -343,12 +367,13 @@ final class AppURLRouterTests: XCTestCase {
 
         let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
         let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
-        XCTAssertEqual(workspace.orderedTabs.count, 2)
-        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected new local document tab")
+        XCTAssertEqual(workspace.orderedTabs.count, 1)
+        XCTAssertEqual(workspace.panels.count, 1)
+        XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspace.rightAuxPanel.activeTab)
+        let panelID = rightPanelTab.panelID
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document")
             return
         }
 

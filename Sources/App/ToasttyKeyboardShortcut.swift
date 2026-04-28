@@ -99,6 +99,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command]
     )
 
+    static let toggleRightPanel = ToasttyKeyboardShortcut(
+        "b",
+        modifiers: [.command, .shift]
+    )
+
     static let newWorkspace = ToasttyKeyboardShortcut(
         "n",
         modifiers: [.command, .shift]
@@ -122,6 +127,16 @@ enum ToasttyKeyboardShortcuts {
     static let selectNextTab = ToasttyKeyboardShortcut(
         "]",
         modifiers: [.command, .shift]
+    )
+
+    static let selectPreviousRightPanelTab = ToasttyKeyboardShortcut(
+        "[",
+        modifiers: [.command, .control]
+    )
+
+    static let selectNextRightPanelTab = ToasttyKeyboardShortcut(
+        "]",
+        modifiers: [.command, .control]
     )
 
     static let closeWorkspace = ToasttyKeyboardShortcut(

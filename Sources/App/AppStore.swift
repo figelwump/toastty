@@ -75,7 +75,7 @@ private struct NextActiveCycleState: Equatable {
 }
 
 struct BrowserPanelCreateRequest: Equatable, Sendable {
-    static let defaultPlacement: WebPanelPlacement = .rootRight
+    static let defaultPlacement: WebPanelPlacement = .rightPanel
 
     var initialURL: String?
     var placementOverride: WebPanelPlacement?
@@ -94,7 +94,7 @@ struct BrowserPanelCreateRequest: Equatable, Sendable {
 }
 
 struct LocalDocumentPanelCreateRequest: Equatable, Sendable {
-    static let defaultPlacement: WebPanelPlacement = .rootRight
+    static let defaultPlacement: WebPanelPlacement = .rightPanel
 
     var filePath: String
     var lineNumber: Int?
@@ -264,6 +264,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var hasEverLaunchedAgent: Bool
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
+    @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
 
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
@@ -442,9 +443,8 @@ final class AppStore: ObservableObject {
         preferredWindowID: UUID?
     ) -> FocusedBrowserPanelCommandSelection? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
-              let panelID = selection.workspace.focusedPanelID,
-              selection.workspace.slotID(containingPanelID: panelID) != nil,
-              case .web(let webState) = selection.workspace.panels[panelID],
+              let focusedPanel = Self.focusedCommandPanel(in: selection.workspace),
+              case .web(let webState) = focusedPanel.panelState,
               webState.definition == .browser else {
             return nil
         }
@@ -452,7 +452,7 @@ final class AppStore: ObservableObject {
         return FocusedBrowserPanelCommandSelection(
             windowID: selection.windowID,
             workspaceID: selection.workspace.id,
-            panelID: panelID
+            panelID: focusedPanel.panelID
         )
     }
 
@@ -460,9 +460,8 @@ final class AppStore: ObservableObject {
         preferredWindowID: UUID?
     ) -> FocusedLocalDocumentPanelCommandSelection? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
-              let panelID = selection.workspace.focusedPanelID,
-              selection.workspace.slotID(containingPanelID: panelID) != nil,
-              case .web(let webState) = selection.workspace.panels[panelID],
+              let focusedPanel = Self.focusedCommandPanel(in: selection.workspace),
+              case .web(let webState) = focusedPanel.panelState,
               webState.definition == .localDocument else {
             return nil
         }
@@ -470,7 +469,7 @@ final class AppStore: ObservableObject {
         return FocusedLocalDocumentPanelCommandSelection(
             windowID: selection.windowID,
             workspaceID: selection.workspace.id,
-            panelID: panelID
+            panelID: focusedPanel.panelID
         )
     }
 
@@ -478,13 +477,11 @@ final class AppStore: ObservableObject {
         preferredWindowID: UUID?
     ) -> FocusedScaleCommandTarget? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
-              let panelID = selection.workspace.focusedPanelID,
-              selection.workspace.slotID(containingPanelID: panelID) != nil,
-              let panelState = selection.workspace.panels[panelID] else {
+              let focusedPanel = Self.focusedCommandPanel(in: selection.workspace) else {
             return nil
         }
 
-        switch panelState {
+        switch focusedPanel.panelState {
         case .terminal:
             return .terminal(windowID: selection.windowID)
         case .web(let webState):
@@ -492,7 +489,7 @@ final class AppStore: ObservableObject {
             case .localDocument:
                 return .markdown(windowID: selection.windowID)
             case .browser:
-                return .browser(windowID: selection.windowID, panelID: panelID)
+                return .browser(windowID: selection.windowID, panelID: focusedPanel.panelID)
             case .scratchpad, .diff:
                 return nil
             }
@@ -522,7 +519,7 @@ final class AppStore: ObservableObject {
             return false
         }
 
-        let existingPanelIDs = Set(existingWorkspace.panels.keys)
+        let existingPanelIDs = Set(existingWorkspace.allPanelsByID.keys)
         let shouldRequestLocationFocus = request.initialURL == nil
 
         guard send(
@@ -598,13 +595,30 @@ final class AppStore: ObservableObject {
             in: workspace,
             normalizedFilePath: resolvedLocalDocument.normalizedFilePath
         ) {
-            guard focusPanel(containing: existingPanelID) else {
-                return nil
+            if request.resolvedPlacement == .rightPanel,
+               let existingTabID = workspace.rightAuxPanelTabID(containingPanelID: existingPanelID) {
+                if workspace.rightAuxPanel.activeTabID != existingTabID ||
+                    workspace.rightAuxPanel.isVisible == false ||
+                    workspace.rightAuxPanel.focusedPanelID != existingPanelID {
+                    guard send(
+                        .selectRightAuxPanelTab(
+                            workspaceID: workspaceID,
+                            tabID: existingTabID,
+                            focus: true
+                        )
+                    ) else {
+                        return nil
+                    }
+                }
+            } else {
+                guard focusPanel(containing: existingPanelID) else {
+                    return nil
+                }
             }
             return .focusedExisting(panelID: existingPanelID)
         }
 
-        let existingPanelIDs = Set(workspace.panels.keys)
+        let existingPanelIDs = Set(workspace.allPanelsByID.keys)
         let displayName = Self.localDocumentDisplayName(for: resolvedLocalDocument.normalizedFilePath)
         guard send(
             .createWebPanel(
@@ -752,7 +766,7 @@ final class AppStore: ObservableObject {
             throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
         }
 
-        let previousPanelIDs = Set(focusedSourceSelection.workspace.panels.keys)
+        let previousPanelIDs = Set(focusedSourceSelection.workspace.allPanelsByID.keys)
         guard send(
             .createWebPanel(
                 workspaceID: focusedSourceSelection.workspaceID,
@@ -761,7 +775,7 @@ final class AppStore: ObservableObject {
                     title: document.title,
                     scratchpad: scratchpad
                 ),
-                placement: .rootRight
+                placement: .rightPanel
             )
         ) else {
             throw ScratchpadPanelError.createPanelFailed
@@ -850,7 +864,7 @@ final class AppStore: ObservableObject {
                         revision: document.revision
                     )
                 ),
-                placement: .rootRight
+                placement: .rightPanel
             )
         )
     }
@@ -921,6 +935,27 @@ final class AppStore: ObservableObject {
             nextIndex = currentIndex < tabs.count - 1 ? currentIndex + 1 : 0
         }
         return send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: tabs[nextIndex].id))
+    }
+
+    func canSelectAdjacentRightAuxPanelTab(preferredWindowID: UUID?) -> Bool {
+        guard let workspace = commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
+            return false
+        }
+        return workspace.rightAuxPanel.isVisible &&
+            workspace.rightAuxPanel.focusedPanelID != nil &&
+            workspace.rightAuxPanel.tabIDs.count > 1
+    }
+
+    @discardableResult
+    func selectAdjacentRightAuxPanelTab(
+        preferredWindowID: UUID?,
+        direction: PanelTabNavigationDirection
+    ) -> Bool {
+        guard canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID),
+              let workspaceID = commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+        return send(.selectAdjacentRightAuxPanelTab(workspaceID: workspaceID, direction: direction))
     }
 
     @discardableResult
@@ -1252,6 +1287,10 @@ final class AppStore: ObservableObject {
         urlRoutingPreferences = preferences
     }
 
+    func setLocalDocumentRoutingPreferences(_ preferences: LocalDocumentRoutingPreferences) {
+        localDocumentRoutingPreferences = preferences
+    }
+
     @discardableResult
     func openURLInBrowser(
         preferredWindowID: UUID?,
@@ -1561,7 +1600,14 @@ final class AppStore: ObservableObject {
         in workspace: WorkspaceState,
         previousPanelIDs: Set<UUID>
     ) -> UUID? {
-        let createdPanelIDs = Set(workspace.panels.keys).subtracting(previousPanelIDs)
+        let createdPanelIDs = Set(workspace.allPanelsByID.keys).subtracting(previousPanelIDs)
+
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           createdPanelIDs.contains(activePanelID),
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .browser {
+            return activePanelID
+        }
 
         if let focusedPanelID = workspace.focusedPanelID,
            createdPanelIDs.contains(focusedPanelID),
@@ -1571,7 +1617,7 @@ final class AppStore: ObservableObject {
         }
 
         return createdPanelIDs.first { panelID in
-            guard case .web(let webState)? = workspace.panels[panelID] else {
+            guard case .web(let webState)? = workspace.allPanelsByID[panelID] else {
                 return false
             }
             return webState.definition == .browser
@@ -1582,7 +1628,14 @@ final class AppStore: ObservableObject {
         in workspace: WorkspaceState,
         previousPanelIDs: Set<UUID>
     ) -> UUID? {
-        let createdPanelIDs = Set(workspace.panels.keys).subtracting(previousPanelIDs)
+        let createdPanelIDs = Set(workspace.allPanelsByID.keys).subtracting(previousPanelIDs)
+
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           createdPanelIDs.contains(activePanelID),
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .localDocument {
+            return activePanelID
+        }
 
         if let focusedPanelID = workspace.focusedPanelID,
            createdPanelIDs.contains(focusedPanelID),
@@ -1592,7 +1645,7 @@ final class AppStore: ObservableObject {
         }
 
         return createdPanelIDs.first { panelID in
-            guard case .web(let webState)? = workspace.panels[panelID] else {
+            guard case .web(let webState)? = workspace.allPanelsByID[panelID] else {
                 return false
             }
             return webState.definition == .localDocument
@@ -1603,7 +1656,14 @@ final class AppStore: ObservableObject {
         in workspace: WorkspaceState,
         previousPanelIDs: Set<UUID>
     ) -> UUID? {
-        let createdPanelIDs = Set(workspace.panels.keys).subtracting(previousPanelIDs)
+        let createdPanelIDs = Set(workspace.allPanelsByID.keys).subtracting(previousPanelIDs)
+
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           createdPanelIDs.contains(activePanelID),
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .scratchpad {
+            return activePanelID
+        }
 
         if let focusedPanelID = workspace.focusedPanelID,
            createdPanelIDs.contains(focusedPanelID),
@@ -1613,7 +1673,7 @@ final class AppStore: ObservableObject {
         }
 
         return createdPanelIDs.first { panelID in
-            guard case .web(let webState)? = workspace.panels[panelID] else {
+            guard case .web(let webState)? = workspace.allPanelsByID[panelID] else {
                 return false
             }
             return webState.definition == .scratchpad
@@ -1628,15 +1688,13 @@ final class AppStore: ObservableObject {
                 guard let workspace = state.workspacesByID[workspaceID] else {
                     continue
                 }
-                for tab in workspace.orderedTabs {
-                    for (panelID, panelState) in tab.panels {
-                        guard case .web(let webState) = panelState,
-                              webState.definition == .scratchpad,
-                              webState.scratchpad?.sessionLink?.sessionID == sessionID else {
-                            continue
-                        }
-                        return (window.id, workspaceID, panelID, webState)
+                for (panelID, panelState) in workspace.allPanelsByID {
+                    guard case .web(let webState) = panelState,
+                          webState.definition == .scratchpad,
+                          webState.scratchpad?.sessionLink?.sessionID == sessionID else {
+                        continue
                     }
+                    return (window.id, workspaceID, panelID, webState)
                 }
             }
         }
@@ -1644,8 +1702,11 @@ final class AppStore: ObservableObject {
     }
 
     private func markScratchpadUpdatedIfUnfocused(workspaceID: UUID, panelID: UUID) {
-        guard let workspace = state.workspacesByID[workspaceID],
-              workspace.focusedPanelID != panelID else {
+        guard let workspace = state.workspacesByID[workspaceID] else {
+            return
+        }
+        guard workspace.focusedPanelID != panelID,
+              workspace.rightAuxPanel.focusedPanelID != panelID else {
             return
         }
         _ = send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
@@ -1766,6 +1827,20 @@ final class AppStore: ObservableObject {
         return values.isEmpty ? "none" : values.joined(separator: ",")
     }
 
+    private static func focusedCommandPanel(in workspace: WorkspaceState) -> (panelID: UUID, panelState: PanelState)? {
+        if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
+           let panelState = workspace.rightAuxPanel.panelState(for: focusedPanelID) {
+            return (focusedPanelID, panelState)
+        }
+
+        guard let focusedPanelID = workspace.focusedPanelID,
+              workspace.slotID(containingPanelID: focusedPanelID) != nil,
+              let panelState = workspace.panels[focusedPanelID] else {
+            return nil
+        }
+        return (focusedPanelID, panelState)
+    }
+
     private func existingLocalDocumentPanelID(
         in workspace: WorkspaceState,
         normalizedFilePath: String
@@ -1779,6 +1854,14 @@ final class AppStore: ObservableObject {
                 }
                 return panelID
             }
+        }
+        for tab in workspace.rightAuxPanel.orderedTabs {
+            guard case .web(let webState) = tab.panelState,
+                  webState.definition == .localDocument,
+                  webState.localDocument?.filePath == normalizedFilePath else {
+                continue
+            }
+            return tab.panelID
         }
         return nil
     }

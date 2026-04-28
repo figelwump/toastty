@@ -332,7 +332,10 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertTrue(
             store.createBrowserPanelFromCommand(
                 preferredWindowID: fixture.windowID,
-                request: BrowserPanelCreateRequest(initialURL: "https://example.com")
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .splitRight
+                )
             )
         )
 
@@ -669,6 +672,38 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
     func testCreateBrowserPanelUsesDefaultPlacementWhenNoOverrideIsProvided() throws {
         let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createBrowserPanel(
+                workspaceID: workspaceID,
+                request: BrowserPanelCreateRequest()
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 1)
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 1)
+        XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
+        let tab = try XCTUnwrap(workspace.rightAuxPanel.activeTab)
+        guard case .web(let webState) = tab.panelState else {
+            XCTFail("expected active right-panel tab to be web-backed browser")
+            return
+        }
+
+        XCTAssertNil(webState.initialURL)
+        XCTAssertNil(webState.currentURL)
+        XCTAssertEqual(workspace.rightAuxPanel.focusedPanelID, tab.panelID)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.windowID, sourceWindowID)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.workspaceID, workspaceID)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.panelID, tab.panelID)
+        XCTAssertNotNil(store.pendingBrowserLocationFocusRequest?.requestID)
+    }
+
+    func testCreateBrowserPanelWithInitialURLDoesNotRequestLocationFocusInRightPanel() throws {
+        let state = AppState.bootstrap()
         let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -680,16 +715,14 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
 
         let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
-        XCTAssertEqual(workspace.orderedTabs.count, 1)
-        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 2)
-        let panelID = try XCTUnwrap(workspace.focusedPanelID)
-        guard case .web(let webState) = workspace.panels[panelID] else {
-            XCTFail("expected focused panel to be web-backed browser")
+        let tab = try XCTUnwrap(workspace.rightAuxPanel.activeTab)
+        guard case .web(let webState) = tab.panelState else {
+            XCTFail("expected active right-panel tab to be web-backed browser")
             return
         }
 
         XCTAssertEqual(webState.initialURL, "https://example.com")
-        XCTAssertNil(webState.currentURL)
+        XCTAssertEqual(workspace.rightAuxPanel.focusedPanelID, tab.panelID)
         XCTAssertNil(store.pendingBrowserLocationFocusRequest)
     }
 
@@ -731,7 +764,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(webState.currentURL)
     }
 
-    func testCreateMarkdownPanelFromCommandDefaultsToRootRightPlacement() throws {
+    func testCreateMarkdownPanelFromCommandDefaultsToRightPanelPlacement() throws {
         let fixture = try makeMarkdownFixture()
         let state = AppState.bootstrap()
         let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
@@ -747,16 +780,18 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
         XCTAssertEqual(workspace.orderedTabs.count, 1)
-        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 2)
-        let panelID = try XCTUnwrap(workspace.focusedPanelID)
-        guard case .web(let webState) = workspace.panels[panelID] else {
-            XCTFail("expected focused panel to be markdown")
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 1)
+        XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
+        let tab = try XCTUnwrap(workspace.rightAuxPanel.activeTab)
+        guard case .web(let webState) = tab.panelState else {
+            XCTFail("expected active right-panel tab to be markdown")
             return
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md")
         XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertEqual(workspace.rightAuxPanel.focusedPanelID, tab.panelID)
         XCTAssertEqual(
             webState.localDocument,
             LocalDocumentState(filePath: fixture.canonicalPath, format: .markdown)
@@ -1018,6 +1053,47 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, existingPanelID)
     }
 
+    func testCreateLocalDocumentRightPanelDedupesAndFocusesExistingTabWithoutChangingMainFocus() throws {
+        let fixture = try makeMarkdownFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let workspaceBefore = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let focusedPanelIDBefore = try XCTUnwrap(workspaceBefore.focusedPanelID)
+
+        let openedOutcome = store.createLocalDocumentPanelFromCommandOutcome(
+            preferredWindowID: sourceWindowID,
+            request: LocalDocumentPanelCreateRequest(
+                filePath: fixture.canonicalPath,
+                placementOverride: .rightPanel
+            )
+        )
+        guard case .opened(let openedPanelID)? = openedOutcome else {
+            XCTFail("expected opened panel outcome")
+            return
+        }
+
+        XCTAssertTrue(store.send(.focusPanel(workspaceID: sourceWorkspaceID, panelID: focusedPanelIDBefore)))
+        let workspaceAfterMainRefocus = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertNil(workspaceAfterMainRefocus.rightAuxPanel.focusedPanelID)
+
+        let dedupedOutcome = store.createLocalDocumentPanelFromCommandOutcome(
+            preferredWindowID: sourceWindowID,
+            request: LocalDocumentPanelCreateRequest(
+                filePath: fixture.alternatePath,
+                placementOverride: .rightPanel
+            )
+        )
+
+        XCTAssertEqual(dedupedOutcome, .focusedExisting(panelID: openedPanelID))
+        let workspaceAfterDedupedOpen = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, focusedPanelIDBefore)
+        XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.tabIDs.count, 1)
+        XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.activePanelID, openedPanelID)
+        XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.focusedPanelID, openedPanelID)
+    }
+
     func testCreateLocalDocumentPanelFromCommandOpensTextFilesAsCodeDocuments() throws {
         let textPath = try makeLocalDocumentFixture(
             fileName: "README.txt",
@@ -1036,9 +1112,9 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
 
         let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
-        let panelID = try XCTUnwrap(workspace.focusedPanelID)
-        guard case .web(let webState) = workspace.panels[panelID] else {
-            XCTFail("expected focused panel to be local-document-backed")
+        let tab = try XCTUnwrap(workspace.rightAuxPanel.activeTab)
+        guard case .web(let webState) = tab.panelState else {
+            XCTFail("expected active right-panel tab to be local-document-backed")
             return
         }
 
@@ -1106,7 +1182,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, markdownPanelID)
     }
 
-    func testOpenURLInBrowserUsesConfiguredRootRightPlacement() throws {
+    func testOpenURLInBrowserUsesConfiguredRightPanelPlacement() throws {
         let state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
         let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
@@ -1117,16 +1193,17 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             store.openURLInBrowser(
                 preferredWindowID: windowID,
                 url: url,
-                placement: .rootRight
+                placement: .rightPanel
             )
         )
 
         let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(workspace.orderedTabs.count, 1)
-        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 2)
-        let panelID = try XCTUnwrap(workspace.focusedPanelID)
-        guard case .web(let webState) = workspace.panels[panelID] else {
-            XCTFail("expected focused panel to be browser")
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 1)
+        XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
+        let tab = try XCTUnwrap(workspace.rightAuxPanel.activeTab)
+        guard case .web(let webState) = tab.panelState else {
+            XCTFail("expected active right-panel tab to be browser")
             return
         }
 

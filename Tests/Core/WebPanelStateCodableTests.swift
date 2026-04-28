@@ -4,6 +4,17 @@ import Testing
 
 struct WebPanelStateCodableTests {
     @Test
+    func webPanelPlacementEncodesCanonicalRightPanelAndDecodesLegacyRootRight() throws {
+        let encoded = try JSONEncoder().encode(WebPanelPlacement.rightPanel)
+        let encodedString = try #require(String(data: encoded, encoding: .utf8))
+
+        #expect(encodedString == "\"rightPanel\"")
+        #expect(try JSONDecoder().decode(WebPanelPlacement.self, from: Data("\"rightPanel\"".utf8)) == .rightPanel)
+        #expect(try JSONDecoder().decode(WebPanelPlacement.self, from: Data("\"rootRight\"".utf8)) == .rightPanel)
+        #expect(WebPanelPlacement(rawValue: "rootRight") == .rightPanel)
+    }
+
+    @Test
     func localDocumentStateRoundTripsWithTypedPayload() throws {
         let state = WebPanelState(
             definition: .localDocument,

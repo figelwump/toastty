@@ -16,6 +16,11 @@ public enum SlotFocusDirection: String, Codable, Equatable, Sendable {
     case right
 }
 
+public enum PanelTabNavigationDirection: String, Codable, Equatable, Sendable {
+    case previous
+    case next
+}
+
 public enum SplitResizeDirection: String, Codable, Equatable, Sendable {
     case up
     case down
@@ -45,6 +50,14 @@ public enum AppAction: Equatable, Sendable {
     case closePanel(panelID: UUID)
     case reopenLastClosedPanel(workspaceID: UUID)
     case createWebPanel(workspaceID: UUID, panel: WebPanelState, placement: WebPanelPlacement)
+    case setRightAuxPanelVisibility(workspaceID: UUID, isVisible: Bool)
+    case toggleRightAuxPanel(workspaceID: UUID)
+    case setRightAuxPanelWidth(workspaceID: UUID, width: Double)
+    case selectRightAuxPanelTab(workspaceID: UUID, tabID: UUID, focus: Bool)
+    case selectAdjacentRightAuxPanelTab(workspaceID: UUID, direction: PanelTabNavigationDirection)
+    case closeRightAuxPanelTab(workspaceID: UUID, tabID: UUID)
+    case focusRightAuxPanel(workspaceID: UUID, panelID: UUID)
+    case clearRightAuxPanelFocus(workspaceID: UUID)
     case toggleFocusedPanelMode(workspaceID: UUID)
     case setConfiguredTerminalFont(points: Double?)
     case setDefaultTerminalProfile(profileID: String?)
@@ -129,6 +142,22 @@ public extension AppAction {
             return "reopenLastClosedPanel"
         case .createWebPanel:
             return "createWebPanel"
+        case .setRightAuxPanelVisibility:
+            return "setRightAuxPanelVisibility"
+        case .toggleRightAuxPanel:
+            return "toggleRightAuxPanel"
+        case .setRightAuxPanelWidth:
+            return "setRightAuxPanelWidth"
+        case .selectRightAuxPanelTab:
+            return "selectRightAuxPanelTab"
+        case .selectAdjacentRightAuxPanelTab:
+            return "selectAdjacentRightAuxPanelTab"
+        case .closeRightAuxPanelTab:
+            return "closeRightAuxPanelTab"
+        case .focusRightAuxPanel:
+            return "focusRightAuxPanel"
+        case .clearRightAuxPanelFocus:
+            return "clearRightAuxPanelFocus"
         case .toggleFocusedPanelMode:
             return "toggleFocusedPanelMode"
         case .setConfiguredTerminalFont:

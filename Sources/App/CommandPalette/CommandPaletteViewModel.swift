@@ -74,6 +74,7 @@ final class CommandPaletteViewModel: ObservableObject {
 
     init(
         originWindowID: UUID,
+        initialQuery: String = "",
         projectCommands: @escaping @MainActor () -> [PaletteCommandDescriptor],
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool,
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
@@ -99,6 +100,7 @@ final class CommandPaletteViewModel: ObservableObject {
         self.filePresentationBuilder = filePresentationBuilder
         self.onCancel = onCancel
         self.onSubmitted = onSubmitted
+        query = initialQuery
         refreshResults(selectionBehavior: .preserveCurrent)
     }
 

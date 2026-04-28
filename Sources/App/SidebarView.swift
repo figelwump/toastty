@@ -395,6 +395,9 @@ struct SidebarView: View {
                 .accessibilityAction {
                     handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
                 }
+                .background {
+                    SidebarSemanticTextBridge(text: accessibilityLabel)
+                }
 
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)

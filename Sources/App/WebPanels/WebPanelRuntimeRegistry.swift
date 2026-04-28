@@ -24,6 +24,7 @@ struct LocalDocumentCloseConfirmationSummary: Equatable, Sendable {
 final class WebPanelRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     private var stateObservation: AnyCancellable?
+    private let registryID = UUID().uuidString
     private var browserRuntimeByPanelID: [UUID: BrowserPanelRuntime] = [:]
     private var browserRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
     private var localDocumentRuntimeByPanelID: [UUID: LocalDocumentPanelRuntime] = [:]
@@ -67,19 +68,10 @@ final class WebPanelRuntimeRegistry: ObservableObject {
                 }
 
                 let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
-                // Browser-native secondary opens intentionally bypass the
-                // general app-owned URL routing preferences: Cmd-click and
-                // popup-style browser opens should behave like browser tabs.
-                // AppURLRouter still sends non-http(s) URLs external.
                 return AppURLRouter.open(
                     url,
                     preferredWindowID: preferredWindowID,
                     appStore: store,
-                    preferences: URLRoutingPreferences(
-                        destination: .toasttyBrowser,
-                        browserPlacement: .newTab,
-                        alternateBrowserPlacement: .newTab
-                    ),
                     requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
                         self?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
                     }
@@ -123,10 +115,31 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         localDocumentRuntimeByPanelID[panelID]
     }
 
-    func scratchpadRuntime(for panelID: UUID) -> ScratchpadPanelRuntime {
+    func scratchpadRuntime(
+        for panelID: UUID,
+        requestSource: String = "unspecified",
+        isEffectivelyVisible: Bool? = nil
+    ) -> ScratchpadPanelRuntime {
         if let runtime = scratchpadRuntimeByPanelID[panelID] {
             return runtime
         }
+
+        let creationStartTime = CFAbsoluteTimeGetCurrent()
+        var creationMetadata = [
+            "panel_id": panelID.uuidString,
+            "request_source": requestSource,
+            "registry_id": registryID,
+            "process_id": "\(ProcessInfo.processInfo.processIdentifier)",
+            "existing_scratchpad_runtime_count": "\(scratchpadRuntimeByPanelID.count)",
+        ]
+        if let isEffectivelyVisible {
+            creationMetadata["is_effectively_visible"] = isEffectivelyVisible ? "true" : "false"
+        }
+        ToasttyLog.info(
+            "Creating Scratchpad panel runtime",
+            category: .state,
+            metadata: creationMetadata
+        )
 
         let runtime = ScratchpadPanelRuntime(
             panelID: panelID,
@@ -144,12 +157,26 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         scratchpadRuntimeObservationByPanelID[panelID] = runtime.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        var readyMetadata = creationMetadata
+        readyMetadata["created_scratchpad_runtime_count"] = "\(scratchpadRuntimeByPanelID.count)"
+        readyMetadata["duration_ms"] = String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - creationStartTime) * 1_000)
+        ToasttyLog.info(
+            "Created Scratchpad panel runtime",
+            category: .state,
+            metadata: readyMetadata
+        )
         return runtime
     }
 
     func loadedScratchpadRuntime(for panelID: UUID) -> ScratchpadPanelRuntime? {
         scratchpadRuntimeByPanelID[panelID]
     }
+
+    #if DEBUG
+    func liveScratchpadPanelIDsForTesting(in state: AppState) -> Set<UUID> {
+        liveScratchpadPanelIDs(in: state)
+    }
+    #endif
 
     func canEnterEditingLocalDocumentPanel(panelID: UUID) -> Bool {
         localDocumentRuntimeByPanelID[panelID]?.canEnterEditFromCommand() == true
@@ -306,7 +333,25 @@ private extension WebPanelRuntimeRegistry {
             liveLocalDocumentPanelIDs.contains(panelID)
         }
 
+        let previousScratchpadPanelIDs = Set(scratchpadRuntimeByPanelID.keys)
         let liveScratchpadPanelIDs = liveScratchpadPanelIDs(in: state)
+        let removedScratchpadPanelIDs = previousScratchpadPanelIDs.subtracting(liveScratchpadPanelIDs)
+        if removedScratchpadPanelIDs.isEmpty == false {
+            ToasttyLog.info(
+                "Pruning stale Scratchpad panel runtimes",
+                category: .state,
+                metadata: [
+                    "registry_id": registryID,
+                    "process_id": "\(ProcessInfo.processInfo.processIdentifier)",
+                    "previous_scratchpad_runtime_count": "\(previousScratchpadPanelIDs.count)",
+                    "live_scratchpad_panel_count": "\(liveScratchpadPanelIDs.count)",
+                    "removed_panel_ids": removedScratchpadPanelIDs
+                        .map(\.uuidString)
+                        .sorted()
+                        .joined(separator: ","),
+                ]
+            )
+        }
         scratchpadRuntimeByPanelID = scratchpadRuntimeByPanelID.filter { panelID, _ in
             liveScratchpadPanelIDs.contains(panelID)
         }
@@ -317,42 +362,36 @@ private extension WebPanelRuntimeRegistry {
 
     func liveBrowserPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
-            for tab in workspace.orderedTabs {
-                for (panelID, panelState) in tab.panels {
-                    guard case .web(let webState) = panelState,
-                          webState.definition == .browser else {
-                        continue
-                    }
-                    result.insert(panelID)
+            for (panelID, panelState) in workspace.allPanelsByID {
+                guard case .web(let webState) = panelState,
+                      webState.definition == .browser else {
+                    continue
                 }
+                result.insert(panelID)
             }
         }
     }
 
     func liveLocalDocumentPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
-            for tab in workspace.orderedTabs {
-                for (panelID, panelState) in tab.panels {
-                    guard case .web(let webState) = panelState,
-                          webState.definition == .localDocument else {
-                        continue
-                    }
-                    result.insert(panelID)
+            for (panelID, panelState) in workspace.allPanelsByID {
+                guard case .web(let webState) = panelState,
+                      webState.definition == .localDocument else {
+                    continue
                 }
+                result.insert(panelID)
             }
         }
     }
 
     func liveScratchpadPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
-            for tab in workspace.orderedTabs {
-                for (panelID, panelState) in tab.panels {
-                    guard case .web(let webState) = panelState,
-                          webState.definition == .scratchpad else {
-                        continue
-                    }
-                    result.insert(panelID)
+            for (panelID, panelState) in workspace.allPanelsByID {
+                guard case .web(let webState) = panelState,
+                      webState.definition == .scratchpad else {
+                    continue
                 }
+                result.insert(panelID)
             }
         }
     }

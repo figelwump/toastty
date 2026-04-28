@@ -19,6 +19,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canOpenLocalDocumentValue = true
     var canShowScratchpadForCurrentSessionValue = true
     var canToggleSidebarValue = true
+    var canToggleRightPanelValue = true
     var canToggleFocusedPanelModeValue = true
     var canWatchRunningCommandValue = true
     var canClosePanelValue = true
@@ -26,6 +27,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canCloseWorkspaceValue = true
     var canRenameTabValue = true
     var canSelectAdjacentTabValue = true
+    var canSelectAdjacentRightPanelTabValue = true
     var canJumpToNextActiveValue = true
     var canLaunchAgentValue = true
     var allowedAgentProfileIDs: Set<String>?
@@ -46,6 +48,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var openLocalDocumentResult = true
     var showScratchpadForCurrentSessionResult = true
     var toggleSidebarResult = true
+    var toggleRightPanelResult = true
     var toggleFocusedPanelModeResult = true
     var watchRunningCommandResult = true
     var closePanelResult = true
@@ -53,6 +56,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var closeWorkspaceResult = true
     var renameTabResult = true
     var selectAdjacentTabResult = true
+    var selectAdjacentRightPanelTabResult = true
     var jumpToNextActiveResult = true
     var launchAgentResult = true
     var splitWithTerminalProfileResult = true
@@ -62,6 +66,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var reloadConfigurationResult = true
 
     var sidebarTitleValue = ToasttyBuiltInCommand.toggleSidebar.title
+    var rightPanelTitleValue = ToasttyBuiltInCommand.toggleRightPanel.title
     var focusedPanelModeTitleValue = ToasttyBuiltInCommand.toggleFocusedPanelMode.title
 
     var createdWindowIDs: [UUID] = []
@@ -75,6 +80,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var localDocumentCalls: [RecordedPaletteLocalDocumentCall] = []
     var shownScratchpadWindowIDs: [UUID] = []
     var toggledSidebarWindowIDs: [UUID] = []
+    var toggledRightPanelWindowIDs: [UUID] = []
     var toggledFocusedPanelModeWindowIDs: [UUID] = []
     var watchedRunningCommandWindowIDs: [UUID] = []
     var closedPanelWindowIDs: [UUID] = []
@@ -82,6 +88,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var closedWorkspaceWindowIDs: [UUID] = []
     var renamedTabWindowIDs: [UUID] = []
     var tabSelectionCalls: [RecordedPaletteTabSelectionCall] = []
+    var rightPanelTabSelectionCalls: [RecordedPaletteRightPanelTabSelectionCall] = []
     var jumpToNextActiveWindowIDs: [UUID] = []
     var workspaceSwitchCalls: [RecordedPaletteWorkspaceSwitchCall] = []
     var launchedAgentCalls: [RecordedPaletteAgentLaunchCall] = []
@@ -233,6 +240,21 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return sidebarTitleValue
     }
 
+    func canToggleRightPanel(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canToggleRightPanelValue
+    }
+
+    func toggleRightPanel(originWindowID: UUID) -> Bool {
+        toggledRightPanelWindowIDs.append(originWindowID)
+        return toggleRightPanelResult
+    }
+
+    func rightPanelTitle(originWindowID: UUID) -> String {
+        _ = originWindowID
+        return rightPanelTitleValue
+    }
+
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return canToggleFocusedPanelModeValue
@@ -315,6 +337,25 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
             RecordedPaletteTabSelectionCall(direction: direction, originWindowID: originWindowID)
         )
         return selectAdjacentTabResult
+    }
+
+    func canSelectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        _ = direction
+        _ = originWindowID
+        return canSelectAdjacentRightPanelTabValue
+    }
+
+    func selectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        rightPanelTabSelectionCalls.append(
+            RecordedPaletteRightPanelTabSelectionCall(direction: direction, originWindowID: originWindowID)
+        )
+        return selectAdjacentRightPanelTabResult
     }
 
     func canJumpToNextActive(originWindowID: UUID) -> Bool {
@@ -457,13 +498,13 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
             case .newTab:
                 return createWorkspaceTab(originWindowID: originWindowID)
             case .newBrowser:
-                return createBrowser(placement: .rootRight, originWindowID: originWindowID)
+                return createBrowser(placement: .rightPanel, originWindowID: originWindowID)
             case .newBrowserTab:
                 return createBrowser(placement: .newTab, originWindowID: originWindowID)
             case .newBrowserSplit:
                 return createBrowser(placement: .splitRight, originWindowID: originWindowID)
             case .openLocalFile:
-                return openLocalDocument(placement: .rootRight, originWindowID: originWindowID)
+                return openLocalDocument(placement: .rightPanel, originWindowID: originWindowID)
             case .openLocalFileInTab:
                 return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
             case .openLocalFileInSplit:
@@ -472,6 +513,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return showScratchpadForCurrentSession(originWindowID: originWindowID)
             case .toggleSidebar:
                 return toggleSidebar(originWindowID: originWindowID)
+            case .toggleRightPanel:
+                return toggleRightPanel(originWindowID: originWindowID)
             case .toggleFocusedPanelMode:
                 return toggleFocusedPanelMode(originWindowID: originWindowID)
             case .watchRunningCommand:
@@ -488,6 +531,10 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return selectAdjacentTab(direction: .previous, originWindowID: originWindowID)
             case .selectNextTab:
                 return selectAdjacentTab(direction: .next, originWindowID: originWindowID)
+            case .selectPreviousRightPanelTab:
+                return selectAdjacentRightPanelTab(direction: .previous, originWindowID: originWindowID)
+            case .selectNextRightPanelTab:
+                return selectAdjacentRightPanelTab(direction: .next, originWindowID: originWindowID)
             case .jumpToNextActive:
                 return jumpToNextActive(originWindowID: originWindowID)
             case .manageConfig:
@@ -546,6 +593,11 @@ struct RecordedPaletteLocalDocumentCall: Equatable {
 
 struct RecordedPaletteTabSelectionCall: Equatable {
     let direction: TabNavigationDirection
+    let originWindowID: UUID
+}
+
+struct RecordedPaletteRightPanelTabSelectionCall: Equatable {
+    let direction: PanelTabNavigationDirection
     let originWindowID: UUID
 }
 

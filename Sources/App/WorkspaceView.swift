@@ -88,6 +88,7 @@ struct WorkspaceView: View {
     let agentLaunchService: AgentLaunchService
     let showAgentGetStartedFlow: () -> Void
     let toggleCommandPalette: @MainActor (UUID) -> Void
+    let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
@@ -117,6 +118,9 @@ struct WorkspaceView: View {
     private static let workspaceTabStripSpacing: CGFloat = -1.5
     private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
+    nonisolated static let rightAuxPanelResizeHandleHitWidth: CGFloat = 10
+    fileprivate nonisolated static let rightAuxPanelResizeHandleHairlineWidth: CGFloat = 1
+    fileprivate nonisolated static let rightAuxPanelResizeHandleHighlightWidth: CGFloat = 3
     private nonisolated static let workspaceTabDragActivationDistance: CGFloat = 4
 
     nonisolated static func mountedContentOpacity(isVisible: Bool) -> Double {
@@ -127,6 +131,14 @@ struct WorkspaceView: View {
         // SwiftUI collapse their AppKit hosts into a hidden state. Background
         // terminal surfaces still need to attach and initialize off-screen.
         return 0.001
+    }
+
+    nonisolated static func effectivePrimaryFocusedPanelID(
+        focusedPanelID: UUID?,
+        rightAuxPanelFocusedPanelID: UUID?,
+        rightAuxPanelVisible: Bool
+    ) -> UUID? {
+        rightAuxPanelVisible && rightAuxPanelFocusedPanelID != nil ? nil : focusedPanelID
     }
 
     nonisolated static func resolvedWorkspaceTitleWidth(
@@ -383,6 +395,30 @@ struct WorkspaceView: View {
         )
     }
 
+    nonisolated static func resolvedWorkspaceTabStripWidth(
+        availableWidth: CGFloat,
+        tabCount: Int,
+        spacing: CGFloat = 0,
+        trailingAccessoryWidth: CGFloat = 0,
+        trailingAccessorySpacing: CGFloat = 0
+    ) -> CGFloat {
+        let idealWidth = workspaceTabIdealTotalWidth(
+            tabCount: tabCount,
+            spacing: spacing,
+            trailingAccessoryWidth: trailingAccessoryWidth,
+            trailingAccessorySpacing: trailingAccessorySpacing
+        )
+        guard availableWidth.isFinite else { return idealWidth }
+
+        let minimumWidth = workspaceTabMinimumTotalWidth(
+            tabCount: tabCount,
+            spacing: spacing,
+            trailingAccessoryWidth: trailingAccessoryWidth,
+            trailingAccessorySpacing: trailingAccessorySpacing
+        )
+        return min(max(availableWidth, minimumWidth), idealWidth)
+    }
+
     nonisolated private static func workspaceTabTotalWidth(
         tabCount: Int,
         tabWidth: CGFloat,
@@ -466,7 +502,10 @@ struct WorkspaceView: View {
             topBar
 
             if let window = store.window(id: windowID) {
-                workspaceStack(for: window)
+                GeometryReader { geometry in
+                    workspaceStack(for: window)
+                        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                }
             } else {
                 EmptyStateView(onCreateWorkspace: createWorkspaceAction)
             }
@@ -532,6 +571,9 @@ struct WorkspaceView: View {
             handlePendingBrowserLocationFocusRequest()
         }
         .onChange(of: selectedWorkspace?.focusedPanelID) { _, _ in
+            handlePendingBrowserLocationFocusRequest()
+        }
+        .onChange(of: selectedWorkspace?.rightAuxPanel.focusedPanelID) { _, _ in
             handlePendingBrowserLocationFocusRequest()
         }
         .onDisappear {
@@ -670,6 +712,8 @@ struct WorkspaceView: View {
             .disabled(isFocusedPanelModeActive)
             .help(ToasttyKeyboardShortcuts.splitVertical.helpText("Split Vertically"))
             .accessibilityIdentifier("workspace.split.vertical")
+
+            rightPanelToggle(identifier: "topbar.toggle.right-panel")
         }
     }
 
@@ -748,6 +792,28 @@ struct WorkspaceView: View {
         .accessibilityIdentifier("workspace.tabs.new")
     }
 
+    private func rightPanelToggle(identifier: String) -> some View {
+        let isVisible = selectedWorkspace?.rightAuxPanel.isVisible == true
+
+        return styledTopBarButton(active: isVisible) {
+            guard let workspaceID = selectedWorkspace?.id else { return }
+            _ = store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+        } label: {
+            Image(systemName: "sidebar.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isVisible ? ToastyTheme.accent : ToastyTheme.inactiveText)
+                .frame(width: 16, height: 16)
+        }
+        .disabled(selectedWorkspace == nil)
+        .help(
+            ToasttyKeyboardShortcuts.toggleRightPanel.helpText(
+                ToasttyBuiltInCommand.toggleRightPanelTitle(rightPanelVisible: isVisible)
+            )
+        )
+        .accessibilityLabel(ToasttyBuiltInCommand.toggleRightPanelTitle(rightPanelVisible: isVisible))
+        .accessibilityIdentifier(identifier)
+    }
+
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = selectedWorkspace?.id else { return }
         terminalRuntimeContext?.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
@@ -802,6 +868,80 @@ struct WorkspaceView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    static func effectiveRightAuxPanelWidth(
+        for panel: RightAuxPanelState?,
+        availableWidth: CGFloat
+    ) -> CGFloat {
+        let availableWorkspaceWidth = Double(max(availableWidth, 0))
+        if let panel {
+            return CGFloat(panel.effectiveWidth(for: availableWorkspaceWidth))
+        }
+
+        return CGFloat(RightAuxPanelState.defaultWidth(for: availableWorkspaceWidth))
+    }
+
+    static func renderedRightAuxPanelWidth(
+        for panel: RightAuxPanelState,
+        availableWidth: CGFloat,
+        focusedPanelModeActive: Bool = false
+    ) -> CGFloat {
+        panel.isVisible && focusedPanelModeActive == false
+            ? effectiveRightAuxPanelWidth(for: panel, availableWidth: availableWidth)
+            : 0
+    }
+
+    static func primaryContentWidth(
+        availableWidth: CGFloat,
+        rightAuxPanelRenderedWidth: CGFloat
+    ) -> CGFloat {
+        max(0, availableWidth - rightAuxPanelRenderedWidth)
+    }
+
+    static func rightAuxPanelAnimatesVisibilityChanges(
+        isWorkspaceSelected: Bool,
+        isWorkspaceTabSelected: Bool
+    ) -> Bool {
+        isWorkspaceSelected && isWorkspaceTabSelected
+    }
+
+    static func rightAuxPanelResizeHandleVisible(
+        isWorkspaceSelected: Bool,
+        isWorkspaceTabSelected: Bool,
+        rightAuxPanelVisible: Bool,
+        focusedPanelModeActive: Bool,
+        renderedWidth: CGFloat
+    ) -> Bool {
+        isWorkspaceSelected &&
+            isWorkspaceTabSelected &&
+            rightAuxPanelVisible &&
+            focusedPanelModeActive == false &&
+            renderedWidth > 0
+    }
+
+    static func rightAuxPanelResizeHandleFrame(
+        primaryContentWidth: CGFloat,
+        height: CGFloat
+    ) -> CGRect {
+        CGRect(
+            x: primaryContentWidth - (Self.rightAuxPanelResizeHandleHitWidth / 2),
+            y: 0,
+            width: Self.rightAuxPanelResizeHandleHitWidth,
+            height: height
+        )
+    }
+
+    private func openRightPanelFileSearch(originWindowID: UUID) {
+        presentCommandPalette(originWindowID, "@")
+    }
+
+    private func openRightPanelBrowser(originWindowID: UUID) {
+        _ = store.createBrowserPanelFromCommand(
+            preferredWindowID: originWindowID,
+            request: BrowserPanelCreateRequest(placementOverride: .rightPanel)
+        )
     }
 
     @ViewBuilder
@@ -853,84 +993,220 @@ struct WorkspaceView: View {
         )
 
         GeometryReader { geometry in
-            let viewportFrame = LayoutFrame(
-                minX: 0,
-                minY: 0,
-                width: geometry.size.width,
-                height: geometry.size.height
+            let rightPanelTargetWidth = Self.effectiveRightAuxPanelWidth(
+                for: tab.rightAuxPanel,
+                availableWidth: geometry.size.width
             )
-            let projection = renderedLayout.projectLayout(
-                in: viewportFrame,
-                dividerThickness: 1
+            let rightPanelRenderedWidth = Self.renderedRightAuxPanelWidth(
+                for: tab.rightAuxPanel,
+                availableWidth: geometry.size.width,
+                focusedPanelModeActive: tab.focusedPanelModeActive
             )
+            let primaryContentWidth = Self.primaryContentWidth(
+                availableWidth: geometry.size.width,
+                rightAuxPanelRenderedWidth: rightPanelRenderedWidth
+            )
+            let animatesRightPanelVisibility = Self.rightAuxPanelAnimatesVisibilityChanges(
+                isWorkspaceSelected: isWorkspaceSelected,
+                isWorkspaceTabSelected: isTabSelected
+            )
+            let primaryFocusedPanelID = Self.effectivePrimaryFocusedPanelID(
+                focusedPanelID: tab.focusedPanelID,
+                rightAuxPanelFocusedPanelID: tab.rightAuxPanel.focusedPanelID,
+                rightAuxPanelVisible: tab.rightAuxPanel.isVisible
+            )
+
             ZStack(alignment: .topLeading) {
-                ForEach(projection.slots) { placement in
-                    SlotPlacementView(
-                        placement: placement,
-                        workspaceID: workspace.id,
+                HStack(spacing: 0) {
+                    workspaceTabPrimarySurface(
+                        workspace: workspace,
                         tab: tab,
                         isWorkspaceSelected: isWorkspaceSelected,
                         isTabSelected: isTabSelected,
-                        store: store,
-                        terminalProfileStore: terminalProfileStore,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                        focusedPanelCommandController: focusedPanelCommandController,
-                        terminalRuntimeContext: terminalRuntimeContext,
-                        windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
-                        windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
-                        appIsActive: appIsActive,
-                        unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
+                        renderedLayout: renderedLayout,
+                        width: primaryContentWidth,
+                        height: geometry.size.height,
+                        focusedPanelID: primaryFocusedPanelID,
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
-                        panelSessionStatusesByPanelID: panelSessionStatusesByPanelID,
-                        panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0
+                        panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
+                    )
+
+                    rightAuxPanelSurface(
+                        workspace: workspace,
+                        tab: tab,
+                        isWorkspaceSelected: isWorkspaceSelected,
+                        isTabSelected: isTabSelected,
+                        targetWidth: rightPanelTargetWidth,
+                        renderedWidth: rightPanelRenderedWidth
                     )
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
 
-                ForEach(projection.dividers) { placement in
-                    Rectangle()
-                        .fill(ToastyTheme.slotDivider)
-                        .frame(
-                            width: CGFloat(placement.frame.width),
-                            height: CGFloat(placement.frame.height)
-                        )
-                        .offset(
-                            x: CGFloat(placement.frame.minX),
-                            y: CGFloat(placement.frame.minY)
-                        )
-                        .allowsHitTesting(false)
+                if Self.rightAuxPanelResizeHandleVisible(
+                    isWorkspaceSelected: isWorkspaceSelected,
+                    isWorkspaceTabSelected: isTabSelected,
+                    rightAuxPanelVisible: tab.rightAuxPanel.isVisible,
+                    focusedPanelModeActive: tab.focusedPanelModeActive,
+                    renderedWidth: rightPanelRenderedWidth
+                ) {
+                    RightAuxPanelResizeHandle(
+                        workspaceID: workspace.id,
+                        workspaceTabID: tab.id,
+                        targetWidth: rightPanelTargetWidth,
+                        appIsActive: appIsActive,
+                        store: store
+                    )
+                    .frame(
+                        width: Self.rightAuxPanelResizeHandleHitWidth,
+                        height: geometry.size.height,
+                        alignment: .topLeading
+                    )
+                    .position(x: primaryContentWidth, y: geometry.size.height / 2)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .clipped()
-            .overlay(alignment: .topLeading) {
-                if isWorkspaceSelected,
-                   isTabSelected,
-                   tab.focusedPanelModeActive {
-                    FocusModeViewportChrome()
-                        .allowsHitTesting(false)
-                } else if isWorkspaceSelected,
-                          isTabSelected,
-                          let frame = transientUnfocusHighlightFrame(
-                              workspaceID: workspace.id,
-                              tabID: tab.id,
-                              layoutTree: tab.layoutTree,
-                              projection: projection
-                          ) {
-                    FocusModeViewportChrome(fillOpacity: 0.04)
-                        .opacity(transientUnfocusHighlightOpacity)
-                        .frame(
-                            width: CGFloat(frame.width),
-                            height: CGFloat(frame.height)
-                        )
-                        .offset(
-                            x: CGFloat(frame.minX),
-                            y: CGFloat(frame.minY)
-                        )
-                        .allowsHitTesting(false)
+            .transaction { transaction in
+                if animatesRightPanelVisibility == false {
+                    transaction.animation = nil
                 }
             }
+            .animation(
+                animatesRightPanelVisibility ? .easeInOut(duration: 0.15) : nil,
+                value: tab.rightAuxPanel.isVisible
+            )
         }
+    }
+
+    private func workspaceTabPrimarySurface(
+        workspace: WorkspaceState,
+        tab: WorkspaceTabState,
+        isWorkspaceSelected: Bool,
+        isTabSelected: Bool,
+        renderedLayout: WorkspaceRenderedLayout,
+        width: CGFloat,
+        height: CGFloat,
+        focusedPanelID: UUID?,
+        terminalShortcutNumbersByPanelID: [UUID: Int],
+        panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus]
+    ) -> some View {
+        let viewportFrame = LayoutFrame(
+            minX: 0,
+            minY: 0,
+            width: width,
+            height: height
+        )
+        let projection = renderedLayout.projectLayout(
+            in: viewportFrame,
+            dividerThickness: 1
+        )
+
+        return ZStack(alignment: .topLeading) {
+            ForEach(projection.slots) { placement in
+                SlotPlacementView(
+                    placement: placement,
+                    workspaceID: workspace.id,
+                    tab: tab,
+                    isWorkspaceSelected: isWorkspaceSelected,
+                    isTabSelected: isTabSelected,
+                    store: store,
+                    terminalProfileStore: terminalProfileStore,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                    focusedPanelCommandController: focusedPanelCommandController,
+                    terminalRuntimeContext: terminalRuntimeContext,
+                    windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
+                    windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+                    focusedPanelID: focusedPanelID,
+                    appIsActive: appIsActive,
+                    unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
+                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
+                    panelSessionStatusesByPanelID: panelSessionStatusesByPanelID,
+                    panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0
+                )
+            }
+
+            ForEach(projection.dividers) { placement in
+                Rectangle()
+                    .fill(ToastyTheme.slotDivider)
+                    .frame(
+                        width: CGFloat(placement.frame.width),
+                        height: CGFloat(placement.frame.height)
+                    )
+                    .offset(
+                        x: CGFloat(placement.frame.minX),
+                        y: CGFloat(placement.frame.minY)
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: width, height: height, alignment: .topLeading)
+        .clipped()
+        .overlay(alignment: .topLeading) {
+            if isWorkspaceSelected,
+               isTabSelected,
+               tab.focusedPanelModeActive {
+                FocusModeViewportChrome()
+                    .allowsHitTesting(false)
+            } else if isWorkspaceSelected,
+                      isTabSelected,
+                      let frame = transientUnfocusHighlightFrame(
+                          workspaceID: workspace.id,
+                          tabID: tab.id,
+                          layoutTree: tab.layoutTree,
+                          projection: projection
+                      ) {
+                FocusModeViewportChrome(fillOpacity: 0.04)
+                    .opacity(transientUnfocusHighlightOpacity)
+                    .frame(
+                        width: CGFloat(frame.width),
+                        height: CGFloat(frame.height)
+                    )
+                    .offset(
+                        x: CGFloat(frame.minX),
+                        y: CGFloat(frame.minY)
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func rightAuxPanelSurface(
+        workspace: WorkspaceState,
+        tab: WorkspaceTabState,
+        isWorkspaceSelected: Bool,
+        isTabSelected: Bool,
+        targetWidth: CGFloat,
+        renderedWidth: CGFloat
+    ) -> some View {
+        let isVisible = isWorkspaceSelected &&
+            isTabSelected &&
+            tab.rightAuxPanel.isVisible &&
+            tab.focusedPanelModeActive == false
+
+        return RightAuxPanelView(
+            windowID: windowID,
+            workspace: workspace,
+            workspaceTab: tab,
+            isWorkspaceSelected: isWorkspaceSelected,
+            isWorkspaceTabSelected: isTabSelected,
+            store: store,
+            terminalProfileStore: terminalProfileStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            focusedPanelCommandController: focusedPanelCommandController,
+            openLocalFileSearch: openRightPanelFileSearch,
+            openBrowser: openRightPanelBrowser,
+            windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
+            windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+            isRightAuxPanelVisible: isVisible,
+            appIsActive: appIsActive
+        )
+        .frame(width: targetWidth)
+        .frame(width: renderedWidth, alignment: .leading)
+        .clipped()
+        .allowsHitTesting(isVisible && renderedWidth > 0)
+        .accessibilityHidden(!isVisible)
     }
 
     @ViewBuilder
@@ -1058,7 +1334,9 @@ struct WorkspaceView: View {
               request.windowID == windowID,
               let workspace = selectedWorkspace,
               workspace.id == request.workspaceID,
-              workspace.focusedPanelID == request.panelID,
+              workspace.focusedPanelID == request.panelID ||
+              workspace.rightAuxPanel.focusedPanelID == request.panelID ||
+              workspace.rightAuxPanel.activePanelID == request.panelID,
               case .web(let webState)? = workspace.panelState(for: request.panelID),
               webState.definition == .browser else {
             return
@@ -2112,6 +2390,110 @@ struct WorkspaceView: View {
     }
 }
 
+private struct RightAuxPanelResizeHandle: View {
+    let workspaceID: UUID
+    let workspaceTabID: UUID
+    let targetWidth: CGFloat
+    let appIsActive: Bool
+    @ObservedObject var store: AppStore
+
+    @State private var resizeStartWidth: Double?
+    @State private var hovered = false
+    @State private var dragging = false
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(width: WorkspaceView.rightAuxPanelResizeHandleHairlineWidth)
+                .allowsHitTesting(false)
+
+            Rectangle()
+                .fill(highlightColor)
+                .frame(width: WorkspaceView.rightAuxPanelResizeHandleHighlightWidth)
+                .animation(.easeOut(duration: 0.12), value: highlighted)
+                .allowsHitTesting(false)
+
+            PointerInteractionRegion(
+                name: "right-panel-resize-handle",
+                metadata: [
+                    "workspaceID": workspaceID.uuidString,
+                    "workspaceTabID": workspaceTabID.uuidString,
+                    "source": "workspace-divider-overlay",
+                    "targetWidth": String(format: "%.1f", targetWidth),
+                ],
+                cursor: .resizeLeftRight,
+                onBegan: { _ in
+                    resizeStartWidth = Double(targetWidth)
+                    updateInteraction(dragging: true)
+                },
+                onChanged: { value in
+                    guard let startingWidth = resizeStartWidth else { return }
+                    let nextWidth = startingWidth - Double(value.translation.width)
+                    _ = store.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: nextWidth))
+                },
+                onEnded: { _ in
+                    resizeStartWidth = nil
+                    updateInteraction(dragging: false)
+                },
+                onHoverChanged: { hovering in
+                    updateInteraction(hovered: hovering)
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityLabel("Resize Right Panel")
+            .accessibilityIdentifier("right-panel.resize")
+            .onDisappear {
+                releaseInteraction()
+            }
+        }
+    }
+
+    private var highlighted: Bool {
+        hovered || dragging
+    }
+
+    private var highlightColor: Color {
+        highlighted
+            ? ToastyTheme.accent.opacity(appIsActive ? 0.9 : 0.55)
+            : Color.clear
+    }
+
+    private func updateInteraction(
+        hovered: Bool? = nil,
+        dragging: Bool? = nil
+    ) {
+        let nextHovered = hovered ?? self.hovered
+        let nextDragging = dragging ?? self.dragging
+        if nextHovered != self.hovered || nextDragging != self.dragging {
+            ToasttyLog.info(
+                "right panel resize handle interaction changed",
+                category: .input,
+                metadata: [
+                    "workspaceID": workspaceID.uuidString,
+                    "workspaceTabID": workspaceTabID.uuidString,
+                    "hovered": "\(nextHovered)",
+                    "dragging": "\(nextDragging)",
+                    "source": "workspace-divider-overlay",
+                    "appIsActive": "\(appIsActive)",
+                    "targetWidth": String(format: "%.1f", targetWidth),
+                ]
+            )
+        }
+        self.hovered = nextHovered
+        self.dragging = nextDragging
+    }
+
+    private func releaseInteraction() {
+        guard hovered || dragging else { return }
+
+        DispatchQueue.main.async {
+            hovered = false
+            dragging = false
+        }
+    }
+}
+
 private struct BrowserTitleIconView: View {
     let image: NSImage?
     let fallbackSymbolName: String
@@ -2290,7 +2672,14 @@ private struct WorkspaceHeaderLayout: Layout {
 
         let tabsX = bounds.minX + titleColumnWidth + titleSpacing
         let tabsMaxX = max(tabsX, trailingX - trailingSpacing)
-        let tabsWidth = max(0, tabsMaxX - tabsX)
+        let tabsAvailableWidth = max(0, tabsMaxX - tabsX)
+        let tabsWidth = WorkspaceView.resolvedWorkspaceTabStripWidth(
+            availableWidth: tabsAvailableWidth,
+            tabCount: tabCount,
+            spacing: tabSpacing,
+            trailingAccessoryWidth: tabAccessoryWidth,
+            trailingAccessorySpacing: tabAccessorySpacing
+        )
 
         subviews[2].place(
             at: CGPoint(x: tabsX, y: bounds.maxY),
@@ -2340,7 +2729,7 @@ private struct WorkspaceTabStripLayout: Layout {
             return CGSize(width: idealWidth, height: height)
         }
 
-        return CGSize(width: max(proposedWidth, minimumWidth), height: height)
+        return CGSize(width: min(max(proposedWidth, minimumWidth), idealWidth), height: height)
     }
 
     func placeSubviews(
@@ -2409,15 +2798,22 @@ struct WorkspaceAgentTopBarModel: Equatable {
     }
 
     let actions: [Action]
+    let showsTopBarButtons: Bool
 
     var showsAddAgentsButton: Bool {
-        actions.isEmpty
+        showsTopBarButtons && actions.isEmpty
     }
 
     init(
         catalog: AgentCatalog,
         profileShortcutRegistry: ProfileShortcutRegistry
     ) {
+        showsTopBarButtons = catalog.showsTopBarButtons
+        guard catalog.showsTopBarButtons else {
+            actions = []
+            return
+        }
+
         actions = catalog.profiles.map { profile in
             let helpTextBase = "Run \(profile.displayName)"
             let helpText = profileShortcutRegistry.chord(
@@ -2453,6 +2849,7 @@ private struct SlotPlacementView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
+    let focusedPanelID: UUID?
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
@@ -2468,7 +2865,7 @@ private struct SlotPlacementView: View {
                     panelState: panelState,
                     isWorkspaceSelected: isWorkspaceSelected,
                     isTabSelected: isTabSelected,
-                    focusedPanelID: tab.focusedPanelID,
+                    focusedPanelID: focusedPanelID,
                     hasUnreadNotification: tab.unreadPanelIDs.contains(placement.panelID),
                     panelSessionStatus: panelSessionStatusesByPanelID[placement.panelID],
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
@@ -2503,7 +2900,7 @@ private struct SlotPlacementView: View {
     }
 }
 
-private struct PanelCardView: View {
+struct PanelCardView: View {
     let workspaceID: UUID
     let panelID: UUID
     let panelState: PanelState
@@ -2887,7 +3284,11 @@ private struct PanelCardView: View {
         } else if state.definition == .scratchpad {
             ScratchpadPanelView(
                 webState: state,
-                runtime: webPanelRuntimeRegistry.scratchpadRuntime(for: panelID),
+                runtime: webPanelRuntimeRegistry.scratchpadRuntime(
+                    for: panelID,
+                    requestSource: "PanelCardView.webPanelBody",
+                    isEffectivelyVisible: isWorkspaceSelected && isTabSelected
+                ),
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
                 isActivePanel: isFocused
             )

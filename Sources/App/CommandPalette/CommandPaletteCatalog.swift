@@ -59,6 +59,7 @@ enum CommandPaletteCatalog {
             (.openLocalFileInSplit, actions.canOpenLocalDocument(originWindowID: originWindowID)),
             (.showScratchpadForCurrentSession, actions.canShowScratchpadForCurrentSession(originWindowID: originWindowID)),
             (.toggleSidebar, actions.canToggleSidebar(originWindowID: originWindowID)),
+            (.toggleRightPanel, actions.canToggleRightPanel(originWindowID: originWindowID)),
             (.toggleFocusedPanelMode, actions.canToggleFocusedPanelMode(originWindowID: originWindowID)),
             (.watchRunningCommand, actions.canWatchRunningCommand(originWindowID: originWindowID)),
             (.closePanel, actions.canClosePanel(originWindowID: originWindowID)),
@@ -67,6 +68,14 @@ enum CommandPaletteCatalog {
             (.renameTab, actions.canRenameTab(originWindowID: originWindowID)),
             (.selectPreviousTab, actions.canSelectAdjacentTab(direction: .previous, originWindowID: originWindowID)),
             (.selectNextTab, actions.canSelectAdjacentTab(direction: .next, originWindowID: originWindowID)),
+            (
+                .selectPreviousRightPanelTab,
+                actions.canSelectAdjacentRightPanelTab(direction: .previous, originWindowID: originWindowID)
+            ),
+            (
+                .selectNextRightPanelTab,
+                actions.canSelectAdjacentRightPanelTab(direction: .next, originWindowID: originWindowID)
+            ),
             (.jumpToNextActive, actions.canJumpToNextActive(originWindowID: originWindowID)),
             (.manageConfig, actions.canManageConfig(originWindowID: originWindowID)),
             (.manageTerminalProfiles, actions.canManageTerminalProfiles(originWindowID: originWindowID)),
@@ -199,6 +208,8 @@ enum CommandPaletteCatalog {
         switch command {
         case .toggleSidebar:
             return actions.sidebarTitle(originWindowID: originWindowID)
+        case .toggleRightPanel:
+            return actions.rightPanelTitle(originWindowID: originWindowID)
         case .toggleFocusedPanelMode:
             return actions.toggleFocusedPanelModeTitle(originWindowID: originWindowID)
         default:

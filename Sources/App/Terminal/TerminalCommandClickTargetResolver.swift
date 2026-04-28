@@ -13,6 +13,7 @@ enum TerminalCommandClickTargetResolver {
         hoveredURL: URL,
         cwd: String?,
         useAlternatePlacement: Bool,
+        localDocumentPreferences: LocalDocumentRoutingPreferences = LocalDocumentRoutingPreferences(),
         fileManager: FileManager = .default
     ) -> TerminalCommandClickTarget {
         if let localDocumentTarget = LocalFileLinkResolver.resolvedLocalDocumentTarget(
@@ -20,7 +21,9 @@ enum TerminalCommandClickTargetResolver {
             cwd: cwd,
             fileManager: fileManager
         ) {
-            let placement: WebPanelPlacement = useAlternatePlacement ? .rootRight : .newTab
+            let placement = localDocumentPreferences
+                .resolvedPlacement(alternateOpen: useAlternatePlacement)
+                .webPanelPlacement
             return .localDocumentFile(
                 path: localDocumentTarget.path,
                 lineNumber: localDocumentTarget.lineNumber,

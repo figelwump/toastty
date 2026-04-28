@@ -30,6 +30,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case openLocalFileInSplit
     case showScratchpadForCurrentSession
     case toggleSidebar
+    case toggleRightPanel
     case toggleFocusedPanelMode
     case watchRunningCommand
     case closePanel
@@ -38,6 +39,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case renameTab
     case selectPreviousTab
     case selectNextTab
+    case selectPreviousRightPanelTab
+    case selectNextRightPanelTab
     case jumpToNextActive
     case manageConfig
     case manageTerminalProfiles
@@ -46,6 +49,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     private static let showSidebarTitle = "Show Sidebar"
     private static let hideSidebarTitle = "Hide Sidebar"
+    private static let showRightPanelTitle = "Show Right Panel"
+    private static let hideRightPanelTitle = "Hide Right Panel"
     private static let focusPanelTitle = "Focus Panel"
     private static let restoreLayoutTitle = "Restore Layout"
 
@@ -104,6 +109,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "scratchpad.show-current-session"
         case .toggleSidebar:
             return "window.toggle-sidebar"
+        case .toggleRightPanel:
+            return "window.toggle-right-panel"
         case .toggleFocusedPanelMode:
             return "panel.focus-mode.toggle"
         case .watchRunningCommand:
@@ -120,6 +127,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "workspace.tab.select-previous"
         case .selectNextTab:
             return "workspace.tab.select-next"
+        case .selectPreviousRightPanelTab:
+            return "right-panel.tab.select-previous"
+        case .selectNextRightPanelTab:
+            return "right-panel.tab.select-next"
         case .jumpToNextActive:
             return "panel.focus-next-unread-or-active"
         case .manageConfig:
@@ -187,6 +198,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Show Scratchpad For Current Session"
         case .toggleSidebar:
             return Self.showSidebarTitle
+        case .toggleRightPanel:
+            return Self.showRightPanelTitle
         case .toggleFocusedPanelMode:
             return Self.focusPanelTitle
         case .watchRunningCommand:
@@ -203,6 +216,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Select Previous Tab"
         case .selectNextTab:
             return "Select Next Tab"
+        case .selectPreviousRightPanelTab:
+            return "Select Previous Right Panel Tab"
+        case .selectNextRightPanelTab:
+            return "Select Next Right Panel Tab"
         case .jumpToNextActive:
             return "Jump to Next Active"
         case .manageConfig:
@@ -270,6 +287,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .toggleSidebar:
             return ToasttyKeyboardShortcuts.toggleSidebar
+        case .toggleRightPanel:
+            return ToasttyKeyboardShortcuts.toggleRightPanel
         case .toggleFocusedPanelMode:
             return ToasttyKeyboardShortcuts.toggleFocusedPanel
         case .watchRunningCommand:
@@ -286,6 +305,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ToasttyKeyboardShortcuts.selectPreviousTab
         case .selectNextTab:
             return ToasttyKeyboardShortcuts.selectNextTab
+        case .selectPreviousRightPanelTab:
+            return ToasttyKeyboardShortcuts.selectPreviousRightPanelTab
+        case .selectNextRightPanelTab:
+            return ToasttyKeyboardShortcuts.selectNextRightPanelTab
         case .jumpToNextActive:
             return ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel
         case .manageConfig:
@@ -360,6 +383,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["scratchpad", "show", "current", "session", "agent", "visual"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
+        case .toggleRightPanel:
+            return ["right", "panel", "sidebar", "toggle", "show", "hide"]
         case .toggleFocusedPanelMode:
             return ["focus", "panel", "layout", "restore"]
         case .watchRunningCommand:
@@ -376,6 +401,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["tab", "previous", "left", "back"]
         case .selectNextTab:
             return ["tab", "next", "right", "forward"]
+        case .selectPreviousRightPanelTab:
+            return ["right", "panel", "tab", "previous", "left", "back"]
+        case .selectNextRightPanelTab:
+            return ["right", "panel", "tab", "next", "right", "forward"]
         case .jumpToNextActive:
             return ["jump", "next", "active", "unread", "attention", "panel"]
         case .manageConfig:
@@ -391,6 +420,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     static func toggleSidebarTitle(sidebarVisible: Bool) -> String {
         sidebarVisible ? hideSidebarTitle : showSidebarTitle
+    }
+
+    static func toggleRightPanelTitle(rightPanelVisible: Bool) -> String {
+        rightPanelVisible ? hideRightPanelTitle : showRightPanelTitle
     }
 
     static func toggleFocusedPanelModeTitle(focusedPanelModeActive: Bool) -> String {

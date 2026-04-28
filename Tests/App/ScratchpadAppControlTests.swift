@@ -25,6 +25,7 @@ struct ScratchpadAppControlTests {
         let documentIDString = try #require(result.string("documentID"))
         let documentID = try #require(UUID(uuidString: documentIDString))
         let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let selectedTab = try #require(workspace.selectedTab)
         let panelState = try #require(workspace.panelState(for: scratchpadPanelID))
         guard case .web(let webState) = panelState else {
             Issue.record("scratchpad panel should be a web panel")
@@ -32,6 +33,10 @@ struct ScratchpadAppControlTests {
         }
         let loadedDocument = try fixture.documentStore.load(documentID: documentID)
         let document = try #require(loadedDocument)
+        let stateResult = try fixture.executor.runQuery(
+            id: AppControlQueryID.panelScratchpadState.rawValue,
+            args: [:]
+        )
 
         #expect(response.didMutateState)
         #expect(result.string("windowID") == fixture.windowID.uuidString)
@@ -40,6 +45,27 @@ struct ScratchpadAppControlTests {
         #expect(result.bool("created") == true)
         #expect(workspace.focusedPanelID == fixture.sourcePanelID)
         #expect(workspace.unreadPanelIDs.contains(scratchpadPanelID))
+        #expect(selectedTab.panels[scratchpadPanelID] == nil)
+        #expect(selectedTab.rightAuxPanel.isVisible)
+        #expect(selectedTab.rightAuxPanel.activePanelID == scratchpadPanelID)
+        #expect(selectedTab.rightAuxPanel.panelState(for: scratchpadPanelID) != nil)
+        #expect(stateResult.string("panelID") == scratchpadPanelIDString)
+
+        #expect(
+            fixture.store.send(
+                .createWebPanel(
+                    workspaceID: fixture.workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                )
+            )
+        )
+        let inactiveStateResult = try fixture.executor.runQuery(
+            id: AppControlQueryID.panelScratchpadState.rawValue,
+            args: [:]
+        )
+        #expect(inactiveStateResult.string("panelID") == scratchpadPanelIDString)
+
         #expect(webState.definition == .scratchpad)
         #expect(webState.title == "Architecture")
         #expect(webState.scratchpad?.documentID == documentID)

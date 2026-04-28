@@ -415,10 +415,55 @@ extension WebPanelState {
     }
 }
 
-public enum WebPanelPlacement: String, Codable, Equatable, Sendable {
-    case rootRight
+public enum WebPanelPlacement: Codable, Equatable, RawRepresentable, Sendable {
+    case rightPanel
     case newTab
     case splitRight
+
+    public static var rootRight: WebPanelPlacement {
+        .rightPanel
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "rightPanel", "rootRight":
+            self = .rightPanel
+        case "newTab":
+            self = .newTab
+        case "splitRight":
+            self = .splitRight
+        default:
+            return nil
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .rightPanel:
+            return "rightPanel"
+        case .newTab:
+            return "newTab"
+        case .splitRight:
+            return "splitRight"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        guard let placement = Self(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown web panel placement: \(rawValue)"
+            )
+        }
+        self = placement
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 private func normalizedWebPanelValue(_ value: String?) -> String? {

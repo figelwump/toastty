@@ -56,3 +56,11 @@ test("generated iframe forwards diagnostics through the parent frame", () => {
   assert.match(mainSource, /optionalDiagnosticString\(event\.blockedURI, 512\)/);
   assert.match(mainSource, /"generated-content"/);
 });
+
+test("generated iframe can be focused from native focus handoff", () => {
+  assert.match(mainSource, /focusActiveContent/);
+  assert.match(mainSource, /iframe\.tabIndex = -1/);
+  assert.match(mainSource, /currentGeneratedContentFrame\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(mainSource, /currentGeneratedContentWindow\?\.focus\(\)/);
+  assert.match(mainSource, /currentGeneratedContentReady/);
+});

@@ -17,6 +17,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             at: skillScriptURL(),
             environment: [
                 "TOASTTY_CLI_PATH": "/usr/bin/true",
+                "TOASTTY_PANEL_ID": "",
             ],
             arguments: [
                 "--workspace-name", "smoke",
@@ -165,7 +166,18 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         process.standardError = stderrPipe
 
         try process.run()
-        process.waitUntilExit()
+        let deadline = Date().addingTimeInterval(10)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if process.isRunning {
+            process.terminate()
+            throw NSError(
+                domain: "WorktreeCreateSkillScriptTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Script timed out: \(scriptURL.path)"]
+            )
+        }
 
         let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""

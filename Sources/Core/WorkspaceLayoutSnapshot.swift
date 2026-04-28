@@ -290,19 +290,22 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
     public var layoutTree: LayoutNode
     public var panels: [UUID: WorkspaceLayoutPanelSnapshot]
     public var focusedPanelID: UUID?
+    public var rightAuxPanel: RightAuxPanelState
 
     public init(
         id: UUID,
         customTitle: String? = nil,
         layoutTree: LayoutNode,
         panels: [UUID: WorkspaceLayoutPanelSnapshot],
-        focusedPanelID: UUID?
+        focusedPanelID: UUID?,
+        rightAuxPanel: RightAuxPanelState = RightAuxPanelState()
     ) {
         self.id = id
         self.customTitle = customTitle
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
+        self.rightAuxPanel = rightAuxPanel
     }
 
     init(tab: WorkspaceTabState) {
@@ -313,6 +316,7 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
             partialResult[entry.key] = WorkspaceLayoutPanelSnapshot(panelState: entry.value)
         }
         focusedPanelID = tab.focusedPanelID
+        rightAuxPanel = tab.rightAuxPanel
     }
 
     func makeWorkspaceTabState() -> WorkspaceTabState {
@@ -325,8 +329,38 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
             focusedPanelID: focusedPanelID,
             focusedPanelModeActive: false,
             unreadPanelIDs: [],
-            recentlyClosedPanels: []
+            recentlyClosedPanels: [],
+            rightAuxPanel: rightAuxPanel
         )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case customTitle
+        case layoutTree
+        case panels
+        case focusedPanelID
+        case rightAuxPanel
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        customTitle = try container.decodeIfPresent(String.self, forKey: .customTitle)
+        layoutTree = try container.decode(LayoutNode.self, forKey: .layoutTree)
+        panels = try container.decode([UUID: WorkspaceLayoutPanelSnapshot].self, forKey: .panels)
+        focusedPanelID = try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
+        rightAuxPanel = try container.decodeIfPresent(RightAuxPanelState.self, forKey: .rightAuxPanel) ?? RightAuxPanelState()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(customTitle, forKey: .customTitle)
+        try container.encode(layoutTree, forKey: .layoutTree)
+        try container.encode(panels, forKey: .panels)
+        try container.encodeIfPresent(focusedPanelID, forKey: .focusedPanelID)
+        try container.encode(rightAuxPanel, forKey: .rightAuxPanel)
     }
 
     private func makePanelsWithRestoredTerminalTitles() -> [UUID: PanelState] {

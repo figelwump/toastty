@@ -65,8 +65,13 @@ public enum AgentProfilesFile {
         # After saving, use Toastty > Reload Configuration to pick up new
         # buttons and shortcuts without relaunching.
         #
-        # Fields:
-        #   displayName  — shown in menus and toolbar buttons.
+        # Top-level options:
+        #   showTopBarButtons — set false to hide agent buttons, including
+        #                       Get Started…, from the top bar.
+        # showTopBarButtons = true
+        #
+        # Profile fields:
+        #   displayName  — shown in menus, top-bar buttons, and command palette.
         #   argv         — the exact command Toastty runs for that profile.
         #   manualCommandNames — (optional) extra executable basenames Toastty
         #                        should shim for typed launches of built-in
@@ -97,6 +102,8 @@ public enum AgentProfilesFile {
 }
 
 private enum AgentProfilesParser {
+    private static let showTopBarButtonsKey = "showTopBarButtons"
+
     private struct PartialProfile {
         var line: Int
         var displayName: String?
@@ -112,6 +119,8 @@ private enum AgentProfilesParser {
         var currentProfile: PartialProfile?
         var seenProfileIDs = Set<String>()
         var seenShortcutKeys = [Character: String]()
+        var showsTopBarButtons = true
+        var hasParsedShowTopBarButtons = false
 
         func finalizeCurrentProfile() throws {
             guard let currentID, let currentProfile else { return }
@@ -185,13 +194,13 @@ private enum AgentProfilesParser {
                 continue
             }
 
-            guard let currentID else {
-                throw AgentProfilesParseError(
-                    line: lineIndex + 1,
-                    message: "expected [profile-id] table before profile fields"
-                )
-            }
             guard let equalsIndex = trimmedLine.firstIndex(of: "=") else {
+                if currentID == nil {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "expected [profile-id] table before profile fields"
+                    )
+                }
                 throw AgentProfilesParseError(line: lineIndex + 1, message: "expected key = value")
             }
 
@@ -200,6 +209,30 @@ private enum AgentProfilesParser {
                 trimmedLine[trimmedLine.index(after: equalsIndex)...]
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             )
+
+            guard let currentID else {
+                guard key == showTopBarButtonsKey else {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "expected [profile-id] table before profile fields"
+                    )
+                }
+                guard hasParsedShowTopBarButtons == false else {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "duplicate showTopBarButtons"
+                    )
+                }
+                guard let parsed = parseBool(rawValue) else {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "invalid showTopBarButtons"
+                    )
+                }
+                showsTopBarButtons = parsed
+                hasParsedShowTopBarButtons = true
+                continue
+            }
 
             if key == "argv" || key == "manualCommandNames" {
                 while collectionBalance(in: rawValue) > 0 {
@@ -299,7 +332,7 @@ private enum AgentProfilesParser {
         }
 
         try finalizeCurrentProfile()
-        return AgentCatalog(profiles: profiles)
+        return AgentCatalog(profiles: profiles, showsTopBarButtons: showsTopBarButtons)
     }
 
     private static func decodeJSONString(_ value: String) throws -> String {
@@ -308,6 +341,17 @@ private enum AgentProfilesParser {
 
     private static func decodeJSONArray(_ value: String) throws -> [String] {
         try JSONDecoder().decode([String].self, from: Data(value.utf8))
+    }
+
+    private static func parseBool(_ value: String) -> Bool? {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "1", "yes", "on":
+            return true
+        case "false", "0", "no", "off":
+            return false
+        default:
+            return nil
+        }
     }
 
     private static func stripComment(from line: String) -> String {

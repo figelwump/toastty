@@ -68,6 +68,128 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
+    func testPointerInteractionViewTrackingAreaRequestsCursorUpdateEvents() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+
+        view.updateTrackingAreas()
+
+        // Cursor delivery relies on the tracking area subscribing to cursor
+        // update events — verify that contract here so a future regression
+        // (e.g., dropping the option) fails fast instead of silently leaving
+        // the resize cursor unset.
+        let trackingArea = try XCTUnwrap(
+            view.trackingAreas.first(where: { $0.options.contains(.cursorUpdate) })
+        )
+        XCTAssertTrue(trackingArea.options.contains(.mouseEnteredAndExited))
+        XCTAssertTrue(trackingArea.options.contains(.inVisibleRect))
+
+        view.cursor = .resizeLeftRight
+        XCTAssertTrue(view.cursor === NSCursor.resizeLeftRight)
+
+        // cursorUpdate(with:) must not crash and must be safe to call when no
+        // cursor is set.
+        let cursorUpdateEvent = try cursorUpdateMouseEvent(
+            location: NSPoint(x: 50, y: 60),
+            window: window
+        )
+        view.cursorUpdate(with: cursorUpdateEvent)
+
+        view.cursor = nil
+        XCTAssertNil(view.cursor)
+        view.cursorUpdate(with: cursorUpdateEvent)
+    }
+
+    @MainActor
+    func testPointerInteractionViewReportsHoverChanges() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+
+        var hoverStates: [Bool] = []
+        view.onHoverChanged = { hoverStates.append($0) }
+
+        view.mouseEntered(
+            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 40, y: 50), window: window)
+        )
+        view.mouseEntered(
+            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 42, y: 52), window: window)
+        )
+        view.mouseExited(
+            with: try pointerMouseEvent(type: .mouseExited, location: NSPoint(x: 180, y: 90), window: window)
+        )
+
+        XCTAssertEqual(hoverStates, [true, false])
+    }
+
+    @MainActor
+    func testPointerInteractionViewHoverDoesNotSuppressWindowMovement() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+
+        XCTAssertTrue(window.isMovable)
+        view.mouseEntered(
+            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 40, y: 50), window: window)
+        )
+        XCTAssertTrue(window.isMovable)
+
+        view.frame = NSRect(x: 160, y: 30, width: 120, height: 40)
+        view.updateTrackingAreas()
+        XCTAssertTrue(window.isMovable)
+    }
+
+    @MainActor
+    func testPointerInteractionViewReportsHoverExitWhenInvalidated() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+
+        var hoverStates: [Bool] = []
+        view.onHoverChanged = { hoverStates.append($0) }
+
+        view.mouseEntered(
+            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 40, y: 50), window: window)
+        )
+        view.invalidate()
+
+        XCTAssertEqual(hoverStates, [true, false])
+    }
+
+    @MainActor
     func testPointerInteractionViewReportsDragSequenceTranslation() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
@@ -395,11 +517,49 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
+    private func cursorUpdateMouseEvent(
+        location: NSPoint,
+        window: NSWindow
+    ) throws -> NSEvent {
+        guard let event = NSEvent.enterExitEvent(
+            with: .cursorUpdate,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        ) else {
+            throw NSError(domain: "NonWindowDraggableRegionTests", code: 1, userInfo: nil)
+        }
+        return event
+    }
+
+    @MainActor
     private func pointerMouseEvent(
         type: NSEvent.EventType,
         location: NSPoint,
         window: NSWindow
     ) throws -> NSEvent {
+        if type == .mouseEntered || type == .mouseExited {
+            guard let event = NSEvent.enterExitEvent(
+                with: type,
+                location: location,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                trackingNumber: 0,
+                userData: nil
+            ) else {
+                throw NSError(domain: "NonWindowDraggableRegionTests", code: 1, userInfo: nil)
+            }
+            return event
+        }
+
         guard let event = NSEvent.mouseEvent(
             with: type,
             location: location,

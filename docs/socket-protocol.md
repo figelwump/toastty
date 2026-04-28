@@ -397,14 +397,14 @@ Supported action IDs:
   - `args.amount` is optional and clamps to at least `1`
 - `workspace.equalize-splits`
 - `panel.create.browser`
-  - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
-  - When `args.placement` is omitted, the default is now `rootRight` rather than `newTab`
+  - `args.placement` is optional: `rightPanel`, `newTab`, or `splitRight`; legacy `rootRight` is still accepted as an alias for `rightPanel`
+  - When `args.placement` is omitted, the default is now `rightPanel` rather than `newTab`
   - `args.url` is optional
 - `panel.create.localDocument`
   - opens a supported local document: Markdown (`md`, `markdown`, `mdown`, `mkd`), YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts (`sh`, `bash`, `zsh`), or common source files (`swift`, `js`, `mjs`, `cjs`, `jsx`, `ts`, `mts`, `cts`, `tsx`, `py`, `go`, `rs`)
   - requires `args.filePath`
-  - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
-  - when `args.placement` is omitted, the default is `rootRight`
+  - `args.placement` is optional: `rightPanel`, `newTab`, or `splitRight`; legacy `rootRight` is still accepted as an alias for `rightPanel`
+  - when `args.placement` is omitted, the default is `rightPanel`
   - if the same normalized file is already open in the target workspace, the action focuses that existing panel instead of creating a duplicate
   - unsupported or extension-less file paths return `INVALID_PAYLOAD`
 - `panel.create.markdown`
@@ -432,13 +432,13 @@ Supported action IDs:
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.browser_zoom.increase`
   - browser-panel page zoom increase
-  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order
 - `app.browser_zoom.decrease`
   - browser-panel page zoom decrease
-  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order
 - `app.browser_zoom.reset`
   - browser-panel page zoom reset to `100%`
-  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order
 - `sidebar.workspaces.new`
   - `args.title` is optional
   - `args.windowID` is required when multiple windows exist
@@ -630,7 +630,7 @@ Result:
 Behavior:
 
 - Compatibility shim over `app_control.run_query` with `id: "panel.local-document.state"`.
-- `panelID` is optional; when omitted, Toastty resolves the local-document panel from `workspaceID` or `windowID`, then prefers the focused local-document panel in that workspace and otherwise falls back to the first local-document panel in layout order.
+- `panelID` is optional; when omitted, Toastty resolves the local-document panel from `workspaceID` or `windowID`, then prefers the focused right-panel local document, the active right-panel local document, the focused layout local document, and otherwise the first local-document panel in layout order.
 - `automation.markdown_panel_state` is accepted as a legacy alias and returns the same payload.
 - All `bootstrap*` fields are `null` when the panel runtime does not currently have an active bootstrap payload.
 
@@ -657,7 +657,7 @@ Result:
 Behavior:
 
 - Compatibility shim over `app_control.run_query` with `id: "panel.browser.state"`.
-- `panelID` is optional; when omitted, Toastty resolves the browser panel from `workspaceID` or `windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order.
+- `panelID` is optional; when omitted, Toastty resolves the browser panel from `workspaceID` or `windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order.
 
 ### `automation.workspace_snapshot`
 
@@ -674,12 +674,16 @@ Result:
 - `selectedTabIndex: Int | null`
 - `tabIDs: [UUID string]`
 - `slotCount: Int`
-- `panelCount: Int`
+- `layoutPanelCount: Int`
+- `panelCount: Int` (layout panels plus right-panel tabs across the workspace)
 - `focusedPanelID: UUID string | null`
 - `rootSplitRatio: Double | null`
 - `slotIDs: [UUID string]`
 - `slotPanelIDs: [UUID string]`
 - `slotMappings: [{ slotID, panelID }]`
+- `rightPanel: { isVisible, width, hasCustomWidth, tabCount, activeTabID, activePanelID, focusedPanelID, tabIDs, panelIDs, tabs }`
+  - describes the selected workspace tab's right panel; switching workspace tabs changes this object with the selected tab
+  - `width` is the stored custom width. When `hasCustomWidth` is false, the visible panel width is resolved responsively from the workspace width.
 - `layoutSignature: String`
 
 `selectedTabIndex` is 1-based when present.

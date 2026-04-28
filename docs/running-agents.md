@@ -33,9 +33,17 @@ argv = ["pi"]
 
 ### Fields
 
+Top-level options:
+
+| Option | Default | Description |
+|---|---|---|
+| `showTopBarButtons` | `true` | Set to `false` to hide dedicated agent buttons from the top bar, including the empty-state `Get Started…` button. Agent menu entries, command palette results, keyboard shortcuts, and typed-command shims still work. |
+
+Profile fields:
+
 | Field | Required | Description |
 |---|---|---|
-| `displayName` | yes | Label shown in the Agent menu, top-bar buttons, and command palette |
+| `displayName` | yes | Label shown in the Agent menu, command palette, and top-bar buttons when enabled |
 | `argv` | yes | The exact command Toastty executes, as a JSON-style string array |
 | `manualCommandNames` | no | For built-in `[codex]` / `[claude]` / `[pi]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
 | `shortcutKey` | no | Single ASCII letter or digit; registers `Cmd+Opt+<key>` |
@@ -71,7 +79,7 @@ argv = ["codex"]
 
 The profile ID is stored as an `AgentKind` internally. When a launch resolves to `AgentKind.codex`, `AgentKind.claude`, or `AgentKind.pi`, Toastty activates the corresponding instrumentation path. When the ID is anything else, the command runs as-is with only the base session context injected.
 
-Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`.
+Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. Add `showTopBarButtons = false` before any profile table to keep agent launch buttons out of the top bar while preserving the menu, command palette, and shortcuts.
 
 ### Wrapper-compatible launch commands
 
@@ -195,8 +203,8 @@ managed wrappers for those commands into the terminal `PATH`, and those wrappers
 prepare the same managed-session context before handing off to the real binary.
 
 If you are setting this up from inside the app, the top-bar `Get Started…`
-button routes to the same shell-integration flow as `Toastty > Install Shell
-Integration…`.
+button, when visible, routes to the same shell-integration flow as
+`Toastty > Install Shell Integration…`.
 
 If a built-in `[codex]`, `[claude]`, or `[pi]` profile uses extra wrapper executables for
 typed launches, list those wrapper basenames in `manualCommandNames`. Entries

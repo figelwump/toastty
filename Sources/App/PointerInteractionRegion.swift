@@ -11,22 +11,28 @@ struct PointerInteractionValue: Equatable {
 struct PointerInteractionRegion: NSViewRepresentable {
     var name: String
     var metadata: [String: String]
+    var cursor: NSCursor?
     var onBegan: (PointerInteractionValue) -> Void
     var onChanged: (PointerInteractionValue) -> Void
     var onEnded: (PointerInteractionValue) -> Void
+    var onHoverChanged: (Bool) -> Void
 
     init(
         name: String,
         metadata: [String: String] = [:],
+        cursor: NSCursor? = nil,
         onBegan: @escaping (PointerInteractionValue) -> Void = { _ in },
         onChanged: @escaping (PointerInteractionValue) -> Void,
-        onEnded: @escaping (PointerInteractionValue) -> Void
+        onEnded: @escaping (PointerInteractionValue) -> Void,
+        onHoverChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.name = name
         self.metadata = metadata
+        self.cursor = cursor
         self.onBegan = onBegan
         self.onChanged = onChanged
         self.onEnded = onEnded
+        self.onHoverChanged = onHoverChanged
     }
 
     func makeNSView(context _: Context) -> PointerInteractionView {
@@ -36,9 +42,11 @@ struct PointerInteractionRegion: NSViewRepresentable {
     func updateNSView(_ nsView: PointerInteractionView, context _: Context) {
         nsView.logName = name
         nsView.logMetadata = metadata
+        nsView.cursor = cursor
         nsView.onBegan = onBegan
         nsView.onChanged = onChanged
         nsView.onEnded = onEnded
+        nsView.onHoverChanged = onHoverChanged
     }
 
     static func dismantleNSView(_ nsView: PointerInteractionView, coordinator _: ()) {
@@ -55,9 +63,25 @@ final class PointerInteractionView: NSView {
     var onBegan: ((PointerInteractionValue) -> Void)?
     var onChanged: ((PointerInteractionValue) -> Void)?
     var onEnded: ((PointerInteractionValue) -> Void)?
+    var onHoverChanged: ((Bool) -> Void)?
+    var cursor: NSCursor? {
+        didSet {
+            // Cursor rects in this view rely on z-order to apply, but the
+            // resize-handle's hit zone overlaps a sibling subtree (the right
+            // panel content) that sits on top in NSView z-order. We rely on
+            // tracking-area cursorUpdate events instead, which fire based on
+            // the tracking area's bounds. If the pointer is already inside,
+            // re-apply the new cursor immediately so the change takes effect
+            // without waiting for the next entry.
+            if isPointerInside {
+                logCursorDiagnostic("cursor-did-set-reapply")
+                cursor?.set()
+            }
+        }
+    }
 
     private var hoverTrackingArea: NSTrackingArea?
-    private var isHoverSuppressingWindowMovement = false
+    private var isPointerInside = false
     private var isSequenceSuppressingWindowMovement = false
     private var startWindowLocation: CGPoint?
     private var startLocation: CGPoint?
@@ -87,15 +111,24 @@ final class PointerInteractionView: NSView {
         finishPointerSequence(with: event)
     }
 
+    override func cursorUpdate(with event: NSEvent) {
+        if let cursor {
+            logCursorDiagnostic("cursor-update-set", event: event)
+            cursor.set()
+        } else {
+            logCursorDiagnostic("cursor-update-defer", event: event)
+            super.cursorUpdate(with: event)
+        }
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        restoreHoverWindowMovementIfNeeded(reason: "window-changed")
+        logCursorDiagnostic("view-did-move-to-window")
         if window == nil {
+            setPointerInside(false)
             if isTrackingPointerSequence == false {
                 restoreSequenceWindowMovementIfNeeded(reason: "removed-from-window")
             }
-        } else {
-            updateHoverWindowMovementSuppressionForCurrentMouseLocation()
         }
     }
 
@@ -107,34 +140,33 @@ final class PointerInteractionView: NSView {
 
         let trackingArea = NSTrackingArea(
             rect: .zero,
-            options: [.activeAlways, .enabledDuringMouseDrag, .inVisibleRect, .mouseEnteredAndExited],
+            options: [.activeAlways, .enabledDuringMouseDrag, .inVisibleRect, .mouseEnteredAndExited, .cursorUpdate],
             owner: self,
             userInfo: nil
         )
         addTrackingArea(trackingArea)
         hoverTrackingArea = trackingArea
-        updateHoverWindowMovementSuppressionForCurrentMouseLocation()
+        logCursorDiagnostic("tracking-area-updated")
     }
 
     override func mouseEntered(with event: NSEvent) {
-        guard shouldSuppressWindowMovementForHover(event: event) else { return }
-        suppressWindowMovementForHover(reason: "mouse-entered")
+        logCursorDiagnostic("mouse-entered", event: event)
+        setPointerInside(true)
     }
 
-    override func mouseExited(with _: NSEvent) {
-        restoreHoverWindowMovementIfNeeded(reason: "mouse-exited")
+    override func mouseExited(with event: NSEvent) {
+        logCursorDiagnostic("mouse-exited", event: event)
+        setPointerInside(false)
     }
 
     deinit {
         let ownerID = ObjectIdentifier(self)
         if Thread.isMainThread {
             MainActor.assumeIsolated {
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "hover")
                 WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-sequence")
             }
         } else {
             Task { @MainActor in
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "hover")
                 WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-sequence")
             }
         }
@@ -142,10 +174,20 @@ final class PointerInteractionView: NSView {
 
     func invalidate() {
         cancelPointerSequence(reason: "invalidate")
-        restoreHoverWindowMovementIfNeeded(reason: "invalidate")
+        setPointerInside(false)
         onBegan = nil
         onChanged = nil
         onEnded = nil
+        onHoverChanged = nil
+    }
+
+    private func setPointerInside(_ isInside: Bool, notify: Bool = true) {
+        guard isPointerInside != isInside else { return }
+        isPointerInside = isInside
+        logCursorDiagnostic(isInside ? "pointer-inside-set" : "pointer-outside-set")
+        if notify {
+            onHoverChanged?(isInside)
+        }
     }
 
     private func beginPointerSequence(with event: NSEvent) {
@@ -185,7 +227,6 @@ final class PointerInteractionView: NSView {
         startLocation = nil
         dragEventCount = 0
         restoreSequenceWindowMovementIfNeeded(reason: "mouse-up")
-        updateHoverWindowMovementSuppressionForCurrentMouseLocation()
         onEnded?(value)
     }
 
@@ -237,7 +278,6 @@ final class PointerInteractionView: NSView {
         startLocation = nil
         dragEventCount = 0
         restoreSequenceWindowMovementIfNeeded(reason: reason)
-        updateHoverWindowMovementSuppressionForCurrentMouseLocation()
     }
 
     private func interactionValue(for event: NSEvent) -> PointerInteractionValue? {
@@ -278,46 +318,6 @@ final class PointerInteractionView: NSView {
         if let window {
             logWindowMovementSuppression(reason: reason, window: window)
         }
-    }
-
-    private func suppressWindowMovementForHover(reason: String) {
-        guard isHoverSuppressingWindowMovement == false else { return }
-        WindowMovementSuppression.suppress(window: window, owner: self, reason: "hover")
-        isHoverSuppressingWindowMovement = true
-        if let window {
-            logWindowMovementSuppression(reason: reason, window: window)
-        }
-    }
-
-    private func restoreHoverWindowMovementIfNeeded(reason: String) {
-        guard isHoverSuppressingWindowMovement else { return }
-        WindowMovementSuppression.restore(owner: self, reason: "hover")
-        isHoverSuppressingWindowMovement = false
-        if let window {
-            logWindowMovementSuppression(reason: reason, window: window)
-        }
-    }
-
-    private func updateHoverWindowMovementSuppressionForCurrentMouseLocation() {
-        guard let window else {
-            restoreHoverWindowMovementIfNeeded(reason: "missing-window")
-            return
-        }
-        let mouseLocation = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        if bounds.contains(mouseLocation), shouldSuppressWindowMovementForHover(event: nil) {
-            suppressWindowMovementForHover(reason: "mouse-inside")
-        } else {
-            restoreHoverWindowMovementIfNeeded(reason: "mouse-outside")
-        }
-    }
-
-    private func shouldSuppressWindowMovementForHover(event _: NSEvent?) -> Bool {
-        if isTrackingPointerSequence {
-            return true
-        }
-        let leftMouseButtonMask = 1 << 0
-        let pressedMouseButtons = NSEvent.pressedMouseButtons
-        return pressedMouseButtons & leftMouseButtonMask == 0
     }
 
     private func logInteraction(
@@ -380,9 +380,70 @@ final class PointerInteractionView: NSView {
         metadata["reason"] = reason
         metadata["windowNumber"] = "\(window.windowNumber)"
         metadata["windowIsMovable"] = "\(window.isMovable)"
-        metadata["hoverSuppressionActive"] = "\(isHoverSuppressingWindowMovement)"
         metadata["sequenceSuppressionActive"] = "\(isSequenceSuppressingWindowMovement)"
         ToasttyLog.info("draggable pointer window movement suppression", category: .input, metadata: metadata)
+    }
+
+    private func logCursorDiagnostic(
+        _ phase: String,
+        event: NSEvent? = nil
+    ) {
+        guard shouldLogCursorDiagnostics else { return }
+
+        var metadata = logMetadata
+        metadata["name"] = logName
+        metadata["phase"] = phase
+        metadata["pointerInside"] = "\(isPointerInside)"
+        metadata["frame"] = DraggableInteractionLog.rectDescription(frame)
+        metadata["bounds"] = DraggableInteractionLog.rectDescription(bounds)
+        metadata["visibleRect"] = DraggableInteractionLog.rectDescription(visibleRect)
+        metadata["targetCursor"] = cursor.map(Self.cursorDescription) ?? "nil"
+        if let cursor {
+            metadata["currentCursorMatchesTarget"] = "\(NSCursor.current === cursor)"
+        }
+        if let event {
+            metadata["eventType"] = DraggableInteractionLog.eventTypeDescription(event.type)
+            metadata["eventWindowLocation"] = DraggableInteractionLog.pointDescription(event.locationInWindow)
+            metadata["eventLocalLocation"] = DraggableInteractionLog.pointDescription(convert(event.locationInWindow, from: nil))
+        }
+        if let window {
+            let windowMouseLocation = window.mouseLocationOutsideOfEventStream
+            let localMouseLocation = convert(windowMouseLocation, from: nil)
+            metadata["windowNumber"] = "\(window.windowNumber)"
+            metadata["windowCursorRectsEnabled"] = "\(window.areCursorRectsEnabled)"
+            metadata["windowMouseLocation"] = DraggableInteractionLog.pointDescription(windowMouseLocation)
+            metadata["localMouseLocation"] = DraggableInteractionLog.pointDescription(localMouseLocation)
+            metadata["localMouseInsideBounds"] = "\(bounds.contains(localMouseLocation))"
+        }
+
+        ToasttyLog.info(
+            "pointer cursor diagnostic",
+            category: .input,
+            metadata: metadata
+        )
+    }
+
+    private var shouldLogCursorDiagnostics: Bool {
+        logName == "right-panel-resize-handle"
+    }
+
+    private static func cursorDescription(_ cursor: NSCursor) -> String {
+        if cursor === NSCursor.arrow {
+            return "arrow"
+        }
+        if cursor === NSCursor.iBeam {
+            return "iBeam"
+        }
+        if cursor === NSCursor.pointingHand {
+            return "pointingHand"
+        }
+        if cursor === NSCursor.resizeLeftRight {
+            return "resizeLeftRight"
+        }
+        if cursor === NSCursor.resizeUpDown {
+            return "resizeUpDown"
+        }
+        return String(describing: cursor)
     }
 }
 

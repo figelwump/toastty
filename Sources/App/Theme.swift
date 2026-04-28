@@ -63,6 +63,9 @@ enum ToastyTheme {
     static let workspaceTabUnselectedText = Color(hex: 0xA8A8A8)
     static let workspaceTabHoverBackground = Color(hex: 0x1C1C1C)
     static let workspaceTabHoverText = Color(hex: 0xB8B8B8)
+    static let rightAuxPanelTabSelectedBackground = Color(hex: 0x202024)
+    static let rightAuxPanelTabHoverBackground = Color(hex: 0x171717)
+    static let rightAuxPanelTabAccentLineHeight: CGFloat = 1
     static let workspaceTabUnreadDot = Color(hex: 0x5BA08A)
     static let workspaceTabUnreadDotDiameter: CGFloat = 7
     static let workspaceTabBadgeSelectedText = Color(hex: 0xA0A0A0)
@@ -253,6 +256,10 @@ enum ToastyTheme {
 
     static func workspaceTabSelectedAccentColor(appIsActive: Bool) -> Color {
         appIsActive ? workspaceTabSelectedAccent : workspaceTabSelectedAccent.opacity(0.5)
+    }
+
+    static func workspaceTabSelectedAccentColor(appIsActive: Bool, isFocused: Bool) -> Color {
+        appIsActive && isFocused ? workspaceTabSelectedAccent : workspaceTabSelectedAccent.opacity(0.5)
     }
 
     static func panelHeaderDividerColor(

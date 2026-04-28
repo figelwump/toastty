@@ -98,7 +98,7 @@ private func openManagedLocalDocumentInToastty(
         preferredWindowID: preferredWindowID,
         request: LocalDocumentPanelCreateRequest(
             filePath: normalizedFilePath,
-            placementOverride: .newTab,
+            placementOverride: store.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement,
             formatOverride: format
         )
     )
@@ -644,10 +644,12 @@ final class DisplayShortcutInterceptor {
         case saveLocalDocument
         case focusNextUnreadOrActivePanel
         case toggleLaterFlag
+        case toggleRightPanel
         case toggleFocusedPanelMode
         case renameSelectedTab
         case selectWorkspaceTab(Int)
         case selectAdjacentTab(TabNavigationDirection)
+        case selectAdjacentRightPanelTab(PanelTabNavigationDirection)
         case switchWorkspace(Int)
         case focusPanel(Int)
         case focusSplit(SlotFocusDirection)
@@ -726,6 +728,11 @@ final class DisplayShortcutInterceptor {
             return .selectAdjacentTab(direction)
         }
 
+        if let direction = Self.rightPanelTabNavigationDirection(for: event),
+           appOwnedWindowID != nil {
+            return .selectAdjacentRightPanelTab(direction)
+        }
+
         if Self.isNewTabShortcut(event),
            appOwnedWindowID != nil {
             return .createWorkspaceTab
@@ -739,6 +746,11 @@ final class DisplayShortcutInterceptor {
         if Self.isNewBrowserTabShortcut(event),
            appOwnedWindowID != nil {
             return .createBrowserTab
+        }
+
+        if Self.isToggleRightPanelShortcut(event),
+           appOwnedWindowID != nil {
+            return .toggleRightPanel
         }
 
         if let textSizeShortcutAction = textSizeShortcutAction(
@@ -866,9 +878,9 @@ final class DisplayShortcutInterceptor {
         case .commandPalette:
             toggleCommandPalette(appOwnedWindowID)
         case .closePanel:
-            closeFocusedPanel()
+            closeFocusedPanel(preferredWindowID: appOwnedWindowID)
         case .createBrowser:
-            createBrowser(preferredWindowID: appOwnedWindowID, placement: .rootRight)
+            createBrowser(preferredWindowID: appOwnedWindowID, placement: .rightPanel)
         case .createBrowserTab:
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
         case .createWorkspaceTab:
@@ -899,6 +911,8 @@ final class DisplayShortcutInterceptor {
             focusNextUnreadOrActivePanel(preferredWindowID: appOwnedWindowID)
         case .toggleLaterFlag:
             toggleLaterFlag(preferredWindowID: appOwnedWindowID)
+        case .toggleRightPanel:
+            toggleRightPanel(preferredWindowID: appOwnedWindowID)
         case .toggleFocusedPanelMode:
             toggleFocusedPanelMode()
         case .renameSelectedTab:
@@ -907,6 +921,8 @@ final class DisplayShortcutInterceptor {
             selectWorkspaceTab(shortcutNumber: shortcutNumber)
         case .selectAdjacentTab(let direction):
             selectAdjacentTab(direction: direction)
+        case .selectAdjacentRightPanelTab(let direction):
+            selectAdjacentRightPanelTab(direction: direction, preferredWindowID: appOwnedWindowID)
         case .switchWorkspace(let shortcutNumber):
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
@@ -966,6 +982,16 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command, .control, .shift]
+    }
+
+    static func isToggleRightPanelShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "b" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
     }
 
     static func isSaveShortcut(_ event: NSEvent) -> Bool {
@@ -1080,6 +1106,22 @@ final class DisplayShortcutInterceptor {
         guard event.type == .keyDown, event.isARepeat == false else { return nil }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers == [.command, .shift] else { return nil }
+
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_LeftBracket):
+            return .previous
+        case Int(kVK_ANSI_RightBracket):
+            return .next
+        default:
+            return nil
+        }
+    }
+
+    /// Detects Cmd+Ctrl+[ (previous right-panel tab) and Cmd+Ctrl+] (next right-panel tab).
+    static func rightPanelTabNavigationDirection(for event: NSEvent) -> PanelTabNavigationDirection? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command, .control] else { return nil }
 
         switch Int(event.keyCode) {
         case Int(kVK_ANSI_LeftBracket):
@@ -1300,9 +1342,9 @@ final class DisplayShortcutInterceptor {
         return currentToasttyAppOwnedWindowID(in: store)
     }
 
-    private func closeFocusedPanel() -> Bool {
+    private func closeFocusedPanel(preferredWindowID: UUID? = nil) -> Bool {
         guard let store else { return false }
-        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
         let preferredWorkspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id
         guard focusedPanelCommandController.closeFocusedPanel(in: preferredWorkspaceID).consumesShortcut else {
             // Cmd+W is app-owned for normal workspace windows. If there is no
@@ -1317,6 +1359,14 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func toggleRightPanel(preferredWindowID: UUID?) -> Bool {
+        guard let store,
+              let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+        return store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
     }
 
     private func textSizeShortcutAction(
@@ -1491,6 +1541,21 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.selectAdjacentWorkspaceTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
+        )
+    }
+
+    private func selectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
+        guard store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return store.selectAdjacentRightAuxPanelTab(
             preferredWindowID: preferredWindowID,
             direction: direction
         )
@@ -2359,6 +2424,9 @@ struct ToasttyApp: App {
                 toggleCommandPalette: { [weak commandPaletteController] originWindowID in
                     _ = commandPaletteController?.toggle(originWindowID: originWindowID)
                 },
+                presentCommandPalette: { [weak commandPaletteController] originWindowID, initialQuery in
+                    _ = commandPaletteController?.present(originWindowID: originWindowID, initialQuery: initialQuery)
+                },
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
@@ -2393,7 +2461,7 @@ struct ToasttyApp: App {
                 openLocalDocumentFile: { preferredWindowID in
                     self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
-                        placement: WebPanelPlacement.rootRight
+                        placement: store.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement
                     )
                 },
                 openLocalDocumentFileInTab: { preferredWindowID in
@@ -2460,6 +2528,7 @@ struct ToasttyApp: App {
 
         let toasttyConfig = ToasttyConfigStore.load()
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
+        store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
@@ -2756,7 +2825,7 @@ struct ToasttyApp: App {
 
     private static func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
         switch placement {
-        case .rootRight:
+        case .rightPanel:
             return "Open Local File"
         case .newTab:
             return "Open Local File in Tab"
@@ -2773,6 +2842,7 @@ struct ToasttyApp: App {
         legacyTerminalFontSizePoints: Double?
     ) {
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
+        store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
         applyConfiguredDefaultTerminalProfile(
             to: store,
             terminalProfileCatalog: terminalProfileCatalog,

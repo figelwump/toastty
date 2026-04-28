@@ -33,6 +33,43 @@ struct AgentProfilesFileTests {
     }
 
     @Test
+    func loadDefaultsTopBarButtonsToVisible() throws {
+        let contents = """
+        [codex]
+        displayName = "Codex"
+        argv = ["codex"]
+        """
+
+        let fileManager = InMemoryFileManager(templateContents: contents)
+        let catalog = try AgentProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path
+        )
+
+        #expect(catalog.showsTopBarButtons)
+    }
+
+    @Test
+    func loadParsesShowTopBarButtonsOption() throws {
+        let contents = """
+        showTopBarButtons = false
+
+        [codex]
+        displayName = "Codex"
+        argv = ["codex"]
+        """
+
+        let fileManager = InMemoryFileManager(templateContents: contents)
+        let catalog = try AgentProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path
+        )
+
+        #expect(catalog.showsTopBarButtons == false)
+        #expect(catalog.profiles.map(\.id) == ["codex"])
+    }
+
+    @Test
     func loadParsesProfilesInFileOrder() throws {
         let contents = """
         [codex]

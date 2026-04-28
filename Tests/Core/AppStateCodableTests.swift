@@ -49,6 +49,166 @@ struct AppStateCodableTests {
     }
 
     @Test
+    func rightAuxPanelPersistsAndTransientFocusResetsWhenDecodingAppState() throws {
+        var state = AppState.bootstrap()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let tabID = UUID()
+        let panelID = UUID()
+        workspace.rightAuxPanel = RightAuxPanelState(
+            isVisible: true,
+            width: 420,
+            hasCustomWidth: true,
+            activeTabID: tabID,
+            tabIDs: [tabID],
+            tabsByID: [
+                tabID: RightAuxPanelTabState(
+                    id: tabID,
+                    identity: .localDocument(path: "/tmp/project/README.md"),
+                    panelID: panelID,
+                    panelState: .web(
+                        WebPanelState(
+                            definition: .localDocument,
+                            title: "README.md",
+                            localDocument: LocalDocumentState(filePath: "/tmp/project/README.md")
+                        )
+                    )
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+        state.workspacesByID[workspaceID] = workspace
+
+        let encoded = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(AppState.self, from: encoded)
+        let decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
+        let decodedRightPanel = decodedWorkspace.rightAuxPanel
+
+        #expect(decodedRightPanel.isVisible)
+        #expect(decodedRightPanel.width == 420)
+        #expect(decodedRightPanel.hasCustomWidth)
+        #expect(decodedRightPanel.activeTabID == tabID)
+        #expect(decodedRightPanel.tabIDs == [tabID])
+        #expect(decodedRightPanel.focusedPanelID == nil)
+        #expect(decodedRightPanel.panelState(for: panelID) != nil)
+        #expect(decodedWorkspace.allPanelsByID[panelID] == decodedRightPanel.panelState(for: panelID))
+        try StateValidator.validate(decoded)
+    }
+
+    @Test
+    func rightAuxPanelPersistsPerWorkspaceTabWhenDecodingAppState() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let firstTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First tab"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let firstPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        #expect(reducer.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: 500), state: &state))
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let secondTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        #expect(secondTabID != firstTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let secondPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        #expect(reducer.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: 300), state: &state))
+
+        let encoded = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(AppState.self, from: encoded)
+        var decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
+
+        #expect(decodedWorkspace.resolvedSelectedTabID == secondTabID)
+        #expect(decodedWorkspace.rightAuxPanel.activePanelID == secondPanelID)
+        #expect(decodedWorkspace.rightAuxPanel.width == 300)
+
+        decodedWorkspace.selectedTabID = firstTabID
+        #expect(decodedWorkspace.rightAuxPanel.activePanelID == firstPanelID)
+        #expect(decodedWorkspace.rightAuxPanel.width == 500)
+        try StateValidator.validate(decoded)
+    }
+
+    @Test
+    func appStateDecodingDoesNotMigrateLegacyWorkspaceLevelRightAuxPanel() throws {
+        let state = AppState.bootstrap()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let legacyRightAuxTabID = UUID()
+        let legacyRightAuxPanelID = UUID()
+        let legacyRightAuxPanel = RightAuxPanelState(
+            isVisible: true,
+            width: 640,
+            hasCustomWidth: true,
+            activeTabID: legacyRightAuxTabID,
+            tabIDs: [legacyRightAuxTabID],
+            tabsByID: [
+                legacyRightAuxTabID: RightAuxPanelTabState(
+                    id: legacyRightAuxTabID,
+                    identity: .browserSession(legacyRightAuxPanelID),
+                    panelID: legacyRightAuxPanelID,
+                    panelState: .web(WebPanelState(definition: .browser, title: "Legacy root panel"))
+                ),
+            ]
+        )
+
+        let encoded = try JSONEncoder().encode(state)
+        var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var workspacesByID = try decodePairedJSONMap(root["workspacesByID"], label: "AppState.workspacesByID")
+        var workspaceObject = try #require(workspacesByID[workspaceID.uuidString] as? [String: Any])
+        workspaceObject["rightAuxPanel"] = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(legacyRightAuxPanel)
+        )
+        workspacesByID[workspaceID.uuidString] = workspaceObject
+        root["workspacesByID"] = encodePairedJSONMap(workspacesByID)
+
+        let legacyData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        let decoded = try JSONDecoder().decode(AppState.self, from: legacyData)
+        let decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
+
+        #expect(decodedWorkspace.rightAuxPanel.tabIDs.isEmpty)
+        #expect(decodedWorkspace.rightAuxPanel.isVisible == false)
+        #expect(decodedWorkspace.rightAuxPanel.width == RightAuxPanelState.defaultWidth)
+        #expect(decodedWorkspace.allPanelsByID[legacyRightAuxPanelID] == nil)
+        try StateValidator.validate(decoded)
+    }
+
+    @Test
+    func rightAuxPanelDecodingDefaultsMissingCustomWidthFlagToFalse() throws {
+        let encoded = Data(
+            """
+            {
+              "isVisible": false,
+              "width": 420,
+              "tabIDs": [],
+              "tabsByID": []
+            }
+            """.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(RightAuxPanelState.self, from: encoded)
+
+        #expect(decoded.width == 420)
+        #expect(decoded.hasCustomWidth == false)
+    }
+
+    @Test
     func appStateCodableRoundTripsMultipleWorkspaceTabs() throws {
         var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
         let reducer = AppReducer()

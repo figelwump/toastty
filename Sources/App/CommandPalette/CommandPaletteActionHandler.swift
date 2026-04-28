@@ -29,6 +29,9 @@ protocol CommandPaletteActionHandling: AnyObject {
     func canToggleSidebar(originWindowID: UUID) -> Bool
     func toggleSidebar(originWindowID: UUID) -> Bool
     func sidebarTitle(originWindowID: UUID) -> String
+    func canToggleRightPanel(originWindowID: UUID) -> Bool
+    func toggleRightPanel(originWindowID: UUID) -> Bool
+    func rightPanelTitle(originWindowID: UUID) -> String
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool
     func toggleFocusedPanelMode(originWindowID: UUID) -> Bool
     func toggleFocusedPanelModeTitle(originWindowID: UUID) -> String
@@ -44,6 +47,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func renameTab(originWindowID: UUID) -> Bool
     func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool
     func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool
+    func canSelectAdjacentRightPanelTab(direction: PanelTabNavigationDirection, originWindowID: UUID) -> Bool
+    func selectAdjacentRightPanelTab(direction: PanelTabNavigationDirection, originWindowID: UUID) -> Bool
     func canJumpToNextActive(originWindowID: UUID) -> Bool
     func jumpToNextActive(originWindowID: UUID) -> Bool
     func canLaunchAgent(profileID: String, originWindowID: UUID) -> Bool
@@ -292,6 +297,26 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return ToasttyBuiltInCommand.toggleSidebarTitle(sidebarVisible: window.sidebarVisible)
     }
 
+    func canToggleRightPanel(originWindowID: UUID) -> Bool {
+        store?.commandSelection(preferredWindowID: originWindowID) != nil
+    }
+
+    func toggleRightPanel(originWindowID: UUID) -> Bool {
+        guard let store,
+              let workspaceID = store.commandSelection(preferredWindowID: originWindowID)?.workspace.id else {
+            return false
+        }
+        return store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+    }
+
+    func rightPanelTitle(originWindowID: UUID) -> String {
+        let isVisible = store?.commandSelection(preferredWindowID: originWindowID)?
+            .workspace
+            .rightAuxPanel
+            .isVisible == true
+        return ToasttyBuiltInCommand.toggleRightPanelTitle(rightPanelVisible: isVisible)
+    }
+
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool {
         store?.commandSelection(preferredWindowID: originWindowID) != nil
     }
@@ -373,6 +398,24 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
 
     func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
         store?.selectAdjacentWorkspaceTab(
+            preferredWindowID: originWindowID,
+            direction: direction
+        ) ?? false
+    }
+
+    func canSelectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        _ = direction
+        return store?.canSelectAdjacentRightAuxPanelTab(preferredWindowID: originWindowID) ?? false
+    }
+
+    func selectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        store?.selectAdjacentRightAuxPanelTab(
             preferredWindowID: originWindowID,
             direction: direction
         ) ?? false
@@ -475,10 +518,9 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         placement: PaletteFileOpenPlacement,
         originWindowID: UUID
     ) -> Bool {
-        let placementOverride = paletteFilePlacementOverride(for: placement)
-
         switch destination {
         case .localDocument(let filePath):
+            let placementOverride = localDocumentFilePlacementOverride(for: placement)
             return store?.createLocalDocumentPanelFromCommand(
                 preferredWindowID: originWindowID,
                 request: LocalDocumentPanelCreateRequest(
@@ -487,6 +529,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
                 )
             ) ?? false
         case .browser(let fileURLString):
+            let placementOverride = paletteBrowserFilePlacementOverride(for: placement)
             return store?.createBrowserPanelFromCommand(
                 preferredWindowID: originWindowID,
                 request: BrowserPanelCreateRequest(
@@ -553,13 +596,16 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         case .newTab:
             return createWorkspaceTab(originWindowID: originWindowID)
         case .newBrowser:
-            return createBrowser(placement: .rootRight, originWindowID: originWindowID)
+            return createBrowser(placement: .rightPanel, originWindowID: originWindowID)
         case .newBrowserTab:
             return createBrowser(placement: .newTab, originWindowID: originWindowID)
         case .newBrowserSplit:
             return createBrowser(placement: .splitRight, originWindowID: originWindowID)
         case .openLocalFile:
-            return openLocalDocument(placement: .rootRight, originWindowID: originWindowID)
+            return openLocalDocument(
+                placement: store?.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement ?? .rightPanel,
+                originWindowID: originWindowID
+            )
         case .openLocalFileInTab:
             return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
         case .openLocalFileInSplit:
@@ -568,6 +614,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return showScratchpadForCurrentSession(originWindowID: originWindowID)
         case .toggleSidebar:
             return toggleSidebar(originWindowID: originWindowID)
+        case .toggleRightPanel:
+            return toggleRightPanel(originWindowID: originWindowID)
         case .toggleFocusedPanelMode:
             return toggleFocusedPanelMode(originWindowID: originWindowID)
         case .watchRunningCommand:
@@ -584,6 +632,10 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return selectAdjacentTab(direction: .previous, originWindowID: originWindowID)
         case .selectNextTab:
             return selectAdjacentTab(direction: .next, originWindowID: originWindowID)
+        case .selectPreviousRightPanelTab:
+            return selectAdjacentRightPanelTab(direction: .previous, originWindowID: originWindowID)
+        case .selectNextRightPanelTab:
+            return selectAdjacentRightPanelTab(direction: .next, originWindowID: originWindowID)
         case .jumpToNextActive:
             return jumpToNextActive(originWindowID: originWindowID)
         case .manageConfig:
@@ -617,7 +669,18 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         store?.commandSelection(preferredWindowID: originWindowID) != nil
     }
 
-    private func paletteFilePlacementOverride(
+    private func localDocumentFilePlacementOverride(
+        for placement: PaletteFileOpenPlacement
+    ) -> WebPanelPlacement? {
+        switch placement {
+        case .default:
+            return store?.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement
+        case .alternate:
+            return store?.localDocumentRoutingPreferences.alternateOpeningPlacement.webPanelPlacement ?? .newTab
+        }
+    }
+
+    private func paletteBrowserFilePlacementOverride(
         for placement: PaletteFileOpenPlacement
     ) -> WebPanelPlacement? {
         switch placement {

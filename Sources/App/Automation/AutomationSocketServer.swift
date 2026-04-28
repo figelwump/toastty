@@ -1365,10 +1365,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         func webPanelPlacement() throws -> WebPanelPlacement {
             guard let rawValue = args.string("placement")?.trimmingCharacters(in: .whitespacesAndNewlines),
                   rawValue.isEmpty == false else {
-                return .rootRight
+                return .rightPanel
             }
             guard let placement = WebPanelPlacement(rawValue: rawValue) else {
-                throw AutomationSocketError.invalidPayload("placement must be one of: rootRight, newTab, splitRight")
+                throw AutomationSocketError.invalidPayload("placement must be one of: rightPanel, newTab, splitRight")
             }
             return placement
         }
@@ -1752,6 +1752,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
            webState.definition == .localDocument {
             return (workspaceID, focusedPanelID, webState)
         }
+        if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
+           webState.definition == .localDocument {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .localDocument {
+            return (workspaceID, activePanelID, webState)
+        }
 
         for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
@@ -1796,6 +1806,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
            case .web(let webState) = panelState,
            webState.definition == .browser {
             return (workspaceID, focusedPanelID, webState)
+        }
+        if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
+           webState.definition == .browser {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .browser {
+            return (workspaceID, activePanelID, webState)
         }
 
         for leaf in workspace.layoutTree.allSlotInfos {
@@ -1947,6 +1967,42 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         let selectedTabIndex: Int? = selectedTabID.flatMap { tabID in
             workspace.tabIDs.firstIndex(of: tabID).map { $0 + 1 }
         }
+        let rightPanelTabIDs = workspace.rightAuxPanel.tabIDs.map { AutomationJSONValue.string($0.uuidString) }
+        let rightPanelPanelIDs = workspace.rightAuxPanel.orderedTabs.map { AutomationJSONValue.string($0.panelID.uuidString) }
+        let rightPanelTabs = workspace.rightAuxPanel.orderedTabs.map { tab -> AutomationJSONValue in
+            let panelKind: String
+            let webDefinition: AutomationJSONValue
+            let panelTitle: String
+            switch tab.panelState {
+            case .terminal(let terminalState):
+                panelKind = "terminal"
+                webDefinition = .null
+                panelTitle = terminalState.title
+            case .web(let webState):
+                panelKind = "web"
+                webDefinition = .string(webState.definition.rawValue)
+                panelTitle = webState.title
+            }
+            return .object([
+                "tabID": .string(tab.id.uuidString),
+                "panelID": .string(tab.panelID.uuidString),
+                "panelKind": .string(panelKind),
+                "webDefinition": webDefinition,
+                "title": .string(panelTitle),
+            ])
+        }
+        let rightPanel: AutomationJSONValue = .object([
+            "isVisible": .bool(workspace.rightAuxPanel.isVisible),
+            "width": .double(workspace.rightAuxPanel.width),
+            "hasCustomWidth": .bool(workspace.rightAuxPanel.hasCustomWidth),
+            "tabCount": .int(workspace.rightAuxPanel.tabIDs.count),
+            "activeTabID": workspace.rightAuxPanel.activeTabID.map { .string($0.uuidString) } ?? .null,
+            "activePanelID": workspace.rightAuxPanel.activePanelID.map { .string($0.uuidString) } ?? .null,
+            "focusedPanelID": workspace.rightAuxPanel.focusedPanelID.map { .string($0.uuidString) } ?? .null,
+            "tabIDs": .array(rightPanelTabIDs),
+            "panelIDs": .array(rightPanelPanelIDs),
+            "tabs": .array(rightPanelTabs),
+        ])
         let rootSplitRatio: AutomationJSONValue
         switch workspace.layoutTree {
         case .split(_, _, let ratio, _, _):
@@ -1962,8 +2018,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             "selectedTabIndex": selectedTabIndex.map { .int($0) } ?? .null,
             "tabIDs": .array(tabIDs),
             "slotCount": .int(slotInfos.count),
-            "panelCount": .int(workspace.panels.count),
+            "layoutPanelCount": .int(workspace.panels.count),
+            "panelCount": .int(workspace.allPanelsByID.count),
             "focusedPanelID": workspace.focusedPanelID.map { .string($0.uuidString) } ?? .null,
+            "rightPanel": rightPanel,
             "rootSplitRatio": rootSplitRatio,
             "slotIDs": .array(slotIDs),
             "slotPanelIDs": .array(slotPanelIDs),

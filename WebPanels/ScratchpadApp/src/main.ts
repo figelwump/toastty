@@ -21,6 +21,7 @@ declare global {
     __toasttyScratchpadDiagnosticsInstalled?: boolean;
     ToasttyScratchpadPanel?: {
       receiveBootstrap: (bootstrap: ScratchpadPanelBootstrap) => void;
+      focusActiveContent: () => boolean;
       getCurrentBootstrap: () => ScratchpadPanelBootstrap | null;
       subscribe: (listener: BootstrapListener) => () => void;
     };
@@ -29,8 +30,10 @@ declare global {
 
 const listeners = new Set<BootstrapListener>();
 let currentBootstrap: ScratchpadPanelBootstrap | null = null;
+let currentGeneratedContentFrame: HTMLIFrameElement | null = null;
 let currentGeneratedContentWindow: Window | null = null;
 let currentGeneratedContentDiagnosticsToken: string | null = null;
+let currentGeneratedContentReady = false;
 const diagnosticStringLimit = 2_000;
 
 function truncateDiagnosticString(value: string, limit = diagnosticStringLimit): string {
@@ -269,8 +272,38 @@ function receiveBootstrap(bootstrap: ScratchpadPanelBootstrap) {
   notifyListeners();
 }
 
+function focusActiveContent(): boolean {
+  if (currentGeneratedContentFrame) {
+    if (!currentGeneratedContentReady) {
+      return false;
+    }
+
+    try {
+      currentGeneratedContentFrame.focus({ preventScroll: true });
+      currentGeneratedContentWindow?.focus();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (!currentBootstrap?.missingDocument) {
+    return false;
+  }
+
+  const emptyState = document.querySelector(".scratchpad-empty");
+  if (emptyState instanceof HTMLElement) {
+    emptyState.tabIndex = -1;
+    emptyState.focus({ preventScroll: true });
+    return document.activeElement === emptyState;
+  }
+
+  return false;
+}
+
 window.ToasttyScratchpadPanel = {
   receiveBootstrap,
+  focusActiveContent,
   getCurrentBootstrap() {
     return currentBootstrap;
   },
@@ -284,8 +317,10 @@ window.ToasttyScratchpadPanel = {
 };
 
 function renderMissing(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
+  currentGeneratedContentFrame = null;
   currentGeneratedContentWindow = null;
   currentGeneratedContentDiagnosticsToken = null;
+  currentGeneratedContentReady = false;
   root.replaceChildren();
   const section = document.createElement("section");
   section.className = "scratchpad-empty";
@@ -299,13 +334,16 @@ function renderMissing(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
 }
 
 function renderDocument(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
+  currentGeneratedContentFrame = null;
   currentGeneratedContentWindow = null;
   currentGeneratedContentDiagnosticsToken = createDiagnosticsSessionToken();
+  currentGeneratedContentReady = false;
   root.replaceChildren();
 
   const iframe = document.createElement("iframe");
   iframe.className = "scratchpad-frame";
   iframe.title = bootstrap.displayName || "Scratchpad";
+  iframe.tabIndex = -1;
   // Keep generated content in an opaque origin; scripts are allowed only inside that boundary.
   iframe.sandbox.add("allow-scripts");
   iframe.referrerPolicy = "no-referrer";
@@ -315,9 +353,12 @@ function renderDocument(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) 
     currentGeneratedContentDiagnosticsToken
   );
   iframe.addEventListener("load", () => {
+    currentGeneratedContentReady = true;
+    currentGeneratedContentWindow = iframe.contentWindow;
     scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision);
   }, { once: true });
 
+  currentGeneratedContentFrame = iframe;
   currentGeneratedContentWindow = iframe.contentWindow;
   root.append(iframe);
   currentGeneratedContentWindow = iframe.contentWindow;
