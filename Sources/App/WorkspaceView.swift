@@ -3415,11 +3415,12 @@ struct PanelCardView: View {
             return nil
         }
         return ScratchpadHeaderAccessory(
+            documentID: webState.scratchpad?.documentID,
             bindingLabel: Self.scratchpadBindingLabel(for: webState.scratchpad?.sessionLink),
             candidates: scratchpadBindCandidates,
             rebind: rebindScratchpad(to:),
-            exportToFile: { exportScratchpadToFile(webState: webState) },
-            openInBrowser: { openScratchpadInBrowser(webState: webState) }
+            exportToFile: exportScratchpadToFile(documentID:),
+            openInBrowser: openScratchpadInBrowser(documentID:)
         )
     }
 
@@ -3461,14 +3462,21 @@ struct PanelCardView: View {
         }
     }
 
-    private func exportScratchpadToFile(webState: WebPanelState) {
-        guard let scratchpad = webState.scratchpad else { return }
+    private func exportScratchpadToFile(documentID: UUID?) {
+        guard let documentID else { return }
+        let documentStore = webPanelRuntimeRegistry.scratchpadDocumentStore
+        let documentTitle: String?
+        do {
+            documentTitle = try documentStore.load(documentID: documentID)?.title
+        } catch {
+            documentTitle = nil
+        }
 
         let savePanel = NSSavePanel()
         savePanel.title = "Export Scratchpad"
         savePanel.nameFieldStringValue = ScratchpadDocumentExporter.defaultFileName(
-            title: webState.title,
-            documentID: scratchpad.documentID
+            title: documentTitle,
+            documentID: documentID
         )
         savePanel.allowedContentTypes = [.html]
         savePanel.canCreateDirectories = true
@@ -3480,8 +3488,8 @@ struct PanelCardView: View {
 
         do {
             _ = try ScratchpadDocumentExporter.export(
-                documentID: scratchpad.documentID,
-                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore,
+                documentID: documentID,
+                documentStore: documentStore,
                 to: targetURL
             )
         } catch {
@@ -3489,12 +3497,12 @@ struct PanelCardView: View {
         }
     }
 
-    private func openScratchpadInBrowser(webState: WebPanelState) {
-        guard let scratchpad = webState.scratchpad else { return }
+    private func openScratchpadInBrowser(documentID: UUID?) {
+        guard let documentID else { return }
 
         do {
             let export = try ScratchpadDocumentExporter.exportToDefaultLocation(
-                documentID: scratchpad.documentID,
+                documentID: documentID,
                 documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
             )
             NSWorkspace.shared.open(export.fileURL)
@@ -3618,62 +3626,230 @@ enum ScratchpadAgentBindCandidateBuilder {
 }
 
 private struct ScratchpadHeaderAccessory: View {
+    let documentID: UUID?
     let bindingLabel: String
     let candidates: [ScratchpadAgentBindCandidate]
     let rebind: (ScratchpadAgentBindCandidate) -> Void
-    let exportToFile: () -> Void
-    let openInBrowser: () -> Void
-
-    private var hasAlternativeCandidates: Bool {
-        candidates.contains { $0.isCurrent == false }
-    }
+    let exportToFile: (UUID?) -> Void
+    let openInBrowser: (UUID?) -> Void
 
     var body: some View {
         HStack(spacing: 6) {
             Text(bindingLabel)
-                .font(ToastyTheme.fontSubtext)
-                .foregroundStyle(ToastyTheme.inactiveText)
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
                 .lineLimit(1)
                 .truncationMode(.tail)
-
-            Menu {
-                Menu("Bind to Agent") {
-                    if hasAlternativeCandidates == false {
-                        Text("No other agents in this tab")
-                    } else {
-                        ForEach(candidates) { candidate in
-                            Button {
-                                rebind(candidate)
-                            } label: {
-                                if candidate.isCurrent {
-                                    Label(candidate.label, systemImage: "checkmark")
-                                } else {
-                                    Text(candidate.label)
-                                }
-                            }
-                            .disabled(candidate.isCurrent)
-                        }
-                    }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    ToastyTheme.sidebarSessionHoverBackground,
+                    in: RoundedRectangle(cornerRadius: 4)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
                 }
-                .disabled(hasAlternativeCandidates == false)
 
-                Divider()
-
-                Button("Export to File...", action: exportToFile)
-                Button("Open in Browser", action: openInBrowser)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .frame(width: 18, height: 18)
-            }
-            .menuStyle(.borderlessButton)
+            ScratchpadActionsMenuButton(
+                documentID: documentID,
+                candidates: candidates,
+                rebind: rebind,
+                exportToFile: exportToFile,
+                openInBrowser: openInBrowser
+            )
+            .frame(width: 18, height: 18)
             .fixedSize()
-            .accessibilityLabel("Scratchpad Actions")
-            .accessibilityIdentifier("panel.header.scratchpad.actions")
             .help("Scratchpad Actions")
         }
         .frame(minWidth: 0)
+    }
+}
+
+private struct ScratchpadActionsMenuButton: NSViewRepresentable {
+    let documentID: UUID?
+    let candidates: [ScratchpadAgentBindCandidate]
+    let rebind: (ScratchpadAgentBindCandidate) -> Void
+    let exportToFile: (UUID?) -> Void
+    let openInBrowser: (UUID?) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.focusRingType = .none
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        button.setAccessibilityRole(.menuButton)
+        button.setAccessibilityLabel("Scratchpad Actions")
+        button.setAccessibilityIdentifier("panel.header.scratchpad.actions")
+        button.setAccessibilityHelp("Opens Scratchpad actions")
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.documentID = documentID
+        context.coordinator.candidates = candidates
+        context.coordinator.rebind = rebind
+        context.coordinator.exportToFile = exportToFile
+        context.coordinator.openInBrowser = openInBrowser
+
+        button.image = NSImage(
+            systemSymbolName: "ellipsis",
+            accessibilityDescription: "Scratchpad Actions"
+        )
+        button.contentTintColor = .secondaryLabelColor
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var documentID: UUID?
+        var candidates: [ScratchpadAgentBindCandidate] = []
+        var rebind: ((ScratchpadAgentBindCandidate) -> Void)?
+        var exportToFile: ((UUID?) -> Void)?
+        var openInBrowser: ((UUID?) -> Void)?
+
+        @objc func showMenu(_ sender: NSButton) {
+            let menu = ScratchpadActionsMenuBuilder.menu(
+                documentID: documentID,
+                candidates: candidates,
+                target: self,
+                rebindAction: #selector(rebindScratchpad(_:)),
+                exportAction: #selector(exportScratchpad(_:)),
+                openInBrowserAction: #selector(openScratchpadInBrowser(_:))
+            )
+
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(x: 0, y: sender.bounds.height + 2),
+                in: sender
+            )
+        }
+
+        @objc private func rebindScratchpad(_ sender: NSMenuItem) {
+            guard let payload = sender.representedObject as? ScratchpadCandidateMenuPayload else {
+                return
+            }
+            rebind?(payload.candidate)
+        }
+
+        @objc private func exportScratchpad(_ sender: NSMenuItem) {
+            let documentID = (sender.representedObject as? ScratchpadDocumentMenuPayload)?.documentID
+            exportToFile?(documentID)
+        }
+
+        @objc private func openScratchpadInBrowser(_ sender: NSMenuItem) {
+            let documentID = (sender.representedObject as? ScratchpadDocumentMenuPayload)?.documentID
+            openInBrowser?(documentID)
+        }
+    }
+}
+
+final class ScratchpadCandidateMenuPayload: NSObject {
+    let candidate: ScratchpadAgentBindCandidate
+
+    init(candidate: ScratchpadAgentBindCandidate) {
+        self.candidate = candidate
+    }
+}
+
+final class ScratchpadDocumentMenuPayload: NSObject {
+    let documentID: UUID
+
+    init(documentID: UUID) {
+        self.documentID = documentID
+    }
+}
+
+enum ScratchpadActionsMenuBuilder {
+    static func menu(
+        documentID: UUID?,
+        candidates: [ScratchpadAgentBindCandidate],
+        target: AnyObject?,
+        rebindAction: Selector?,
+        exportAction: Selector?,
+        openInBrowserAction: Selector?
+    ) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(bindToAgentMenuItem(
+            candidates: candidates,
+            target: target,
+            rebindAction: rebindAction
+        ))
+        menu.addItem(.separator())
+        menu.addItem(documentActionItem(
+            title: "Export to File...",
+            documentID: documentID,
+            target: target,
+            action: exportAction
+        ))
+        menu.addItem(documentActionItem(
+            title: "Open in Browser",
+            documentID: documentID,
+            target: target,
+            action: openInBrowserAction
+        ))
+        return menu
+    }
+
+    private static func bindToAgentMenuItem(
+        candidates: [ScratchpadAgentBindCandidate],
+        target: AnyObject?,
+        rebindAction: Selector?
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: "Bind to Agent", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let hasAlternativeCandidates = candidates.contains { $0.isCurrent == false }
+        item.isEnabled = hasAlternativeCandidates
+
+        if hasAlternativeCandidates {
+            for candidate in candidates {
+                let candidateItem = NSMenuItem(
+                    title: candidate.label,
+                    action: rebindAction,
+                    keyEquivalent: ""
+                )
+                candidateItem.target = target
+                candidateItem.representedObject = ScratchpadCandidateMenuPayload(candidate: candidate)
+                candidateItem.state = candidate.isCurrent ? .on : .off
+                candidateItem.isEnabled = candidate.isCurrent == false
+                submenu.addItem(candidateItem)
+            }
+        } else {
+            let emptyItem = NSMenuItem(
+                title: "No other agents in this tab",
+                action: nil,
+                keyEquivalent: ""
+            )
+            emptyItem.isEnabled = false
+            submenu.addItem(emptyItem)
+        }
+
+        item.submenu = submenu
+        return item
+    }
+
+    private static func documentActionItem(
+        title: String,
+        documentID: UUID?,
+        target: AnyObject?,
+        action: Selector?
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = target
+        if let documentID {
+            item.representedObject = ScratchpadDocumentMenuPayload(documentID: documentID)
+            item.isEnabled = true
+        } else {
+            item.isEnabled = false
+        }
+        return item
     }
 }
 

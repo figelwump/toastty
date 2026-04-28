@@ -279,6 +279,82 @@ final class RightAuxPanelViewTests: XCTestCase {
         XCTAssertEqual(candidates[0].label, "Codex - current binding")
         XCTAssertEqual(candidates[1].label, "Claude - right split")
     }
+
+    func testScratchpadActionsMenuSnapshotsCandidateAndDocumentPayloads() throws {
+        let documentID = UUID()
+        let current = ScratchpadAgentBindCandidate(
+            sessionID: "sess-current",
+            agent: .codex,
+            panelID: UUID(),
+            label: "Codex - current binding",
+            isCurrent: true
+        )
+        let destination = ScratchpadAgentBindCandidate(
+            sessionID: "sess-destination",
+            agent: .claude,
+            panelID: UUID(),
+            label: "Claude - right split",
+            isCurrent: false
+        )
+
+        let menu = ScratchpadActionsMenuBuilder.menu(
+            documentID: documentID,
+            candidates: [current, destination],
+            target: nil,
+            rebindAction: nil,
+            exportAction: nil,
+            openInBrowserAction: nil
+        )
+
+        let bindItem = menu.items[0]
+        let bindSubmenu = try XCTUnwrap(bindItem.submenu)
+        XCTAssertTrue(bindItem.isEnabled)
+        XCTAssertEqual(bindSubmenu.items[0].state, .on)
+        XCTAssertFalse(bindSubmenu.items[0].isEnabled)
+
+        let destinationPayload = try XCTUnwrap(
+            bindSubmenu.items[1].representedObject as? ScratchpadCandidateMenuPayload
+        )
+        XCTAssertEqual(destinationPayload.candidate, destination)
+
+        let exportPayload = try XCTUnwrap(
+            menu.items[2].representedObject as? ScratchpadDocumentMenuPayload
+        )
+        XCTAssertEqual(exportPayload.documentID, documentID)
+        let openPayload = try XCTUnwrap(
+            menu.items[3].representedObject as? ScratchpadDocumentMenuPayload
+        )
+        XCTAssertEqual(openPayload.documentID, documentID)
+    }
+
+    func testScratchpadActionsMenuDisablesBindWhenNoAlternativeCandidates() throws {
+        let current = ScratchpadAgentBindCandidate(
+            sessionID: "sess-current",
+            agent: .codex,
+            panelID: UUID(),
+            label: "Codex - current binding",
+            isCurrent: true
+        )
+
+        let menu = ScratchpadActionsMenuBuilder.menu(
+            documentID: nil,
+            candidates: [current],
+            target: nil,
+            rebindAction: nil,
+            exportAction: nil,
+            openInBrowserAction: nil
+        )
+
+        let bindItem = menu.items[0]
+        let bindSubmenu = try XCTUnwrap(bindItem.submenu)
+        XCTAssertFalse(bindItem.isEnabled)
+        XCTAssertEqual(bindSubmenu.items.map(\.title), ["No other agents in this tab"])
+        XCTAssertFalse(bindSubmenu.items[0].isEnabled)
+        XCTAssertFalse(menu.items[2].isEnabled)
+        XCTAssertNil(menu.items[2].representedObject)
+        XCTAssertFalse(menu.items[3].isEnabled)
+        XCTAssertNil(menu.items[3].representedObject)
+    }
 }
 
 private func assertColor(
