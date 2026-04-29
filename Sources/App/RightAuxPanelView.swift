@@ -154,6 +154,7 @@ struct RightAuxPanelEmptyStateView: View {
                     title: "Find local file",
                     subtitle: "Open a document from this workspace.",
                     systemImage: "magnifyingglass",
+                    shortcut: ToasttyKeyboardShortcuts.commandPalette,
                     action: openLocalFileSearch
                 )
                 .accessibilityIdentifier("right-panel.empty.find-local-file")
@@ -162,6 +163,7 @@ struct RightAuxPanelEmptyStateView: View {
                     title: "Open browser",
                     subtitle: "Start with a blank page.",
                     systemImage: "globe",
+                    shortcut: ToasttyKeyboardShortcuts.newBrowser,
                     action: openBrowser
                 )
                 .accessibilityIdentifier("right-panel.empty.open-browser")
@@ -181,6 +183,7 @@ private struct RightAuxPanelEmptyStateActionButton: View {
     let title: String
     let subtitle: String
     let systemImage: String
+    let shortcut: ToasttyKeyboardShortcut?
     let action: @MainActor () -> Void
 
     @State private var isHovered = false
@@ -208,6 +211,10 @@ private struct RightAuxPanelEmptyStateActionButton: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if let shortcut {
+                    shortcutBadge(shortcut.symbolLabel)
+                }
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 11)
@@ -223,6 +230,16 @@ private struct RightAuxPanelEmptyStateActionButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+    }
+
+    private func shortcutBadge(_ label: String) -> some View {
+        Text(label)
+            .font(ToastyTheme.fontShortcutBadge)
+            .tracking(1.5)
+            .foregroundStyle(ToastyTheme.shortcutBadgeText)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
     }
 }
 
