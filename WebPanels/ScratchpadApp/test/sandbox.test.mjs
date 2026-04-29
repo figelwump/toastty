@@ -70,6 +70,14 @@ test("blank scratchpad documents render onboarding guidance instead of an empty 
   assert.match(mainSource, /isBlankUnboundScratchpadDocument\(bootstrap\)/);
   assert.match(mainSource, /bootstrap\.sessionLinked !== true/);
   assert.match(mainSource, /Scratchpad is ready/);
-  assert.match(mainSource, /toastty-main\/\.agents\/skills\/toastty-scratchpad/);
+  assert.match(mainSource, /github\.com\/figelwump\/toastty\/tree\/main\/\.agents\/skills\/toastty-scratchpad/);
+  assert.match(mainSource, /~\/\.claude\/skills/);
+  assert.match(mainSource, /~\/\.codex\/skills/);
+  assert.match(mainSource, /~\/\.agents\/skills/);
+  assert.match(mainSource, /Skip this next time/);
+  assert.match(mainSource, /Only one agent session can read or write a Scratchpad at a time/);
   assert.match(mainSource, /navigator\.clipboard\.writeText\(scratchpadSkillInstallSnippet\)/);
+  // Snippet must be agent-prose, not a shell command.
+  assert.doesNotMatch(mainSource, /scratchpadSkillInstallSnippet[\s\S]*tar -xz/);
+  assert.doesNotMatch(mainSource, /scratchpadSkillInstallSnippet[\s\S]*mkdir -p/);
 });

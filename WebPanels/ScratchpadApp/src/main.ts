@@ -36,9 +36,18 @@ let currentGeneratedContentWindow: Window | null = null;
 let currentGeneratedContentDiagnosticsToken: string | null = null;
 let currentGeneratedContentReady = false;
 const diagnosticStringLimit = 2_000;
-const scratchpadSkillInstallSnippet = `mkdir -p "$HOME/.codex/skills"
-curl -L https://github.com/figelwump/toastty/archive/refs/heads/main.tar.gz \\
-  | tar -xz -C "$HOME/.codex/skills" --strip-components=3 "toastty-main/.agents/skills/toastty-scratchpad"`;
+const scratchpadSkillInstallSnippet = `Download the Toastty Scratchpad skill from
+https://github.com/figelwump/toastty/tree/main/.agents/skills/toastty-scratchpad
+
+Install it globally. Check which of these directories already exist
+and copy the toastty-scratchpad folder into the matching ones:
+
+  • ~/.claude/skills        (Claude Code)
+  • ~/.codex/skills         (Codex)
+  • ~/.agents/skills        (generic / Codex)
+
+If none of these exist for the agent I'm currently using, create the
+appropriate one and install there.`;
 
 function truncateDiagnosticString(value: string, limit = diagnosticStringLimit): string {
   if (value.length <= limit) {
@@ -362,33 +371,35 @@ function renderEmptyGuidance(root: HTMLElement, bootstrap: ScratchpadPanelBootst
   const title = document.createElement("h1");
   title.textContent = "Scratchpad is ready";
   const intro = document.createElement("p");
-  intro.textContent = "Bind it to an active agent or install the skill to publish visual work from Toastty.";
-  header.append(title, intro);
+  intro.textContent = "You’re on the manual path: you created an empty Scratchpad, so you’ll need to bind it to an agent and install the Scratchpad skill before the agent can publish to it.";
+  const introAlt = document.createElement("p");
+  introAlt.textContent = "The shorter path is to install the skill once and skip this screen entirely — agents create and bind their own Scratchpads on demand. See “Skip this next time” below.";
+  header.append(title, intro, introAlt);
 
-  const steps = document.createElement("div");
+  const steps = document.createElement("ol");
   steps.className = "scratchpad-guide-steps";
 
-  const bindStep = document.createElement("article");
+  const bindStep = document.createElement("li");
   bindStep.className = "scratchpad-guide-step";
   const bindTitle = document.createElement("h2");
-  bindTitle.textContent = "Bind to an agent";
+  bindTitle.textContent = "Bind this Scratchpad to an agent";
   const bindText = document.createElement("p");
-  bindText.textContent = "Use the Unbound menu in this panel header, then choose an active agent session in the current tab.";
+  bindText.textContent = "Click the “Unbound” chip in this panel’s header and pick an agent session running in the current tab. Only Toastty-managed sessions show up.";
   bindStep.append(bindTitle, bindText);
 
-  const installStep = document.createElement("article");
+  const installStep = document.createElement("li");
   installStep.className = "scratchpad-guide-step scratchpad-guide-step--snippet";
   const installHeader = document.createElement("div");
   installHeader.className = "scratchpad-snippet-header";
   const installTitle = document.createElement("h2");
-  installTitle.textContent = "Install the skill";
+  installTitle.textContent = "Install the Scratchpad skill";
   const copyButton = document.createElement("button");
   copyButton.type = "button";
   copyButton.className = "scratchpad-copy-button";
   copyButton.textContent = "Copy";
   installHeader.append(installTitle, copyButton);
   const installText = document.createElement("p");
-  installText.textContent = "Paste this into a Codex-compatible agent terminal.";
+  installText.textContent = "Paste this into your agent’s chat (Claude Code, Codex, or any compatible agent). It tells the agent to download the skill and install it globally for whichever runtime you’re using.";
   const snippet = document.createElement("textarea");
   snippet.className = "scratchpad-snippet";
   snippet.readOnly = true;
@@ -416,16 +427,27 @@ function renderEmptyGuidance(root: HTMLElement, bootstrap: ScratchpadPanelBootst
   });
   installStep.append(installHeader, installText, snippet);
 
-  const exampleStep = document.createElement("article");
+  const exampleStep = document.createElement("li");
   exampleStep.className = "scratchpad-guide-step";
   const exampleTitle = document.createElement("h2");
-  exampleTitle.textContent = "Ask for a visual";
+  exampleTitle.textContent = "Ask the agent for a visual";
   const exampleText = document.createElement("p");
-  exampleText.textContent = "After the skill is installed, ask your agent to create diagrams, mock-ups, wireframes, architecture maps, or data visualizations in Scratchpad.";
+  exampleText.textContent = "Ask for a diagram, mock-up, wireframe, architecture map, or data viz, or invoke the skill explicitly. The result will publish into this Scratchpad.";
   exampleStep.append(exampleTitle, exampleText);
 
   steps.append(bindStep, installStep, exampleStep);
-  section.append(header, steps);
+
+  const footer = document.createElement("aside");
+  footer.className = "scratchpad-guide-footer";
+  const footerTitle = document.createElement("h2");
+  footerTitle.textContent = "Skip this next time";
+  const footerSkill = document.createElement("p");
+  footerSkill.textContent = "Once the skill is installed for an agent, you don’t need New Scratchpad at all — just ask the agent for a visual and it’ll create and bind a fresh Scratchpad on the fly.";
+  const footerRebind = document.createElement("p");
+  footerRebind.textContent = "Rebinding is still useful, though: you might want one agent to create a Scratchpad and another to read it. Use the binding chip to switch which agent has access. Only one agent session can read or write a Scratchpad at a time.";
+  footer.append(footerTitle, footerSkill, footerRebind);
+
+  section.append(header, steps, footer);
   root.append(section);
   scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision);
 }

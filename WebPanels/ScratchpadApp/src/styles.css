@@ -104,19 +104,48 @@ body {
 }
 
 .scratchpad-guide-header p {
+  margin: 0;
   font-size: 14px;
+}
+
+.scratchpad-guide-header p + p {
+  margin-top: 8px;
 }
 
 .scratchpad-guide-steps {
   display: grid;
   gap: 12px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+  counter-reset: scratchpad-guide-step;
 }
 
 .scratchpad-guide-step {
-  padding: 14px 16px;
+  position: relative;
+  padding: 14px 16px 14px 46px;
   border: 1px solid var(--scratchpad-border);
   border-radius: 8px;
   background: var(--scratchpad-panel);
+  counter-increment: scratchpad-guide-step;
+}
+
+.scratchpad-guide-step::before {
+  content: counter(scratchpad-guide-step);
+  position: absolute;
+  top: 13px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--scratchpad-panel-strong);
+  color: var(--scratchpad-fg);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .scratchpad-guide-step h2 {
@@ -129,6 +158,32 @@ body {
 
 .scratchpad-guide-step p {
   font-size: 13px;
+}
+
+.scratchpad-guide-footer {
+  padding: 14px 16px;
+  border: 1px dashed var(--scratchpad-border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+.scratchpad-guide-footer h2 {
+  margin: 0 0 6px;
+  color: var(--scratchpad-fg);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.scratchpad-guide-footer p {
+  margin: 0 0 8px;
+  color: var(--scratchpad-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.scratchpad-guide-footer p:last-child {
+  margin-bottom: 0;
 }
 
 .scratchpad-snippet-header {
