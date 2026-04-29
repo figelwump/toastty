@@ -3426,10 +3426,14 @@ struct PanelCardView: View {
               webState.definition == .scratchpad else {
             return nil
         }
+        let bindingStatus = Self.scratchpadBindingStatus(
+            for: webState.scratchpad?.sessionLink,
+            sessionRegistry: sessionRuntimeStore.sessionRegistry
+        )
         return ScratchpadHeaderAccessory(
             documentID: webState.scratchpad?.documentID,
-            bindingLabel: Self.scratchpadBindingLabel(for: webState.scratchpad?.sessionLink),
-            isBound: webState.scratchpad?.sessionLink != nil,
+            bindingLabel: bindingStatus.label,
+            isBound: bindingStatus.isLiveBound,
             candidates: scratchpadBindCandidates,
             rebind: rebindScratchpad(to:),
             unbind: unbindScratchpad,
@@ -3450,17 +3454,36 @@ struct PanelCardView: View {
         return ScratchpadAgentBindCandidateBuilder.candidates(
             workspaceTab: ownerTab,
             sessionRegistry: sessionRuntimeStore.sessionRegistry,
-            currentSessionID: webState.scratchpad?.sessionLink?.sessionID
+            currentSessionID: Self.scratchpadBindingStatus(
+                for: webState.scratchpad?.sessionLink,
+                sessionRegistry: sessionRuntimeStore.sessionRegistry
+            ).liveSessionID
         )
     }
 
-    static func scratchpadBindingLabel(for sessionLink: ScratchpadSessionLink?) -> String {
+    static func scratchpadBindingStatus(
+        for sessionLink: ScratchpadSessionLink?,
+        sessionRegistry: SessionRegistry
+    ) -> ScratchpadBindingStatus {
         guard let sessionLink else {
-            return "Unbound"
+            return .unbound
         }
-        let displayName = sessionLink.displayTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let label = displayName?.isEmpty == false ? displayName! : sessionLink.agent.displayName
-        return "Bound to \(label)"
+        guard let activeSession = sessionRegistry.activeSession(sessionID: sessionLink.sessionID) else {
+            return .unbound
+        }
+        let displayName = normalizedScratchpadBindingLabel(activeSession.displayTitleOverride)
+            ?? normalizedScratchpadBindingLabel(sessionLink.displayTitle)
+            ?? activeSession.agent.displayName
+        return ScratchpadBindingStatus(
+            label: "Bound to \(displayName)",
+            liveSessionID: activeSession.sessionID
+        )
+    }
+
+    private static func normalizedScratchpadBindingLabel(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func rebindScratchpad(to candidate: ScratchpadAgentBindCandidate) {
@@ -3576,6 +3599,17 @@ struct ScratchpadAgentBindCandidate: Equatable, Identifiable {
     let isCurrent: Bool
 
     var id: String { sessionID }
+}
+
+struct ScratchpadBindingStatus: Equatable {
+    let label: String
+    let liveSessionID: String?
+
+    static let unbound = ScratchpadBindingStatus(label: "Unbound", liveSessionID: nil)
+
+    var isLiveBound: Bool {
+        liveSessionID != nil
+    }
 }
 
 enum ScratchpadAgentBindCandidateBuilder {

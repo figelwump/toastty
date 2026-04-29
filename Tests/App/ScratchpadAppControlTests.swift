@@ -291,6 +291,143 @@ struct ScratchpadAppControlTests {
     }
 
     @Test
+    func cleanupStaleScratchpadSessionLinksClearsRightPanelStateAndDocumentLink() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linkedScratchpad = try fixture.createLinkedScratchpad()
+
+        let outcome = fixture.store.cleanupStaleScratchpadSessionLinks(
+            sessionRegistry: SessionRegistry(),
+            documentStore: fixture.documentStore
+        )
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspace.panelState(for: linkedScratchpad.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: linkedScratchpad.documentID))
+
+        #expect(outcome.clearedPanelIDs == [linkedScratchpad.panelID])
+        #expect(outcome.clearedDocumentIDs == [linkedScratchpad.documentID])
+        #expect(outcome.failures.isEmpty)
+        #expect(webState.scratchpad?.documentID == linkedScratchpad.documentID)
+        #expect(webState.scratchpad?.sessionLink == nil)
+        #expect(document.content == "<p>Initial</p>")
+        #expect(document.sessionLink == nil)
+    }
+
+    @Test
+    func cleanupStaleScratchpadSessionLinksPreservesActiveSessionLink() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linkedScratchpad = try fixture.createLinkedScratchpad()
+
+        let outcome = fixture.store.cleanupStaleScratchpadSessionLinks(
+            sessionRegistry: fixture.sessionRuntimeStore.sessionRegistry,
+            documentStore: fixture.documentStore
+        )
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspace.panelState(for: linkedScratchpad.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: linkedScratchpad.documentID))
+
+        #expect(outcome.clearedPanelIDs.isEmpty)
+        #expect(outcome.clearedDocumentIDs.isEmpty)
+        #expect(outcome.failures.isEmpty)
+        #expect(webState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
+        #expect(document.sessionLink?.sessionID == fixture.sessionID)
+    }
+
+    @Test
+    func cleanupStaleScratchpadSessionLinksClearsStoppedSessionLink() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linkedScratchpad = try fixture.createLinkedScratchpad()
+        fixture.sessionRuntimeStore.stopSession(
+            sessionID: fixture.sessionID,
+            at: Date(timeIntervalSince1970: 300)
+        )
+
+        let outcome = fixture.store.cleanupStaleScratchpadSessionLinks(
+            sessionRegistry: fixture.sessionRuntimeStore.sessionRegistry,
+            documentStore: fixture.documentStore
+        )
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspace.panelState(for: linkedScratchpad.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: linkedScratchpad.documentID))
+
+        #expect(outcome.clearedPanelIDs == [linkedScratchpad.panelID])
+        #expect(outcome.failures.isEmpty)
+        #expect(webState.scratchpad?.sessionLink == nil)
+        #expect(document.sessionLink == nil)
+    }
+
+    @Test
+    func cleanupCoordinatorClearsStaleLinkAfterStartup() async throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linkedScratchpad = try fixture.createLinkedScratchpad()
+        let restoredSessionRuntimeStore = SessionRuntimeStore()
+        restoredSessionRuntimeStore.bind(store: fixture.store)
+        let coordinator = ScratchpadSessionLinkCleanupCoordinator(
+            store: fixture.store,
+            sessionRuntimeStore: restoredSessionRuntimeStore,
+            documentStore: fixture.documentStore,
+            cleanupDelayNanoseconds: 0
+        )
+
+        try await fixture.waitForScratchpadSessionLink(
+            documentID: linkedScratchpad.documentID,
+            toBecome: nil
+        )
+        let restoredState = WorkspaceLayoutSnapshot(state: fixture.store.state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[fixture.workspaceID])
+        let restoredPanelState = try #require(restoredWorkspace.panelState(for: linkedScratchpad.panelID))
+        guard case .web(let restoredWebState) = restoredPanelState else {
+            Issue.record("scratchpad panel should restore as a web panel")
+            return
+        }
+
+        #expect(restoredWebState.scratchpad?.sessionLink == nil)
+        _ = coordinator
+    }
+
+    @Test
+    func cleanupCoordinatorClearsLinkWhenActiveSessionStops() async throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linkedScratchpad = try fixture.createLinkedScratchpad()
+        let coordinator = ScratchpadSessionLinkCleanupCoordinator(
+            store: fixture.store,
+            sessionRuntimeStore: fixture.sessionRuntimeStore,
+            documentStore: fixture.documentStore,
+            cleanupDelayNanoseconds: 0
+        )
+
+        fixture.sessionRuntimeStore.updateStatus(
+            sessionID: fixture.sessionID,
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: Date(timeIntervalSince1970: 250)
+        )
+        try await Task.sleep(nanoseconds: 10_000_000)
+        #expect(try fixture.documentStore.load(documentID: linkedScratchpad.documentID)?.sessionLink?.sessionID == fixture.sessionID)
+
+        fixture.sessionRuntimeStore.stopSession(
+            sessionID: fixture.sessionID,
+            at: Date(timeIntervalSince1970: 300)
+        )
+
+        try await fixture.waitForScratchpadSessionLink(
+            documentID: linkedScratchpad.documentID,
+            toBecome: nil
+        )
+        _ = coordinator
+    }
+
+    @Test
     func exportWritesSessionLinkedScratchpadToDeterministicFile() throws {
         let fixture = try ScratchpadAppControlFixture()
         let response = try fixture.executor.runAction(
@@ -402,6 +539,42 @@ private final class ScratchpadAppControlFixture {
         let url = tempURL.appendingPathComponent("scratchpad.html")
         try content.write(to: url, atomically: true, encoding: .utf8)
         return url
+    }
+
+    func createLinkedScratchpad() throws -> (panelID: UUID, documentID: UUID) {
+        let initial = try executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(sessionID),
+                "content": .string("<p>Initial</p>"),
+                "title": .string("Notes"),
+            ]
+        )
+        let result = try #require(initial.result)
+        let panelIDString = try #require(result.string("panelID"))
+        let panelID = try #require(UUID(uuidString: panelIDString))
+        let documentIDString = try #require(result.string("documentID"))
+        let documentID = try #require(UUID(uuidString: documentIDString))
+        return (panelID, documentID)
+    }
+
+    func waitForScratchpadSessionLink(
+        documentID: UUID,
+        toBecome expectedSessionID: String?,
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        pollNanoseconds: UInt64 = 10_000_000
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            let document = try documentStore.load(documentID: documentID)
+            if document?.sessionLink?.sessionID == expectedSessionID {
+                return
+            }
+            try await Task.sleep(nanoseconds: pollNanoseconds)
+        }
+
+        let document = try documentStore.load(documentID: documentID)
+        #expect(document?.sessionLink?.sessionID == expectedSessionID)
     }
 
     func createDestinationSession() throws -> (panelID: UUID, sessionID: String) {
