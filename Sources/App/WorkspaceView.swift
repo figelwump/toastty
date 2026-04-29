@@ -3114,7 +3114,7 @@ struct PanelCardView: View {
     }
 
     private var panelHeaderTitle: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 6) {
             if let browserTitleIconImage {
                 BrowserTitleIconView(
                     image: browserTitleIconImage,
@@ -3695,7 +3695,7 @@ private struct ScratchpadHeaderAccessory: View {
     let openInBrowser: (UUID?) -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 3) {
             ScratchpadBindingMenuChip(
                 bindingLabel: bindingLabel,
                 isBound: isBound,
@@ -3703,6 +3703,7 @@ private struct ScratchpadHeaderAccessory: View {
                 rebind: rebind,
                 unbind: unbind
             )
+            .fixedSize(horizontal: true, vertical: false)
 
             ScratchpadActionsMenuButton(
                 documentID: documentID,
