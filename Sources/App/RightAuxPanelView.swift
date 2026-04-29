@@ -177,7 +177,7 @@ struct RightAuxPanelEmptyStateView: View {
                     title: "New scratchpad",
                     subtitle: "Start a blank, unbound scratchpad.",
                     systemImage: "square.and.pencil",
-                    shortcut: nil,
+                    shortcut: ToasttyKeyboardShortcuts.newScratchpad,
                     action: createBlankScratchpad
                 )
                 .accessibilityIdentifier("right-panel.empty.new-scratchpad")

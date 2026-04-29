@@ -27,6 +27,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFile.id, "local-document.open")
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInTab.id, "local-document.open-tab")
         XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInSplit.id, "local-document.open-split")
+        XCTAssertEqual(ToasttyBuiltInCommand.newScratchpad.id, "scratchpad.create")
         XCTAssertEqual(ToasttyBuiltInCommand.showScratchpadForCurrentSession.id, "scratchpad.show-current-session")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleRightPanel.id, "window.toggle-right-panel")
         XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
@@ -69,6 +70,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.openLocalFile.id,
                 ToasttyBuiltInCommand.openLocalFileInTab.id,
                 ToasttyBuiltInCommand.openLocalFileInSplit.id,
+                ToasttyBuiltInCommand.newScratchpad.id,
                 ToasttyBuiltInCommand.showScratchpadForCurrentSession.id,
                 ToasttyBuiltInCommand.toggleSidebar.id,
                 ToasttyBuiltInCommand.toggleRightPanel.id,
@@ -122,6 +124,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.canEqualizeSplitsValue = false
         actions.canCreateBrowserValue = false
         actions.canOpenLocalDocumentValue = false
+        actions.canCreateScratchpadValue = false
         actions.canShowScratchpadForCurrentSessionValue = false
         actions.canToggleRightPanelValue = false
         actions.canWatchRunningCommandValue = false
@@ -136,6 +139,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.equalizeSplits.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.newBrowser.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.openLocalFile.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.newScratchpad.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.toggleRightPanel.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id }))
@@ -261,6 +265,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         )
 
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.newWindow.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.newScratchpad.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.showScratchpadForCurrentSession.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.watchRunningCommand.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageConfig.id })).invocation, originWindowID: originWindowID))
@@ -271,6 +276,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "terminal-profile.zmx.split-right" })).invocation, originWindowID: originWindowID))
 
         XCTAssertEqual(actions.createdWindowIDs, [originWindowID])
+        XCTAssertEqual(actions.createdScratchpadWindowIDs, [originWindowID])
         XCTAssertEqual(actions.shownScratchpadWindowIDs, [originWindowID])
         XCTAssertEqual(actions.watchedRunningCommandWindowIDs, [originWindowID])
         XCTAssertEqual(actions.managedConfigWindowIDs, [originWindowID])

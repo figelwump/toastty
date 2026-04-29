@@ -134,6 +134,42 @@ final class ScratchpadPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.revision, 1)
         XCTAssertEqual(bootstrap.contentHTML, "<strong>Visible</strong>")
         XCTAssertFalse(bootstrap.missingDocument)
+        XCTAssertFalse(bootstrap.sessionLinked)
+    }
+
+    func testBootstrapMarksSessionLinkedDocument() throws {
+        let fixture = try ScratchpadRuntimeFixture()
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "session-1",
+            agent: .codex,
+            sourcePanelID: UUID(),
+            sourceWorkspaceID: UUID()
+        )
+        let document = try fixture.store.createDocument(
+            title: "Sketch",
+            content: "",
+            sessionLink: sessionLink
+        )
+        let webState = WebPanelState(
+            definition: .scratchpad,
+            title: "Scratchpad",
+            scratchpad: ScratchpadState(
+                documentID: document.documentID,
+                sessionLink: sessionLink,
+                revision: document.revision
+            )
+        )
+
+        let bootstrap = ScratchpadPanelRuntime.bootstrap(
+            for: webState,
+            documentStore: fixture.store,
+            theme: .dark
+        )
+
+        XCTAssertEqual(bootstrap.documentID, document.documentID)
+        XCTAssertEqual(bootstrap.revision, 1)
+        XCTAssertEqual(bootstrap.contentHTML, "")
+        XCTAssertTrue(bootstrap.sessionLinked)
     }
 
     func testBootstrapReportsMissingDocument() throws {
@@ -158,6 +194,66 @@ final class ScratchpadPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.revision, 3)
         XCTAssertTrue(bootstrap.missingDocument)
         XCTAssertNil(bootstrap.contentHTML)
+    }
+
+    func testBlankScratchpadOnboardingOnlyAppliesToUnboundDocuments() async throws {
+        let assetDirectoryURL = try XCTUnwrap(ScratchpadPanelAssetLocator.directoryURL())
+        let entryURL = assetDirectoryURL.appendingPathComponent("index.html")
+        let handler = ScratchpadPanelTestMessageHandler()
+        let configuration = ScratchpadPanelRuntime.makeWebViewConfiguration(for: .localOnly)
+        configuration.userContentController.add(handler, name: "toasttyScratchpadPanel")
+        defer {
+            configuration.userContentController.removeScriptMessageHandler(forName: "toasttyScratchpadPanel")
+        }
+
+        let bridgeReady = expectation(description: "Scratchpad bridge becomes ready")
+        handler.bridgeReadyExpectation = bridgeReady
+
+        let webView = WKWebView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600),
+            configuration: configuration
+        )
+        webView.loadFileURL(entryURL, allowingReadAccessTo: assetDirectoryURL)
+
+        await fulfillment(of: [bridgeReady], timeout: 5)
+
+        let unboundBootstrapScript = try XCTUnwrap(ScratchpadPanelRuntime.bootstrapJavaScript(
+            for: ScratchpadPanelBootstrap(
+                documentID: UUID(),
+                displayName: "Unbound Scratchpad",
+                revision: 1,
+                contentHTML: "",
+                theme: .dark
+            )
+        ))
+        _ = try await webView.evaluateJavaScript(unboundBootstrapScript)
+        let unboundGuideResult = try await webView.evaluateJavaScript(
+            "document.querySelector('.scratchpad-empty--guide') !== null"
+        )
+        let unboundHasGuide = try XCTUnwrap(unboundGuideResult as? Bool)
+        XCTAssertTrue(unboundHasGuide)
+
+        let linkedBootstrapScript = try XCTUnwrap(ScratchpadPanelRuntime.bootstrapJavaScript(
+            for: ScratchpadPanelBootstrap(
+                documentID: UUID(),
+                displayName: "Linked Scratchpad",
+                revision: 1,
+                contentHTML: "",
+                sessionLinked: true,
+                theme: .dark
+            )
+        ))
+        _ = try await webView.evaluateJavaScript(linkedBootstrapScript)
+        let linkedGuideResult = try await webView.evaluateJavaScript(
+            "document.querySelector('.scratchpad-empty--guide') !== null"
+        )
+        let linkedFrameResult = try await webView.evaluateJavaScript(
+            "document.querySelector('.scratchpad-frame') !== null"
+        )
+        let linkedHasGuide = try XCTUnwrap(linkedGuideResult as? Bool)
+        let linkedHasFrame = try XCTUnwrap(linkedFrameResult as? Bool)
+        XCTAssertFalse(linkedHasGuide)
+        XCTAssertTrue(linkedHasFrame)
     }
 
     func testBridgeIgnoresSubframeMessagesInTestingShim() throws {

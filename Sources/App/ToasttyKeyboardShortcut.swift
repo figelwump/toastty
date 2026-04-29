@@ -189,6 +189,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .control, .shift]
     )
 
+    static let newScratchpad = ToasttyKeyboardShortcut(
+        "s",
+        modifiers: [.command, .control]
+    )
+
     static let browserReload = ToasttyKeyboardShortcut(
         "r",
         modifiers: [.command]

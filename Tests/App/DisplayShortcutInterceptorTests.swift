@@ -326,6 +326,23 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isNewBrowserTabShortcut(repeatedEvent))
     }
 
+    func testNewScratchpadShortcutMatchesCommandControlSOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "s", modifiers: [.command, .control], keyCode: 0x01)
+        let shiftedEvent = try makeKeyEvent(characters: "S", modifiers: [.command, .control, .shift], keyCode: 0x01)
+        let saveEvent = try makeKeyEvent(characters: "s", modifiers: [.command], keyCode: 0x01)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "s",
+            modifiers: [.command, .control],
+            keyCode: 0x01,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isNewScratchpadShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewScratchpadShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewScratchpadShortcut(saveEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewScratchpadShortcut(repeatedEvent))
+    }
+
     func testToggleRightPanelShortcutMatchesCommandShiftBOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "B", modifiers: [.command, .shift], keyCode: 0x0B)
         let oldRightPanelEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .option], keyCode: 0x0B)
@@ -623,7 +640,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(sessionRuntimeStore.isLaterFlagged(sessionID: "sess-later-shortcut"))
     }
 
-    func testBrowserCreationShortcutsRequireAppOwnedWindowSelection() throws {
+    func testWebPanelCreationShortcutsRequireAppOwnedWindowSelection() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let interceptor = makeInterceptor(store: store)
@@ -633,6 +650,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             modifiers: [.command, .control, .shift],
             keyCode: 0x0B
         )
+        let newScratchpadEvent = try makeKeyEvent(characters: "s", modifiers: [.command, .control], keyCode: 0x01)
 
         XCTAssertEqual(
             interceptor.shortcutAction(for: newBrowserEvent, appOwnedWindowID: windowID),
@@ -642,8 +660,13 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             interceptor.shortcutAction(for: newBrowserTabEvent, appOwnedWindowID: windowID),
             .createBrowserTab
         )
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: newScratchpadEvent, appOwnedWindowID: windowID),
+            .createScratchpad
+        )
         XCTAssertNil(interceptor.shortcutAction(for: newBrowserEvent, appOwnedWindowID: nil))
         XCTAssertNil(interceptor.shortcutAction(for: newBrowserTabEvent, appOwnedWindowID: nil))
+        XCTAssertNil(interceptor.shortcutAction(for: newScratchpadEvent, appOwnedWindowID: nil))
     }
 
     func testMarkdownSaveShortcutUsesFocusedMarkdownSelection() throws {
@@ -1074,6 +1097,26 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertTrue(interceptor.handle(.createBrowserTab, appOwnedWindowID: windowID))
         let workspaceAfterBrowserTab = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(workspaceAfterBrowserTab.orderedTabs.count, 2)
+    }
+
+    func testCreateScratchpadActionUsesRightPanelPlacement() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.createScratchpad, appOwnedWindowID: windowID))
+
+        let workspaceAfterScratchpad = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterScratchpad.layoutTree.allSlotInfos.count, 1)
+        XCTAssertEqual(workspaceAfterScratchpad.orderedTabs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfterScratchpad.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected createScratchpad shortcut to create a Scratchpad panel in the right panel")
+            return
+        }
+        XCTAssertEqual(webState.definition, .scratchpad)
+        XCTAssertNotNil(webState.scratchpad?.documentID)
     }
 
     func testToggleRightPanelActionTogglesSelectedWorkspacePanel() throws {

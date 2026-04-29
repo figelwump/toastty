@@ -12,6 +12,7 @@ struct ScratchpadPanelBootstrap: Codable, Equatable, Sendable {
     let revision: Int?
     let contentHTML: String?
     let missingDocument: Bool
+    let sessionLinked: Bool
     let message: String?
     let theme: ScratchpadPanelTheme
 
@@ -22,6 +23,7 @@ struct ScratchpadPanelBootstrap: Codable, Equatable, Sendable {
         revision: Int?,
         contentHTML: String?,
         missingDocument: Bool = false,
+        sessionLinked: Bool = false,
         message: String? = nil,
         theme: ScratchpadPanelTheme
     ) {
@@ -31,6 +33,7 @@ struct ScratchpadPanelBootstrap: Codable, Equatable, Sendable {
         self.revision = revision
         self.contentHTML = contentHTML
         self.missingDocument = missingDocument
+        self.sessionLinked = sessionLinked
         self.message = message
         self.theme = theme
     }
@@ -45,6 +48,7 @@ extension ScratchpadPanelBootstrap {
             revision: revision,
             contentHTML: contentHTML,
             missingDocument: missingDocument,
+            sessionLinked: sessionLinked,
             message: message,
             theme: theme
         )

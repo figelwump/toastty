@@ -510,6 +510,7 @@ extension ScratchpadPanelRuntime {
                     revision: scratchpad.revision,
                     contentHTML: nil,
                     missingDocument: true,
+                    sessionLinked: scratchpad.sessionLink != nil,
                     message: "The Scratchpad document is missing from Toastty's document store.",
                     theme: theme
                 )
@@ -520,6 +521,7 @@ extension ScratchpadPanelRuntime {
                 displayName: document.title ?? webState.title,
                 revision: document.revision,
                 contentHTML: document.content,
+                sessionLinked: scratchpad.sessionLink != nil || document.sessionLink != nil,
                 theme: theme
             )
         } catch {
@@ -529,6 +531,7 @@ extension ScratchpadPanelRuntime {
                 revision: scratchpad.revision,
                 contentHTML: nil,
                 missingDocument: true,
+                sessionLinked: scratchpad.sessionLink != nil,
                 message: "Toastty could not load this Scratchpad document: \(error.localizedDescription)",
                 theme: theme
             )

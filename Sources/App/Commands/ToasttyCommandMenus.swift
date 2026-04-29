@@ -574,6 +574,15 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
+            Button(ToasttyBuiltInCommand.newScratchpad.title) {
+                createBlankScratchpad(preferredWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.newScratchpad.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.newScratchpad.requiredShortcut.modifiers
+            )
+            .disabled(commandWorkspace == nil)
+
             Button(ToasttyBuiltInCommand.showScratchpadForCurrentSession.title) {
                 showScratchpadForCurrentSession(preferredWindowID)
             }
@@ -752,6 +761,21 @@ struct ToasttyCommandMenus: Commands {
             sessionRuntimeStore: sessionRuntimeStore,
             documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
         )
+    }
+
+    private func createBlankScratchpad(_ preferredWindowID: UUID?) {
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return
+        }
+
+        do {
+            _ = try store.createBlankScratchpadPanel(
+                workspaceID: workspaceID,
+                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+            )
+        } catch {
+            NSLog("Blank Scratchpad creation failed: \(error.localizedDescription)")
+        }
     }
 
     private func startFindFromCommandSelection() {

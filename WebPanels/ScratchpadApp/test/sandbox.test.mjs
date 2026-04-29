@@ -64,3 +64,12 @@ test("generated iframe can be focused from native focus handoff", () => {
   assert.match(mainSource, /currentGeneratedContentWindow\?\.focus\(\)/);
   assert.match(mainSource, /currentGeneratedContentReady/);
 });
+
+test("blank scratchpad documents render onboarding guidance instead of an empty iframe", () => {
+  assert.match(mainSource, /function renderEmptyGuidance/);
+  assert.match(mainSource, /isBlankUnboundScratchpadDocument\(bootstrap\)/);
+  assert.match(mainSource, /bootstrap\.sessionLinked !== true/);
+  assert.match(mainSource, /Scratchpad is ready/);
+  assert.match(mainSource, /toastty-main\/\.agents\/skills\/toastty-scratchpad/);
+  assert.match(mainSource, /navigator\.clipboard\.writeText\(scratchpadSkillInstallSnippet\)/);
+});

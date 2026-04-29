@@ -10,6 +10,7 @@ interface ScratchpadPanelBootstrap {
   revision: number | null;
   contentHTML: string | null;
   missingDocument: boolean;
+  sessionLinked?: boolean;
   message: string | null;
   theme: ScratchpadPanelTheme;
 }
@@ -35,6 +36,9 @@ let currentGeneratedContentWindow: Window | null = null;
 let currentGeneratedContentDiagnosticsToken: string | null = null;
 let currentGeneratedContentReady = false;
 const diagnosticStringLimit = 2_000;
+const scratchpadSkillInstallSnippet = `mkdir -p "$HOME/.codex/skills"
+curl -L https://github.com/figelwump/toastty/archive/refs/heads/main.tar.gz \\
+  | tar -xz -C "$HOME/.codex/skills" --strip-components=3 "toastty-main/.agents/skills/toastty-scratchpad"`;
 
 function truncateDiagnosticString(value: string, limit = diagnosticStringLimit): string {
   if (value.length <= limit) {
@@ -261,6 +265,21 @@ function notifyListeners() {
   }
 }
 
+function resetGeneratedContentState() {
+  currentGeneratedContentFrame = null;
+  currentGeneratedContentWindow = null;
+  currentGeneratedContentDiagnosticsToken = null;
+  currentGeneratedContentReady = false;
+}
+
+function isBlankUnboundScratchpadDocument(bootstrap: ScratchpadPanelBootstrap): boolean {
+  return (
+    !bootstrap.missingDocument &&
+    bootstrap.sessionLinked !== true &&
+    (bootstrap.contentHTML ?? "").trim().length === 0
+  );
+}
+
 function receiveBootstrap(bootstrap: ScratchpadPanelBootstrap) {
   if (bootstrap.contractVersion !== 1) {
     console.warn(
@@ -287,7 +306,7 @@ function focusActiveContent(): boolean {
     }
   }
 
-  if (!currentBootstrap?.missingDocument) {
+  if (!currentBootstrap || (!currentBootstrap.missingDocument && !isBlankUnboundScratchpadDocument(currentBootstrap))) {
     return false;
   }
 
@@ -317,10 +336,7 @@ window.ToasttyScratchpadPanel = {
 };
 
 function renderMissing(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
-  currentGeneratedContentFrame = null;
-  currentGeneratedContentWindow = null;
-  currentGeneratedContentDiagnosticsToken = null;
-  currentGeneratedContentReady = false;
+  resetGeneratedContentState();
   root.replaceChildren();
   const section = document.createElement("section");
   section.className = "scratchpad-empty";
@@ -333,11 +349,90 @@ function renderMissing(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
   scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision);
 }
 
+function renderEmptyGuidance(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
+  resetGeneratedContentState();
+  root.replaceChildren();
+
+  const section = document.createElement("section");
+  section.className = "scratchpad-empty scratchpad-empty--guide";
+  section.tabIndex = -1;
+
+  const header = document.createElement("div");
+  header.className = "scratchpad-guide-header";
+  const title = document.createElement("h1");
+  title.textContent = "Scratchpad is ready";
+  const intro = document.createElement("p");
+  intro.textContent = "Bind it to an active agent or install the skill to publish visual work from Toastty.";
+  header.append(title, intro);
+
+  const steps = document.createElement("div");
+  steps.className = "scratchpad-guide-steps";
+
+  const bindStep = document.createElement("article");
+  bindStep.className = "scratchpad-guide-step";
+  const bindTitle = document.createElement("h2");
+  bindTitle.textContent = "Bind to an agent";
+  const bindText = document.createElement("p");
+  bindText.textContent = "Use the Unbound menu in this panel header, then choose an active agent session in the current tab.";
+  bindStep.append(bindTitle, bindText);
+
+  const installStep = document.createElement("article");
+  installStep.className = "scratchpad-guide-step scratchpad-guide-step--snippet";
+  const installHeader = document.createElement("div");
+  installHeader.className = "scratchpad-snippet-header";
+  const installTitle = document.createElement("h2");
+  installTitle.textContent = "Install the skill";
+  const copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.className = "scratchpad-copy-button";
+  copyButton.textContent = "Copy";
+  installHeader.append(installTitle, copyButton);
+  const installText = document.createElement("p");
+  installText.textContent = "Paste this into a Codex-compatible agent terminal.";
+  const snippet = document.createElement("textarea");
+  snippet.className = "scratchpad-snippet";
+  snippet.readOnly = true;
+  snippet.spellcheck = false;
+  snippet.value = scratchpadSkillInstallSnippet;
+  snippet.setAttribute("aria-label", "Toastty Scratchpad skill install snippet");
+  copyButton.addEventListener("click", async () => {
+    try {
+      if (!navigator.clipboard) {
+        throw new Error("Clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(scratchpadSkillInstallSnippet);
+      copyButton.textContent = "Copied";
+      setTimeout(() => {
+        copyButton.textContent = "Copy";
+      }, 1_600);
+    } catch {
+      snippet.focus();
+      snippet.select();
+      copyButton.textContent = "Selected";
+      setTimeout(() => {
+        copyButton.textContent = "Copy";
+      }, 1_600);
+    }
+  });
+  installStep.append(installHeader, installText, snippet);
+
+  const exampleStep = document.createElement("article");
+  exampleStep.className = "scratchpad-guide-step";
+  const exampleTitle = document.createElement("h2");
+  exampleTitle.textContent = "Ask for a visual";
+  const exampleText = document.createElement("p");
+  exampleText.textContent = "After the skill is installed, ask your agent to create diagrams, mock-ups, wireframes, architecture maps, or data visualizations in Scratchpad.";
+  exampleStep.append(exampleTitle, exampleText);
+
+  steps.append(bindStep, installStep, exampleStep);
+  section.append(header, steps);
+  root.append(section);
+  scratchpadNativeBridge.renderReady(bootstrap.displayName, bootstrap.revision);
+}
+
 function renderDocument(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap) {
-  currentGeneratedContentFrame = null;
-  currentGeneratedContentWindow = null;
+  resetGeneratedContentState();
   currentGeneratedContentDiagnosticsToken = createDiagnosticsSessionToken();
-  currentGeneratedContentReady = false;
   root.replaceChildren();
 
   const iframe = document.createElement("iframe");
@@ -370,6 +465,10 @@ function render(root: HTMLElement, bootstrap: ScratchpadPanelBootstrap | null) {
   }
   if (bootstrap.missingDocument) {
     renderMissing(root, bootstrap);
+    return;
+  }
+  if (isBlankUnboundScratchpadDocument(bootstrap)) {
+    renderEmptyGuidance(root, bootstrap);
     return;
   }
   renderDocument(root, bootstrap);

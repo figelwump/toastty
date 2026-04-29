@@ -47,6 +47,7 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWindow.symbolLabel, "⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel, "⌘B")
         XCTAssertEqual(ToasttyKeyboardShortcuts.toggleRightPanel.symbolLabel, "⇧⌘B")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.newScratchpad.symbolLabel, "⌃⌘S")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWorkspace.symbolLabel, "⇧⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameWorkspace.symbolLabel, "⇧⌘E")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameTab.symbolLabel, "⌥⇧E")
@@ -71,6 +72,7 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.newWindow,
             ToasttyKeyboardShortcuts.toggleSidebar,
             ToasttyKeyboardShortcuts.toggleRightPanel,
+            ToasttyKeyboardShortcuts.newScratchpad,
             ToasttyKeyboardShortcuts.newWorkspace,
             ToasttyKeyboardShortcuts.renameWorkspace,
             ToasttyKeyboardShortcuts.renameTab,

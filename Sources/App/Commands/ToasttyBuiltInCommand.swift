@@ -28,6 +28,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case openLocalFile
     case openLocalFileInTab
     case openLocalFileInSplit
+    case newScratchpad
     case showScratchpadForCurrentSession
     case toggleSidebar
     case toggleRightPanel
@@ -105,6 +106,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "local-document.open-tab"
         case .openLocalFileInSplit:
             return "local-document.open-split"
+        case .newScratchpad:
+            return "scratchpad.create"
         case .showScratchpadForCurrentSession:
             return "scratchpad.show-current-session"
         case .toggleSidebar:
@@ -194,6 +197,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Open Local File in Tab"
         case .openLocalFileInSplit:
             return "Open Local File in Split"
+        case .newScratchpad:
+            return "New Scratchpad"
         case .showScratchpadForCurrentSession:
             return "Show Scratchpad For Current Session"
         case .toggleSidebar:
@@ -283,6 +288,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .openLocalFileInSplit:
             return nil
+        case .newScratchpad:
+            return ToasttyKeyboardShortcuts.newScratchpad
         case .showScratchpadForCurrentSession:
             return nil
         case .toggleSidebar:
@@ -379,6 +386,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["open", "local", "file", "document", "tab", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
         case .openLocalFileInSplit:
             return ["open", "local", "file", "document", "split", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
+        case .newScratchpad:
+            return ["scratchpad", "new", "create", "visual", "canvas", "diagram", "wireframe"]
         case .showScratchpadForCurrentSession:
             return ["scratchpad", "show", "current", "session", "agent", "visual"]
         case .toggleSidebar:

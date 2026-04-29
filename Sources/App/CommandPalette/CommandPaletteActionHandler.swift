@@ -24,6 +24,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func createBrowser(placement: WebPanelPlacement, originWindowID: UUID) -> Bool
     func canOpenLocalDocument(originWindowID: UUID) -> Bool
     func openLocalDocument(placement: WebPanelPlacement, originWindowID: UUID) -> Bool
+    func canCreateScratchpad(originWindowID: UUID) -> Bool
+    func createScratchpad(originWindowID: UUID) -> Bool
     func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool
     func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool
     func canToggleSidebar(originWindowID: UUID) -> Bool
@@ -85,6 +87,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let supportsConfigurationReload: @MainActor () -> Bool
     private let reloadConfigurationAction: @MainActor () -> Void
     private let openLocalDocumentAction: @MainActor (UUID?, WebPanelPlacement) -> Bool
+    private let createScratchpadAction: @MainActor (UUID?) -> Bool
     private let showScratchpadForCurrentSessionAction: @MainActor (UUID?) -> Bool
     private let openManageConfigAction: @MainActor (UUID) -> Bool
     private let openTerminalProfilesConfigurationAction: @MainActor (UUID) -> Bool
@@ -102,6 +105,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         supportsConfigurationReload: @escaping @MainActor () -> Bool,
         reloadConfigurationAction: @escaping @MainActor () -> Void,
         openLocalDocumentAction: @escaping @MainActor (UUID?, WebPanelPlacement) -> Bool,
+        createScratchpadAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         showScratchpadForCurrentSessionAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         openManageConfigAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
         openTerminalProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
@@ -124,6 +128,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         self.supportsConfigurationReload = supportsConfigurationReload
         self.reloadConfigurationAction = reloadConfigurationAction
         self.openLocalDocumentAction = openLocalDocumentAction
+        self.createScratchpadAction = createScratchpadAction
         self.showScratchpadForCurrentSessionAction = showScratchpadForCurrentSessionAction
         self.openManageConfigAction = openManageConfigAction
         self.openTerminalProfilesConfigurationAction = openTerminalProfilesConfigurationAction
@@ -259,6 +264,17 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
 
     func openLocalDocument(placement: WebPanelPlacement, originWindowID: UUID) -> Bool {
         openLocalDocumentAction(originWindowID, placement)
+    }
+
+    func canCreateScratchpad(originWindowID: UUID) -> Bool {
+        store?.commandSelection(preferredWindowID: originWindowID) != nil
+    }
+
+    func createScratchpad(originWindowID: UUID) -> Bool {
+        guard canCreateScratchpad(originWindowID: originWindowID) else {
+            return false
+        }
+        return createScratchpadAction(originWindowID)
     }
 
     func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
@@ -610,6 +626,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
         case .openLocalFileInSplit:
             return openLocalDocument(placement: .splitRight, originWindowID: originWindowID)
+        case .newScratchpad:
+            return createScratchpad(originWindowID: originWindowID)
         case .showScratchpadForCurrentSession:
             return showScratchpadForCurrentSession(originWindowID: originWindowID)
         case .toggleSidebar:

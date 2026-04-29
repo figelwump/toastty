@@ -57,6 +57,7 @@ enum CommandPaletteCatalog {
             (.openLocalFile, actions.canOpenLocalDocument(originWindowID: originWindowID)),
             (.openLocalFileInTab, actions.canOpenLocalDocument(originWindowID: originWindowID)),
             (.openLocalFileInSplit, actions.canOpenLocalDocument(originWindowID: originWindowID)),
+            (.newScratchpad, actions.canCreateScratchpad(originWindowID: originWindowID)),
             (.showScratchpadForCurrentSession, actions.canShowScratchpadForCurrentSession(originWindowID: originWindowID)),
             (.toggleSidebar, actions.canToggleSidebar(originWindowID: originWindowID)),
             (.toggleRightPanel, actions.canToggleRightPanel(originWindowID: originWindowID)),

@@ -630,6 +630,7 @@ final class DisplayShortcutInterceptor {
         case closePanel
         case createBrowser
         case createBrowserTab
+        case createScratchpad
         case createWorkspaceTab
         case increaseTextSize
         case decreaseTextSize
@@ -746,6 +747,11 @@ final class DisplayShortcutInterceptor {
         if Self.isNewBrowserTabShortcut(event),
            appOwnedWindowID != nil {
             return .createBrowserTab
+        }
+
+        if Self.isNewScratchpadShortcut(event),
+           appOwnedWindowID != nil {
+            return .createScratchpad
         }
 
         if Self.isToggleRightPanelShortcut(event),
@@ -883,6 +889,8 @@ final class DisplayShortcutInterceptor {
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .rightPanel)
         case .createBrowserTab:
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
+        case .createScratchpad:
+            createScratchpad(preferredWindowID: appOwnedWindowID)
         case .createWorkspaceTab:
             createWorkspaceTab()
         case .increaseTextSize:
@@ -982,6 +990,16 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command, .control, .shift]
+    }
+
+    static func isNewScratchpadShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "s" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .control]
     }
 
     static func isToggleRightPanelShortcut(_ event: NSEvent) -> Bool {
@@ -1427,6 +1445,25 @@ final class DisplayShortcutInterceptor {
                 placementOverride: placement
             )
         )
+    }
+
+    private func createScratchpad(preferredWindowID: UUID?) -> Bool {
+        guard let store,
+              let preferredWindowID,
+              let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        do {
+            _ = try store.createBlankScratchpadPanel(
+                workspaceID: workspaceID,
+                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+            )
+            return true
+        } catch {
+            NSLog("Blank Scratchpad creation failed: \(error.localizedDescription)")
+            return false
+        }
     }
 
     private func adjustTextSize(
@@ -2083,6 +2120,13 @@ struct ToasttyApp: App {
                     store: store,
                     preferredWindowID: preferredWindowID,
                     placement: placement
+                )
+            },
+            createScratchpadAction: { preferredWindowID in
+                Self.createBlankScratchpad(
+                    store: store,
+                    preferredWindowID: preferredWindowID,
+                    documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
                 )
             },
             showScratchpadForCurrentSessionAction: { preferredWindowID in
@@ -2828,6 +2872,29 @@ struct ToasttyApp: App {
         alert.addButton(withTitle: "OK")
         alert.runModal()
         return false
+    }
+
+    @MainActor
+    @discardableResult
+    private static func createBlankScratchpad(
+        store: AppStore,
+        preferredWindowID: UUID?,
+        documentStore: ScratchpadDocumentStore
+    ) -> Bool {
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        do {
+            _ = try store.createBlankScratchpadPanel(
+                workspaceID: workspaceID,
+                documentStore: documentStore
+            )
+            return true
+        } catch {
+            NSLog("Blank Scratchpad creation failed: \(error.localizedDescription)")
+            return false
+        }
     }
 
     private static func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
