@@ -1014,6 +1014,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         )
 
         let result: Bool
+        let openedRightPanelInToastty: Bool
         switch target {
         case .localDocumentFile(let path, let lineNumber, let placement):
             let outcome = store.createLocalDocumentPanelFromCommandOutcome(
@@ -1025,6 +1026,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 )
             )
             result = outcome != nil
+            openedRightPanelInToastty = result && placement == .rightPanel
             if let lineNumber,
                let panelID = outcome?.panelID {
                 _ = webPanelRuntimeRegistry?.requestLocalDocumentReveal(
@@ -1052,6 +1054,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 direction: direction,
                 workingDirectory: path
             )
+            openedRightPanelInToastty = false
         case .localBrowserFile(let fileURL):
             let placement = store.urlRoutingPreferences.resolvedBrowserPlacement(
                 alternateOpen: useAlternatePlacement
@@ -1061,16 +1064,25 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 url: fileURL,
                 placement: placement
             )
+            openedRightPanelInToastty = result && placement == .rightPanel
         case .unresolvedLocalDocument(let unresolvedURL, let issue):
             presentLocalDocumentLinkAlert(preferredWindowID, unresolvedURL, issue)
             result = false
+            openedRightPanelInToastty = false
         case .passthrough(let passthroughURL):
-            result = AppURLRouter.open(
+            let openResult = AppURLRouter.openResult(
                 passthroughURL,
                 preferredWindowID: preferredWindowID,
                 appStore: store,
                 useAlternatePlacement: useAlternatePlacement
             )
+            result = openResult.didOpen
+            openedRightPanelInToastty = openResult.openedRightPanelInToastty
+        }
+
+        if openedRightPanelInToastty,
+           let workspaceID = selection?.workspaceID {
+            _ = store.send(.exitFocusedPanelMode(workspaceID: workspaceID))
         }
 
         let targetMetadata: [String: String]

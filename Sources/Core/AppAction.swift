@@ -59,6 +59,7 @@ public enum AppAction: Equatable, Sendable {
     case focusRightAuxPanel(workspaceID: UUID, panelID: UUID)
     case clearRightAuxPanelFocus(workspaceID: UUID)
     case toggleFocusedPanelMode(workspaceID: UUID)
+    case exitFocusedPanelMode(workspaceID: UUID)
     case setConfiguredTerminalFont(points: Double?)
     case setDefaultTerminalProfile(profileID: String?)
     case setWindowTerminalFont(windowID: UUID, points: Double)
@@ -160,6 +161,8 @@ public extension AppAction {
             return "clearRightAuxPanelFocus"
         case .toggleFocusedPanelMode:
             return "toggleFocusedPanelMode"
+        case .exitFocusedPanelMode:
+            return "exitFocusedPanelMode"
         case .setConfiguredTerminalFont:
             return "setConfiguredTerminalFont"
         case .setDefaultTerminalProfile:

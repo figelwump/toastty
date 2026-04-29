@@ -627,12 +627,7 @@ public struct AppReducer {
             }
 
             if selectedTab.focusedPanelModeActive {
-                selectedTab.focusedPanelModeActive = false
-                selectedTab.focusModeRootNodeID = nil
-                selectedTab.selectedPanelIDs.removeAll()
-                workspace.tabsByID[selectedTabID] = selectedTab
-                commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
-                return true
+                return exitFocusedPanelMode(workspaceID: workspaceID, state: &state)
             }
 
             let splitTree = WorkspaceSplitTree(root: selectedTab.layoutTree)
@@ -652,6 +647,9 @@ public struct AppReducer {
             workspace.tabsByID[selectedTabID] = selectedTab
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
+
+        case .exitFocusedPanelMode(let workspaceID):
+            return exitFocusedPanelMode(workspaceID: workspaceID, state: &state)
 
         case .setConfiguredTerminalFont(let points):
             let clampedConfiguredPoints = points.map(AppState.clampedTerminalFontPoints)
@@ -1121,6 +1119,23 @@ public struct AppReducer {
         }
 
         return didMutate
+    }
+
+    @discardableResult
+    private static func exitFocusedPanelMode(workspaceID: UUID, state: inout AppState) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID],
+              let selectedTabID = workspace.resolvedSelectedTabID,
+              var selectedTab = workspace.tab(id: selectedTabID),
+              selectedTab.focusedPanelModeActive else {
+            return false
+        }
+
+        selectedTab.focusedPanelModeActive = false
+        selectedTab.focusModeRootNodeID = nil
+        selectedTab.selectedPanelIDs.removeAll()
+        workspace.tabsByID[selectedTabID] = selectedTab
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+        return true
     }
 
     @discardableResult

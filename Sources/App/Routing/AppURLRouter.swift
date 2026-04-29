@@ -106,6 +106,39 @@ enum AppURLRoute: Equatable {
     case external
     case localDocument(LocalDocumentPanelCreateRequest)
     case toasttyBrowser(placement: URLBrowserOpenPlacement)
+
+    var opensRightPanelInToastty: Bool {
+        switch self {
+        case .external:
+            return false
+        case .localDocument(let request):
+            return request.resolvedPlacement == .rightPanel
+        case .toasttyBrowser(let placement):
+            return placement == .rightPanel
+        }
+    }
+}
+
+enum AppURLRouterOpenResult: Equatable {
+    case openedInToastty(AppURLRoute)
+    case openedExternally(URL)
+    case failed
+
+    var didOpen: Bool {
+        switch self {
+        case .openedInToastty, .openedExternally:
+            return true
+        case .failed:
+            return false
+        }
+    }
+
+    var openedRightPanelInToastty: Bool {
+        guard case .openedInToastty(let route) = self else {
+            return false
+        }
+        return route.opensRightPanelInToastty
+    }
 }
 
 enum AppURLRouter {
@@ -160,6 +193,52 @@ enum AppURLRouter {
         return .toasttyBrowser(placement: preferences.resolvedBrowserPlacement(alternateOpen: useAlternatePlacement))
     }
 
+    @MainActor
+    static func openResult(
+        _ url: URL,
+        preferredWindowID: UUID?,
+        appStore: AppStore,
+        useAlternatePlacement: Bool = false,
+        preferences: URLRoutingPreferences? = nil,
+        requestLocalDocumentReveal: ((UUID, Int) -> Bool)? = nil,
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> AppURLRouterOpenResult {
+        let resolvedPreferences = preferences ?? appStore.urlRoutingPreferences
+        let resolvedRoute = route(
+            for: url,
+            preferences: resolvedPreferences,
+            localDocumentPreferences: appStore.localDocumentRoutingPreferences,
+            useAlternatePlacement: useAlternatePlacement
+        )
+        switch resolvedRoute {
+        case .external:
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget) ? .openedExternally(externalTarget) : .failed
+        case .localDocument(let request):
+            if let outcome = appStore.createLocalDocumentPanelFromCommandOutcome(
+                preferredWindowID: preferredWindowID,
+                request: request
+            ) {
+                if let lineNumber = request.lineNumber {
+                    _ = requestLocalDocumentReveal?(outcome.panelID, lineNumber)
+                }
+                return .openedInToastty(resolvedRoute)
+            }
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget) ? .openedExternally(externalTarget) : .failed
+        case .toasttyBrowser(let placement):
+            if appStore.openURLInBrowser(
+                preferredWindowID: preferredWindowID,
+                url: url,
+                placement: placement
+            ) {
+                return .openedInToastty(resolvedRoute)
+            }
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget) ? .openedExternally(externalTarget) : .failed
+        }
+    }
+
     @discardableResult
     @MainActor
     static func open(
@@ -171,39 +250,14 @@ enum AppURLRouter {
         requestLocalDocumentReveal: ((UUID, Int) -> Bool)? = nil,
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) -> Bool {
-        let resolvedPreferences = preferences ?? appStore.urlRoutingPreferences
-        let resolvedRoute = route(
-            for: url,
-            preferences: resolvedPreferences,
-            localDocumentPreferences: appStore.localDocumentRoutingPreferences,
-            useAlternatePlacement: useAlternatePlacement
-        )
-        switch resolvedRoute {
-        case .external:
-            let externalTarget = externalOpenTarget(for: url)
-            return openExternally(externalTarget)
-        case .localDocument(let request):
-            if let outcome = appStore.createLocalDocumentPanelFromCommandOutcome(
-                preferredWindowID: preferredWindowID,
-                request: request
-            ) {
-                if let lineNumber = request.lineNumber {
-                    _ = requestLocalDocumentReveal?(outcome.panelID, lineNumber)
-                }
-                return true
-            }
-            let externalTarget = externalOpenTarget(for: url)
-            return openExternally(externalTarget)
-        case .toasttyBrowser(let placement):
-            if appStore.openURLInBrowser(
-                preferredWindowID: preferredWindowID,
-                url: url,
-                placement: placement
-            ) {
-                return true
-            }
-            let externalTarget = externalOpenTarget(for: url)
-            return openExternally(externalTarget)
-        }
+        openResult(
+            url,
+            preferredWindowID: preferredWindowID,
+            appStore: appStore,
+            useAlternatePlacement: useAlternatePlacement,
+            preferences: preferences,
+            requestLocalDocumentReveal: requestLocalDocumentReveal,
+            openExternally: openExternally
+        ).didOpen
     }
 }
