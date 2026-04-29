@@ -150,6 +150,62 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(opacity, 0.01)
     }
 
+    func testScratchpadBindingStatusShowsUnboundWithoutSessionLink() {
+        XCTAssertEqual(
+            PanelCardView.scratchpadBindingStatus(for: nil, sessionRegistry: SessionRegistry()),
+            .unbound
+        )
+    }
+
+    func testScratchpadBindingStatusShowsUnboundForStaleSessionLink() {
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "stale-session",
+            agent: .claude,
+            sourcePanelID: UUID(),
+            sourceWorkspaceID: UUID(),
+            displayTitle: "Claude Code",
+            startedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        XCTAssertEqual(
+            PanelCardView.scratchpadBindingStatus(for: sessionLink, sessionRegistry: SessionRegistry()),
+            .unbound
+        )
+    }
+
+    func testScratchpadBindingStatusUsesActiveSessionTitle() {
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "live-session",
+            agent: .claude,
+            sourcePanelID: panelID,
+            sourceWorkspaceID: workspaceID,
+            displayTitle: "Old Title",
+            startedAt: Date(timeIntervalSince1970: 100)
+        )
+        var sessionRegistry = SessionRegistry()
+        sessionRegistry.startSession(
+            sessionID: "live-session",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            displayTitleOverride: "Claude Code",
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(
+            PanelCardView.scratchpadBindingStatus(
+                for: sessionLink,
+                sessionRegistry: sessionRegistry
+            ),
+            ScratchpadBindingStatus(label: "Bound to Claude Code", liveSessionID: "live-session")
+        )
+    }
+
     func testEffectivePrimaryFocusedPanelIDClearsWhenVisibleRightPanelIsFocused() {
         let mainPanelID = UUID()
         let rightPanelID = UUID()

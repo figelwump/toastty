@@ -146,6 +146,20 @@ Fix the artifact from those diagnostics before republishing. If `recentDiagnosti
 
 When debugging JavaScript, add short `console.info(...)` checkpoints around startup and event handlers, republish, and verify they appear as `generated-content` `console-message` diagnostics.
 
+## Read Current Scratchpad
+
+When the user asks you to look at, read, inspect, use, or implement what is in the current Scratchpad, export the session-linked Scratchpad through Toastty before acting on it.
+
+In a Toastty-managed agent terminal, run:
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export "sessionID=$TOASTTY_SESSION_ID"
+```
+
+Read the returned `filePath` as the current Scratchpad HTML, then use that content as the source for the requested work. The response also includes `panelID`, `documentID`, `revision`, and `title` for diagnostics or follow-up state queries.
+
+If export reports that the session has no linked Scratchpad, ask the user to bind the Scratchpad to this agent from the Scratchpad action menu or specify the relevant Scratchpad panel.
+
 ## Publish
 
 From the repo root, pipe generated HTML into the helper:

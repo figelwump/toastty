@@ -261,8 +261,11 @@ Scratchpad should not introduce a second independently editable title source in
 the runtime. If the agent passes a title, update the panel title through the same
 app-owned metadata path used by other web panels.
 
-The session link is a historical/provenance snapshot. It should not require the
-runtime `SessionRegistry` to still contain the session after app restart.
+The session link is a live-session reference, not durable provenance. A
+scratchpad should present itself as bound only while the runtime
+`SessionRegistry` still contains the referenced active session; after app
+restart or session stop, stale links are cleared from both restored panel state
+and the document store.
 
 ## document storage
 

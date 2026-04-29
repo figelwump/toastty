@@ -42,6 +42,42 @@ struct ScratchpadDocumentStoreTests {
     }
 
     @Test
+    func updateSessionLinkPersistsWithoutChangingContentRevision() throws {
+        let fixture = try ScratchpadDocumentStoreFixture()
+        let created = try fixture.store.createDocument(
+            title: "Initial",
+            content: "<p>One</p>",
+            sessionLink: nil,
+            now: Date(timeIntervalSince1970: 100)
+        )
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "sess-rebound",
+            agent: .claude,
+            sourcePanelID: UUID(),
+            sourceWorkspaceID: UUID(),
+            repoRoot: "/tmp/project",
+            cwd: "/tmp/project",
+            displayTitle: "Claude",
+            startedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let updated = try fixture.store.updateSessionLink(
+            documentID: created.documentID,
+            sessionLink: sessionLink,
+            now: Date(timeIntervalSince1970: 300)
+        )
+        let loadedDocument = try fixture.store.load(documentID: created.documentID)
+        let reloaded = try #require(loadedDocument)
+
+        #expect(updated.revision == 1)
+        #expect(updated.title == "Initial")
+        #expect(updated.content == "<p>One</p>")
+        #expect(updated.sessionLink == sessionLink)
+        #expect(updated.updatedAt == Date(timeIntervalSince1970: 300))
+        #expect(reloaded == updated)
+    }
+
+    @Test
     func staleExpectedRevisionIsRejected() throws {
         let fixture = try ScratchpadDocumentStoreFixture()
         let created = try fixture.store.createDocument(

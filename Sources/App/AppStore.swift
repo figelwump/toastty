@@ -158,6 +158,65 @@ struct ScratchpadPanelSetContentOutcome: Equatable, Sendable {
     let created: Bool
 }
 
+struct ScratchpadPanelCreateOutcome: Equatable, Sendable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+    let documentID: UUID
+    let revision: Int
+}
+
+struct ScratchpadPanelRebindOutcome: Equatable, Sendable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+    let documentID: UUID
+    let revision: Int
+    let sessionID: String
+}
+
+struct ScratchpadPanelUnbindOutcome: Equatable, Sendable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+    let documentID: UUID
+    let revision: Int
+}
+
+struct ScratchpadSessionLinkCleanupFailure: Equatable, Sendable {
+    let panelID: UUID
+    let errorDescription: String
+}
+
+struct ScratchpadSessionLinkCleanupOutcome: Equatable, Sendable {
+    let clearedPanelIDs: [UUID]
+    let clearedDocumentIDs: [UUID]
+    let failures: [ScratchpadSessionLinkCleanupFailure]
+
+    var didClearLinks: Bool {
+        clearedPanelIDs.isEmpty == false
+    }
+}
+
+private struct ScratchpadPanelSelection {
+    let windowID: UUID
+    let workspaceID: UUID
+    let workspace: WorkspaceState
+    let scratchpad: ScratchpadState
+}
+
+private struct ScratchpadPanelLinkUpdate {
+    let windowID: UUID
+    let workspaceID: UUID
+    let documentID: UUID
+    let revision: Int
+}
+
+private struct ScratchpadLinkedPanel {
+    let panelID: UUID
+    let sessionID: String
+}
+
 enum ScratchpadPanelError: LocalizedError, Equatable {
     case missingSession(String)
     case missingSourcePanel(UUID)
@@ -166,6 +225,8 @@ enum ScratchpadPanelError: LocalizedError, Equatable {
     case updatePanelFailed(UUID)
     case missingScratchpadState(UUID)
     case missingDocument(UUID)
+    case targetSessionOutsideScratchpadTab(String)
+    case sessionAlreadyLinkedToScratchpad(String, UUID)
 
     var errorDescription: String? {
         switch self {
@@ -183,6 +244,10 @@ enum ScratchpadPanelError: LocalizedError, Equatable {
             return "scratchpad panel has no scratchpad state: \(panelID.uuidString)"
         case .missingDocument(let documentID):
             return "scratchpad document is missing: \(documentID.uuidString)"
+        case .targetSessionOutsideScratchpadTab(let sessionID):
+            return "target session is not in the Scratchpad tab: \(sessionID)"
+        case .sessionAlreadyLinkedToScratchpad(let sessionID, let panelID):
+            return "target session \(sessionID) is already linked to Scratchpad panel: \(panelID.uuidString)"
         }
     }
 }
@@ -802,6 +867,164 @@ final class AppStore: ObservableObject {
             documentID: document.documentID,
             revision: document.revision,
             created: true
+        )
+    }
+
+    func createBlankScratchpadPanel(
+        workspaceID: UUID,
+        documentStore: ScratchpadDocumentStore
+    ) throws -> ScratchpadPanelCreateOutcome {
+        guard let workspace = state.workspacesByID[workspaceID] else {
+            throw ScratchpadPanelError.createPanelFailed
+        }
+
+        let previousPanelIDs = Set(workspace.allPanelsByID.keys)
+        let document = try documentStore.createDocument(
+            title: nil,
+            content: "",
+            sessionLink: nil
+        )
+        let scratchpad = ScratchpadState(
+            documentID: document.documentID,
+            sessionLink: nil,
+            revision: document.revision
+        )
+
+        guard send(
+            .createWebPanel(
+                workspaceID: workspaceID,
+                panel: WebPanelState(
+                    definition: .scratchpad,
+                    title: document.title,
+                    scratchpad: scratchpad
+                ),
+                placement: .rightPanel
+            )
+        ) else {
+            throw ScratchpadPanelError.createPanelFailed
+        }
+
+        guard let createdSelection = state.workspaceSelection(containingWorkspaceID: workspaceID),
+              let panelID = createdScratchpadPanelID(
+                  in: createdSelection.workspace,
+                  previousPanelIDs: previousPanelIDs
+              ) else {
+            throw ScratchpadPanelError.createPanelFailed
+        }
+
+        return ScratchpadPanelCreateOutcome(
+            windowID: createdSelection.windowID,
+            workspaceID: createdSelection.workspaceID,
+            panelID: panelID,
+            documentID: document.documentID,
+            revision: document.revision
+        )
+    }
+
+    func rebindScratchpadPanel(
+        panelID: UUID,
+        toSessionID sessionID: String,
+        sessionRuntimeStore: SessionRuntimeStore,
+        documentStore: ScratchpadDocumentStore
+    ) throws -> ScratchpadPanelRebindOutcome {
+        guard let targetSession = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            throw ScratchpadPanelError.missingSession(sessionID)
+        }
+        guard targetSession.agent != .processWatch else {
+            throw ScratchpadPanelError.missingSession(sessionID)
+        }
+        let scratchpadSelection = try scratchpadPanelSelection(panelID: panelID)
+        guard let ownerTabID = scratchpadOwnerTabID(
+            panelID: panelID,
+            workspace: scratchpadSelection.workspace
+        ),
+              let ownerTab = scratchpadSelection.workspace.tab(id: ownerTabID),
+              ownerTab.layoutTree.slotContaining(panelID: targetSession.panelID) != nil,
+              ownerTab.panels[targetSession.panelID] != nil else {
+            throw ScratchpadPanelError.targetSessionOutsideScratchpadTab(sessionID)
+        }
+        if let existing = linkedScratchpadPanel(sessionID: sessionID),
+           existing.panelID != panelID {
+            throw ScratchpadPanelError.sessionAlreadyLinkedToScratchpad(sessionID, existing.panelID)
+        }
+
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: targetSession.sessionID,
+            agent: targetSession.agent,
+            sourcePanelID: targetSession.panelID,
+            sourceWorkspaceID: scratchpadSelection.workspaceID,
+            repoRoot: targetSession.repoRoot,
+            cwd: targetSession.cwd,
+            displayTitle: targetSession.displayTitleOverride,
+            startedAt: targetSession.startedAt
+        )
+        let linkUpdate = try updateScratchpadPanelSessionLink(
+            panelID: panelID,
+            sessionLink: sessionLink,
+            documentStore: documentStore
+        )
+
+        return ScratchpadPanelRebindOutcome(
+            windowID: linkUpdate.windowID,
+            workspaceID: linkUpdate.workspaceID,
+            panelID: panelID,
+            documentID: linkUpdate.documentID,
+            revision: linkUpdate.revision,
+            sessionID: targetSession.sessionID
+        )
+    }
+
+    func unbindScratchpadPanel(
+        panelID: UUID,
+        documentStore: ScratchpadDocumentStore
+    ) throws -> ScratchpadPanelUnbindOutcome {
+        let linkUpdate = try updateScratchpadPanelSessionLink(
+            panelID: panelID,
+            sessionLink: nil,
+            documentStore: documentStore
+        )
+        return ScratchpadPanelUnbindOutcome(
+            windowID: linkUpdate.windowID,
+            workspaceID: linkUpdate.workspaceID,
+            panelID: panelID,
+            documentID: linkUpdate.documentID,
+            revision: linkUpdate.revision
+        )
+    }
+
+    func cleanupStaleScratchpadSessionLinks(
+        sessionRegistry: SessionRegistry,
+        documentStore: ScratchpadDocumentStore
+    ) -> ScratchpadSessionLinkCleanupOutcome {
+        let linkedPanels = scratchpadLinkedPanels()
+        var clearedPanelIDs: [UUID] = []
+        var clearedDocumentIDs: [UUID] = []
+        var failures: [ScratchpadSessionLinkCleanupFailure] = []
+
+        for linkedPanel in linkedPanels where sessionRegistry.activeSession(sessionID: linkedPanel.sessionID) == nil {
+            // Session links are exact live-session references; do not infer a
+            // replacement session from agent kind, title, panel ID, or cwd.
+            do {
+                let outcome = try unbindScratchpadPanel(
+                    panelID: linkedPanel.panelID,
+                    documentStore: documentStore
+                )
+                clearedPanelIDs.append(outcome.panelID)
+                clearedDocumentIDs.append(outcome.documentID)
+            } catch {
+                failures.append(
+                    ScratchpadSessionLinkCleanupFailure(
+                        panelID: linkedPanel.panelID,
+                        errorDescription: error.localizedDescription
+                    )
+                )
+            }
+        }
+
+        return ScratchpadSessionLinkCleanupOutcome(
+            clearedPanelIDs: clearedPanelIDs,
+            clearedDocumentIDs: clearedDocumentIDs,
+            failures: failures
         )
     }
 
@@ -1680,6 +1903,86 @@ final class AppStore: ObservableObject {
         }
     }
 
+    private func scratchpadPanelSelection(panelID: UUID) throws -> ScratchpadPanelSelection {
+        guard let selection = state.workspaceSelection(containingPanelID: panelID),
+              let panelState = selection.workspace.panelState(for: panelID),
+              case .web(let webState) = panelState,
+              webState.definition == .scratchpad else {
+            throw ScratchpadPanelError.updatePanelFailed(panelID)
+        }
+        guard let scratchpad = webState.scratchpad else {
+            throw ScratchpadPanelError.missingScratchpadState(panelID)
+        }
+        return ScratchpadPanelSelection(
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            workspace: selection.workspace,
+            scratchpad: scratchpad
+        )
+    }
+
+    private func updateScratchpadPanelSessionLink(
+        panelID: UUID,
+        sessionLink: ScratchpadSessionLink?,
+        documentStore: ScratchpadDocumentStore
+    ) throws -> ScratchpadPanelLinkUpdate {
+        let selection = try scratchpadPanelSelection(panelID: panelID)
+        guard let existingDocument = try documentStore.load(documentID: selection.scratchpad.documentID) else {
+            throw ScratchpadPanelError.missingDocument(selection.scratchpad.documentID)
+        }
+
+        let document: ScratchpadDocument
+        if existingDocument.sessionLink != sessionLink {
+            document = try documentStore.updateSessionLink(
+                documentID: selection.scratchpad.documentID,
+                sessionLink: sessionLink
+            )
+        } else {
+            document = existingDocument
+        }
+
+        let nextScratchpad = ScratchpadState(
+            documentID: document.documentID,
+            sessionLink: sessionLink,
+            revision: document.revision
+        )
+        if selection.scratchpad != nextScratchpad {
+            guard send(
+                .updateScratchpadPanelState(
+                    panelID: panelID,
+                    scratchpad: nextScratchpad,
+                    title: nil
+                )
+            ) else {
+                throw ScratchpadPanelError.updatePanelFailed(panelID)
+            }
+        }
+
+        return ScratchpadPanelLinkUpdate(
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            documentID: document.documentID,
+            revision: document.revision
+        )
+    }
+
+    private func scratchpadLinkedPanels() -> [ScratchpadLinkedPanel] {
+        state.workspacesByID.values
+            .flatMap { workspace in
+                workspace.allPanelsByID.compactMap { panelID, panelState in
+                    guard case .web(let webState) = panelState,
+                          webState.definition == .scratchpad,
+                          let sessionID = webState.scratchpad?.sessionLink?.sessionID else {
+                        return nil
+                    }
+                    return ScratchpadLinkedPanel(panelID: panelID, sessionID: sessionID)
+                }
+            }
+            .sorted { lhs, rhs in
+                lhs.panelID.uuidString < rhs.panelID.uuidString
+            }
+    }
+
     private func linkedScratchpadPanel(
         sessionID: String
     ) -> (windowID: UUID, workspaceID: UUID, panelID: UUID, webState: WebPanelState)? {
@@ -1699,6 +2002,13 @@ final class AppStore: ObservableObject {
             }
         }
         return nil
+    }
+
+    private func scratchpadOwnerTabID(panelID: UUID, workspace: WorkspaceState) -> UUID? {
+        if let location = workspace.rightAuxPanelTabLocation(containingPanelID: panelID) {
+            return location.mainTabID
+        }
+        return workspace.tabID(containingPanelID: panelID)
     }
 
     private func markScratchpadUpdatedIfUnfocused(workspaceID: UUID, panelID: UUID) {
