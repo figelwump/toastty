@@ -29,6 +29,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+Ctrl+B` | New browser in the right panel |
 | `Cmd+Ctrl+Shift+B` | New browser tab |
+| `Cmd+Ctrl+S` | New Scratchpad in the right panel |
 | `Cmd+[` | Focus previous pane, including the active right-panel tab when visible |
 | `Cmd+]` | Focus next pane, including the active right-panel tab when visible |
 | `Cmd+Opt+Left Arrow` | Focus pane to the left |

@@ -16,7 +16,7 @@ Important scope note:
 CLI note:
 
 - The repo ships a `toastty` CLI wrapper for app control (`action` / `query`), notifications, and the `session` subcommands.
-- Toastty-managed Claude and Codex launches primarily use
+- Toastty-managed Claude, Codex, and Pi launches primarily use
   `session ingest-agent-event` to translate provider events into `session.status`
   updates. `session ingest-agent-event` is handled locally inside the CLI; it is
   not a socket event type.
@@ -211,6 +211,9 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `panel.close`
 - `panel.create.browser`
 - `panel.create.local-document`
+- `panel.scratchpad.set-content`
+- `panel.scratchpad.rebind`
+- `panel.scratchpad.export`
 - `panel.focus-mode.toggle`
 - `agent.launch`
 - `config.reload`
@@ -235,6 +238,36 @@ Notable action-specific behavior:
   - requires `args.index` and `args.toIndex`, both 1-based tab positions in the
     target workspace.
   - Reorders the workspace's tab list without changing the selected tab ID.
+- `panel.scratchpad.set-content`
+  - requires `args.sessionID`.
+  - requires exactly one of `args.filePath` or `args.content`.
+  - `args.filePath` is read as UTF-8. Relative paths resolve from the active
+    session's `cwd` when available, then from the app process working directory.
+  - `args.title` is optional.
+  - `args.expectedRevision` is optional. New documents accept `0`; existing
+    documents reject stale revisions.
+  - Content is stored as HTML in the Scratchpad document store and is limited to
+    1,048,576 UTF-8 bytes.
+  - The action creates or updates the Scratchpad linked to the active managed
+    session, opens new Scratchpads in the right panel, restores focus to the
+    source terminal after auto-create, and marks unfocused Scratchpads updated.
+  - The result includes `windowID`, `workspaceID`, `panelID`, `documentID`,
+    `revision`, and `created`.
+- `panel.scratchpad.rebind`
+  - requires `args.sessionID` for an active managed session.
+  - Targets an existing Scratchpad panel using `args.panelID`, workspace/window
+    selectors, or the focused/active Scratchpad resolution order.
+  - The target session must be in the same workspace tab as the Scratchpad, and
+    a session may only be linked to one Scratchpad at a time.
+  - `panel.scratchpad.bind` is accepted as a compatibility alias.
+  - The result includes `windowID`, `workspaceID`, `panelID`, `documentID`,
+    `revision`, and `sessionID`.
+- `panel.scratchpad.export`
+  - Targets by `args.sessionID` when provided, otherwise by the normal
+    Scratchpad panel selectors.
+  - Writes the Scratchpad HTML to an app-chosen local file path.
+  - The result includes `workspaceID`, `panelID`, `filePath`, `documentID`,
+    `revision`, and `title`.
 
 ### `app_control.list_queries`
 
@@ -267,6 +300,14 @@ Common query IDs include:
 - `terminal.visible-text`
 - `panel.local-document.state`
 - `panel.browser.state`
+- `panel.scratchpad.state`
+
+`panel.scratchpad.state` resolves a Scratchpad panel from `panelID`, or from
+`workspaceID` / `windowID` using focused layout Scratchpad, focused right-panel
+Scratchpad, active right-panel Scratchpad, any right-panel Scratchpad, then
+layout Scratchpad order. It returns Scratchpad document metadata, linked session
+ID when present, host lifecycle state, bootstrap content hashes, and recent
+Scratchpad diagnostics.
 
 ## 6) implemented automation commands
 
@@ -411,6 +452,25 @@ Supported action IDs:
   - legacy alias for `panel.create.localDocument`
 - `panel.create.local-document`
   - canonical ID for `panel.create.localDocument`
+- `panel.scratchpad.set-content`
+  - requires `args.sessionID`
+  - requires exactly one of `args.filePath` or `args.content`
+  - accepts optional `args.title` and `args.expectedRevision`
+  - creates or updates the Scratchpad linked to the active managed session
+  - returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and
+    `created`
+- `panel.scratchpad.rebind`
+  - requires `args.sessionID`
+  - targets an existing Scratchpad panel by `args.panelID`, workspace/window
+    selectors, or focused/active Scratchpad resolution
+  - returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and
+    `sessionID`
+- `panel.scratchpad.export`
+  - targets by `args.sessionID` when provided, otherwise by the normal
+    Scratchpad panel selectors
+  - writes the Scratchpad HTML to an app-chosen local file path
+  - returns `workspaceID`, `panelID`, `filePath`, `documentID`, `revision`, and
+    `title`
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
   - terminal-only window font increase
@@ -659,6 +719,45 @@ Behavior:
 - Compatibility shim over `app_control.run_query` with `id: "panel.browser.state"`.
 - `panelID` is optional; when omitted, Toastty resolves the browser panel from `workspaceID` or `windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order.
 
+### `automation.scratchpad_panel_state`
+
+Request payload:
+
+- `panelID?: UUID string`
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
+
+Result:
+
+- `workspaceID: UUID string`
+- `panelID: UUID string`
+- `stateTitle: String`
+- `stateDocumentID: UUID string | null`
+- `stateRevision: Int | null`
+- `stateSessionID: String | null`
+- `hostLifecycleState: String`
+- `hostAttachmentID: UUID string | null`
+- `currentTheme: String`
+- `hasCurrentBootstrap: Bool`
+- `pendingBootstrapScript: Bool`
+- `currentAssetPath: String | null`
+- `diagnosticCount: Int`
+- `recentDiagnostics: [{ sequence, source, kind, level, message, metadata }]`
+- `bootstrapContractVersion: Int | null`
+- `bootstrapDocumentID: UUID string | null`
+- `bootstrapDisplayName: String | null`
+- `bootstrapRevision: Int | null`
+- `bootstrapMissingDocument: Bool | null`
+- `bootstrapMessage: String | null`
+- `bootstrapTheme: String | null`
+- `bootstrapContentLength: Int | null`
+- `bootstrapContentSHA256: String | null`
+
+Behavior:
+
+- Compatibility shim over `app_control.run_query` with `id: "panel.scratchpad.state"`.
+- `panelID` is optional; when omitted, Toastty resolves the Scratchpad panel from `workspaceID` or `windowID`, then prefers the focused layout Scratchpad, the focused right-panel Scratchpad, the active right-panel Scratchpad, any right-panel Scratchpad, and otherwise the first layout Scratchpad.
+
 ### `automation.workspace_snapshot`
 
 Request payload:
@@ -783,7 +882,7 @@ Validation:
 
 - `panelID` must refer to a live panel
 - `agent` must be a valid lowercase agent ID
-- Built-in examples include `claude` and `codex`
+- Built-in examples include `claude`, `codex`, and `pi`
 
 Result:
 

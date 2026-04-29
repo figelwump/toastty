@@ -65,18 +65,18 @@ Build:
 - `ScratchpadPanelView`
 - `ScratchpadPanelHostView`
 - bundled `WebPanels/ScratchpadApp/`
-- app-control action `panel.scratchpad.set-content`
+- app-control actions `panel.scratchpad.set-content`,
+  `panel.scratchpad.rebind`, and `panel.scratchpad.export`
 - session-linked create-or-update behavior
+- manual blank Scratchpad tabs in the right panel
+- bind, rebind, unbind, export, and open-in-browser panel affordances
 - sandboxed generated HTML/CSS/JS rendering
 - persisted scratchpad document storage outside layout snapshots
 - unread/updated indication when an unfocused scratchpad changes
 
-Do not build in v1:
+Still out of scope for v1:
 
-- `New Scratchpad Tab`
-- standalone scratchpads
 - workspace-shared scratchpads
-- relink or detach
 - user comments or annotations
 - scratchpad-to-agent feedback queues
 - terminal injection
@@ -115,12 +115,13 @@ new one per turn.
 
 ### backup entry point
 
-V1 should include one user-facing backup action:
+V1 includes two user-facing entry points:
 
 - `Show Scratchpad For Current Session`
+- `New Scratchpad`
 
-Expose this action from the Workspace menu and the command palette. Do not add a
-standalone `New Scratchpad` action in v1.
+Expose these actions from the Workspace menu and the command palette. The right
+panel add menu also offers `New Scratchpad`.
 
 Behavior:
 
@@ -131,8 +132,8 @@ Behavior:
 
 Unlike agent auto-create, explicit user invocation may focus the scratchpad.
 
-Standalone `New Scratchpad Tab` is deferred until standalone scratchpads have a
-clear product role.
+`New Scratchpad` creates an unbound right-panel Scratchpad immediately. The
+panel can later be rebound to a live managed session from the panel affordances.
 
 ## placement
 
@@ -364,9 +365,11 @@ When the linked agent session ends:
 
 - the scratchpad remains open if its panel is open
 - the document remains viewable
-- the session link becomes historical metadata
-- future writes require a currently active session unless a later relink flow is
-  built
+- stale session links are cleared from restored panel state and document metadata
+  once the runtime no longer has the linked active session
+- future writes require a currently active session
+- the user can rebind an open Scratchpad to another active managed session in
+  the same workspace tab, or unbind it from the current session
 
 When the user closes a scratchpad panel:
 
@@ -411,6 +414,9 @@ App-control tests:
   `revision`, and `created`
 - repeated calls for the same session update in place
 - concurrent calls serialize per scratchpad document
+- `panel.scratchpad.rebind` requires a live managed session in the same
+  workspace tab
+- `panel.scratchpad.export` writes the current Scratchpad HTML to a local file
 
 Smoke validation:
 
@@ -431,12 +437,12 @@ Recommended implementation order:
 5. add `panel.scratchpad.set-content` app-control action
 6. add session-linked create-or-update behavior and focus restoration
 7. add unread/updated indicator behavior
-8. add agent skill/prompt guidance for when to use Scratchpad
+8. add manual right-panel Scratchpad creation, rebind/unbind, and export flows
+9. add agent skill/prompt guidance for when to use Scratchpad
 
 After v1 is proven, revisit:
 
 - true `splitBesideSource`
-- standalone scratchpads
 - append or patch APIs
 - comments and feedback routing
 - Markdown-to-agent review feedback

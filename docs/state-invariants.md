@@ -53,8 +53,9 @@ For each workspace, the validator enforces:
 - Every tab ID in `WorkspaceState.tabIDs` must exist in `WorkspaceState.tabsByID`.
 - `WorkspaceState.selectedTabID`, if non-nil, must be present in
   `WorkspaceState.tabIDs`.
-- For each tab, `WorkspaceTabState.panels` is the canonical storage for panel
-  state.
+- For each tab, `WorkspaceTabState.panels` is the canonical storage for main
+  layout panel state. `WorkspaceTabState.rightAuxPanel.tabsByID` stores
+  right-panel tab state for that same workspace tab.
 - Every `LayoutNode.slot.panelID` exists in its tab's `WorkspaceTabState.panels`.
 - Every panel in a tab's `WorkspaceTabState.panels` appears in exactly one slot
   in that tab's layout tree.
@@ -65,8 +66,18 @@ For each workspace, the validator enforces:
 - Every split ratio satisfies `0 < ratio < 1`.
 - Slot IDs and split node IDs are unique across all tab layout trees in a
   workspace.
-- `WorkspaceTabState.unreadPanelIDs` and `WorkspaceTabState.selectedPanelIDs`
-  may only contain panel IDs present in that tab's `WorkspaceTabState.panels`.
+- `WorkspaceTabState.unreadPanelIDs` may only contain panel IDs present in that
+  tab's main panels or right auxiliary panel tabs.
+- `WorkspaceTabState.selectedPanelIDs` may only contain panel IDs present in
+  that tab's main panels.
+- Every `RightAuxPanelState.tabIDs` entry must exist in
+  `RightAuxPanelState.tabsByID`.
+- A right auxiliary panel's `activeTabID`, if non-nil, must exist in
+  `RightAuxPanelState.tabsByID` and `RightAuxPanelState.tabIDs`.
+- A right auxiliary panel's transient `focusedPanelID`, if non-nil, must refer
+  to a panel in one of that right panel's tabs.
+- A panel ID may appear at most once across a tab's main layout tree and right
+  auxiliary panel tabs.
 
 Important model detail:
 
@@ -89,7 +100,11 @@ During `WorkspaceTabState` decode:
 
 - `focusedPanelModeActive` is always reset to `false`.
 - `focusModeRootNodeID` is reset to `nil`.
-- `unreadPanelIDs` is intersected with the current `panels` keys.
+- `rightAuxPanel` defaults to an empty right panel when missing, repairs tab
+  ordering, clamps width, clears invalid active-tab focus, and never persists
+  `focusedPanelID`.
+- `unreadPanelIDs` is intersected with the current main panel keys plus right
+  auxiliary panel IDs.
 - `selectedPanelIDs` is reset to `[]`.
 
 During `AppState` initialization or decode:

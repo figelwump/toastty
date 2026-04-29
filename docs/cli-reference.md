@@ -46,12 +46,14 @@ Human-readable output prints one command per line as `id<TAB>summary`. With `--j
 Run an app action against a live Toastty instance. This surface is available in normal launches by default; it does not require automation mode.
 
 ```
-toastty action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+toastty action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [--stdin <key>] [key=value ...]
 ```
 
 Selectors map directly to the socket request's `windowID`, `workspaceID`, and `panelID` arguments. Additional `key=value` arguments are passed through as action arguments. Repeating the same key produces an array, which is how repeatable arguments such as `files=... files=...` are encoded.
 
 The CLI sends `key=value` arguments as strings. The app-control executor coerces supported argument types such as booleans (`true`, `false`, `1`, `0`, `yes`, `no`), integers, UUIDs, and string arrays.
+
+`--stdin <key>` reads UTF-8 stdin and sends it as the named argument. Use it for payloads that are awkward to pass as a shell argument, such as Scratchpad HTML content.
 
 ```bash
 "$TOASTTY_CLI_PATH" action run window.sidebar.toggle --window "$WINDOW_ID"
@@ -77,6 +79,15 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
   --workspace "$WORKSPACE_ID" \
   index=2 \
   toIndex=1
+"$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
+  sessionID="$TOASTTY_SESSION_ID" \
+  filePath=artifacts/scratchpad.html \
+  title="Review notes"
+printf '%s' "$html" | "$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
+  --stdin content \
+  sessionID="$TOASTTY_SESSION_ID"
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+  sessionID="$TOASTTY_SESSION_ID"
 ```
 
 `workspace.create` accepts optional `title` and `activate` arguments. When
@@ -106,6 +117,9 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `panel.close`
 - `panel.create.browser`
 - `panel.create.local-document`
+- `panel.scratchpad.set-content`
+- `panel.scratchpad.rebind`
+- `panel.scratchpad.export`
 - `panel.focus-mode.toggle`
 - `agent.launch`
 - `config.reload`
@@ -113,6 +127,12 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `terminal.drop-image-files`
 
 Descriptors can also advertise compatibility aliases. Those aliases are accepted by the socket executor, but canonical IDs are preferred for new integrations.
+
+Scratchpad actions are intended for agent and automation integrations:
+
+- `panel.scratchpad.set-content` creates or updates the Scratchpad linked to an active managed session. It requires `sessionID` plus either `filePath` or `content`, accepts optional `title` and `expectedRevision`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`.
+- `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
+- `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
 
 ### `query list`
 
@@ -151,6 +171,9 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `terminal.visible-text`
 - `panel.local-document.state`
 - `panel.browser.state`
+- `panel.scratchpad.state`
+
+`panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 
 ### `notify`
 
@@ -269,7 +292,7 @@ toastty session stop --session <id> [--panel <id>] [--reason <text>]
 
 ### `session ingest-agent-event`
 
-Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude and Codex instrumentation — it reads structured event JSON from stdin and translates it into `session status` and `session stop` calls over the socket.
+Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, and Pi instrumentation — it reads structured event JSON from stdin and translates it into `session status` and `session stop` calls over the socket.
 
 ```
 toastty session ingest-agent-event --source <source> [--session <id>] [--panel <id>]
@@ -277,13 +300,13 @@ toastty session ingest-agent-event --source <source> [--session <id>] [--panel <
 
 | Option | Required | Env var fallback | Description |
 |---|---|---|---|
-| `--source <source>` | yes | — | `claude-hooks` or `codex-notify` |
+| `--source <source>` | yes | — | `claude-hooks`, `codex-notify`, or `pi-extension` |
 | `--session <id>` | no | `TOASTTY_SESSION_ID` | Session ID |
 | `--panel <id>` | no | `TOASTTY_PANEL_ID` | Panel UUID |
 
 This command is not intended for third-party integrations. Custom agents should use `session status` and `session stop` directly.
 
-Toastty's built-in Claude and Codex launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If the helper cannot reach the app, it keeps the agent process alive but appends the CLI failure details to `telemetry-failures.log` in that session's temporary launch artifacts directory. Codex keeps that directory only while the session is active; Claude can retain hook artifacts briefly after session stop so late hooks fail softly instead of hitting missing-file shell errors.
+Toastty's built-in Claude, Codex, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If the helper cannot reach the app, it keeps the agent process alive but appends the CLI failure details to `telemetry-failures.log` in that session's temporary launch artifacts directory. Codex keeps that directory only while the session is active; Claude can retain hook artifacts briefly after session stop so late hooks fail softly instead of hitting missing-file shell errors.
 
 ## Environment variables
 

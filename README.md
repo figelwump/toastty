@@ -28,12 +28,13 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, drag to reorder them, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
 - **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions; active sessions then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active sessions, then wrapped working panels.
-- **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
+- **Automatic agent status** — For Claude, Codex, and Pi, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Command palette** — Open a keyboard-first palette with `Cmd+Shift+P` to run built-in commands, switch workspaces, launch configured agents, and split with terminal profiles
 - **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
 - **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`, and drag to reorder within the workspace
 - **Right panel** — Keep supporting work beside the active terminal with per-tab Scratchpad, browser, and local-document tabs; toggle it with `Cmd+Shift+B`
+- **Scratchpad** — Keep rich agent-authored notes, plans, and review surfaces in session-linked right-panel tabs; Scratchpad documents persist locally and can be rebound or exported
 - **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu, top bar, or command palette, with live sidebar status and notifications
 - **Later flags** — Mark a managed session for follow-up without pinning or reordering it; the flag stays until you clear it or the session meaningfully advances
 - **Watch running commands** — Mark a busy terminal with `Cmd+Shift+M` to surface a session-style row, unread badge, and completion notification when that foreground command exits
@@ -42,7 +43,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **In-panel find** — Search the active terminal's Ghostty scrollback or the focused local document in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
 - **Persisted terminal history** — With shell integration installed, restored `zsh`, `bash`, and `fish` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
-- **Local documents and directory opens** — Open supported local files in tabs or splits as editable code views with line numbers: Markdown, plain-text files (`.txt`), YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts, and common source files (`.swift`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.py`, `.go`, `.rs`). Backed local documents also expose `Open in Default App` as a header escape hatch. `Cmd`-clicking a local directory path in the terminal opens a split rooted at that directory.
+- **Local documents and directory opens** — Open supported local files in tabs or splits as editable code views with line numbers: Markdown, plain-text files (`.txt`), YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts, and common source files (`.swift`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.py`, `.go`, `.rs`). Local `.html` and `.htm` files open as browser panels. Backed local documents also expose `Open in Default App` as a header escape hatch. `Cmd`-clicking a local directory path in the terminal opens a split rooted at that directory.
 - **Text size and zoom control** — `Cmd+=`, `Cmd+-`, and `Cmd+0` adjust terminal font size for focused terminals, local-document text size for focused local documents, or page zoom for focused browser panels; terminal and local-document overrides persist per window, and browser zoom persists per browser panel
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
@@ -61,6 +62,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+Shift+P` | Open the command palette |
 | `Cmd+Ctrl+B` | New browser in the right panel |
+| `Cmd+Ctrl+S` | New Scratchpad in the right panel |
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
@@ -100,7 +102,7 @@ For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md
 
 The right panel is a workspace-side tab strip for supporting material that should stay next to the active terminal instead of taking over the main pane layout. Use it for Scratchpad notes, browser panels, and local documents while the main workspace remains focused on terminals and splits.
 
-Each horizontal workspace tab keeps its own right-panel tabs, active tab, width, and visibility in the persisted layout. `Cmd+Shift+B` shows or hides the right panel; when showing it, Toastty focuses the active right-panel tab if one exists. `Cmd+Ctrl+[` and `Cmd+Ctrl+]` cycle through right-panel tabs, and `Cmd+Ctrl+B` opens a new browser there.
+Each horizontal workspace tab keeps its own right-panel tabs, active tab, width, and visibility in the persisted layout. `Cmd+Shift+B` shows or hides the right panel; when showing it, Toastty focuses the active right-panel tab if one exists. `Cmd+Ctrl+[` and `Cmd+Ctrl+]` cycle through right-panel tabs, `Cmd+Ctrl+B` opens a new browser there, and `Cmd+Ctrl+S` creates a new Scratchpad.
 
 Terminal command-click integrations use the right panel for common supporting files: supported local documents open as editable local-document tabs, and local HTML files open in the browser.
 

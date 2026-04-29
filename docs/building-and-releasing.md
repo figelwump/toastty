@@ -143,7 +143,7 @@ TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
 
 ## Dev and test runs
 
-When developing or testing locally, Toastty can isolate all mutable state — config, workspace layouts, terminal profiles, logs, and `UserDefaults` — inside a per-worktree or per-run runtime home so parallel instances never collide.
+When developing or testing locally, Toastty can isolate all mutable state — config, workspace layouts, Scratchpad documents, terminal profiles, logs, and `UserDefaults` — inside a per-worktree or per-run runtime home so parallel instances never collide.
 
 Set `TOASTTY_DEV_WORKTREE_ROOT` to derive a stable sandbox from the current worktree, or set `TOASTTY_RUNTIME_HOME` for an explicit one-off sandbox. The Tuist-generated Xcode Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`.
 

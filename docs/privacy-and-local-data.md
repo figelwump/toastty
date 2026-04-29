@@ -9,7 +9,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/config-reference`
   - Generated commented reference for every supported Toastty config key. Toastty rewrites this file on launch and when you open `Toastty > Open Config Reference…`.
 - `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/bin/` when runtime isolation is enabled and agent command shims are enabled
-  - Managed `codex` and `claude` wrapper symlinks used to track manual agent invocations inside Toastty terminals.
+  - Managed `codex`, `claude`, and `pi` wrapper symlinks used to track manual agent invocations inside Toastty terminals.
 - macOS `UserDefaults` for Toastty
   - Small UI-managed settings such as the post-agent-launch sidebar default latch, plus any one-time legacy migration state.
 - `~/.toastty/terminal-profiles.toml`
@@ -18,6 +18,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Local per-command usage counts used only to rank command-palette results.
 - `~/.toastty/workspace-layout-profiles.json`
   - Saved workspace and window layout snapshots, including window-local terminal font overrides, window-local local-document text-size overrides, and per-browser page zoom overrides.
+- `~/.toastty/scratchpad-documents/`
+  - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
 - `~/.toastty/history/pane-journals/`
@@ -32,6 +34,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
+  - `<runtime-home>/scratchpad-documents/`
   - `<runtime-home>/history/pane-journals/`
   - `<runtime-home>/logs/toastty.log`
   - `<runtime-home>/instance.json`
