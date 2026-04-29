@@ -917,7 +917,20 @@ final class GhosttyRuntimeManager {
         inheritFrom sourceSurface: ghostty_surface_t? = nil,
         launchConfiguration: TerminalSurfaceLaunchConfiguration = .empty
     ) -> SurfaceCreationResult? {
-        guard let app else { return nil }
+        guard let app else {
+            ToasttyLog.warning(
+                "Ghostty surface creation requested before app initialization",
+                category: .ghostty,
+                metadata: Self.surfaceCreationDiagnostics(
+                    hostView: hostView,
+                    fontPoints: fontPoints,
+                    sourceSurface: sourceSurface,
+                    launchConfiguration: launchConfiguration,
+                    resolvedWorkingDirectory: Self.normalizedWorkingDirectoryValue(workingDirectory) ?? "nil"
+                )
+            )
+            return nil
+        }
 
         var surfaceConfig: ghostty_surface_config_s
         var inheritedWorkingDirectory: String?
@@ -983,13 +996,79 @@ final class GhosttyRuntimeManager {
         if let surface {
             registerSurfaceAssociation(surface, forHostView: hostView)
             scheduleImmediateTick()
+            ToasttyLog.debug(
+                "Ghostty runtime created surface",
+                category: .ghostty,
+                metadata: Self.surfaceCreationDiagnostics(
+                    hostView: hostView,
+                    fontPoints: fontPoints,
+                    sourceSurface: sourceSurface,
+                    launchConfiguration: launchConfiguration,
+                    resolvedWorkingDirectory: resolvedWorkingDirectory,
+                    extra: ["surface_handle": String(UInt(bitPattern: surface))]
+                )
+            )
             return SurfaceCreationResult(
                 surface: surface,
                 workingDirectory: resolvedWorkingDirectory
             )
         }
         scheduleImmediateTick()
+        ToasttyLog.warning(
+            "Ghostty runtime surface factory returned nil",
+            category: .ghostty,
+            metadata: Self.surfaceCreationDiagnostics(
+                hostView: hostView,
+                fontPoints: fontPoints,
+                sourceSurface: sourceSurface,
+                launchConfiguration: launchConfiguration,
+                resolvedWorkingDirectory: resolvedWorkingDirectory
+            )
+        )
         return nil
+    }
+
+    private static func surfaceCreationDiagnostics(
+        hostView: NSView,
+        fontPoints: Double,
+        sourceSurface: ghostty_surface_t?,
+        launchConfiguration: TerminalSurfaceLaunchConfiguration,
+        resolvedWorkingDirectory: String,
+        extra: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata = [
+            "host_view_id": String(describing: Unmanaged.passUnretained(hostView).toOpaque()),
+            "host_has_superview": hostView.superview == nil ? "false" : "true",
+            "host_superview_id": hostView.superview.map {
+                String(describing: Unmanaged.passUnretained($0).toOpaque())
+            } ?? "nil",
+            "host_has_window": hostView.window == nil ? "false" : "true",
+            "host_window_id": hostView.window.map {
+                String(describing: Unmanaged.passUnretained($0).toOpaque())
+            } ?? "nil",
+            "host_window_key": hostView.window?.isKeyWindow == true ? "true" : "false",
+            "host_window_visible": hostView.window?.isVisible == true ? "true" : "false",
+            "host_hidden": hostView.isHidden ? "true" : "false",
+            "host_hidden_ancestor": hostView.ghosttyLogHasHiddenAncestor ? "true" : "false",
+            "host_width": String(format: "%.1f", hostView.bounds.width),
+            "host_height": String(format: "%.1f", hostView.bounds.height),
+            "host_backing_scale": String(
+                format: "%.3f",
+                hostView.window?.screen?.backingScaleFactor
+                    ?? hostView.window?.backingScaleFactor
+                    ?? NSScreen.main?.backingScaleFactor
+                    ?? 1
+            ),
+            "font_points": String(format: "%.1f", fontPoints),
+            "inherited_source_surface": sourceSurface == nil ? "false" : "true",
+            "launch_environment_count": String(launchConfiguration.environmentVariables.count),
+            "launch_initial_input_present": launchConfiguration.normalizedInitialInput == nil ? "false" : "true",
+            "resolved_working_directory_present": resolvedWorkingDirectory.isEmpty ? "false" : "true",
+        ]
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        return metadata
     }
 
     func unregisterSurfaceAssociation(forHostView hostView: NSView, surface: ghostty_surface_t?) {
@@ -1730,6 +1809,19 @@ final class GhosttyRuntimeManager {
 
     fileprivate func routeCloseSurfaceRequest(surfaceHandle: UInt?, confirmed: Bool) -> Bool {
         actionHandler?.handleGhosttyCloseSurfaceRequest(surfaceHandle: surfaceHandle, confirmed: confirmed) ?? false
+    }
+}
+
+private extension NSView {
+    var ghosttyLogHasHiddenAncestor: Bool {
+        var ancestor = superview
+        while let current = ancestor {
+            if current.isHidden {
+                return true
+            }
+            ancestor = current.superview
+        }
+        return false
     }
 }
 #endif
