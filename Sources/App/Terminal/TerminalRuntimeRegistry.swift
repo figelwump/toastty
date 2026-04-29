@@ -1052,6 +1052,15 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 direction: direction,
                 workingDirectory: path
             )
+        case .localBrowserFile(let fileURL):
+            let placement = store.urlRoutingPreferences.resolvedBrowserPlacement(
+                alternateOpen: useAlternatePlacement
+            )
+            result = store.openURLInBrowser(
+                preferredWindowID: preferredWindowID,
+                url: fileURL,
+                placement: placement
+            )
         case .unresolvedLocalDocument(let unresolvedURL, let issue):
             presentLocalDocumentLinkAlert(preferredWindowID, unresolvedURL, issue)
             result = false
@@ -1079,6 +1088,15 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             targetMetadata = [
                 "resolved_path": path,
                 "split_direction": useAlternatePlacement ? SlotSplitDirection.down.rawValue : SlotSplitDirection.right.rawValue,
+            ]
+        case .localBrowserFile(let fileURL):
+            let placement = store.urlRoutingPreferences.resolvedBrowserPlacement(
+                alternateOpen: useAlternatePlacement
+            )
+            targetKind = "local_browser_file"
+            targetMetadata = [
+                "resolved_url": fileURL.absoluteString,
+                "placement": placement.rawValue,
             ]
         case .unresolvedLocalDocument(let unresolvedURL, let issue):
             targetKind = "unresolved_local_document"

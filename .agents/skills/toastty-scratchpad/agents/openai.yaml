@@ -1,4 +1,4 @@
 interface:
   display_name: "Toastty Scratchpad"
-  short_description: "Create and update visual Scratchpad panels for users."
-  default_prompt: "Use Toastty Scratchpad to turn this context into a visual Scratchpad panel."
+  short_description: "Read, review, create, and update current-session Scratchpad panels."
+  default_prompt: "Use Toastty Scratchpad to read or turn this context into a visual Scratchpad panel."

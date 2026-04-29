@@ -137,7 +137,9 @@ enum LocalFileLinkResolver {
         )
     }
 
-    private static func resolvedLocalFilePath(for url: URL, cwd: String?) -> String? {
+    // Shared by the local-document and local-browser-file resolvers so terminal
+    // link handling has one source of truth for cwd-relative path recovery.
+    static func resolvedLocalFilePath(for url: URL, cwd: String?) -> String? {
         if let scheme = url.scheme?.lowercased(),
            scheme != "file" {
             return nil
@@ -231,7 +233,9 @@ enum LocalFileLinkResolver {
         return false
     }
 
-    private static func normalizedRecoveredPath(
+    // Applies the same punctuation/prose recovery pass to each local link type;
+    // the caller still owns file-kind validation.
+    static func normalizedRecoveredPath(
         for path: String,
         fileManager: FileManager,
         exactMatcher: (String, FileManager) -> String?
