@@ -3114,7 +3114,7 @@ struct PanelCardView: View {
     }
 
     private var panelHeaderTitle: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 3) {
             if let browserTitleIconImage {
                 BrowserTitleIconView(
                     image: browserTitleIconImage,
@@ -3775,7 +3775,6 @@ private struct ScratchpadBindingChipLabel: View {
         .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .frame(maxWidth: 180, alignment: .leading)
         .background(
             isHighlighted ? ToastyTheme.elevatedBackground : ToastyTheme.sidebarSessionHoverBackground,
             in: RoundedRectangle(cornerRadius: 4)

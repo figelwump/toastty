@@ -437,6 +437,23 @@ final class RightAuxPanelViewTests: XCTestCase {
         XCTAssertEqual(control.accessibilityHelp(), "Change Scratchpad Binding")
     }
 
+    @MainActor
+    func testScratchpadBindingMenuControlFitsShortLabelAndCapsLongLabel() {
+        let control = ScratchpadBindingMenuControl(frame: .zero)
+        control.update(bindingLabel: "Unbound", help: "Bind Scratchpad to a Session")
+        let shortWidth = control.intrinsicContentSize.width
+
+        control.update(
+            bindingLabel: "Bound to Extremely Verbose Agent Session Name That Should Truncate",
+            help: "Change Scratchpad Binding"
+        )
+        let longWidth = control.intrinsicContentSize.width
+
+        XCTAssertLessThan(shortWidth, 120)
+        XCTAssertLessThanOrEqual(longWidth, 180)
+        XCTAssertGreaterThan(longWidth, shortWidth)
+    }
+
     func testScratchpadActionsMenuContainsDocumentActionsOnly() throws {
         let documentID = UUID()
 
