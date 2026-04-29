@@ -12,24 +12,34 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
 1. Pick a short slug for the task.
    - Prefer an explicit user-provided name.
    - Otherwise derive a hyphen-case slug from the task, such as `browser-link-routing`.
-2. Confirm the Toastty-managed environment is present before using the launch helper.
+2. Pick a branch prefix that describes the work, not the agent.
+   - Use `feat` for new behavior, UI, workflows, or user-visible capability.
+   - Use `debug` for bug investigation, repro work, flaky behavior, crashes, or targeted fixes where the root cause is not yet settled.
+   - Use `fix` for a known, narrow bug fix with a clear intended correction.
+   - Use `refactor` for internal restructuring without intended behavior changes.
+   - Use `test`, `docs`, or `chore` when the branch is primarily test-only, documentation-only, or maintenance work.
+   - If the user explicitly provides a prefix or branch name, honor it when it fits the repo's branch naming style.
+3. Confirm the Toastty-managed environment is present before using the launch helper.
    - `TOASTTY_CLI_PATH` must be set.
    - `TOASTTY_PANEL_ID` should be set unless you are explicitly overriding `--window-id`.
    - The skill is designed for a Toastty-managed agent session, not an arbitrary shell.
-3. Create and bootstrap the new worktree with the bundled helper:
+4. Create and bootstrap the new worktree with the bundled helper, passing the selected branch prefix explicitly:
 
 ```bash
-.agents/skills/worktree-create/scripts/create-toastty-worktree.sh --slug browser-link-routing --json
+.agents/skills/worktree-create/scripts/create-toastty-worktree.sh \
+  --slug browser-link-routing \
+  --branch-prefix feat \
+  --json
 ```
 
-4. Parse the helper output to get `worktree_path` and `handoff_path`.
-5. Persist the handoff inside the new worktree before launching the next session.
+5. Parse the helper output to get `branch_name`, `worktree_path`, and `handoff_path`.
+6. Persist the handoff inside the new worktree before launching the next session.
    - Write `WORKTREE_HANDOFF.md` in the new worktree root.
    - If the current thread already has a concrete plan/design file in the repo, reference that file explicitly in the handoff.
    - If the current thread already produced a detailed implementation plan in-chat but that plan is not yet persisted in the repo, copy that plan into `WORKTREE_HANDOFF.md` with enough detail for the next session to execute directly.
    - Do not compress an already-settled implementation plan into a lightweight summary just because it is being handed off.
    - If there is no durable plan file yet and no detailed plan exists in-thread, put a concise task-specific plan directly in `WORKTREE_HANDOFF.md`.
-6. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
+7. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
    - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` in a right-hand local-document split, and starts the new terminal command in the left terminal pane.
    - Background-created workspaces stay marked as new in the sidebar until the user visits them once.
 
@@ -41,7 +51,7 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
   --json
 ```
 
-7. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, and handoff file path.
+8. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, and handoff file path.
 
 ## Handoff file contents
 
@@ -72,7 +82,8 @@ When the parent thread already has a full implementation plan, prefer the follow
 
 ## Important invariants
 
-- The worktree branch naming convention is `codex/<slug>`.
+- The worktree branch naming convention is `<semantic-prefix>/<slug>` such as `feat/<slug>`, `debug/<slug>`, `fix/<slug>`, `refactor/<slug>`, `test/<slug>`, `docs/<slug>`, or `chore/<slug>`.
+- Do not use an agent-specific prefix such as `codex/` unless the user explicitly requests it.
 - The filesystem naming convention is a sibling repo path like `../toastty-<slug>`.
 - Always run `scripts/dev/bootstrap-worktree.sh` in the new worktree before handing it off.
 - Treat bootstrap as a local worktree requirement, not just a remote-build requirement.
