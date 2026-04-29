@@ -33,6 +33,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Command palette** — Open a keyboard-first palette with `Cmd+Shift+P` to run built-in commands, switch workspaces, launch configured agents, and split with terminal profiles
 - **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
 - **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`, and drag to reorder within the workspace
+- **Right panel** — Keep supporting work beside the active terminal with per-tab Scratchpad, browser, and local-document tabs; toggle it with `Cmd+Shift+B`
 - **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu, top bar, or command palette, with live sidebar status and notifications
 - **Later flags** — Mark a managed session for follow-up without pinning or reordering it; the flag stays until you clear it or the session meaningfully advances
 - **Watch running commands** — Mark a busy terminal with `Cmd+Shift+M` to surface a session-style row, unread badge, and completion notification when that foreground command exits
@@ -59,6 +60,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Option+Shift+E` | Rename tab |
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+Shift+P` | Open the command palette |
+| `Cmd+Ctrl+B` | New browser in the right panel |
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
@@ -80,6 +82,8 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+1`–`Cmd+9` | Switch tab |
 | `Cmd+Shift+[` | Previous tab |
 | `Cmd+Shift+]` | Next tab |
+| `Cmd+Ctrl+[` | Previous right-panel tab |
+| `Cmd+Ctrl+]` | Next right-panel tab |
 | `Option+Shift+[` | Previous tab (wrapping, terminal-proof) |
 | `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
@@ -91,6 +95,14 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 `Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running or local-document drafts would be discarded, and it blocks destructive quit while a local-document save is still in progress. Choosing `Always quit without asking` in that alert turns the setting off.
 
 For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md).
+
+## Right Panel
+
+The right panel is a workspace-side tab strip for supporting material that should stay next to the active terminal instead of taking over the main pane layout. Use it for Scratchpad notes, browser panels, and local documents while the main workspace remains focused on terminals and splits.
+
+Each horizontal workspace tab keeps its own right-panel tabs, active tab, width, and visibility in the persisted layout. `Cmd+Shift+B` shows or hides the right panel; when showing it, Toastty focuses the active right-panel tab if one exists. `Cmd+Ctrl+[` and `Cmd+Ctrl+]` cycle through right-panel tabs, and `Cmd+Ctrl+B` opens a new browser there.
+
+Terminal command-click integrations use the right panel for common supporting files: supported local documents open as editable local-document tabs, and local HTML files open in the browser.
 
 ## Running Agents
 
