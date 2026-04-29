@@ -3752,86 +3752,307 @@ enum ScratchpadBindingMenuEntry: Equatable, Identifiable {
     }
 }
 
-private struct ScratchpadBindingMenuChip: View {
+private struct ScratchpadBindingChipLabel: View {
+    let bindingLabel: String
+    let isHovered: Bool
+    let isFocused: Bool
+
+    private var isHighlighted: Bool {
+        isHovered || isFocused
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(bindingLabel)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Image(systemName: "chevron.down")
+                .font(.system(size: 7, weight: .bold))
+                .accessibilityHidden(true)
+        }
+        .font(ToastyTheme.fontWorkspaceSessionChip)
+        .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .frame(maxWidth: 180, alignment: .leading)
+        .background(
+            isHighlighted ? ToastyTheme.elevatedBackground : ToastyTheme.sidebarSessionHoverBackground,
+            in: RoundedRectangle(cornerRadius: 4)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(isHighlighted ? ToastyTheme.accent.opacity(0.7) : ToastyTheme.subtleBorder, lineWidth: 1)
+        }
+    }
+}
+
+private struct ScratchpadBindingMenuChip: NSViewRepresentable {
     let bindingLabel: String
     let isBound: Bool
     let candidates: [ScratchpadAgentBindCandidate]
     let rebind: (ScratchpadAgentBindCandidate) -> Void
     let unbind: () -> Void
 
-    @State private var isHovered = false
-
-    private var entries: [ScratchpadBindingMenuEntry] {
-        ScratchpadBindingMenuEntry.entries(candidates: candidates, isBound: isBound)
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
     }
 
-    var body: some View {
-        Menu {
-            ForEach(entries) { entry in
-                menuEntry(entry)
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(bindingLabel)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+    func makeNSView(context: Context) -> ScratchpadBindingMenuControl {
+        let control = ScratchpadBindingMenuControl()
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.showMenu(_:))
+        control.setAccessibilityRole(.menuButton)
+        control.setAccessibilityLabel("Scratchpad Binding")
+        control.setAccessibilityIdentifier("panel.header.scratchpad.binding")
+        return control
+    }
 
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .bold))
-                    .accessibilityHidden(true)
-            }
-            .font(ToastyTheme.fontWorkspaceSessionChip)
-            .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .frame(maxWidth: 180, alignment: .leading)
-            .background(
-                isHovered ? ToastyTheme.elevatedBackground : ToastyTheme.sidebarSessionHoverBackground,
-                in: RoundedRectangle(cornerRadius: 4)
+    func updateNSView(_ control: ScratchpadBindingMenuControl, context: Context) {
+        context.coordinator.isBound = isBound
+        context.coordinator.candidates = candidates
+        context.coordinator.rebind = rebind
+        context.coordinator.unbind = unbind
+
+        control.update(
+            bindingLabel: bindingLabel,
+            help: isBound ? "Change Scratchpad Binding" : "Bind Scratchpad to a Session"
+        )
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var isBound = false
+        var candidates: [ScratchpadAgentBindCandidate] = []
+        var rebind: ((ScratchpadAgentBindCandidate) -> Void)?
+        var unbind: (() -> Void)?
+
+        @objc func showMenu(_ sender: ScratchpadBindingMenuControl) {
+            let menu = ScratchpadBindingMenuBuilder.menu(
+                entries: ScratchpadBindingMenuEntry.entries(candidates: candidates, isBound: isBound),
+                target: self,
+                candidateAction: #selector(selectCandidate(_:)),
+                unbindAction: #selector(unbindScratchpad(_:))
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(isHovered ? ToastyTheme.accent.opacity(0.7) : ToastyTheme.subtleBorder, lineWidth: 1)
-            }
+
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(x: 0, y: sender.bounds.height + 2),
+                in: sender
+            )
         }
-        .menuIndicator(.hidden)
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
-        .help(isBound ? "Change Scratchpad Binding" : "Bind Scratchpad to a Session")
-        .accessibilityLabel("Scratchpad Binding")
-        .accessibilityValue(bindingLabel)
-        .accessibilityIdentifier("panel.header.scratchpad.binding")
-        .onHover { hovering in
-            isHovered = hovering
+
+        @objc private func selectCandidate(_ sender: NSMenuItem) {
+            guard let payload = sender.representedObject as? ScratchpadBindingCandidateMenuPayload else { return }
+            rebind?(payload.candidate)
+        }
+
+        @objc private func unbindScratchpad(_ sender: NSMenuItem) {
+            unbind?()
         }
     }
+}
 
-    @ViewBuilder
-    private func menuEntry(_ entry: ScratchpadBindingMenuEntry) -> some View {
-        switch entry {
-        case .candidate(let candidate):
-            Button {
-                if candidate.isCurrent == false {
-                    rebind(candidate)
-                }
-            } label: {
-                if candidate.isCurrent {
-                    Label(candidate.label, systemImage: "checkmark")
-                } else {
-                    Text(candidate.label)
-                }
-            }
-            .disabled(candidate.isCurrent)
+@MainActor
+final class ScratchpadBindingMenuControl: NSControl {
+    private static let maxChipWidth: CGFloat = 180
 
-        case .noActiveSessions(let label):
-            Text(label)
+    private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
+    private var trackingArea: NSTrackingArea?
+    private var bindingLabel = ""
+    private var isHovered = false
+    private var isFocused = false
 
-        case .separator:
-            Divider()
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        focusRingType = .exterior
+        wantsLayer = false
 
-        case .unbind:
-            Button("Unbind", action: unbind)
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        hostingView.sizingOptions = [.intrinsicContentSize]
+        addSubview(hostingView)
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
+        setAccessibilityRole(.menuButton)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let size = hostingView.intrinsicContentSize
+        return NSSize(width: min(size.width, Self.maxChipWidth), height: size.height)
+    }
+
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        isFocused = true
+        render()
+        return true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        isFocused = false
+        render()
+        return true
+    }
+
+    func update(bindingLabel: String, help: String) {
+        self.bindingLabel = bindingLabel
+        toolTip = help
+        setAccessibilityValue(bindingLabel)
+        setAccessibilityHelp(help)
+        render()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard isHidden == false, alphaValue > 0, bounds.contains(point) else { return nil }
+        return self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        window?.makeFirstResponder(self)
+        openMenu()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if Self.opensMenu(for: event) {
+            openMenu()
+            return
         }
+        super.keyDown(with: event)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        render()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        render()
+    }
+
+    override func updateTrackingAreas() {
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        self.trackingArea = trackingArea
+        super.updateTrackingAreas()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        openMenu()
+        return true
+    }
+
+    private func render() {
+        hostingView.rootView = AnyView(ScratchpadBindingChipLabel(
+            bindingLabel: bindingLabel,
+            isHovered: isHovered,
+            isFocused: isFocused
+        ))
+        invalidateIntrinsicContentSize()
+        needsLayout = true
+    }
+
+    private func openMenu() {
+        sendAction(action, to: target)
+    }
+
+    private static func opensMenu(for event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 36, 49, 76:
+            return true
+        default:
+            return event.charactersIgnoringModifiers == " " ||
+                event.charactersIgnoringModifiers == "\r" ||
+                event.charactersIgnoringModifiers == "\n"
+        }
+    }
+}
+
+final class ScratchpadBindingCandidateMenuPayload: NSObject {
+    let candidate: ScratchpadAgentBindCandidate
+
+    init(candidate: ScratchpadAgentBindCandidate) {
+        self.candidate = candidate
+    }
+}
+
+enum ScratchpadBindingMenuBuilder {
+    static func menu(
+        entries: [ScratchpadBindingMenuEntry],
+        target: AnyObject?,
+        candidateAction: Selector?,
+        unbindAction: Selector?
+    ) -> NSMenu {
+        let menu = NSMenu()
+        for entry in entries {
+            switch entry {
+            case .candidate(let candidate):
+                menu.addItem(candidateItem(
+                    candidate,
+                    target: target,
+                    action: candidateAction
+                ))
+
+            case .noActiveSessions(let label):
+                let item = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+
+            case .separator:
+                menu.addItem(.separator())
+
+            case .unbind:
+                let item = NSMenuItem(title: "Unbind", action: unbindAction, keyEquivalent: "")
+                item.target = target
+                menu.addItem(item)
+            }
+        }
+        return menu
+    }
+
+    private static func candidateItem(
+        _ candidate: ScratchpadAgentBindCandidate,
+        target: AnyObject?,
+        action: Selector?
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: candidate.label,
+            action: candidate.isCurrent ? nil : action,
+            keyEquivalent: ""
+        )
+        item.target = target
+        item.representedObject = ScratchpadBindingCandidateMenuPayload(candidate: candidate)
+        item.state = candidate.isCurrent ? .on : .off
+        item.isEnabled = candidate.isCurrent == false
+        return item
     }
 }
 

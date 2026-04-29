@@ -324,6 +324,119 @@ final class RightAuxPanelViewTests: XCTestCase {
         )
     }
 
+    func testScratchpadBindingMenuBuilderMarksCurrentCandidateAndUnbindAction() throws {
+        let current = ScratchpadAgentBindCandidate(
+            sessionID: "sess-current",
+            agent: .codex,
+            panelID: UUID(),
+            label: "Codex - current binding",
+            isCurrent: true
+        )
+        let destination = ScratchpadAgentBindCandidate(
+            sessionID: "sess-destination",
+            agent: .claude,
+            panelID: UUID(),
+            label: "Claude - right split",
+            isCurrent: false
+        )
+
+        let menu = ScratchpadBindingMenuBuilder.menu(
+            entries: [
+                .candidate(current),
+                .candidate(destination),
+                .separator,
+                .unbind,
+            ],
+            target: self,
+            candidateAction: #selector(scratchpadBindingCandidateAction(_:)),
+            unbindAction: #selector(scratchpadBindingUnbindAction(_:))
+        )
+
+        XCTAssertEqual(menu.items.map(\.title), [
+            "Codex - current binding",
+            "Claude - right split",
+            "",
+            "Unbind",
+        ])
+        XCTAssertEqual(menu.items[0].state, .on)
+        XCTAssertFalse(menu.items[0].isEnabled)
+        XCTAssertNil(menu.items[0].action)
+        let currentPayload = try XCTUnwrap(
+            menu.items[0].representedObject as? ScratchpadBindingCandidateMenuPayload
+        )
+        XCTAssertEqual(currentPayload.candidate, current)
+
+        XCTAssertEqual(menu.items[1].state, .off)
+        XCTAssertTrue(menu.items[1].isEnabled)
+        XCTAssertEqual(menu.items[1].action, #selector(scratchpadBindingCandidateAction(_:)))
+        let destinationPayload = try XCTUnwrap(
+            menu.items[1].representedObject as? ScratchpadBindingCandidateMenuPayload
+        )
+        XCTAssertEqual(destinationPayload.candidate, destination)
+
+        XCTAssertTrue(menu.items[2].isSeparatorItem)
+        XCTAssertEqual(menu.items[3].action, #selector(scratchpadBindingUnbindAction(_:)))
+    }
+
+    func testScratchpadBindingMenuBuilderDisablesNoActiveSessionsFallback() {
+        let menu = ScratchpadBindingMenuBuilder.menu(
+            entries: [.noActiveSessions("No active sessions in this tab")],
+            target: self,
+            candidateAction: #selector(scratchpadBindingCandidateAction(_:)),
+            unbindAction: #selector(scratchpadBindingUnbindAction(_:))
+        )
+
+        XCTAssertEqual(menu.items.map(\.title), ["No active sessions in this tab"])
+        XCTAssertFalse(menu.items[0].isEnabled)
+        XCTAssertNil(menu.items[0].action)
+    }
+
+    @MainActor
+    func testScratchpadBindingMenuControlRoutesInputToMenuAction() throws {
+        let control = ScratchpadBindingMenuControl(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+        let recorder = ScratchpadBindingMenuControlActionRecorder()
+        control.target = recorder
+        control.action = #selector(ScratchpadBindingMenuControlActionRecorder.recordAction(_:))
+        control.update(bindingLabel: "Bound to Codex", help: "Change Scratchpad Binding")
+
+        XCTAssertTrue(control.acceptsFirstResponder)
+        XCTAssertTrue(control.becomeFirstResponder())
+        XCTAssertTrue(control.resignFirstResponder())
+
+        control.mouseDown(with: try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 8, y: 8),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )))
+        control.keyDown(with: try XCTUnwrap(Self.keyDownEvent(characters: " ", keyCode: 49)))
+        control.keyDown(with: try XCTUnwrap(Self.keyDownEvent(characters: "\r", keyCode: 36)))
+        XCTAssertTrue(control.accessibilityPerformPress())
+
+        XCTAssertEqual(recorder.invocationCount, 4)
+    }
+
+    @MainActor
+    func testScratchpadBindingMenuControlKeepsHitTestingAndAccessibilityOnControl() {
+        let control = ScratchpadBindingMenuControl(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+        control.setAccessibilityLabel("Scratchpad Binding")
+        control.setAccessibilityIdentifier("panel.header.scratchpad.binding")
+        control.update(bindingLabel: "Bound to Codex", help: "Change Scratchpad Binding")
+
+        XCTAssertTrue(control.hitTest(NSPoint(x: 8, y: 8)) === control)
+        XCTAssertNil(control.hitTest(NSPoint(x: -1, y: 8)))
+        XCTAssertEqual(control.toolTip, "Change Scratchpad Binding")
+        XCTAssertEqual(control.accessibilityLabel(), "Scratchpad Binding")
+        XCTAssertEqual(control.accessibilityIdentifier(), "panel.header.scratchpad.binding")
+        XCTAssertEqual(control.accessibilityValue() as? String, "Bound to Codex")
+        XCTAssertEqual(control.accessibilityHelp(), "Change Scratchpad Binding")
+    }
+
     func testScratchpadActionsMenuContainsDocumentActionsOnly() throws {
         let documentID = UUID()
 
@@ -360,6 +473,33 @@ final class RightAuxPanelViewTests: XCTestCase {
         XCTAssertNil(menu.items[0].representedObject)
         XCTAssertFalse(menu.items[1].isEnabled)
         XCTAssertNil(menu.items[1].representedObject)
+    }
+
+    @objc private func scratchpadBindingCandidateAction(_ sender: NSMenuItem) {}
+
+    @objc private func scratchpadBindingUnbindAction(_ sender: NSMenuItem) {}
+
+    private static func keyDownEvent(characters: String, keyCode: UInt16) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        )
+    }
+}
+
+private final class ScratchpadBindingMenuControlActionRecorder: NSObject {
+    var invocationCount = 0
+
+    @objc func recordAction(_ sender: Any) {
+        invocationCount += 1
     }
 }
 
