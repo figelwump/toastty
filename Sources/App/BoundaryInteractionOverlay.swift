@@ -77,9 +77,13 @@ final class BoundaryInteractionOverlayView: NSView {
     private nonisolated static let windowMovementSuppressionReason = "boundary-interaction"
 
     var usesEventTrackingLoop = true
+    var currentLocalMouseLocationProvider: (() -> CGPoint?)?
+    var backingScaleFactorProvider: (() -> CGFloat?)?
+    private(set) var boundaryTrackingAreaRebuildCount = 0
 
     private var orderedDescriptors: [BoundaryInteractionDescriptor] = []
     private var descriptorsByID: [String: BoundaryInteractionDescriptor] = [:]
+    private var interactionSpecs: [BoundaryInteractionSpec] = []
     private var boundaryTrackingAreas: [NSTrackingArea] = []
     private var hoveredDescriptorID: String?
     private var hoveredDescriptor: BoundaryInteractionDescriptor?
@@ -121,8 +125,7 @@ final class BoundaryInteractionOverlayView: NSView {
         }
 
         updateAccessibility()
-        updateTrackingAreas()
-        window?.invalidateCursorRects(for: self)
+        refreshBoundaryInteractionRegionsIfNeeded()
         reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: deliversCallbacksImmediately)
         reconcileActiveDescriptorAfterDescriptorUpdate(deliversCallbacksImmediately: deliversCallbacksImmediately)
     }
@@ -137,11 +140,17 @@ final class BoundaryInteractionOverlayView: NSView {
         removeBoundaryTrackingAreas()
         orderedDescriptors = []
         descriptorsByID = [:]
+        interactionSpecs = []
         onAccessibilityUpdateAfterInvalidation()
     }
 
     func descriptorID(at location: CGPoint) -> String? {
         descriptor(at: location)?.id
+    }
+
+    func effectiveHitFrame(forDescriptorID id: String) -> CGRect? {
+        guard let descriptor = orderedDescriptors.last(where: { $0.id == id }) else { return nil }
+        return effectiveHitFrame(for: descriptor.hitFrame)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -159,36 +168,16 @@ final class BoundaryInteractionOverlayView: NSView {
         super.resetCursorRects()
         for descriptor in orderedDescriptors {
             guard let cursor = descriptor.cursor,
-                  let hitFrame = Self.validHitFrame(descriptor.hitFrame) else {
+                  let hitFrame = clippedEffectiveHitFrame(for: descriptor.hitFrame) else {
                 continue
             }
-            let cursorFrame = bounds.intersection(hitFrame)
-            guard cursorFrame.isNull == false, cursorFrame.isEmpty == false else { continue }
-            addCursorRect(cursorFrame, cursor: cursor)
+            addCursorRect(hitFrame, cursor: cursor)
         }
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        removeBoundaryTrackingAreas()
-
-        for descriptor in orderedDescriptors {
-            guard let hitFrame = Self.validHitFrame(descriptor.hitFrame) else { continue }
-            let trackingArea = NSTrackingArea(
-                rect: hitFrame,
-                options: [
-                    .activeAlways,
-                    .enabledDuringMouseDrag,
-                    .mouseEnteredAndExited,
-                    .mouseMoved,
-                    .cursorUpdate,
-                ],
-                owner: self,
-                userInfo: ["id": descriptor.id]
-            )
-            addTrackingArea(trackingArea)
-            boundaryTrackingAreas.append(trackingArea)
-        }
+        rebuildBoundaryTrackingAreas()
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -200,7 +189,15 @@ final class BoundaryInteractionOverlayView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
-        updateHover(with: event)
+        let eventLocation = localLocation(for: event)
+        if let currentLocation = currentLocalMouseLocation(),
+           bounds.contains(currentLocation) {
+            lastKnownLocalMouseLocation = currentLocation
+            setHoveredDescriptor(descriptor(at: currentLocation))
+            return
+        }
+
+        setHoveredDescriptor(descriptor(at: eventLocation))
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -249,8 +246,15 @@ final class BoundaryInteractionOverlayView: NSView {
                 )
             }
         } else {
+            refreshBoundaryInteractionRegionsIfNeeded(force: true)
             reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: true)
         }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        refreshBoundaryInteractionRegionsIfNeeded(force: true)
+        reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: true)
     }
 
     deinit {
@@ -269,7 +273,7 @@ final class BoundaryInteractionOverlayView: NSView {
 
     private func descriptor(at location: CGPoint) -> BoundaryInteractionDescriptor? {
         orderedDescriptors.reversed().first { descriptor in
-            guard let hitFrame = Self.validHitFrame(descriptor.hitFrame) else { return false }
+            guard let hitFrame = effectiveHitFrame(for: descriptor.hitFrame) else { return false }
             return hitFrame.contains(location)
         }
     }
@@ -280,12 +284,13 @@ final class BoundaryInteractionOverlayView: NSView {
     }
 
     private func reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: Bool) {
-        guard let location = lastKnownLocalMouseLocation,
+        guard let location = currentLocalMouseLocation() ?? lastKnownLocalMouseLocation,
               bounds.contains(location) else {
             setHoveredDescriptor(nil, deliversCallbacksImmediately: deliversCallbacksImmediately)
             return
         }
 
+        lastKnownLocalMouseLocation = location
         setHoveredDescriptor(
             descriptor(at: location),
             deliversCallbacksImmediately: deliversCallbacksImmediately
@@ -489,6 +494,14 @@ final class BoundaryInteractionOverlayView: NSView {
         return location
     }
 
+    private func currentLocalMouseLocation() -> CGPoint? {
+        if let currentLocalMouseLocationProvider {
+            return currentLocalMouseLocationProvider()
+        }
+        guard let window else { return nil }
+        return convert(window.mouseLocationOutsideOfEventStream, from: nil)
+    }
+
     private func suppressWindowMovementForCurrentSequence() {
         guard isSequenceSuppressingWindowMovement == false else { return }
         guard window != nil else { return }
@@ -511,6 +524,39 @@ final class BoundaryInteractionOverlayView: NSView {
             removeTrackingArea(trackingArea)
         }
         boundaryTrackingAreas.removeAll()
+    }
+
+    private func refreshBoundaryInteractionRegionsIfNeeded(force: Bool = false) {
+        let nextSpecs = interactionSpecs(for: orderedDescriptors)
+        let didChange = interactionSpecs != nextSpecs
+        interactionSpecs = nextSpecs
+
+        guard force || didChange else { return }
+        rebuildBoundaryTrackingAreas()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private func rebuildBoundaryTrackingAreas() {
+        removeBoundaryTrackingAreas()
+        boundaryTrackingAreaRebuildCount += 1
+
+        for descriptor in orderedDescriptors {
+            guard let hitFrame = clippedEffectiveHitFrame(for: descriptor.hitFrame) else { continue }
+            let trackingArea = NSTrackingArea(
+                rect: hitFrame,
+                options: [
+                    .activeAlways,
+                    .enabledDuringMouseDrag,
+                    .mouseEnteredAndExited,
+                    .mouseMoved,
+                    .cursorUpdate,
+                ],
+                owner: self,
+                userInfo: ["id": descriptor.id]
+            )
+            addTrackingArea(trackingArea)
+            boundaryTrackingAreas.append(trackingArea)
+        }
     }
 
     private func updateAccessibility() {
@@ -544,6 +590,62 @@ final class BoundaryInteractionOverlayView: NSView {
         }
     }
 
+    private func interactionSpecs(
+        for descriptors: [BoundaryInteractionDescriptor]
+    ) -> [BoundaryInteractionSpec] {
+        descriptors.compactMap { descriptor in
+            guard let hitFrame = effectiveHitFrame(for: descriptor.hitFrame) else { return nil }
+            return BoundaryInteractionSpec(
+                id: descriptor.id,
+                hitFrame: hitFrame,
+                axis: descriptor.axis,
+                cursorID: descriptor.cursor.map(ObjectIdentifier.init),
+                accessibilityLabel: descriptor.accessibilityLabel,
+                accessibilityIdentifier: descriptor.accessibilityIdentifier
+            )
+        }
+    }
+
+    private func clippedEffectiveHitFrame(for frame: CGRect) -> CGRect? {
+        guard let effectiveFrame = effectiveHitFrame(for: frame) else { return nil }
+        let clippedFrame = bounds.intersection(effectiveFrame)
+        guard clippedFrame.isNull == false,
+              clippedFrame.isInfinite == false,
+              clippedFrame.isEmpty == false else {
+            return nil
+        }
+        return clippedFrame
+    }
+
+    private func effectiveHitFrame(for frame: CGRect) -> CGRect? {
+        guard let standardized = Self.validHitFrame(frame) else { return nil }
+
+        let scale = backingScaleFactor()
+        let minX = floor(standardized.minX * scale) / scale
+        let minY = floor(standardized.minY * scale) / scale
+        let maxX = ceil(standardized.maxX * scale) / scale
+        let maxY = ceil(standardized.maxY * scale) / scale
+        let alignedFrame = CGRect(
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
+        ).standardized
+        return Self.validHitFrame(alignedFrame) ?? standardized
+    }
+
+    private func backingScaleFactor() -> CGFloat {
+        let candidate = backingScaleFactorProvider?() ??
+            window?.backingScaleFactor ??
+            NSScreen.main?.backingScaleFactor ??
+            1
+        guard candidate.isFinite,
+              candidate > 0 else {
+            return 1
+        }
+        return candidate
+    }
+
     private static func validHitFrame(_ frame: CGRect) -> CGRect? {
         let standardized = frame.standardized
         guard standardized.isNull == false,
@@ -553,4 +655,13 @@ final class BoundaryInteractionOverlayView: NSView {
         }
         return standardized
     }
+}
+
+private struct BoundaryInteractionSpec: Equatable {
+    let id: String
+    let hitFrame: CGRect
+    let axis: BoundaryInteractionAxis
+    let cursorID: ObjectIdentifier?
+    let accessibilityLabel: String?
+    let accessibilityIdentifier: String?
 }

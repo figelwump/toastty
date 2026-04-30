@@ -148,6 +148,9 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
             with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 100, y: 50), window: window)
         )
         NSCursor.arrow.set()
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
 
         overlay.updateDescriptors([
             descriptor(
@@ -264,6 +267,136 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
         XCTAssertEqual(trackingArea.rect, NSRect(x: 95, y: 0, width: 10, height: 100))
         XCTAssertTrue(trackingArea.options.contains(.mouseEnteredAndExited))
         XCTAssertTrue(trackingArea.options.contains(.mouseMoved))
+    }
+
+    @MainActor
+    func testEquivalentDescriptorReplacementDoesNotRebuildTrackingAreas() {
+        let overlay = BoundaryInteractionOverlayView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 100)
+        )
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: .resizeLeftRight,
+                onChanged: { _ in XCTFail("first callback should not be invoked") }
+            ),
+        ])
+        let rebuildCount = overlay.boundaryTrackingAreaRebuildCount
+
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: .resizeLeftRight,
+                onChanged: { _ in }
+            ),
+        ])
+
+        XCTAssertEqual(overlay.boundaryTrackingAreaRebuildCount, rebuildCount)
+        XCTAssertEqual(
+            overlay.trackingAreas.filter { $0.options.contains(.cursorUpdate) }.count,
+            1
+        )
+    }
+
+    @MainActor
+    func testFractionalHitFrameExpandsOutwardToBackingPixels() throws {
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        let logicalFrame = CGRect(x: 95.25, y: 0, width: 10, height: 100)
+        overlay.updateDescriptors([
+            descriptor(id: "seam", hitFrame: logicalFrame),
+        ])
+
+        let effectiveFrame = try XCTUnwrap(overlay.effectiveHitFrame(forDescriptorID: "seam"))
+        let backingScale = window.backingScaleFactor
+        let expectedMinX = floor(logicalFrame.minX * backingScale) / backingScale
+        let expectedMaxX = ceil(logicalFrame.maxX * backingScale) / backingScale
+        XCTAssertEqual(effectiveFrame.minX, expectedMinX, accuracy: 0.001)
+        XCTAssertEqual(effectiveFrame.maxX, expectedMaxX, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(effectiveFrame.minX, logicalFrame.minX)
+        XCTAssertGreaterThanOrEqual(effectiveFrame.maxX, logicalFrame.maxX)
+        XCTAssertEqual(
+            overlay.descriptorID(at: CGPoint(x: expectedMaxX - 0.001, y: 50)),
+            "seam"
+        )
+        XCTAssertNil(overlay.descriptorID(at: CGPoint(x: expectedMaxX + 0.001, y: 50)))
+    }
+
+    @MainActor
+    func testMouseExitedKeepsHoverWhenCurrentPointerIsStillInsideBoundary() throws {
+        defer { NSCursor.arrow.set() }
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        var hoverStates: [Bool] = []
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: .resizeLeftRight,
+                onHoverChanged: { hoverStates.append($0) }
+            ),
+        ])
+
+        overlay.mouseMoved(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 100, y: 50), window: window)
+        )
+        XCTAssertEqual(hoverStates, [true])
+
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
+        overlay.mouseExited(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 40, y: 50), window: window)
+        )
+
+        XCTAssertEqual(hoverStates, [true])
+        XCTAssertTrue(NSCursor.current === NSCursor.resizeLeftRight)
+    }
+
+    @MainActor
+    func testBackingPropertyChangeRebuildsTrackingAreasAndPreservesHover() throws {
+        defer { NSCursor.arrow.set() }
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        var backingScale: CGFloat = 2
+        overlay.backingScaleFactorProvider = {
+            backingScale
+        }
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
+
+        var hoverStates: [Bool] = []
+        let logicalFrame = CGRect(x: 95.25, y: 0, width: 10, height: 100)
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: logicalFrame,
+                cursor: .resizeLeftRight,
+                onHoverChanged: { hoverStates.append($0) }
+            ),
+        ])
+        overlay.mouseMoved(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 100, y: 50), window: window)
+        )
+        let initialRebuildCount = overlay.boundaryTrackingAreaRebuildCount
+        let initialEffectiveFrame = try XCTUnwrap(overlay.effectiveHitFrame(forDescriptorID: "seam"))
+        XCTAssertEqual(initialEffectiveFrame.maxX, 105.5, accuracy: 0.001)
+        XCTAssertEqual(hoverStates, [true])
+
+        backingScale = 1
+        overlay.viewDidChangeBackingProperties()
+
+        let refreshedEffectiveFrame = try XCTUnwrap(overlay.effectiveHitFrame(forDescriptorID: "seam"))
+        XCTAssertEqual(refreshedEffectiveFrame.maxX, 106, accuracy: 0.001)
+        XCTAssertEqual(overlay.boundaryTrackingAreaRebuildCount, initialRebuildCount + 1)
+        XCTAssertEqual(hoverStates, [true])
+        XCTAssertTrue(NSCursor.current === NSCursor.resizeLeftRight)
     }
 
     @MainActor
