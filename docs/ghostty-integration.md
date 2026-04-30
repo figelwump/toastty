@@ -126,6 +126,12 @@ Toastty resolves Ghostty config in this order:
 
 Recursive includes are loaded through Ghostty's normal recursive config loading.
 
+If Ghostty surface creation fails because CoreVideo cannot create an active
+display link, Toastty retries once with an effective config overlay that disables
+Ghostty `window-vsync`. This recovery path does not rewrite the user's Ghostty
+config; it is logged under Toastty's Ghostty log category with display-link
+diagnostics.
+
 On macOS, when Ghostty's `copy-on-select` behavior is enabled by its config or
 platform defaults, Toastty routes the Ghostty selection clipboard through a
 Toastty-private pasteboard instead of the shared system clipboard. That preserves
