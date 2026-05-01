@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -19,6 +20,9 @@ struct AppWindowView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
+
+    static let sidebarResizeHandleHitWidth: CGFloat = 10
+    static let sidebarDividerWidth: CGFloat = 1
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
@@ -46,7 +50,7 @@ struct AppWindowView: View {
 
                     Rectangle()
                         .fill(ToastyTheme.hairline)
-                        .frame(width: 1)
+                        .frame(width: Self.sidebarDividerWidth)
                 }
 
                 WorkspaceView(
@@ -68,6 +72,24 @@ struct AppWindowView: View {
                 )
             }
             .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
+            .overlay(alignment: .topLeading) {
+                GeometryReader { geometry in
+                    if sidebarVisible {
+                        SidebarResizeLayer(
+                            windowID: windowID,
+                            sidebarWidth: effectiveSidebarWidth,
+                            defaultSidebarWidth: defaultSidebarWidth,
+                            height: geometry.size.height,
+                            store: store
+                        )
+                        .frame(
+                            width: geometry.size.width,
+                            height: geometry.size.height,
+                            alignment: .topLeading
+                        )
+                    }
+                }
+            }
 
             // Sidebar toggle button in the title bar area, right of traffic lights
             sidebarToggleButton
@@ -145,7 +167,38 @@ struct AppWindowView: View {
     static func effectiveSidebarWidth(
         hasEverLaunchedAgent: Bool
     ) -> CGFloat {
+        effectiveSidebarWidth(
+            hasEverLaunchedAgent: hasEverLaunchedAgent,
+            sidebarWidthPointsOverride: nil
+        )
+    }
+
+    static func effectiveSidebarWidth(
+        hasEverLaunchedAgent: Bool,
+        sidebarWidthPointsOverride: Double?
+    ) -> CGFloat {
+        if let override = WindowState.normalizedSidebarWidthOverride(sidebarWidthPointsOverride) {
+            return CGFloat(override)
+        }
+
+        return defaultSidebarWidth(hasEverLaunchedAgent: hasEverLaunchedAgent)
+    }
+
+    static func defaultSidebarWidth(hasEverLaunchedAgent: Bool) -> CGFloat {
         hasEverLaunchedAgent ? ToastyTheme.sidebarWidth : ToastyTheme.sidebarWidthBeforeAgentLaunch
+    }
+
+    static func sidebarResizeHandleFrame(
+        sidebarWidth: CGFloat,
+        height: CGFloat
+    ) -> CGRect {
+        let dividerCenterX = sidebarWidth + (Self.sidebarDividerWidth / 2)
+        return CGRect(
+            x: dividerCenterX - (Self.sidebarResizeHandleHitWidth / 2),
+            y: 0,
+            width: Self.sidebarResizeHandleHitWidth,
+            height: max(0, height)
+        )
     }
 
     static func sidebarToggleShowsUnreadBadge(
@@ -217,8 +270,13 @@ struct AppWindowView: View {
 
     private var effectiveSidebarWidth: CGFloat {
         Self.effectiveSidebarWidth(
-            hasEverLaunchedAgent: store.hasEverLaunchedAgent
+            hasEverLaunchedAgent: store.hasEverLaunchedAgent,
+            sidebarWidthPointsOverride: store.window(id: windowID)?.sidebarWidthPointsOverride
         )
+    }
+
+    private var defaultSidebarWidth: CGFloat {
+        Self.defaultSidebarWidth(hasEverLaunchedAgent: store.hasEverLaunchedAgent)
     }
 
     @MainActor
@@ -277,6 +335,69 @@ private struct WindowSlotFocusSignature: Equatable {
     let windowID: UUID
     let workspaceID: UUID?
     let focusedPanelID: UUID?
+}
+
+private struct SidebarResizeLayer: View {
+    let windowID: UUID
+    let sidebarWidth: CGFloat
+    let defaultSidebarWidth: CGFloat
+    let height: CGFloat
+    @ObservedObject var store: AppStore
+
+    @State private var resizeStartWidth: Double?
+
+    var body: some View {
+        BoundaryInteractionOverlay(descriptors: [boundaryDescriptor])
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onDisappear {
+                resizeStartWidth = nil
+            }
+    }
+
+    private var boundaryDescriptor: BoundaryInteractionDescriptor {
+        BoundaryInteractionDescriptor(
+            id: boundaryID,
+            hitFrame: AppWindowView.sidebarResizeHandleFrame(
+                sidebarWidth: sidebarWidth,
+                height: height
+            ),
+            visualFrame: CGRect(
+                x: sidebarWidth,
+                y: 0,
+                width: AppWindowView.sidebarDividerWidth,
+                height: height
+            ),
+            axis: .vertical,
+            cursor: .resizeLeftRight,
+            accessibilityLabel: "Resize Sidebar",
+            accessibilityIdentifier: "sidebar.resize",
+            metadata: [
+                "windowID": windowID.uuidString,
+                "sidebarWidth": String(format: "%.1f", sidebarWidth),
+            ],
+            onBegan: { _ in
+                resizeStartWidth = Double(sidebarWidth)
+            },
+            onChanged: { value in
+                guard let startingWidth = resizeStartWidth else { return }
+                let nextWidth = startingWidth + Double(value.translation.width)
+                _ = store.send(
+                    .setSidebarWidth(
+                        windowID: windowID,
+                        width: nextWidth,
+                        defaultWidth: Double(defaultSidebarWidth)
+                    )
+                )
+            },
+            onEnded: { _ in
+                resizeStartWidth = nil
+            }
+        )
+    }
+
+    private var boundaryID: String {
+        "sidebar.resize.\(windowID.uuidString)"
+    }
 }
 
 private struct PendingWorkspaceClose: Identifiable {

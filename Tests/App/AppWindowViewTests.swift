@@ -1,4 +1,5 @@
 @testable import ToasttyApp
+import CoreState
 import XCTest
 
 @MainActor
@@ -55,6 +56,49 @@ final class AppWindowViewTests: XCTestCase {
             AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: true),
             280
         )
+    }
+
+    func testEffectiveSidebarWidthUsesPersistedOverride() {
+        XCTAssertEqual(
+            AppWindowView.effectiveSidebarWidth(
+                hasEverLaunchedAgent: false,
+                sidebarWidthPointsOverride: 320
+            ),
+            320
+        )
+        XCTAssertEqual(
+            AppWindowView.effectiveSidebarWidth(
+                hasEverLaunchedAgent: true,
+                sidebarWidthPointsOverride: 320
+            ),
+            320
+        )
+    }
+
+    func testEffectiveSidebarWidthClampsPersistedOverride() {
+        XCTAssertEqual(
+            AppWindowView.effectiveSidebarWidth(
+                hasEverLaunchedAgent: true,
+                sidebarWidthPointsOverride: 10
+            ),
+            CGFloat(WindowState.minSidebarWidth)
+        )
+        XCTAssertEqual(
+            AppWindowView.effectiveSidebarWidth(
+                hasEverLaunchedAgent: true,
+                sidebarWidthPointsOverride: 900
+            ),
+            CGFloat(WindowState.maxSidebarWidth)
+        )
+    }
+
+    func testSidebarResizeHandleFrameStraddlesDivider() {
+        let frame = AppWindowView.sidebarResizeHandleFrame(sidebarWidth: 280, height: 600)
+
+        XCTAssertEqual(frame.origin.x, 275.5)
+        XCTAssertEqual(frame.origin.y, 0)
+        XCTAssertEqual(frame.size.width, AppWindowView.sidebarResizeHandleHitWidth)
+        XCTAssertEqual(frame.size.height, 600)
     }
 
     func testEffectiveSidebarWidthTransitionsAfterSuccessfulAgentLaunch() {

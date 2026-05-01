@@ -12,6 +12,7 @@ struct WindowStateCodableTests {
             workspaceIDs: [workspaceID],
             selectedWorkspaceID: workspaceID,
             sidebarVisible: false,
+            sidebarWidthPointsOverride: 320,
             terminalFontSizePointsOverride: 17.5,
             markdownTextScaleOverride: 1.2
         )
@@ -40,6 +41,35 @@ struct WindowStateCodableTests {
     }
 
     @Test
+    func windowStateNormalizesSidebarWidthOverride() {
+        let low = WindowState(
+            id: UUID(),
+            frame: CGRectCodable(x: 32, y: 64, width: 1024, height: 768),
+            workspaceIDs: [],
+            selectedWorkspaceID: nil,
+            sidebarWidthPointsOverride: 12
+        )
+        let high = WindowState(
+            id: UUID(),
+            frame: CGRectCodable(x: 32, y: 64, width: 1024, height: 768),
+            workspaceIDs: [],
+            selectedWorkspaceID: nil,
+            sidebarWidthPointsOverride: 900
+        )
+        let nonFinite = WindowState(
+            id: UUID(),
+            frame: CGRectCodable(x: 32, y: 64, width: 1024, height: 768),
+            workspaceIDs: [],
+            selectedWorkspaceID: nil,
+            sidebarWidthPointsOverride: .infinity
+        )
+
+        #expect(low.sidebarWidthPointsOverride == WindowState.minSidebarWidth)
+        #expect(high.sidebarWidthPointsOverride == WindowState.maxSidebarWidth)
+        #expect(nonFinite.sidebarWidthPointsOverride == nil)
+    }
+
+    @Test
     func decodingLegacyWindowStateIgnoresRemovedSidebarWidthOverride() throws {
         let windowID = UUID()
         let workspaceID = UUID()
@@ -60,6 +90,7 @@ struct WindowStateCodableTests {
         #expect(decoded.workspaceIDs == [workspaceID])
         #expect(decoded.selectedWorkspaceID == workspaceID)
         #expect(decoded.sidebarVisible)
+        #expect(decoded.sidebarWidthPointsOverride == nil)
         #expect(decoded.terminalFontSizePointsOverride == nil)
         #expect(decoded.markdownTextScaleOverride == nil)
     }

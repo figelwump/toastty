@@ -17,7 +17,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/command-palette-usage.json`
   - Local per-command usage counts used only to rank command-palette results.
 - `~/.toastty/workspace-layout-profiles.json`
-  - Saved workspace and window layout snapshots, including window-local terminal font overrides, window-local local-document text-size overrides, and per-browser page zoom overrides.
+  - Saved workspace and window layout snapshots, including window-local sidebar widths, window-local terminal font overrides, window-local local-document text-size overrides, and per-browser page zoom overrides.
 - `~/.toastty/scratchpad-documents/`
   - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)

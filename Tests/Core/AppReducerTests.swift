@@ -4464,4 +4464,183 @@ struct AppReducerTests {
 
         #expect(reducer.send(.toggleSidebar(windowID: UUID()), state: &state) == false)
     }
+
+    @Test
+    func setSidebarWidthPersistsWidthOverride() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(state.windows.first?.sidebarWidthPointsOverride == nil)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: 320,
+                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                ),
+                state: &state
+            )
+        )
+        #expect(state.windows.first?.sidebarWidthPointsOverride == 320)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: 320,
+                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                ),
+                state: &state
+            ) == false
+        )
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setSidebarWidthClearsDefaultWidthOverride() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: WindowState.defaultSidebarWidthBeforeAgentLaunch,
+                    defaultWidth: WindowState.defaultSidebarWidthBeforeAgentLaunch
+                ),
+                state: &state
+            ) == false
+        )
+        #expect(state.windows.first?.sidebarWidthPointsOverride == nil)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: 320,
+                    defaultWidth: WindowState.defaultSidebarWidthBeforeAgentLaunch
+                ),
+                state: &state
+            )
+        )
+        #expect(state.windows.first?.sidebarWidthPointsOverride == 320)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: WindowState.defaultSidebarWidthBeforeAgentLaunch,
+                    defaultWidth: WindowState.defaultSidebarWidthBeforeAgentLaunch
+                ),
+                state: &state
+            )
+        )
+        #expect(state.windows.first?.sidebarWidthPointsOverride == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setSidebarWidthUsesCurrentDefaultWidthWhenNormalizingOverride() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: WindowState.defaultSidebarWidthBeforeAgentLaunch,
+                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                ),
+                state: &state
+            )
+        )
+        #expect(state.windows.first?.sidebarWidthPointsOverride == WindowState.defaultSidebarWidthBeforeAgentLaunch)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setSidebarWidthClampsWidthOverride() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: 12,
+                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                ),
+                state: &state
+            )
+        )
+        #expect(state.windows.first?.sidebarWidthPointsOverride == WindowState.minSidebarWidth)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: 900,
+                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                ),
+                state: &state
+            )
+        )
+        #expect(state.windows.first?.sidebarWidthPointsOverride == WindowState.maxSidebarWidth)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setSidebarWidthRejectsInvalidInput() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let originalState = state
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: UUID(),
+                    width: 320,
+                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                ),
+                state: &state
+            ) == false
+        )
+        #expect(state == originalState)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: .infinity,
+                    defaultWidth: WindowState.defaultSidebarWidthAfterAgentLaunch
+                ),
+                state: &state
+            ) == false
+        )
+        #expect(state == originalState)
+
+        #expect(
+            reducer.send(
+                .setSidebarWidth(
+                    windowID: windowID,
+                    width: 320,
+                    defaultWidth: .infinity
+                ),
+                state: &state
+            ) == false
+        )
+        #expect(state == originalState)
+
+        try StateValidator.validate(state)
+    }
 }
