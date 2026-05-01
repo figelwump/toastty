@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Toastty - A native terminal home for coding agents</title>
+    <meta
+      name="description"
+      content="Toastty is a native macOS terminal multiplexer powered by Ghostty and tuned for coding agents, with workspaces, live status, supporting panels, and fast navigation."
+    >
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="site-header" aria-label="Primary">
+      <a class="brand" href="#top" aria-label="Toastty home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="img">
+            <path d="M7 7.5 12.6 12 7 16.5" />
+            <path d="M14 16.5h4" />
+          </svg>
+        </span>
+        <span>Toastty</span>
+      </a>
+      <nav class="nav-links" aria-label="Page sections">
+        <a href="#workflows">Workflows</a>
+        <a href="#right-panel">Panels</a>
+        <a href="#command-palette">Palette</a>
+        <a href="https://github.com/figelwump/toastty">GitHub</a>
+      </nav>
+      <a class="button button-primary header-cta" href="https://github.com/figelwump/toastty/releases/latest">
+        Download for macOS
+      </a>
+    </header>
+
+    <main id="top">
+      <section class="hero section-shell">
+        <div class="hero-copy">
+          <h1>A native terminal home for coding <span>agents.</span></h1>
+          <p>
+            Toastty is a native macOS terminal multiplexer powered by Ghostty and tuned for agent-heavy
+            development: workspaces, live status, unread badges, right-side context, and fast keyboard navigation.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <a class="button button-primary" href="https://github.com/figelwump/toastty/releases/latest">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 4v11" />
+                <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+                <path d="M5 20h14" />
+              </svg>
+              Download for macOS
+            </a>
+            <a class="button button-secondary" href="https://github.com/figelwump/toastty">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 2.5c-5.25 0-9.5 4.15-9.5 9.27 0 4.1 2.73 7.58 6.52 8.8.48.08.66-.2.66-.45v-1.58c-2.65.56-3.21-1.1-3.21-1.1-.44-1.08-1.07-1.37-1.07-1.37-.87-.58.07-.57.07-.57.96.07 1.47.96 1.47.96.85 1.43 2.23 1.02 2.78.78.08-.6.33-1.02.6-1.25-2.12-.23-4.35-1.03-4.35-4.58 0-1.01.37-1.84.98-2.49-.1-.24-.43-1.2.09-2.46 0 0 .8-.25 2.62.95A9.25 9.25 0 0 1 12 7.08c.8 0 1.6.1 2.35.32 1.82-1.2 2.62-.95 2.62-.95.52 1.26.19 2.22.09 2.46.61.65.98 1.48.98 2.49 0 3.56-2.23 4.35-4.36 4.58.34.29.65.86.65 1.74v2.4c0 .25.18.54.66.45 3.79-1.22 6.51-4.7 6.51-8.8 0-5.12-4.25-9.27-9.5-9.27Z"
+                />
+              </svg>
+              View on GitHub
+            </a>
+          </div>
+          <p class="requirement">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16.4 2.7c-.9.06-1.96.62-2.58 1.36-.56.67-1.03 1.73-.9 2.75 1 .08 2.03-.5 2.65-1.24.62-.74.98-1.77.83-2.87Z" />
+              <path d="M20 16.9c-.42.94-.62 1.36-1.16 2.2-.75 1.16-1.8 2.6-3.1 2.62-1.17.02-1.47-.76-3.05-.75-1.59.01-1.92.77-3.09.75-1.3-.02-2.3-1.31-3.05-2.47-2.09-3.24-2.31-7.05-1.02-9.07.92-1.43 2.37-2.27 3.74-2.27 1.39 0 2.27.76 3.42.76 1.12 0 1.8-.76 3.41-.76 1.22 0 2.5.66 3.42 1.8-3 1.64-2.51 5.92.48 7.19Z" />
+            </svg>
+            macOS 14.0+ required
+          </p>
+        </div>
+
+        <figure class="hero-media" aria-label="Toastty app interface">
+          <img src="./assets/hero_0.6.2.jpg" alt="Toastty showing agent workspaces, terminal output, and a right-side document panel">
+        </figure>
+      </section>
+
+      <section class="workflow product-section" id="workflows" aria-labelledby="workflow-title">
+        <div class="section-shell two-up sidebar-story">
+          <figure class="screenshot-frame sidebar-frame">
+            <img src="./assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and agent status rows" loading="lazy" decoding="async">
+          </figure>
+          <div class="section-copy">
+            <h2 id="workflow-title">Know which agent needs you next.</h2>
+            <p>
+              Workspaces become an agent dashboard. Toastty surfaces ready, working, unread, and later-marked
+              sessions without making you leave the terminal.
+            </p>
+            <div class="feature-stack">
+              <article>
+                <span class="status-dot green" aria-hidden="true"></span>
+                <div>
+                  <h3>Live sidebar status</h3>
+                  <p>Claude, Codex, and Pi sessions can report readiness, working state, errors, and unread output.</p>
+                </div>
+              </article>
+              <article>
+                <span class="status-dot amber" aria-hidden="true"></span>
+                <div>
+                  <h3>Jump to active work</h3>
+                  <p>Use <kbd>⌘⇧A</kbd> to rotate through unread, approval, ready, and active sessions.</p>
+                </div>
+              </article>
+              <article>
+                <span class="status-dot cyan" aria-hidden="true"></span>
+                <div>
+                  <h3>Follow up later</h3>
+                  <p>Mark a session for later without pinning it, reordering it, or losing your current flow.</p>
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel-section product-section" id="right-panel" aria-labelledby="panel-title">
+        <div class="section-shell split-feature">
+          <div class="section-copy">
+            <h2 id="panel-title">Keep context beside the terminal.</h2>
+            <p>
+              The right panel gives every workspace tab a place for Scratchpad notes, browser pages, and local
+              documents while the main terminal layout stays focused on running work.
+            </p>
+            <ul class="plain-list">
+              <li>Open Markdown and code-like local documents without leaving Toastty.</li>
+              <li>Keep a Scratchpad bound to the agent session that produced it.</li>
+              <li>Switch panel tabs independently from terminal tabs and splits.</li>
+            </ul>
+          </div>
+          <figure class="screenshot-frame wide-frame">
+            <img src="./assets/right_panel_cropped_0.6.2.jpg" alt="Toastty right panel showing README.md in a local document tab" loading="lazy" decoding="async">
+          </figure>
+        </div>
+      </section>
+
+      <section class="palette-section product-section" id="command-palette" aria-labelledby="palette-title">
+        <div class="section-shell palette-layout">
+          <figure class="screenshot-frame palette-frame">
+            <img src="./assets/command_palette_0.6.2.png" alt="Toastty command palette filtering worktree-create skill files" loading="lazy" decoding="async">
+          </figure>
+          <div class="section-copy">
+            <h2 id="palette-title">Keyboard-first, even when the workflow gets wide.</h2>
+            <p>
+              Launch agents, split panes, switch workspaces, open documents, and jump through session state from
+              the command palette and predictable shortcuts.
+            </p>
+            <div class="shortcut-grid">
+              <span><kbd>⌘⇧P</kbd>Command palette</span>
+              <span><kbd>⌘D</kbd>Split horizontally</span>
+              <span><kbd>⌘⇧B</kbd>Right panel</span>
+              <span><kbd>⌥1-9</kbd>Workspace switch</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="feature-band" aria-labelledby="features-title">
+        <div class="section-shell feature-band-grid">
+          <div class="section-heading">
+            <h2 id="features-title">Native terminal power, shaped for agents.</h2>
+            <p>Toastty stays close to the terminal while adding just enough app structure around it.</p>
+          </div>
+          <article>
+            <h3>Ghostty rendering</h3>
+            <p>GPU-accelerated terminal rendering powered by Ghostty, with Ghostty config compatibility.</p>
+          </article>
+          <article>
+            <h3>Terminal profiles</h3>
+            <p>Launch setups such as tmux, zmx, ssh, or custom scripts from menus and shortcuts.</p>
+          </article>
+          <article>
+            <h3>Split panes</h3>
+            <p>Create, resize, equalize, and zoom terminal panes without losing keyboard focus.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="final-cta" aria-labelledby="cta-title">
+        <div class="section-shell cta-grid">
+          <div>
+            <h2 id="cta-title">Open source. Built for developers.</h2>
+            <p>
+              Toastty is open source on GitHub. Download the latest release for macOS 14.0+ and make it your
+              terminal home for agent-driven work.
+            </p>
+          </div>
+          <div class="cta-actions">
+            <a class="button button-primary" href="https://github.com/figelwump/toastty/releases/latest">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 4v11" />
+                <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+                <path d="M5 20h14" />
+              </svg>
+              Download for macOS
+            </a>
+            <a class="button button-secondary" href="https://github.com/figelwump/toastty">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 2.5c-5.25 0-9.5 4.15-9.5 9.27 0 4.1 2.73 7.58 6.52 8.8.48.08.66-.2.66-.45v-1.58c-2.65.56-3.21-1.1-3.21-1.1-.44-1.08-1.07-1.37-1.07-1.37-.87-.58.07-.57.07-.57.96.07 1.47.96 1.47.96.85 1.43 2.23 1.02 2.78.78.08-.6.33-1.02.6-1.25-2.12-.23-4.35-1.03-4.35-4.58 0-1.01.37-1.84.98-2.49-.1-.24-.43-1.2.09-2.46 0 0 .8-.25 2.62.95A9.25 9.25 0 0 1 12 7.08c.8 0 1.6.1 2.35.32 1.82-1.2 2.62-.95 2.62-.95.52 1.26.19 2.22.09 2.46.61.65.98 1.48.98 2.49 0 3.56-2.23 4.35-4.36 4.58.34.29.65.86.65 1.74v2.4c0 .25.18.54.66.45 3.79-1.22 6.51-4.7 6.51-8.8 0-5.12-4.25-9.27-9.5-9.27Z"
+                />
+              </svg>
+              View on GitHub
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
