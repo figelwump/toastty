@@ -309,21 +309,20 @@ private extension CodexSessionLogWatcher {
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "from_tui",
               normalizedString(object["kind"]) == "op",
-              let payload = object["payload"] as? [String: Any],
-              let type = normalizedString(payload["type"]) else {
+              let operation = normalizedOperationPayload(object["payload"]) else {
             return nil
         }
 
-        switch type {
+        switch operation.type {
         case "user_turn":
-            let dedupeKey = "op_user_turn:\(operationEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
+            let dedupeKey = "op_user_turn:\(operationEventIdentifier(from: object, payload: operation.payload, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else {
                 return nil
             }
 
             return CodexSessionLogEvent(
                 kind: .turnStarted,
-                detail: userTurnDetail(from: payload) ?? "Responding to your prompt"
+                detail: userTurnDetail(from: operation.payload) ?? "Responding to your prompt"
             )
 
         case "interrupt":
@@ -331,7 +330,7 @@ private extension CodexSessionLogWatcher {
             // user cancels the active turn (Esc, Ctrl-C, or equivalent).
             // Treat it as the modern equivalent of the legacy turn_aborted
             // record so the sidebar clears the working spinner promptly.
-            let dedupeKey = "op_interrupt:\(operationEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
+            let dedupeKey = "op_interrupt:\(operationEventIdentifier(from: object, payload: operation.payload, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else {
                 return nil
             }
@@ -341,6 +340,24 @@ private extension CodexSessionLogWatcher {
         default:
             return nil
         }
+    }
+
+    static func normalizedOperationPayload(_ value: Any?) -> (type: String, payload: [String: Any])? {
+        if let payload = value as? [String: Any] {
+            if let type = normalizedString(payload["type"]) {
+                return (type: type, payload: payload)
+            }
+
+            if let userTurn = payload["UserTurn"] as? [String: Any] {
+                return (type: "user_turn", payload: userTurn)
+            }
+        }
+
+        if normalizedString(value) == "Interrupt" {
+            return (type: "interrupt", payload: [:])
+        }
+
+        return nil
     }
 
     static func parseHistoryInsertEvent(
