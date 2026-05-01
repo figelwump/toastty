@@ -64,7 +64,8 @@ svg {
 }
 
 .section-shell {
-  width: min(100% - 64px, 1340px);
+  width: calc(100% - 64px);
+  max-width: 1340px;
   margin: 0 auto;
 }
 
@@ -203,6 +204,7 @@ svg path {
   max-width: 680px;
   font-size: clamp(42px, 4.3vw, 66px);
   line-height: 1.02;
+  overflow-wrap: break-word;
 }
 
 .hero h1 span {
@@ -216,6 +218,7 @@ svg path {
   font-family: var(--mono);
   font-size: 16px;
   line-height: 1.62;
+  overflow-wrap: break-word;
 }
 
 .hero-actions {
@@ -242,6 +245,13 @@ svg path {
   position: relative;
   margin: 0;
   isolation: isolate;
+}
+
+.hero-copy,
+.section-copy,
+.section-heading,
+.cta-grid > div {
+  min-width: 0;
 }
 
 .hero-media::before {
@@ -511,7 +521,8 @@ kbd {
 
 @media (max-width: 1220px) {
   .section-shell {
-    width: min(100% - 48px, 980px);
+    width: calc(100% - 48px);
+    max-width: 980px;
   }
 
   .hero,
@@ -570,7 +581,8 @@ kbd {
   }
 
   .section-shell {
-    width: min(100% - 32px, 640px);
+    width: calc(100% - 32px);
+    max-width: 640px;
   }
 
   .hero {
@@ -579,7 +591,8 @@ kbd {
   }
 
   .hero h1 {
-    font-size: clamp(40px, 12vw, 56px);
+    font-size: clamp(34px, 10vw, 44px);
+    line-height: 1.08;
   }
 
   .hero-copy p,

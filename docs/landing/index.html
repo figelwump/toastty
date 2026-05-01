@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Toastty - A native terminal home for coding agents</title>
+    <title>Toastty - Your home for agents, done your way</title>
     <meta
       name="description"
-      content="Toastty is a native macOS terminal multiplexer powered by Ghostty and tuned for coding agents, with workspaces, live status, supporting panels, and fast navigation."
+      content="Toastty is a flexible, customizable, and automatable home for your agents, with live agent status, workspaces, rich keyboard shortcuts, and extensions."
     >
     <link rel="stylesheet" href="./styles.css">
   </head>
@@ -22,9 +22,7 @@
         <span>Toastty</span>
       </a>
       <nav class="nav-links" aria-label="Page sections">
-        <a href="#workflows">Workflows</a>
-        <a href="#right-panel">Panels</a>
-        <a href="#command-palette">Palette</a>
+        <a href="#features">Features</a>
         <a href="https://github.com/figelwump/toastty">GitHub</a>
       </nav>
       <a class="button button-primary header-cta" href="https://github.com/figelwump/toastty/releases/latest">
@@ -35,10 +33,11 @@
     <main id="top">
       <section class="hero section-shell">
         <div class="hero-copy">
-          <h1>A native terminal home for coding <span>agents.</span></h1>
+          <h1>Your home for agents, done <span>your way.</span></h1>
           <p>
-            Toastty is a native macOS terminal multiplexer powered by Ghostty and tuned for agent-heavy
-            development: workspaces, live status, unread badges, right-side context, and fast keyboard navigation.
+            A flexible, customizable and automatable home for your agents.
+            <br><br>
+            Live agent status, workspaces, rich keyboard shortcuts, and a growing list of extensions.
           </p>
           <div class="hero-actions" aria-label="Primary actions">
             <a class="button button-primary" href="https://github.com/figelwump/toastty/releases/latest">
@@ -72,7 +71,7 @@
         </figure>
       </section>
 
-      <section class="workflow product-section" id="workflows" aria-labelledby="workflow-title">
+      <section class="workflow product-section" id="features" aria-labelledby="workflow-title">
         <div class="section-shell two-up sidebar-story">
           <figure class="screenshot-frame sidebar-frame">
             <img src="./assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and agent status rows" loading="lazy" decoding="async">
@@ -101,8 +100,8 @@
               <article>
                 <span class="status-dot cyan" aria-hidden="true"></span>
                 <div>
-                  <h3>Follow up later</h3>
-                  <p>Mark a session for later without pinning it, reordering it, or losing your current flow.</p>
+                  <h3>Focus Mode</h3>
+                  <p>Focus on one panel at a time when you want to stay in the flow.</p>
                 </div>
               </article>
             </div>
@@ -121,7 +120,10 @@
             <ul class="plain-list">
               <li>Open Markdown and code-like local documents without leaving Toastty.</li>
               <li>Keep a Scratchpad bound to the agent session that produced it.</li>
-              <li>Switch panel tabs independently from terminal tabs and splits.</li>
+              <li>
+                Automate workflows that create new workspaces, open markdown files, or automatically start a new
+                scratchpad for you.
+              </li>
             </ul>
           </div>
           <figure class="screenshot-frame wide-frame">
@@ -136,10 +138,10 @@
             <img src="./assets/command_palette_0.6.2.png" alt="Toastty command palette filtering worktree-create skill files" loading="lazy" decoding="async">
           </figure>
           <div class="section-copy">
-            <h2 id="palette-title">Keyboard-first, even when the workflow gets wide.</h2>
+            <h2 id="palette-title">Rich keyboard support</h2>
             <p>
-              Launch agents, split panes, switch workspaces, open documents, and jump through session state from
-              the command palette and predictable shortcuts.
+              Do everything you can do in the app with keyboard shortcuts and the command palette. Quickly search
+              for and open local files from the command palette too.
             </p>
             <div class="shortcut-grid">
               <span><kbd>⌘⇧P</kbd>Command palette</span>
