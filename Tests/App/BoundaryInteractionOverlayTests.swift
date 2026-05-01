@@ -164,6 +164,68 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testCursorUpdateUsesCurrentPointerWhenEventLocationIsStale() throws {
+        defer { NSCursor.arrow.set() }
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        var hoverStates: [Bool] = []
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: .resizeLeftRight,
+                onHoverChanged: { hoverStates.append($0) }
+            ),
+        ])
+        NSCursor.arrow.set()
+
+        overlay.cursorUpdate(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 40, y: 50), window: window)
+        )
+
+        XCTAssertTrue(NSCursor.current === NSCursor.resizeLeftRight)
+        XCTAssertEqual(hoverStates, [true])
+    }
+
+    @MainActor
+    func testCursorUpdateClearsHoverWhenStaleEventLocationStillHitsBoundary() throws {
+        defer { NSCursor.arrow.set() }
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        var hoverStates: [Bool] = []
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: .resizeLeftRight,
+                onHoverChanged: { hoverStates.append($0) }
+            ),
+        ])
+        overlay.cursorUpdate(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 100, y: 50), window: window)
+        )
+        XCTAssertTrue(NSCursor.current === NSCursor.resizeLeftRight)
+        XCTAssertEqual(hoverStates, [true])
+
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 40, y: 50)
+        }
+        overlay.cursorUpdate(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 100, y: 50), window: window)
+        )
+
+        XCTAssertEqual(hoverStates, [true, false])
+    }
+
+    @MainActor
     func testDescriptorReplacementDuringDragKeepsCapturedDescriptorID() throws {
         defer { WindowMovementSuppression.resetForTesting() }
         let (window, overlay) = makeWindowWithOverlay()

@@ -121,7 +121,6 @@ struct WorkspaceView: View {
     private static let workspaceNewTabButtonSize: CGFloat = 20
     nonisolated static let rightAuxPanelResizeHandleHitWidth: CGFloat = 10
     fileprivate nonisolated static let rightAuxPanelResizeHandleHairlineWidth: CGFloat = 1
-    fileprivate nonisolated static let rightAuxPanelResizeHandleHighlightWidth: CGFloat = 3
     private nonisolated static let workspaceTabDragActivationDistance: CGFloat = 4
 
     nonisolated static func mountedContentOpacity(isVisible: Bool) -> Double {
@@ -2421,9 +2420,10 @@ private struct RightAuxPanelResizeLayer: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            RightAuxPanelResizeHandleVisual(
+            BoundaryResizeHandleVisual(
                 highlighted: highlighted,
-                appIsActive: appIsActive
+                appIsActive: appIsActive,
+                width: WorkspaceView.rightAuxPanelResizeHandleHairlineWidth
             )
             .frame(
                 width: WorkspaceView.rightAuxPanelResizeHandleHitWidth,
@@ -2488,30 +2488,6 @@ private struct RightAuxPanelResizeLayer: View {
 
     private var highlighted: Bool {
         hovered || dragging
-    }
-}
-
-private struct RightAuxPanelResizeHandleVisual: View {
-    let highlighted: Bool
-    let appIsActive: Bool
-
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(width: WorkspaceView.rightAuxPanelResizeHandleHairlineWidth)
-
-            Rectangle()
-                .fill(highlightColor)
-                .frame(width: WorkspaceView.rightAuxPanelResizeHandleHighlightWidth)
-                .animation(.easeOut(duration: 0.12), value: highlighted)
-        }
-    }
-
-    private var highlightColor: Color {
-        highlighted
-            ? ToastyTheme.accent.opacity(appIsActive ? 0.9 : 0.55)
-            : Color.clear
     }
 }
 

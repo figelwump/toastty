@@ -20,6 +20,7 @@ struct AppWindowView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
+    @State private var appIsActive = true
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
     static let sidebarDividerWidth: CGFloat = 1
@@ -80,6 +81,7 @@ struct AppWindowView: View {
                             sidebarWidth: effectiveSidebarWidth,
                             defaultSidebarWidth: defaultSidebarWidth,
                             height: geometry.size.height,
+                            appIsActive: appIsActive,
                             store: store
                         )
                         .frame(
@@ -121,6 +123,7 @@ struct AppWindowView: View {
             agentGetStartedSheet
         }
         .onAppear {
+            appIsActive = NSApplication.shared.isActive
             scheduleWindowFocusRestore()
         }
         .onChange(of: slotFocusSignature) { _, _ in
@@ -160,6 +163,12 @@ struct AppWindowView: View {
                 notificationObject: notification.object
             ) else { return }
             presentAgentGetStartedFlow()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            appIsActive = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            appIsActive = false
         }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
     }
@@ -342,16 +351,34 @@ private struct SidebarResizeLayer: View {
     let sidebarWidth: CGFloat
     let defaultSidebarWidth: CGFloat
     let height: CGFloat
+    let appIsActive: Bool
     @ObservedObject var store: AppStore
 
     @State private var resizeStartWidth: Double?
+    @State private var hovered = false
+    @State private var dragging = false
 
     var body: some View {
-        BoundaryInteractionOverlay(descriptors: [boundaryDescriptor])
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onDisappear {
-                resizeStartWidth = nil
-            }
+        ZStack(alignment: .topLeading) {
+            BoundaryResizeHandleVisual(
+                highlighted: highlighted,
+                appIsActive: appIsActive,
+                width: AppWindowView.sidebarDividerWidth
+            )
+            .frame(
+                width: AppWindowView.sidebarResizeHandleHitWidth,
+                height: height,
+                alignment: .topLeading
+            )
+            .position(x: sidebarWidth + (AppWindowView.sidebarDividerWidth / 2), y: height / 2)
+            .allowsHitTesting(false)
+
+            BoundaryInteractionOverlay(descriptors: [boundaryDescriptor])
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onDisappear {
+            releaseInteraction()
+        }
     }
 
     private var boundaryDescriptor: BoundaryInteractionDescriptor {
@@ -377,6 +404,7 @@ private struct SidebarResizeLayer: View {
             ],
             onBegan: { _ in
                 resizeStartWidth = Double(sidebarWidth)
+                updateInteraction(dragging: true)
             },
             onChanged: { value in
                 guard let startingWidth = resizeStartWidth else { return }
@@ -391,12 +419,40 @@ private struct SidebarResizeLayer: View {
             },
             onEnded: { _ in
                 resizeStartWidth = nil
+                updateInteraction(dragging: false)
+            },
+            onHoverChanged: { hovering in
+                updateInteraction(hovered: hovering)
             }
         )
     }
 
     private var boundaryID: String {
         "sidebar.resize.\(windowID.uuidString)"
+    }
+
+    private var highlighted: Bool {
+        hovered || dragging
+    }
+}
+
+private extension SidebarResizeLayer {
+    func updateInteraction(
+        hovered: Bool? = nil,
+        dragging: Bool? = nil
+    ) {
+        self.hovered = hovered ?? self.hovered
+        self.dragging = dragging ?? self.dragging
+    }
+
+    func releaseInteraction() {
+        resizeStartWidth = nil
+        guard hovered || dragging else { return }
+
+        DispatchQueue.main.async {
+            hovered = false
+            dragging = false
+        }
     }
 }
 

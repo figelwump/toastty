@@ -1,4 +1,5 @@
 import AppKit
+import CoreState
 import SwiftUI
 
 enum BoundaryInteractionAxis: Equatable {
@@ -75,6 +76,10 @@ struct BoundaryInteractionOverlay: NSViewRepresentable {
 final class BoundaryInteractionOverlayView: NSView {
     private static let trackingEventMask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
     private nonisolated static let windowMovementSuppressionReason = "boundary-interaction"
+    private nonisolated static let cursorDiagnosticsEnvironmentKey = "TOASTTY_BOUNDARY_CURSOR_DIAGNOSTICS"
+    private nonisolated static let cursorDiagnosticsEnabled = truthy(
+        ProcessInfo.processInfo.environment[cursorDiagnosticsEnvironmentKey]
+    )
 
     var usesEventTrackingLoop = true
     var currentLocalMouseLocationProvider: (() -> CGPoint?)?
@@ -173,6 +178,7 @@ final class BoundaryInteractionOverlayView: NSView {
             }
             addCursorRect(hitFrame, cursor: cursor)
         }
+        logCursorDiagnostic("reset-cursor-rects")
     }
 
     override func updateTrackingAreas() {
@@ -193,22 +199,45 @@ final class BoundaryInteractionOverlayView: NSView {
         if let currentLocation = currentLocalMouseLocation(),
            bounds.contains(currentLocation) {
             lastKnownLocalMouseLocation = currentLocation
-            setHoveredDescriptor(descriptor(at: currentLocation))
+            let descriptor = descriptor(at: currentLocation)
+            logCursorDiagnostic(
+                "mouse-exited-current-location-inside",
+                descriptor: descriptor,
+                event: event,
+                location: currentLocation
+            )
+            setHoveredDescriptor(descriptor)
             return
         }
 
-        setHoveredDescriptor(descriptor(at: eventLocation))
+        let descriptor = descriptor(at: eventLocation)
+        logCursorDiagnostic("mouse-exited", descriptor: descriptor, event: event, location: eventLocation)
+        setHoveredDescriptor(descriptor)
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        let location = localLocation(for: event)
-        if let descriptor = descriptor(at: location),
+        let (descriptor, location, locationSource) = cursorDescriptor(for: event)
+        if let descriptor,
            let cursor = descriptor.cursor {
+            logCursorDiagnostic(
+                "cursor-update-set",
+                descriptor: descriptor,
+                event: event,
+                location: location,
+                extraMetadata: ["locationSource": locationSource]
+            )
             cursor.set()
             setHoveredDescriptor(descriptor)
             return
         }
 
+        logCursorDiagnostic(
+            "cursor-update-defer",
+            descriptor: descriptor,
+            event: event,
+            location: location,
+            extraMetadata: ["locationSource": locationSource]
+        )
         setHoveredDescriptor(nil)
         super.cursorUpdate(with: event)
     }
@@ -237,6 +266,7 @@ final class BoundaryInteractionOverlayView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil {
+            logCursorDiagnostic("view-did-move-to-window-removed")
             setHoveredDescriptor(nil)
             if isTrackingBoundarySequence == false {
                 cancelBoundarySequence(
@@ -246,6 +276,7 @@ final class BoundaryInteractionOverlayView: NSView {
                 )
             }
         } else {
+            logCursorDiagnostic("view-did-move-to-window-attached")
             refreshBoundaryInteractionRegionsIfNeeded(force: true)
             reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: true)
         }
@@ -253,6 +284,7 @@ final class BoundaryInteractionOverlayView: NSView {
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
+        logCursorDiagnostic("view-did-change-backing-properties-before-refresh")
         refreshBoundaryInteractionRegionsIfNeeded(force: true)
         reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: true)
     }
@@ -280,7 +312,9 @@ final class BoundaryInteractionOverlayView: NSView {
 
     private func updateHover(with event: NSEvent) {
         let location = localLocation(for: event)
-        setHoveredDescriptor(descriptor(at: location))
+        let descriptor = descriptor(at: location)
+        logCursorDiagnostic("mouse-hover", descriptor: descriptor, event: event, location: location)
+        setHoveredDescriptor(descriptor)
     }
 
     private func reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: Bool) {
@@ -318,12 +352,21 @@ final class BoundaryInteractionOverlayView: NSView {
         guard hoveredDescriptorID != nextID else {
             if let descriptor {
                 hoveredDescriptor = descriptor
+                logCursorDiagnostic("hover-same-reapply-cursor", descriptor: descriptor)
                 descriptor.cursor?.set()
             }
             return
         }
 
         let previous = hoveredDescriptor
+        logCursorDiagnostic(
+            "hover-change",
+            descriptor: descriptor,
+            extraMetadata: [
+                "previousDescriptorID": previous?.id ?? "nil",
+                "nextDescriptorID": nextID ?? "nil",
+            ]
+        )
         hoveredDescriptorID = nextID
         hoveredDescriptor = descriptor
         descriptor?.cursor?.set()
@@ -532,6 +575,13 @@ final class BoundaryInteractionOverlayView: NSView {
         interactionSpecs = nextSpecs
 
         guard force || didChange else { return }
+        logCursorDiagnostic(
+            force ? "refresh-regions-forced" : "refresh-regions-changed",
+            extraMetadata: [
+                "specCount": "\(nextSpecs.count)",
+                "didChange": "\(didChange)",
+            ]
+        )
         rebuildBoundaryTrackingAreas()
         window?.invalidateCursorRects(for: self)
     }
@@ -557,6 +607,13 @@ final class BoundaryInteractionOverlayView: NSView {
             addTrackingArea(trackingArea)
             boundaryTrackingAreas.append(trackingArea)
         }
+        logCursorDiagnostic(
+            "tracking-areas-rebuilt",
+            extraMetadata: [
+                "trackingAreaCount": "\(boundaryTrackingAreas.count)",
+                "rebuildCount": "\(boundaryTrackingAreaRebuildCount)",
+            ]
+        )
     }
 
     private func updateAccessibility() {
@@ -655,6 +712,163 @@ final class BoundaryInteractionOverlayView: NSView {
         }
         return standardized
     }
+
+    private func cursorDescriptor(for event: NSEvent) -> (BoundaryInteractionDescriptor?, CGPoint, String) {
+        let eventLocation = localLocation(for: event)
+        let eventDescriptor = descriptor(at: eventLocation)
+
+        if let currentLocation = currentLocalMouseLocation() {
+            lastKnownLocalMouseLocation = currentLocation
+            if bounds.contains(currentLocation) {
+                if let currentDescriptor = descriptor(at: currentLocation) {
+                    let source = eventDescriptor?.id == currentDescriptor.id
+                        ? "current-window-location"
+                        : "current-window-location-corrected"
+                    return (currentDescriptor, currentLocation, source)
+                }
+
+                if eventDescriptor != nil {
+                    return (nil, currentLocation, "current-window-location-outside-descriptor")
+                }
+            } else if eventDescriptor != nil {
+                return (nil, currentLocation, "current-window-location-outside-bounds")
+            }
+        }
+
+        if let eventDescriptor {
+            return (eventDescriptor, eventLocation, "event-location")
+        }
+
+        return (nil, eventLocation, "none")
+    }
+
+    private func logCursorDiagnostic(
+        _ phase: String,
+        descriptor: BoundaryInteractionDescriptor? = nil,
+        event: NSEvent? = nil,
+        location: CGPoint? = nil,
+        extraMetadata: [String: String] = [:]
+    ) {
+        guard Self.cursorDiagnosticsEnabled else { return }
+
+        var metadata = extraMetadata
+        metadata["phase"] = phase
+        metadata["frame"] = Self.rectDescription(frame)
+        metadata["bounds"] = Self.rectDescription(bounds)
+        metadata["visibleRect"] = Self.rectDescription(visibleRect)
+        metadata["hoveredDescriptorID"] = hoveredDescriptorID ?? "nil"
+        metadata["activeDescriptorID"] = activeDescriptorID ?? "nil"
+        metadata["descriptorCount"] = "\(orderedDescriptors.count)"
+        metadata["trackingAreaCount"] = "\(boundaryTrackingAreas.count)"
+        metadata["rebuildCount"] = "\(boundaryTrackingAreaRebuildCount)"
+        metadata["backingScaleFactor"] = String(format: "%.3f", backingScaleFactor())
+        metadata["currentCursor"] = Self.cursorDescription(NSCursor.current)
+
+        if let descriptor {
+            metadata["descriptorID"] = descriptor.id
+            metadata["descriptorHitFrame"] = Self.rectDescription(descriptor.hitFrame)
+            metadata["descriptorEffectiveHitFrame"] = effectiveHitFrame(for: descriptor.hitFrame)
+                .map(Self.rectDescription) ?? "nil"
+            metadata["descriptorCursor"] = descriptor.cursor.map(Self.cursorDescription) ?? "nil"
+            if let cursor = descriptor.cursor {
+                metadata["currentCursorMatchesDescriptor"] = "\(NSCursor.current === cursor)"
+            }
+            for (key, value) in descriptor.metadata {
+                metadata["descriptor.\(key)"] = value
+            }
+        }
+
+        if let event {
+            metadata["eventType"] = Self.eventTypeDescription(event.type)
+            metadata["eventWindowLocation"] = Self.pointDescription(event.locationInWindow)
+            let eventLocalLocation = convert(event.locationInWindow, from: nil)
+            metadata["eventLocalLocation"] = Self.pointDescription(eventLocalLocation)
+            metadata["eventDescriptorID"] = self.descriptor(at: eventLocalLocation)?.id ?? "nil"
+        }
+
+        if let location {
+            metadata["resolvedLocalLocation"] = Self.pointDescription(location)
+            metadata["resolvedDescriptorID"] = self.descriptor(at: location)?.id ?? "nil"
+        }
+
+        if let window {
+            let windowMouseLocation = window.mouseLocationOutsideOfEventStream
+            let localMouseLocation = convert(windowMouseLocation, from: nil)
+            metadata["windowNumber"] = "\(window.windowNumber)"
+            metadata["windowBackingScaleFactor"] = String(format: "%.3f", window.backingScaleFactor)
+            metadata["windowCursorRectsEnabled"] = "\(window.areCursorRectsEnabled)"
+            metadata["windowMouseLocation"] = Self.pointDescription(windowMouseLocation)
+            metadata["currentLocalMouseLocation"] = Self.pointDescription(localMouseLocation)
+            metadata["currentLocalMouseInsideBounds"] = "\(bounds.contains(localMouseLocation))"
+            metadata["currentDescriptorID"] = self.descriptor(at: localMouseLocation)?.id ?? "nil"
+            if let screen = window.screen {
+                metadata["screenName"] = screen.localizedName
+                metadata["screenFrame"] = Self.rectDescription(screen.frame)
+                metadata["screenBackingScaleFactor"] = String(format: "%.3f", screen.backingScaleFactor)
+            }
+        }
+
+        ToasttyLog.info(
+            "boundary cursor diagnostic",
+            category: .input,
+            metadata: metadata
+        )
+    }
+
+    private nonisolated static func truthy(_ value: String?) -> Bool {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+    }
+
+    private static func cursorDescription(_ cursor: NSCursor) -> String {
+        if cursor === NSCursor.arrow {
+            return "arrow"
+        }
+        if cursor === NSCursor.iBeam {
+            return "iBeam"
+        }
+        if cursor === NSCursor.pointingHand {
+            return "pointingHand"
+        }
+        if cursor === NSCursor.resizeLeftRight {
+            return "resizeLeftRight"
+        }
+        if cursor === NSCursor.resizeUpDown {
+            return "resizeUpDown"
+        }
+        return String(describing: cursor)
+    }
+
+    private static func pointDescription(_ point: CGPoint) -> String {
+        String(format: "%.1f,%.1f", point.x, point.y)
+    }
+
+    private static func rectDescription(_ rect: CGRect) -> String {
+        String(format: "%.1f,%.1f %.1fx%.1f", rect.minX, rect.minY, rect.width, rect.height)
+    }
+
+    private static func eventTypeDescription(_ eventType: NSEvent.EventType) -> String {
+        switch eventType {
+        case .leftMouseDown:
+            return "leftMouseDown"
+        case .leftMouseDragged:
+            return "leftMouseDragged"
+        case .leftMouseUp:
+            return "leftMouseUp"
+        case .mouseEntered:
+            return "mouseEntered"
+        case .mouseExited:
+            return "mouseExited"
+        case .mouseMoved:
+            return "mouseMoved"
+        case .cursorUpdate:
+            return "cursorUpdate"
+        default:
+            return "\(eventType.rawValue)"
+        }
+    }
 }
 
 private struct BoundaryInteractionSpec: Equatable {
@@ -664,4 +878,26 @@ private struct BoundaryInteractionSpec: Equatable {
     let cursorID: ObjectIdentifier?
     let accessibilityLabel: String?
     let accessibilityIdentifier: String?
+}
+
+struct BoundaryResizeHandleVisual: View {
+    let highlighted: Bool
+    let appIsActive: Bool
+    let width: CGFloat
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(fillColor)
+                .frame(width: width)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.easeOut(duration: 0.12), value: highlighted)
+    }
+
+    private var fillColor: Color {
+        highlighted
+            ? ToastyTheme.accent.opacity(appIsActive ? 0.9 : 0.55)
+            : ToastyTheme.hairline
+    }
 }
