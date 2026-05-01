@@ -1,7 +1,7 @@
 # Toastty
 
 <p align="center">
-  <img src="docs/assets/toastty-hero.png" alt="Toastty — built for coding with agents" width="1332">
+  <img src="docs/assets/toastty-hero.png" alt="Toastty — built for coding with agents" width="3680">
 </p>
 
 Toastty is a flexible, native, powerful home for working with agents.
