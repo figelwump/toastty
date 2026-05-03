@@ -143,34 +143,89 @@
               Do everything you can do in the app with keyboard shortcuts and the command palette. Quickly search
               for and open local files from the command palette too.
             </p>
-            <div class="shortcut-grid">
-              <span><kbd>⌘⇧P</kbd>Command palette</span>
-              <span><kbd>⌘D</kbd>Split horizontally</span>
-              <span><kbd>⌘⇧B</kbd>Right panel</span>
-              <span><kbd>⌥1-9</kbd>Workspace switch</span>
+          </div>
+        </div>
+        <div class="section-shell shortcut-reference" aria-label="Keyboard shortcut reference">
+          <div class="shortcut-reference-header">
+            <span>Keyboard-first</span>
+            <a href="https://github.com/figelwump/toastty/blob/main/docs/keyboard-shortcuts.md">Full reference →</a>
+          </div>
+          <div class="shortcut-reference-grid">
+            <div class="shortcut-reference-column">
+              <span><span>Sidebar</span><kbd>⌘B</kbd></span>
+              <span><span>Side panel</span><kbd>⌘⇧B</kbd></span>
+            </div>
+            <div class="shortcut-reference-column">
+              <span><span>Split horizontal</span><kbd>⌘D</kbd></span>
+              <span><span>Split vertical</span><kbd>⌘⇧D</kbd></span>
+            </div>
+            <div class="shortcut-reference-column">
+              <span><span>New workspace</span><kbd>⌘⇧N</kbd></span>
+              <span><span>Switch workspace</span><kbd>⌥1-9</kbd></span>
+            </div>
+            <div class="shortcut-reference-column">
+              <span><span>Focus mode</span><kbd>⌘⇧F</kbd></span>
+              <span><span>Next active agent</span><kbd>⌘⇧A</kbd></span>
             </div>
           </div>
         </div>
       </section>
 
       <section class="feature-band" aria-labelledby="features-title">
-        <div class="section-shell feature-band-grid">
+        <div class="section-shell feature-band-layout">
           <div class="section-heading">
             <h2 id="features-title">Native terminal power, shaped for agents.</h2>
             <p>Toastty stays close to the terminal while adding just enough app structure around it.</p>
           </div>
-          <article>
-            <h3>Ghostty rendering</h3>
-            <p>GPU-accelerated terminal rendering powered by Ghostty, with Ghostty config compatibility.</p>
-          </article>
-          <article>
-            <h3>Terminal profiles</h3>
-            <p>Launch setups such as tmux, zmx, ssh, or custom scripts from menus and shortcuts.</p>
-          </article>
-          <article>
-            <h3>Split panes</h3>
-            <p>Create, resize, equalize, and zoom terminal panes without losing keyboard focus.</p>
-          </article>
+          <div class="feature-card-grid">
+            <article class="feature-card">
+              <span class="feature-card-number">04</span>
+              <h3>Full layout flexibility</h3>
+              <p>Split horizontal, vertical, resize with arrows, equalize, zoom one to full view. Layouts persist across restarts.</p>
+              <div class="terminal-split-preview" aria-hidden="true">
+                <div>
+                  <span>zsh ~/code</span>
+                  <code>$ npm test ✓ 142 passing</code>
+                </div>
+                <div>
+                  <span>Claude Code</span>
+                  <code>working</code>
+                </div>
+              </div>
+            </article>
+            <article class="feature-card">
+              <span class="feature-card-number">05</span>
+              <h3>Automate your workflows</h3>
+              <p>
+                Toastty is fully scriptable over JSON-RPC. Wire up custom skills that create workspaces, open
+                Markdown files, or kick off a new Scratchpad for you.
+              </p>
+              <pre class="terminal-code"><code>.agents/skills/release/SKILL.md
+name: release
+trigger: "@skill release"
+steps:
+  - workspace.create # new tab
+  - pane.run $ "./scripts/release.sh"
+  - panel.scratchpad.set
+
+$ toastty action.run release ● ok</code></pre>
+            </article>
+            <article class="feature-card">
+              <span class="feature-card-number">06</span>
+              <h3>Ghostty under the hood</h3>
+              <p>Built on libghostty's GPU-accelerated rendering. Your existing Ghostty config just works.</p>
+              <pre class="terminal-code"><code>$ git status
+On branch main
+nothing to commit, working tree clean
+
+$ cat ~/.config/ghostty/config
+# your existing config - just works
+theme = tokyonight
+font-family = JetBrains Mono
+unfocused-split-opacity = 0.7
+unfocused-split-fill = #4a4a66</code></pre>
+            </article>
+          </div>
         </div>
       </section>
 
