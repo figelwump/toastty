@@ -4,6 +4,10 @@
   <img src="docs/assets/toastty-hero.png" alt="Toastty — built for coding with agents" width="3680">
 </p>
 
+<p align="center">
+  <a href="https://toastty.dev"><strong>toastty.dev</strong></a>
+</p>
+
 Toastty is a flexible, native, powerful home for working with agents.
 
 It's a native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
