@@ -226,6 +226,110 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testDeferredCursorReassertionRestoresCursorInsideBoundary() throws {
+        defer { NSCursor.arrow.set() }
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: .resizeLeftRight
+            ),
+        ])
+
+        overlay.mouseMoved(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 100, y: 50), window: window)
+        )
+        XCTAssertTrue(NSCursor.current === NSCursor.resizeLeftRight)
+        XCTAssertTrue(overlay.hasPendingCursorReassertion)
+
+        NSCursor.arrow.set()
+        runDeferredMainQueueWork()
+
+        XCTAssertTrue(NSCursor.current === NSCursor.resizeLeftRight)
+        XCTAssertEqual(overlay.deferredCursorReassertionCount, 1)
+    }
+
+    @MainActor
+    func testDeferredCursorReassertionDoesNotRestoreAfterPointerLeavesBoundary() throws {
+        defer { NSCursor.arrow.set() }
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        var hoverStates: [Bool] = []
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: .resizeLeftRight,
+                onHoverChanged: { hoverStates.append($0) }
+            ),
+        ])
+
+        overlay.mouseMoved(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 100, y: 50), window: window)
+        )
+        XCTAssertTrue(NSCursor.current === NSCursor.resizeLeftRight)
+        XCTAssertTrue(overlay.hasPendingCursorReassertion)
+
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 40, y: 50)
+        }
+        overlay.mouseMoved(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 40, y: 50), window: window)
+        )
+        XCTAssertEqual(hoverStates, [true, false])
+        XCTAssertFalse(overlay.hasPendingCursorReassertion)
+
+        NSCursor.arrow.set()
+        runDeferredMainQueueWork()
+
+        XCTAssertEqual(overlay.deferredCursorReassertionCount, 0)
+    }
+
+    @MainActor
+    func testDescriptorRemovalCancelsPendingDeferredCursorReassertion() throws {
+        defer { NSCursor.arrow.set() }
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        var hoverStates: [Bool] = []
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: .resizeLeftRight,
+                onHoverChanged: { hoverStates.append($0) }
+            ),
+        ])
+
+        overlay.mouseMoved(
+            with: try mouseEvent(type: .mouseMoved, location: NSPoint(x: 100, y: 50), window: window)
+        )
+        XCTAssertTrue(overlay.hasPendingCursorReassertion)
+
+        overlay.updateDescriptors([])
+        XCTAssertEqual(hoverStates, [true, false])
+        XCTAssertFalse(overlay.hasPendingCursorReassertion)
+
+        NSCursor.arrow.set()
+        runDeferredMainQueueWork()
+
+        XCTAssertEqual(overlay.deferredCursorReassertionCount, 0)
+    }
+
+    @MainActor
     func testDescriptorReplacementDuringDragKeepsCapturedDescriptorID() throws {
         defer { WindowMovementSuppression.resetForTesting() }
         let (window, overlay) = makeWindowWithOverlay()
@@ -519,6 +623,11 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
             throw NSError(domain: "BoundaryInteractionOverlayTests", code: 1, userInfo: nil)
         }
         return event
+    }
+
+    @MainActor
+    private func runDeferredMainQueueWork() {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
     }
 }
 

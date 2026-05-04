@@ -85,6 +85,10 @@ final class BoundaryInteractionOverlayView: NSView {
     var currentLocalMouseLocationProvider: (() -> CGPoint?)?
     var backingScaleFactorProvider: (() -> CGFloat?)?
     private(set) var boundaryTrackingAreaRebuildCount = 0
+    private(set) var deferredCursorReassertionCount = 0
+    var hasPendingCursorReassertion: Bool {
+        pendingCursorReassertionDescriptorID != nil
+    }
 
     private var orderedDescriptors: [BoundaryInteractionDescriptor] = []
     private var descriptorsByID: [String: BoundaryInteractionDescriptor] = [:]
@@ -100,6 +104,8 @@ final class BoundaryInteractionOverlayView: NSView {
     private var lastKnownLocalMouseLocation: CGPoint?
     private var isSequenceSuppressingWindowMovement = false
     private var isTrackingBoundarySequence = false
+    private var pendingCursorReassertionDescriptorID: String?
+    private var isCursorReassertionScheduled = false
 
     override var isFlipped: Bool { true }
 
@@ -354,6 +360,9 @@ final class BoundaryInteractionOverlayView: NSView {
                 hoveredDescriptor = descriptor
                 logCursorDiagnostic("hover-same-reapply-cursor", descriptor: descriptor)
                 descriptor.cursor?.set()
+                scheduleCursorReassertion(for: descriptor)
+            } else {
+                cancelCursorReassertion()
             }
             return
         }
@@ -369,10 +378,57 @@ final class BoundaryInteractionOverlayView: NSView {
         )
         hoveredDescriptorID = nextID
         hoveredDescriptor = descriptor
-        descriptor?.cursor?.set()
+        if let descriptor {
+            descriptor.cursor?.set()
+            scheduleCursorReassertion(for: descriptor)
+        } else {
+            cancelCursorReassertion()
+        }
         deliverCallback(immediately: deliversCallbacksImmediately) {
             previous?.onHoverChanged(false)
             descriptor?.onHoverChanged(true)
+        }
+    }
+
+    private func scheduleCursorReassertion(for descriptor: BoundaryInteractionDescriptor) {
+        guard descriptor.cursor != nil else {
+            cancelCursorReassertion()
+            return
+        }
+
+        pendingCursorReassertionDescriptorID = descriptor.id
+        guard isCursorReassertionScheduled == false else { return }
+        isCursorReassertionScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.performPendingCursorReassertion()
+        }
+    }
+
+    private func cancelCursorReassertion() {
+        pendingCursorReassertionDescriptorID = nil
+    }
+
+    private func performPendingCursorReassertion() {
+        isCursorReassertionScheduled = false
+        guard let descriptorID = pendingCursorReassertionDescriptorID else { return }
+        pendingCursorReassertionDescriptorID = nil
+
+        guard let location = currentLocalMouseLocation(),
+              bounds.contains(location),
+              let descriptor = descriptor(at: location),
+              descriptor.id == descriptorID,
+              let cursor = descriptor.cursor else {
+            return
+        }
+
+        if NSCursor.current !== cursor {
+            deferredCursorReassertionCount += 1
+            logCursorDiagnostic(
+                "deferred-cursor-reassert",
+                descriptor: descriptor,
+                location: location
+            )
+            cursor.set()
         }
     }
 
@@ -761,6 +817,9 @@ final class BoundaryInteractionOverlayView: NSView {
         metadata["descriptorCount"] = "\(orderedDescriptors.count)"
         metadata["trackingAreaCount"] = "\(boundaryTrackingAreas.count)"
         metadata["rebuildCount"] = "\(boundaryTrackingAreaRebuildCount)"
+        metadata["pendingCursorReassertionDescriptorID"] = pendingCursorReassertionDescriptorID ?? "nil"
+        metadata["isCursorReassertionScheduled"] = "\(isCursorReassertionScheduled)"
+        metadata["deferredCursorReassertionCount"] = "\(deferredCursorReassertionCount)"
         metadata["backingScaleFactor"] = String(format: "%.3f", backingScaleFactor())
         metadata["currentCursor"] = Self.cursorDescription(NSCursor.current)
 
