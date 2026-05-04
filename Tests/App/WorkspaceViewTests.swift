@@ -382,51 +382,36 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
-    func testRightAuxPanelResizeHandleStraddlesDividerButStaysInsideCursorGutter() {
+    func testRightAuxPanelResizeHandleSitsLeftOfRightPanelToAvoidWebKitCursorRace() {
         let primaryContentWidth: CGFloat = 840
         let frame = WorkspaceView.rightAuxPanelResizeHandleFrame(
             primaryContentWidth: primaryContentWidth,
             height: 600
         )
-        let rightPanelContentMinX = primaryContentWidth + WorkspaceView.rightAuxPanelContentOffsetX()
 
         XCTAssertEqual(WorkspaceView.rightAuxPanelResizeHandleHitWidth, 10)
-        XCTAssertEqual(WorkspaceView.rightAuxPanelLeadingCursorGutterWidth, 5)
-        XCTAssertEqual(frame, CGRect(x: 835, y: 0, width: 10, height: 600))
-        XCTAssertEqual(frame.midX, primaryContentWidth)
-        // The right-panel surface reserves a leading gutter, so the symmetric
-        // hit zone can cross the divider without putting WKWebView/NSText
-        // content under the cursor and reintroducing the cursor race.
-        XCTAssertLessThanOrEqual(frame.maxX, rightPanelContentMinX)
+        XCTAssertEqual(frame, CGRect(x: 830, y: 0, width: 10, height: 600))
+        // The right edge of the hit zone must not extend into the right-panel
+        // surface. The right panel hosts a WKWebView whose tracking area sets
+        // NSCursor on every mouse-moved event; any overlap reintroduces the
+        // resize-cursor flicker that prior re-assertion fixes could not fully
+        // cure.
+        XCTAssertLessThanOrEqual(frame.maxX, primaryContentWidth)
     }
 
-    func testRightAuxPanelResizeHandleNeverOverlapsRightPanelContentAcrossWidths() {
+    func testRightAuxPanelResizeHandleNeverOverlapsRightPanelSurfaceAcrossWidths() {
         for primaryContentWidth in [CGFloat](stride(from: 200, through: 1600, by: 137)) {
             let frame = WorkspaceView.rightAuxPanelResizeHandleFrame(
                 primaryContentWidth: primaryContentWidth,
                 height: 600
             )
-            let rightPanelContentMinX = primaryContentWidth + WorkspaceView.rightAuxPanelContentOffsetX()
             XCTAssertLessThanOrEqual(
                 frame.maxX,
-                rightPanelContentMinX,
-                "hit zone must not overlap right panel content at primaryContentWidth=\(primaryContentWidth)"
+                primaryContentWidth,
+                "hit zone must not overlap WKWebView at primaryContentWidth=\(primaryContentWidth)"
             )
-            XCTAssertEqual(frame.midX, primaryContentWidth)
             XCTAssertEqual(frame.width, WorkspaceView.rightAuxPanelResizeHandleHitWidth)
         }
-    }
-
-    func testRightAuxPanelContentLayoutReservesLeadingCursorGutter() {
-        XCTAssertEqual(WorkspaceView.rightAuxPanelContentOffsetX(), 5)
-        XCTAssertEqual(
-            WorkspaceView.rightAuxPanelContentWidth(targetWidth: 360),
-            355
-        )
-        XCTAssertEqual(
-            WorkspaceView.rightAuxPanelContentWidth(targetWidth: 3),
-            0
-        )
     }
 
     func testSingleTabWorkspaceStillInstallsTabContextMenu() {

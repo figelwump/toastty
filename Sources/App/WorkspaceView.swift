@@ -120,7 +120,6 @@ struct WorkspaceView: View {
     private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
     nonisolated static let rightAuxPanelResizeHandleHitWidth: CGFloat = 10
-    nonisolated static let rightAuxPanelLeadingCursorGutterWidth: CGFloat = rightAuxPanelResizeHandleHitWidth / 2
     fileprivate nonisolated static let rightAuxPanelResizeHandleHairlineWidth: CGFloat = 1
     private nonisolated static let workspaceTabDragActivationDistance: CGFloat = 4
 
@@ -926,24 +925,18 @@ struct WorkspaceView: View {
         primaryContentWidth: CGFloat,
         height: CGFloat
     ) -> CGRect {
-        // Keep this centered on the visible divider. The right-panel surface
-        // reserves a leading cursor gutter of the same half-width, so the handle
-        // still feels symmetric without putting WKWebView/NSText content under
-        // the right half of the hit zone.
+        // Keep the hit zone strictly to the left of the right-panel surface so it
+        // never overlaps the WKWebView that hosts the right panel content. The
+        // WKContentView's tracking area calls NSCursor.set() on every mouse-moved
+        // event based on the hovered HTML cursor style, which races with the
+        // boundary overlay's resize cursor and produces a flicker. Anchoring the
+        // hit zone left-of-divider keeps a single cursor authority active.
         CGRect(
-            x: primaryContentWidth - (Self.rightAuxPanelResizeHandleHitWidth / 2),
+            x: primaryContentWidth - Self.rightAuxPanelResizeHandleHitWidth,
             y: 0,
             width: Self.rightAuxPanelResizeHandleHitWidth,
             height: height
         )
-    }
-
-    static func rightAuxPanelContentOffsetX() -> CGFloat {
-        rightAuxPanelLeadingCursorGutterWidth
-    }
-
-    static func rightAuxPanelContentWidth(targetWidth: CGFloat) -> CGFloat {
-        max(0, targetWidth - rightAuxPanelLeadingCursorGutterWidth)
     }
 
     private func openRightPanelFileSearch(originWindowID: UUID) {
@@ -1209,36 +1202,27 @@ struct WorkspaceView: View {
             isTabSelected &&
             tab.rightAuxPanel.isVisible &&
             tab.focusedPanelModeActive == false
-        let contentWidth = Self.rightAuxPanelContentWidth(targetWidth: targetWidth)
 
-        return ZStack(alignment: .leading) {
-            Rectangle()
-                .fill(ToastyTheme.surfaceBackground)
-                .allowsHitTesting(false)
-
-            RightAuxPanelView(
-                windowID: windowID,
-                workspace: workspace,
-                workspaceTab: tab,
-                isWorkspaceSelected: isWorkspaceSelected,
-                isWorkspaceTabSelected: isTabSelected,
-                store: store,
-                terminalProfileStore: terminalProfileStore,
-                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                sessionRuntimeStore: sessionRuntimeStore,
-                webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-                focusedPanelCommandController: focusedPanelCommandController,
-                openLocalFileSearch: openRightPanelFileSearch,
-                createBlankScratchpad: createBlankRightPanelScratchpad(workspaceID:),
-                openBrowser: openRightPanelBrowser,
-                windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
-                windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
-                isRightAuxPanelVisible: isVisible,
-                appIsActive: appIsActive
-            )
-            .frame(width: contentWidth)
-            .offset(x: Self.rightAuxPanelContentOffsetX())
-        }
+        return RightAuxPanelView(
+            windowID: windowID,
+            workspace: workspace,
+            workspaceTab: tab,
+            isWorkspaceSelected: isWorkspaceSelected,
+            isWorkspaceTabSelected: isTabSelected,
+            store: store,
+            terminalProfileStore: terminalProfileStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            focusedPanelCommandController: focusedPanelCommandController,
+            openLocalFileSearch: openRightPanelFileSearch,
+            createBlankScratchpad: createBlankRightPanelScratchpad(workspaceID:),
+            openBrowser: openRightPanelBrowser,
+            windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
+            windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+            isRightAuxPanelVisible: isVisible,
+            appIsActive: appIsActive
+        )
         .frame(width: targetWidth)
         .frame(width: renderedWidth, alignment: .leading)
         .clipped()
