@@ -925,8 +925,14 @@ struct WorkspaceView: View {
         primaryContentWidth: CGFloat,
         height: CGFloat
     ) -> CGRect {
+        // Keep the hit zone strictly to the left of the right-panel surface so it
+        // never overlaps the WKWebView that hosts the right panel content. The
+        // WKContentView's tracking area calls NSCursor.set() on every mouse-moved
+        // event based on the hovered HTML cursor style, which races with the
+        // boundary overlay's resize cursor and produces a flicker. Anchoring the
+        // hit zone left-of-divider keeps a single cursor authority active.
         CGRect(
-            x: primaryContentWidth - (Self.rightAuxPanelResizeHandleHitWidth / 2),
+            x: primaryContentWidth - Self.rightAuxPanelResizeHandleHitWidth,
             y: 0,
             width: Self.rightAuxPanelResizeHandleHitWidth,
             height: height
