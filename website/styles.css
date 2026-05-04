@@ -646,7 +646,6 @@ kbd {
 
 .terminal-split-preview,
 .terminal-code {
-  margin: auto 0 0;
   color: #e8eeeb;
   background: #050706;
   border: 1px solid rgba(255, 255, 255, 0.11);
@@ -659,6 +658,10 @@ kbd {
   min-height: 240px;
   margin: 18px 0 0;
   padding: 8px;
+}
+
+.terminal-code {
+  margin: 0;
 }
 
 .animated-split-preview {
