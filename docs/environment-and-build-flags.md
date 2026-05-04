@@ -214,6 +214,8 @@ CLI notes:
 | `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and run outputs. |
 | `RUN_LABEL` | timestamped `computer-use-*` value | Optional stable label for the remote Computer Use run. Prefer `--run-label` for explicit CLI usage. |
 | `TIMEOUT_SECONDS` | `300` | Default hard timeout for the Codex turn when `--timeout-seconds` is not passed. |
+| `CODEX_COMPUTER_USE_MODEL` | `gpt-5.3-codex-spark` | Codex model passed explicitly to `codex app-server` for Computer Use turns. |
+| `CODEX_COMPUTER_USE_REASONING_EFFORT` | `high` | Codex reasoning effort passed explicitly to `codex app-server` for Computer Use turns. |
 
 CLI notes:
 
@@ -221,7 +223,7 @@ CLI notes:
 - `--prompt-file <path>` reads prompt text from a local file and copies that exact prompt into the artifact bundle as `prompt.txt`.
 - `--scope working-tree|head|ref` and `--ref <rev>` match the remote worktree export behavior from `scripts/remote/validate.sh`.
 - The wrapper builds Toastty remotely, launches it in an isolated runtime home, starts `/Applications/Codex.app/Contents/Resources/codex app-server` behind a PTY, tunnels that localhost port back over SSH, drives one JSON-RPC turn locally, then copies the artifact bundle back into `artifacts/remote-gui/<run-label>/`.
-- Result bundles include `result.json`, `client-summary.json`, `prompt.txt`, `remote/transcript.jsonl`, `remote/build.log`, `remote/app.log`, `remote/app-server.log`, `remote/app-server-session.log`, and `remote/launch.json`.
+- Result bundles include `result.json`, `client-summary.json`, `prompt.txt`, `remote/transcript.jsonl`, `remote/build.log`, `remote/app.log`, `remote/app-server.log`, `remote/app-server-session.log`, and `remote/launch.json`. `result.json` records the resolved Codex model, provider, service tier, and reasoning effort when the client reaches `thread/start`; setup failures before then record the configured model and reasoning effort.
 - `result.json` distinguishes `pass`, `agent_error`, `timeout`, and `setup_error`. Computer Use permission or app-discovery problems on the Mini currently land as `setup_error`.
 - The remote host must be awake, unlocked, logged into the GUI session, and have the Codex Computer Use plugin already installed with macOS permissions granted.
 - The first live spike proved the `app-server` transport works unattended on the Mini, but Toastty still needs explicit Computer Use approval in that Codex session. Approve `com.GiantThings.toastty` in Codex on the Mini; until that happens, the default `@Computer Use` prompt exits with `approval_denied`.

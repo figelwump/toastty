@@ -13,6 +13,8 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"
 KEEP_REMOTE=0
 PROMPT_FILE=""
 PROMPT_TEXT=""
+CODEX_COMPUTER_USE_MODEL="${CODEX_COMPUTER_USE_MODEL:-gpt-5.3-codex-spark}"
+CODEX_COMPUTER_USE_REASONING_EFFORT="${CODEX_COMPUTER_USE_REASONING_EFFORT:-high}"
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
 REMOTE_HOST="${TOASTTY_REMOTE_GUI_HOST:-}"
@@ -70,6 +72,8 @@ Required local environment:
 Optional local environment:
   TOASTTY_REMOTE_GUI_REPO_ROOT          Absolute Toastty repo path on the remote host
   TOASTTY_REMOTE_GUI_ROOT               Remote directory that will hold disposable worktrees and runs
+  CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-5.3-codex-spark)
+  CODEX_COMPUTER_USE_REASONING_EFFORT   Codex reasoning effort for app-server turns (default: high)
 
 Default prompt:
   @Computer Use Toastty is already running on this Mac. Use computer use only.
@@ -218,7 +222,21 @@ remote_host=$REMOTE_HOST
 remote_repo_root=$REMOTE_REPO_ROOT
 remote_gui_root=$REMOTE_GUI_ROOT
 prompt_file=$PROMPT_FILE
+codex_model=$CODEX_COMPUTER_USE_MODEL
+codex_reasoning_effort=$CODEX_COMPUTER_USE_REASONING_EFFORT
 EOF
+}
+
+configured_model_json() {
+  jq -cn \
+    --arg name "$CODEX_COMPUTER_USE_MODEL" \
+    --arg reasoningEffort "$CODEX_COMPUTER_USE_REASONING_EFFORT" \
+    '{
+      name: $name,
+      provider: null,
+      serviceTier: null,
+      reasoningEffort: $reasoningEffort
+    }'
 }
 
 write_result_json() {
@@ -237,6 +255,7 @@ write_result_json() {
   local final_text="${13}"
   local remote_run_root="${14}"
   local remote_worktree_dir="${15}"
+  local model_json="${16}"
 
   jq -n \
     --arg status "$status" \
@@ -256,6 +275,7 @@ write_result_json() {
     --arg appServerSessionLogPath "remote/app-server-session.log" \
     --arg launchPath "remote/launch.json" \
     --arg clientSummaryPath "client-summary.json" \
+    --argjson model "$model_json" \
     --argjson durationSeconds "$duration_seconds" \
     --argjson timeoutSeconds "$TIMEOUT_SECONDS" \
     --argjson retryCount 0 \
@@ -273,6 +293,7 @@ write_result_json() {
       durationSeconds: $durationSeconds,
       timeoutSeconds: $timeoutSeconds,
       retryCount: $retryCount,
+      model: $model,
       tokensUsed: $tokensUsed,
       costUSD: null,
       summary: $summary,
@@ -417,7 +438,10 @@ run_remote_prepare_mode() {
 
   app_server_port="$(pick_unused_port)" || fail "Failed to allocate a free port for codex app-server"
 
-  nohup script -q "$app_server_session_log" "$codex_cli" app-server --listen "ws://127.0.0.1:${app_server_port}" \
+  nohup script -q "$app_server_session_log" "$codex_cli" app-server \
+    -c "model=\"${CODEX_COMPUTER_USE_MODEL}\"" \
+    -c "model_reasoning_effort=\"${CODEX_COMPUTER_USE_REASONING_EFFORT}\"" \
+    --listen "ws://127.0.0.1:${app_server_port}" \
     >"$app_server_log" 2>&1 < /dev/null &
   app_server_pid=$!
 
@@ -448,6 +472,8 @@ run_remote_prepare_mode() {
   "appBundle": "$(json_escape "$app_bundle")",
   "appBinary": "$(json_escape "$app_binary")",
   "appPid": ${app_pid},
+  "codexModel": "$(json_escape "$CODEX_COMPUTER_USE_MODEL")",
+  "codexReasoningEffort": "$(json_escape "$CODEX_COMPUTER_USE_REASONING_EFFORT")",
   "appServerPort": ${app_server_port},
   "appServerPid": ${app_server_pid},
   "appServerListenerPid": $(if [[ -n "$app_server_listener_pid" ]]; then printf '%s' "$app_server_listener_pid"; else printf 'null'; fi)
@@ -637,6 +663,8 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
       "$SCRIPT_PATH" \
       "$RUN_LABEL" \
       "$remote_run_root" \
+      "$CODEX_COMPUTER_USE_MODEL" \
+      "$CODEX_COMPUTER_USE_REASONING_EFFORT" \
       > >(tee "$remote_prepare_stdout") \
       2> >(tee "$remote_prepare_stderr" >&2) <<'EOF'; then
 set -euo pipefail
@@ -644,8 +672,12 @@ remote_worktree_dir="$1"
 script_path="$2"
 run_label="$3"
 remote_run_root="$4"
+codex_model="$5"
+codex_reasoning_effort="$6"
 cd "$remote_worktree_dir"
-/bin/bash "$script_path" \
+CODEX_COMPUTER_USE_MODEL="$codex_model" \
+CODEX_COMPUTER_USE_REASONING_EFFORT="$codex_reasoning_effort" \
+  /bin/bash "$script_path" \
   --run-label "$run_label" \
   --remote-prepare \
   --remote-worktree-dir "$remote_worktree_dir" \
@@ -670,7 +702,8 @@ EOF
       false \
       "" \
       "$remote_run_root" \
-      "$remote_worktree_dir"
+      "$remote_worktree_dir" \
+      "$(configured_model_json)"
     return 1
   fi
   CLEANUP_REMOTE_PREPARED=1
@@ -787,6 +820,8 @@ EOF
   local app_list_count=0
   local computer_use_ready=false
   local final_text=""
+  local model_json
+  model_json="$(configured_model_json)"
 
   if [[ -f "$client_summary" ]]; then
     client_status="$(jq -r '.status' "$client_summary")"
@@ -799,6 +834,17 @@ EOF
     app_list_count="$(jq -r '.appListCount // 0' "$client_summary")"
     computer_use_ready="$(jq -c '.computerUseReady // false' "$client_summary")"
     final_text="$(jq -r '.finalText // empty' "$client_summary")"
+    model_json="$(
+      jq -c \
+        --arg fallbackName "$CODEX_COMPUTER_USE_MODEL" \
+        --arg fallbackReasoningEffort "$CODEX_COMPUTER_USE_REASONING_EFFORT" \
+        '{
+          name: (.model // $fallbackName),
+          provider: (.modelProvider // null),
+          serviceTier: (.serviceTier // null),
+          reasoningEffort: (.reasoningEffort // $fallbackReasoningEffort)
+        }' "$client_summary"
+    )"
   elif [[ "$client_exit_code" == "3" ]]; then
     client_status="timeout"
     summary_text="Remote Computer Use turn timed out"
@@ -824,7 +870,8 @@ EOF
     "$computer_use_ready" \
     "$final_text" \
     "$remote_run_root" \
-    "$remote_worktree_dir"
+    "$remote_worktree_dir" \
+    "$model_json"
 
   if [[ "$KEEP_REMOTE" != "1" ]]; then
     log "Cleaning up remote worktree"

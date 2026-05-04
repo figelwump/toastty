@@ -182,6 +182,10 @@ let nextRequestId = 1;
 let initialized = false;
 let activeThreadId = null;
 let activeTurnId = null;
+let model = null;
+let modelProvider = null;
+let serviceTier = null;
+let reasoningEffort = null;
 let appListCount = 0;
 let computerUseReady = null;
 let finalText = "";
@@ -250,6 +254,10 @@ async function finish(status, options = {}) {
     wsUrl,
     approvalPolicy,
     sandbox,
+    model,
+    modelProvider,
+    serviceTier,
+    reasoningEffort,
     appListCount,
     computerUseReady,
     mcpElicitationsAccepted,
@@ -661,6 +669,10 @@ socket.onopen = () => {
         persistExtendedHistory: true,
       });
       activeThreadId = threadResponse?.thread?.id ?? null;
+      model = threadResponse?.model ?? null;
+      modelProvider = threadResponse?.modelProvider ?? null;
+      serviceTier = threadResponse?.serviceTier ?? null;
+      reasoningEffort = threadResponse?.reasoningEffort ?? null;
 
       const appListResponse = await sendRequest("app/list", {
         threadId: activeThreadId,
