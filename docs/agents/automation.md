@@ -23,6 +23,10 @@ For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` 
 
 When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
 
+## Remote Computer Use
+
+Use `.agents/skills/toastty-computer-use/SKILL.md` when a GUI bug or fix needs human-like remote interaction beyond the supported smoke tests. That skill owns prompt templates, scope selection, `scripts/remote/computer-use-run.sh` invocation, and artifact interpretation.
+
 ## Remote Xcode Tests
 
 Agent-driven `xcodebuild test` runs should start with:

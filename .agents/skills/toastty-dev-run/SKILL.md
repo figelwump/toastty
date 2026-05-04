@@ -9,6 +9,8 @@ Use this workflow when the task requires a real running Toastty app instance rat
 
 Pair this skill with the global `peekaboo` skill for local UI inspection and interaction. When foreground validation would steal focus from the current desktop, prefer the repo-local remote GUI wrapper instead of running Peekaboo locally.
 
+For human-like remote GUI debugging or verification beyond the supported smoke tests, use `.agents/skills/toastty-computer-use/SKILL.md`.
+
 ## When to use this
 
 - A change needs live UI validation, menu inspection, shortcut testing, focus checks, or screenshot-based confirmation.
@@ -53,6 +55,7 @@ Use the least disruptive path that still covers the change:
 - Shortcut-hints smoke: use `scripts/automation/shortcut-hints-smoke.sh` when the change only needs a visual artifact for always-visible shortcut badges or hint text.
 - Local foreground: use a local isolated dev run plus Peekaboo only when you need direct inspection but the focus impact is acceptable.
 - Remote validation: use `scripts/remote/validate.sh` when the validation should run on the dedicated remote Mac. Prefer `--smoke-test` for remote smoke runs; keep `--validation-command` for foreground-capable Peekaboo checks or other custom remote validation.
+- Remote Computer Use: use `.agents/skills/toastty-computer-use/SKILL.md` when the check needs human-like interaction, judgment, or exploratory GUI reproduction beyond the smoke scripts.
 
 ## Typical terminal flow
 
