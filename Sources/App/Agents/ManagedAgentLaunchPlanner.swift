@@ -214,6 +214,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 let status: SessionStatus
                 switch event.kind {
                 case .turnStarted:
+                    if let rootInputFingerprint = event.rootInputFingerprint {
+                        sessionRuntimeStore.recordCodexRootTurnInput(
+                            sessionID: sessionID,
+                            fingerprint: rootInputFingerprint
+                        )
+                    }
                     status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
                 case .historyUpdated:
                     guard let panelID = sessionRuntimeStore

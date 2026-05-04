@@ -18,6 +18,7 @@ final class SessionRuntimeStore: ObservableObject {
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
+    private var codexNotifyStateBySessionID: [String: CodexNotifySessionState] = [:]
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
 
@@ -47,6 +48,7 @@ final class SessionRuntimeStore: ObservableObject {
     func reset() {
         sessionRegistry = SessionRegistry()
         suppressedCodexVisibleErrorDetailBySessionID = [:]
+        codexNotifyStateBySessionID = [:]
     }
 
     func startSession(
@@ -62,6 +64,7 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+        codexNotifyStateBySessionID.removeValue(forKey: sessionID)
         var nextRegistry = sessionRegistry
         nextRegistry.startSession(
             sessionID: sessionID,
@@ -188,6 +191,126 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
+    func recordCodexRootTurnInput(
+        sessionID: String,
+        fingerprint: String?
+    ) {
+        guard let record = sessionRegistry.sessionsByID[sessionID],
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            return
+        }
+
+        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        state.pendingRootInputFingerprint = fingerprint
+        codexNotifyStateBySessionID[sessionID] = state
+
+        ToasttyLog.debug(
+            "Recorded Codex root turn input fingerprint",
+            category: .terminal,
+            metadata: codexNotifyMetadata(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                additional: [
+                    "input_fingerprint": truncatedFingerprint(fingerprint),
+                ]
+            )
+        )
+    }
+
+    @discardableResult
+    func handleCodexNotifyCompletion(
+        sessionID: String,
+        completion: CodexNotifyCompletion,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.sessionsByID[sessionID],
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: completion.detail),
+                at: now
+            )
+            return true
+        }
+
+        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        if let threadID = completion.threadID {
+            if let rootThreadID = state.rootThreadID {
+                guard threadID == rootThreadID else {
+                    codexNotifyStateBySessionID[sessionID] = state
+                    logIgnoredCodexNotifyCompletion(
+                        sessionID: sessionID,
+                        record: record,
+                        state: state,
+                        completion: completion,
+                        reason: "thread_mismatch"
+                    )
+                    return false
+                }
+            } else if let notifyFingerprint = completion.lastInputMessageFingerprint,
+                      let pendingFingerprint = state.pendingRootInputFingerprint,
+                      notifyFingerprint == pendingFingerprint {
+                state.rootThreadID = threadID
+                codexNotifyStateBySessionID[sessionID] = state
+                ToasttyLog.debug(
+                    "Latched Codex root notify thread",
+                    category: .terminal,
+                    metadata: codexNotifyMetadata(
+                        sessionID: sessionID,
+                        record: record,
+                        state: state,
+                        completion: completion
+                    )
+                )
+            } else if state.pendingRootInputFingerprint == nil {
+                codexNotifyStateBySessionID[sessionID] = state
+                logIgnoredCodexNotifyCompletion(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    completion: completion,
+                    reason: "missing_root_input_fingerprint"
+                )
+                return false
+            } else {
+                codexNotifyStateBySessionID[sessionID] = state
+                let reason = completion.lastInputMessageFingerprint == nil
+                    ? "missing_notify_input_fingerprint"
+                    : "input_fingerprint_mismatch"
+                logIgnoredCodexNotifyCompletion(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    completion: completion,
+                    reason: reason
+                )
+                return false
+            }
+        } else {
+            codexNotifyStateBySessionID[sessionID] = state
+            ToasttyLog.debug(
+                "Accepted unthreaded Codex notify completion",
+                category: .terminal,
+                metadata: codexNotifyMetadata(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    completion: completion
+                )
+            )
+        }
+
+        updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: completion.detail),
+            at: now
+        )
+        return true
+    }
+
     func stopSession(
         sessionID: String,
         reason: ManagedSessionStopReason = .explicit,
@@ -197,6 +320,7 @@ final class SessionRuntimeStore: ObservableObject {
             logSessionStop(record, reason: reason, at: now)
         }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+        codexNotifyStateBySessionID.removeValue(forKey: sessionID)
         var nextRegistry = sessionRegistry
         if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
             nextRegistry.removeSession(sessionID: sessionID)
@@ -214,6 +338,7 @@ final class SessionRuntimeStore: ObservableObject {
         if let record = sessionRegistry.activeSession(for: panelID) {
             logSessionStop(record, reason: reason, at: now)
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
+            codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
         }
         var nextRegistry = sessionRegistry
         if let record = sessionRegistry.activeSession(for: panelID),
@@ -460,6 +585,64 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         return metadata
+    }
+
+    private func logIgnoredCodexNotifyCompletion(
+        sessionID: String,
+        record: SessionRecord,
+        state: CodexNotifySessionState,
+        completion: CodexNotifyCompletion,
+        reason: String
+    ) {
+        ToasttyLog.debug(
+            "Ignored Codex notify completion",
+            category: .terminal,
+            metadata: codexNotifyMetadata(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                completion: completion,
+                additional: [
+                    "reason": reason,
+                ]
+            )
+        )
+    }
+
+    private func codexNotifyMetadata(
+        sessionID: String,
+        record: SessionRecord,
+        state: CodexNotifySessionState,
+        completion: CodexNotifyCompletion? = nil,
+        additional: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "session_id": sessionID,
+            "panel_id": record.panelID.uuidString,
+            "root_thread_id": state.rootThreadID ?? "none",
+            "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
+        ]
+
+        if let completion {
+            metadata["notify_type"] = completion.notificationType
+            metadata["notify_thread_id"] = completion.threadID ?? "none"
+            metadata["notify_turn_id"] = completion.turnID ?? "none"
+            metadata["notify_input_fingerprint"] = truncatedFingerprint(completion.lastInputMessageFingerprint)
+            metadata["notify_input_message_count"] = String(completion.inputMessageCount)
+        }
+
+        for (key, value) in additional {
+            metadata[key] = value
+        }
+
+        return metadata
+    }
+
+    private func truncatedFingerprint(_ fingerprint: String?) -> String {
+        guard let fingerprint, fingerprint.isEmpty == false else {
+            return "none"
+        }
+        return String(fingerprint.prefix(16))
     }
 
     private func sessionStartMetadata(
@@ -829,6 +1012,11 @@ final class SessionRuntimeStore: ObservableObject {
     private static func defaultIsApplicationActive() -> Bool {
         NSApplication.shared.isActive
     }
+}
+
+private struct CodexNotifySessionState {
+    var rootThreadID: String?
+    var pendingRootInputFingerprint: String?
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {

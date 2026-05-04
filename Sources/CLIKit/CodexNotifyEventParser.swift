@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 enum CodexNotifyEventParser {
@@ -7,20 +8,25 @@ enum CodexNotifyEventParser {
         payload: Data
     ) throws -> [CLICommand] {
         let object = try decodeJSONObject(from: payload)
-        let type = normalizedString(object["type"])
-        guard type == "agent-turn-complete" || type == "task_complete" else {
+        guard let type = normalizedString(object["type"]),
+              type == "agent-turn-complete" || type == "task_complete" else {
             return []
         }
 
         return [
-            .sessionStatus(
+            .sessionCodexNotifyCompletion(
                 sessionID: sessionID,
                 panelID: panelID,
-                kind: .ready,
-                summary: "Ready",
-                detail: normalizedSummaryText(object["last-assistant-message"])
-                    ?? normalizedSummaryText(object["last_agent_message"])
-                    ?? "Turn complete"
+                completion: CodexNotifyCompletion(
+                    notificationType: type,
+                    threadID: normalizedString(object["thread-id"]) ?? normalizedString(object["thread_id"]),
+                    turnID: normalizedString(object["turn-id"]) ?? normalizedString(object["turn_id"]),
+                    lastInputMessageFingerprint: lastInputMessageFingerprint(from: object),
+                    inputMessageCount: inputMessages(from: object).count,
+                    detail: normalizedSummaryText(object["last-assistant-message"])
+                        ?? normalizedSummaryText(object["last_agent_message"])
+                        ?? "Turn complete"
+                )
             )
         ]
     }
@@ -47,5 +53,23 @@ private extension CodexNotifyEventParser {
         guard string.count > limit else { return string }
         let endIndex = string.index(string.startIndex, offsetBy: limit - 3)
         return String(string[..<endIndex]) + "..."
+    }
+
+    static func lastInputMessageFingerprint(from object: [String: Any]) -> String? {
+        guard let message = inputMessages(from: object).last else {
+            return nil
+        }
+        return CodexInputFingerprint.fingerprint(for: message)
+    }
+
+    static func inputMessages(from object: [String: Any]) -> [String] {
+        let value = object["input-messages"] ?? object["input_messages"]
+        if let messages = value as? [Any] {
+            return messages.compactMap(normalizedString)
+        }
+        if let message = normalizedString(value) {
+            return [message]
+        }
+        return []
     }
 }

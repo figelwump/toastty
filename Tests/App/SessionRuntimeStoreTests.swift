@@ -89,6 +89,237 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexNotifyCompletionIgnoresChildThreadBeforeRootCompletes() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let rootFingerprint = CodexInputFingerprint.fingerprint(for: "Fix the sidebar state")
+
+        store.startSession(
+            sessionID: "sess-codex-notify",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-notify",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Fix the sidebar state"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        store.recordCodexRootTurnInput(sessionID: "sess-codex-notify", fingerprint: rootFingerprint)
+
+        let ignoredChild = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-notify",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: "thread-child",
+                turnID: "turn-child",
+                lastInputMessageFingerprint: CodexInputFingerprint.fingerprint(for: "Inspect parser wiring"),
+                inputMessageCount: 1,
+                detail: "Child finished"
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(ignoredChild == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-notify")?.status?.kind == .working)
+
+        let acceptedRoot = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-notify",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                lastInputMessageFingerprint: rootFingerprint,
+                inputMessageCount: 1,
+                detail: "Root finished"
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(acceptedRoot)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-notify")?.status
+        #expect(status?.kind == .ready)
+        #expect(status?.detail == "Root finished")
+    }
+
+    @Test
+    func codexNotifyCompletionIgnoresDifferentThreadAfterRootThreadIsLatched() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let rootFingerprint = CodexInputFingerprint.fingerprint(for: "Fix the sidebar state")
+
+        store.startSession(
+            sessionID: "sess-codex-root-latched",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(sessionID: "sess-codex-root-latched", fingerprint: rootFingerprint)
+        _ = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-root-latched",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: "thread-root",
+                turnID: "turn-root-1",
+                lastInputMessageFingerprint: rootFingerprint,
+                inputMessageCount: 1,
+                detail: "Root finished"
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-root-latched",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Next turn"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        let ignoredChild = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-root-latched",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: "thread-child",
+                turnID: "turn-child",
+                lastInputMessageFingerprint: CodexInputFingerprint.fingerprint(for: "Child task"),
+                inputMessageCount: 1,
+                detail: "Child finished"
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(ignoredChild == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-root-latched")?.status?.kind == .working)
+    }
+
+    @Test
+    func codexNotifyCompletionIgnoresThreadedInputWhenRootInputWasNotRecorded() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-missing-root-input",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-missing-root-input",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Root still running"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let accepted = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-missing-root-input",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: "thread-unknown",
+                turnID: "turn-unknown",
+                lastInputMessageFingerprint: CodexInputFingerprint.fingerprint(for: "Maybe a child task"),
+                inputMessageCount: 1,
+                detail: "Thread finished"
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-missing-root-input")?.status?.kind == .working)
+    }
+
+    @Test
+    func codexNotifyCompletionIgnoresThreadedCompletionWithoutInputMetadata() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-threaded-no-input",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-threaded-no-input",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Root still running"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let accepted = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-threaded-no-input",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: "thread-unknown",
+                turnID: "turn-unknown",
+                lastInputMessageFingerprint: nil,
+                inputMessageCount: 0,
+                detail: "Thread finished"
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-threaded-no-input")?.status?.kind == .working)
+    }
+
+    @Test
+    func codexNotifyCompletionAcceptsUnthreadedLegacyCompletionWithoutInputMetadata() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-legacy-notify",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        let accepted = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-legacy-notify",
+            completion: CodexNotifyCompletion(
+                notificationType: "task_complete",
+                threadID: nil,
+                turnID: nil,
+                lastInputMessageFingerprint: nil,
+                inputMessageCount: 0,
+                detail: "Legacy finished"
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(accepted)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-legacy-notify")?.status
+        #expect(status?.kind == .ready)
+        #expect(status?.detail == "Legacy finished")
+    }
+
+    @Test
     func bindStopsActiveSessionWhenPanelCloses() throws {
         let appStore = AppStore(persistTerminalFontPreference: false)
         let sessionStore = SessionRuntimeStore()

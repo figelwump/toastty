@@ -19,13 +19,14 @@ enum CLICommand: Equatable {
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
+    case sessionCodexNotifyCompletion(sessionID: String, panelID: UUID?, completion: CodexNotifyCompletion)
     case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
     case sessionIngestAgentEvent(sessionID: String, panelID: UUID?, source: AgentEventSource)
     case sessionStop(sessionID: String, panelID: UUID?, reason: String?)
 
     func makeRequestEnvelope(requestID: String = UUID().uuidString) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .notify, .sessionStart, .sessionStatus, .sessionUpdateFiles, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .notify, .sessionStart, .sessionStatus, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -99,6 +100,29 @@ enum CLICommand: Equatable {
                 payload: payload
             )
 
+        case .sessionCodexNotifyCompletion(let sessionID, let panelID, let completion):
+            var payload: [String: AutomationJSONValue] = [
+                "type": .string(completion.notificationType),
+                "detail": .string(completion.detail),
+                "inputMessageCount": .int(completion.inputMessageCount),
+            ]
+            if let threadID = completion.threadID {
+                payload["threadID"] = .string(threadID)
+            }
+            if let turnID = completion.turnID {
+                payload["turnID"] = .string(turnID)
+            }
+            if let lastInputMessageFingerprint = completion.lastInputMessageFingerprint {
+                payload["lastInputMessageFingerprint"] = .string(lastInputMessageFingerprint)
+            }
+            return AutomationEventEnvelope(
+                eventType: "session.codex_notify_completion",
+                sessionID: sessionID,
+                panelID: panelID?.uuidString,
+                requestID: requestID,
+                payload: payload
+            )
+
         case .sessionUpdateFiles(let sessionID, let panelID, let files, let cwd, let repoRoot):
             var payload: [String: AutomationJSONValue] = [
                 "files": .array(files.map(AutomationJSONValue.string)),
@@ -154,6 +178,8 @@ enum CLICommand: Equatable {
             return resolvedSessionID
         case .sessionStatus(let sessionID, _, let kind, let summary, _):
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
+        case .sessionCodexNotifyCompletion(let sessionID, _, _):
+            return "processed Codex notify completion for \(sessionID)"
         case .sessionUpdateFiles(let sessionID, _, let files, _, _):
             let queuedFiles = response.result?.int("queuedFiles") ?? files.count
             return "queued \(queuedFiles) files for \(sessionID)"

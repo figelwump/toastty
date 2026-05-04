@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 struct CodexSessionLogEvent: Equatable, Sendable {
@@ -11,6 +12,13 @@ struct CodexSessionLogEvent: Equatable, Sendable {
 
     let kind: Kind
     let detail: String
+    let rootInputFingerprint: String?
+
+    init(kind: Kind, detail: String, rootInputFingerprint: String? = nil) {
+        self.kind = kind
+        self.detail = detail
+        self.rootInputFingerprint = rootInputFingerprint
+    }
 }
 
 final class CodexSessionLogWatcher {
@@ -247,7 +255,8 @@ private extension CodexSessionLogWatcher {
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .turnStarted,
-                detail: normalizedSummaryText(message["message"], limit: 140) ?? "Responding to your prompt"
+                detail: normalizedSummaryText(message["message"], limit: 140) ?? "Responding to your prompt",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: normalizedString(message["message"]))
             )
 
         case "task_started":
@@ -322,7 +331,8 @@ private extension CodexSessionLogWatcher {
 
             return CodexSessionLogEvent(
                 kind: .turnStarted,
-                detail: userTurnDetail(from: operation.payload) ?? "Responding to your prompt"
+                detail: userTurnDetail(from: operation.payload) ?? "Responding to your prompt",
+                rootInputFingerprint: userTurnInputFingerprint(from: operation.payload)
             )
 
         case "interrupt":
@@ -508,18 +518,27 @@ private extension CodexSessionLogWatcher {
     }
 
     static func userTurnDetail(from payload: [String: Any]) -> String? {
+        userTurnInputText(from: payload).flatMap { normalizedSummaryText($0, limit: 140) }
+    }
+
+    static func userTurnInputFingerprint(from payload: [String: Any]) -> String? {
+        CodexInputFingerprint.fingerprint(for: userTurnInputText(from: payload))
+    }
+
+    static func userTurnInputText(from payload: [String: Any]) -> String? {
         if let items = payload["items"] as? [Any] {
-            for case let item as [String: Any] in items {
-                guard normalizedString(item["type"]) == "text" else {
-                    continue
+            let textItems = items.compactMap { item -> String? in
+                guard let item = item as? [String: Any],
+                      normalizedString(item["type"]) == "text" else {
+                    return nil
                 }
-                if let summary = normalizedSummaryText(item["text"], limit: 140) {
-                    return summary
-                }
+                return normalizedString(item["text"])
+            }
+            if textItems.isEmpty == false {
+                return textItems.joined(separator: "\n")
             }
         }
-
-        return normalizedSummaryText(payload["text"], limit: 140)
+        return normalizedString(payload["text"])
     }
 
     static func normalizedJSONLineData(from lineData: Data) -> Data? {

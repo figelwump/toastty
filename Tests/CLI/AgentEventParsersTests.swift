@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 import Testing
 @testable import ToasttyCLIKit
@@ -248,29 +249,34 @@ struct AgentEventParsersTests {
     }
 
     @Test
-    func codexTurnCompleteMapsToReadyStatusWithAssistantSummary() throws {
+    func codexTurnCompletePreservesThreadIdentityForAppFiltering() throws {
         let commands = try AgentEventIngestor.commands(
             for: .codexNotify,
             sessionID: "sess-123",
             panelID: nil,
             payload: Data(
-                #"{"type":"agent-turn-complete","last-assistant-message":"Finished updating the launch path."}"#.utf8
+                #"{"type":"agent-turn-complete","thread-id":"thread-root","turn-id":"turn-1","input-messages":["Fix the sidebar"],"last-assistant-message":"Finished updating the launch path."}"#.utf8
             )
         )
 
         #expect(commands == [
-            .sessionStatus(
+            .sessionCodexNotifyCompletion(
                 sessionID: "sess-123",
                 panelID: nil,
-                kind: .ready,
-                summary: "Ready",
-                detail: "Finished updating the launch path."
+                completion: CodexNotifyCompletion(
+                    notificationType: "agent-turn-complete",
+                    threadID: "thread-root",
+                    turnID: "turn-1",
+                    lastInputMessageFingerprint: CodexInputFingerprint.fingerprint(for: "Fix the sidebar"),
+                    inputMessageCount: 1,
+                    detail: "Finished updating the launch path."
+                )
             )
         ])
     }
 
     @Test
-    func codexTaskCompleteMapsToReadyStatusWithAssistantSummary() throws {
+    func codexTaskCompleteUsesNotifyCompletionFallback() throws {
         let commands = try AgentEventIngestor.commands(
             for: .codexNotify,
             sessionID: "sess-123",
@@ -281,12 +287,17 @@ struct AgentEventParsersTests {
         )
 
         #expect(commands == [
-            .sessionStatus(
+            .sessionCodexNotifyCompletion(
                 sessionID: "sess-123",
                 panelID: nil,
-                kind: .ready,
-                summary: "Ready",
-                detail: "Finished updating the launch path."
+                completion: CodexNotifyCompletion(
+                    notificationType: "task_complete",
+                    threadID: nil,
+                    turnID: nil,
+                    lastInputMessageFingerprint: nil,
+                    inputMessageCount: 0,
+                    detail: "Finished updating the launch path."
+                )
             )
         ])
     }

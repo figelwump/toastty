@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 import XCTest
 @testable import ToasttyApp
@@ -303,7 +304,11 @@ final class CodexSessionLogWatcherTests: XCTestCase {
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
-            CodexSessionLogEvent(kind: .turnStarted, detail: "summarize skills in here")
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "summarize skills in here",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "summarize skills in here")
+            )
         ])
     }
 
@@ -319,7 +324,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(events, [
             CodexSessionLogEvent(
                 kind: .turnStarted,
-                detail: "Investigate why cdx tracking is stale in Toastty"
+                detail: "Investigate why cdx tracking is stale in Toastty",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "Investigate why cdx tracking is stale in Toastty")
             )
         ])
     }
@@ -336,7 +342,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(events, [
             CodexSessionLogEvent(
                 kind: .turnStarted,
-                detail: "Investigate the sidebar working state"
+                detail: "Investigate the sidebar working state",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "Investigate the sidebar working state")
             )
         ])
     }
@@ -397,7 +404,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(events, [
             CodexSessionLogEvent(
                 kind: .turnStarted,
-                detail: "Investigate why cdx tracking is stale in Toastty"
+                detail: "Investigate why cdx tracking is stale in Toastty",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "Investigate why cdx tracking is stale in Toastty")
             )
         ])
     }
@@ -459,7 +467,11 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         )
 
         XCTAssertEqual(events, [
-            CodexSessionLogEvent(kind: .turnStarted, detail: "Run repo checks"),
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Run repo checks",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "Run repo checks")
+            ),
             CodexSessionLogEvent(kind: .historyUpdated, detail: "History updated")
         ])
     }
@@ -576,7 +588,10 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(events, [
             CodexSessionLogEvent(
                 kind: .turnStarted,
-                detail: "Investigate split writes in the Codex log watcher"
+                detail: "Investigate split writes in the Codex log watcher",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(
+                    for: "Investigate split writes in the Codex log watcher"
+                )
             )
         ])
     }
@@ -610,7 +625,11 @@ final class CodexSessionLogWatcherTests: XCTestCase {
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
-            CodexSessionLogEvent(kind: .turnStarted, detail: "summarize skills in here")
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "summarize skills in here",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "summarize skills in here")
+            )
         ])
     }
 

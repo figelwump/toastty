@@ -1239,6 +1239,29 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.codex_notify_completion":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            let completion = try codexNotifyCompletion(from: event.payload)
+            let accepted = sessionRuntimeStore.handleCodexNotifyCompletion(
+                sessionID: sessionID,
+                completion: completion,
+                at: now
+            )
+            if accepted {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(accepted ? "accepted" : "ignored"),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.update_files":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
@@ -2154,6 +2177,25 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private func normalizedOptionalText(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func codexNotifyCompletion(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> CodexNotifyCompletion {
+        guard let notificationType = normalizedOptionalText(payload.string("type")) else {
+            throw AutomationSocketError.invalidPayload("type is required")
+        }
+        guard let detail = normalizedOptionalText(payload.string("detail")) else {
+            throw AutomationSocketError.invalidPayload("detail is required")
+        }
+        return CodexNotifyCompletion(
+            notificationType: notificationType,
+            threadID: normalizedOptionalText(payload.string("threadID")),
+            turnID: normalizedOptionalText(payload.string("turnID")),
+            lastInputMessageFingerprint: normalizedOptionalText(payload.string("lastInputMessageFingerprint")),
+            inputMessageCount: payload.int("inputMessageCount") ?? 0,
+            detail: detail
+        )
     }
 
     private func parseArgsPayload(_ payload: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
