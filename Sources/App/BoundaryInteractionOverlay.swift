@@ -84,11 +84,21 @@ final class BoundaryInteractionOverlayView: NSView {
     var usesEventTrackingLoop = true
     var currentLocalMouseLocationProvider: (() -> CGPoint?)?
     var backingScaleFactorProvider: (() -> CGFloat?)?
+    #if DEBUG
+    var cursorSetter: (NSCursor) -> Void = { $0.set() }
+    #endif
     private(set) var boundaryTrackingAreaRebuildCount = 0
     private(set) var deferredCursorReassertionCount = 0
     var hasPendingCursorReassertion: Bool {
         pendingCursorReassertionDescriptorID != nil
     }
+
+    #if DEBUG
+    func performCursorReassertionForTesting(descriptorID: String) {
+        pendingCursorReassertionDescriptorID = descriptorID
+        performPendingCursorReassertion()
+    }
+    #endif
 
     private var orderedDescriptors: [BoundaryInteractionDescriptor] = []
     private var descriptorsByID: [String: BoundaryInteractionDescriptor] = [:]
@@ -232,7 +242,7 @@ final class BoundaryInteractionOverlayView: NSView {
                 location: location,
                 extraMetadata: ["locationSource": locationSource]
             )
-            cursor.set()
+            setCursor(cursor)
             setHoveredDescriptor(descriptor)
             return
         }
@@ -359,7 +369,9 @@ final class BoundaryInteractionOverlayView: NSView {
             if let descriptor {
                 hoveredDescriptor = descriptor
                 logCursorDiagnostic("hover-same-reapply-cursor", descriptor: descriptor)
-                descriptor.cursor?.set()
+                if let cursor = descriptor.cursor {
+                    setCursor(cursor)
+                }
                 scheduleCursorReassertion(for: descriptor)
             } else {
                 cancelCursorReassertion()
@@ -379,7 +391,9 @@ final class BoundaryInteractionOverlayView: NSView {
         hoveredDescriptorID = nextID
         hoveredDescriptor = descriptor
         if let descriptor {
-            descriptor.cursor?.set()
+            if let cursor = descriptor.cursor {
+                setCursor(cursor)
+            }
             scheduleCursorReassertion(for: descriptor)
         } else {
             cancelCursorReassertion()
@@ -421,15 +435,21 @@ final class BoundaryInteractionOverlayView: NSView {
             return
         }
 
-        if NSCursor.current !== cursor {
-            deferredCursorReassertionCount += 1
-            logCursorDiagnostic(
-                "deferred-cursor-reassert",
-                descriptor: descriptor,
-                location: location
-            )
-            cursor.set()
-        }
+        deferredCursorReassertionCount += 1
+        logCursorDiagnostic(
+            "deferred-cursor-reassert",
+            descriptor: descriptor,
+            location: location
+        )
+        setCursor(cursor)
+    }
+
+    private func setCursor(_ cursor: NSCursor) {
+        #if DEBUG
+        cursorSetter(cursor)
+        #else
+        cursor.set()
+        #endif
     }
 
     private func beginBoundarySequence(

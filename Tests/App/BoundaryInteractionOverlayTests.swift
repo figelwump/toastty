@@ -256,6 +256,38 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testDeferredCursorReassertionSetsCursorWhenAlreadyCurrent() throws {
+        defer { NSCursor.arrow.set() }
+        let (window, overlay) = makeWindowWithOverlay()
+        defer { window.orderOut(nil) }
+
+        let resizeCursor = NSCursor.resizeLeftRight
+        var setCursors: [NSCursor] = []
+        overlay.cursorSetter = { cursor in
+            setCursors.append(cursor)
+            cursor.set()
+        }
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                cursor: resizeCursor
+            ),
+        ])
+        overlay.currentLocalMouseLocationProvider = {
+            CGPoint(x: 100, y: 50)
+        }
+
+        resizeCursor.set()
+        XCTAssertTrue(NSCursor.current === resizeCursor)
+        overlay.performCursorReassertionForTesting(descriptorID: "seam")
+
+        XCTAssertEqual(setCursors.count, 1)
+        XCTAssertTrue(try XCTUnwrap(setCursors.first) === resizeCursor)
+        XCTAssertEqual(overlay.deferredCursorReassertionCount, 1)
+    }
+
+    @MainActor
     func testDeferredCursorReassertionDoesNotRestoreAfterPointerLeavesBoundary() throws {
         defer { NSCursor.arrow.set() }
         let (window, overlay) = makeWindowWithOverlay()
