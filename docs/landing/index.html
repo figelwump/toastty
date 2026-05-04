@@ -114,16 +114,13 @@
           <div class="section-copy">
             <h2 id="panel-title">Keep context beside the terminal.</h2>
             <p>
-              The right panel gives every workspace tab a place for Scratchpad notes, browser pages, and local
-              documents while the main terminal layout stays focused on running work.
+              The side panel gives every workspace a place for local context. Fully automatable with the Toastty
+              CLI, along with the rest of the app.
             </p>
             <ul class="plain-list">
-              <li>Open Markdown and code-like local documents without leaving Toastty.</li>
-              <li>Keep a Scratchpad bound to the agent session that produced it.</li>
-              <li>
-                Automate workflows that create new workspaces, open markdown files, or automatically start a new
-                scratchpad for you.
-              </li>
+              <li>Open markdown and code without leaving Toastty.</li>
+              <li>Visualize ideas, architectures, mockups, data flows and more in an HTML scratchpad.</li>
+              <li>Open webpages in the built-in browser.</li>
             </ul>
           </div>
           <figure class="screenshot-frame wide-frame">
@@ -140,8 +137,8 @@
           <div class="section-copy">
             <h2 id="palette-title">Rich keyboard support</h2>
             <p>
-              Do everything you can do in the app with keyboard shortcuts and the command palette. Quickly search
-              for and open local files from the command palette too.
+              Do everything you can do in the app with keyboard shortcuts. Quickly search for and open local files
+              from the command palette too.
             </p>
           </div>
         </div>
@@ -151,6 +148,10 @@
             <a href="https://github.com/figelwump/toastty/blob/main/docs/keyboard-shortcuts.md">Full reference →</a>
           </div>
           <div class="shortcut-reference-grid">
+            <div class="shortcut-reference-column">
+              <span><span>Focus mode</span><kbd>⌘⇧F</kbd></span>
+              <span><span>Next active agent</span><kbd>⌘⇧A</kbd></span>
+            </div>
             <div class="shortcut-reference-column">
               <span><span>Sidebar</span><kbd>⌘B</kbd></span>
               <span><span>Side panel</span><kbd>⌘⇧B</kbd></span>
@@ -162,10 +163,6 @@
             <div class="shortcut-reference-column">
               <span><span>New workspace</span><kbd>⌘⇧N</kbd></span>
               <span><span>Switch workspace</span><kbd>⌥1-9</kbd></span>
-            </div>
-            <div class="shortcut-reference-column">
-              <span><span>Focus mode</span><kbd>⌘⇧F</kbd></span>
-              <span><span>Next active agent</span><kbd>⌘⇧A</kbd></span>
             </div>
           </div>
         </div>
@@ -182,14 +179,36 @@
               <span class="feature-card-number">04</span>
               <h3>Full layout flexibility</h3>
               <p>Split horizontal, vertical, resize with arrows, equalize, zoom one to full view. Layouts persist across restarts.</p>
-              <div class="terminal-split-preview" aria-hidden="true">
-                <div>
-                  <span>zsh ~/code</span>
-                  <code>$ npm test ✓ 142 passing</code>
+              <div class="terminal-split-preview animated-split-preview" aria-hidden="true">
+                <div class="split-layout split-layout-one">
+                  <div class="split-pane split-pane-primary">
+                    <span class="split-pane-label">zsh ~/code</span>
+                    <code>$ npm test<br>✓ 142 passing</code>
+                  </div>
                 </div>
-                <div>
-                  <span>Claude Code</span>
-                  <code>working</code>
+                <div class="split-layout split-layout-two">
+                  <div class="split-pane split-pane-primary">
+                    <span class="split-pane-label">zsh ~/code</span>
+                    <code>$ npm test<br>✓ 142 passing</code>
+                  </div>
+                  <div class="split-pane split-pane-secondary">
+                    <span class="split-pane-label">Claude Code</span>
+                    <code>working</code>
+                  </div>
+                </div>
+                <div class="split-layout split-layout-three">
+                  <div class="split-pane split-pane-primary">
+                    <span class="split-pane-label">zsh ~/code</span>
+                    <code>$ npm test<br>✓ 142 passing</code>
+                  </div>
+                  <div class="split-pane split-pane-secondary">
+                    <span class="split-pane-label">Claude Code</span>
+                    <code>working</code>
+                  </div>
+                  <div class="split-pane split-pane-tertiary">
+                    <span class="split-pane-label">zmx attach</span>
+                    <code>$ tail -f log</code>
+                  </div>
                 </div>
               </div>
             </article>
@@ -197,33 +216,33 @@
               <span class="feature-card-number">05</span>
               <h3>Automate your workflows</h3>
               <p>
-                Toastty is fully scriptable over JSON-RPC. Wire up custom skills that create workspaces, open
-                Markdown files, or kick off a new Scratchpad for you.
+                Toastty's CLI can drive the app over its automation socket, so skills can prepare background
+                workspaces, start agent terminals, and attach handoff context.
               </p>
-              <pre class="terminal-code"><code>.agents/skills/release/SKILL.md
-name: release
-trigger: "@skill release"
-steps:
-  - workspace.create # new tab
-  - pane.run $ "./scripts/release.sh"
-  - panel.scratchpad.set
+              <pre class="terminal-code syntax-code"><code><span class="token-comment">.agents/skills/worktree-create/SKILL.md</span>
+<span class="token-key">name</span><span class="token-punct">:</span> <span class="token-value">worktree-create</span>
+<span class="token-key">steps</span><span class="token-punct">:</span>
+  <span class="token-punct">-</span> <span class="token-command">toastty action run</span> <span class="token-action">workspace.create</span> <span class="token-arg">activate</span><span class="token-punct">=</span><span class="token-value">false</span>
+  <span class="token-punct">-</span> <span class="token-command">toastty action run</span> <span class="token-action">terminal.send-text</span> <span class="token-ref">text=@startupPrompt</span>
+  <span class="token-punct">-</span> <span class="token-command">toastty action run</span> <span class="token-action">panel.create.local-document</span> <span class="token-string">WORKTREE_HANDOFF.md</span>
+  <span class="token-punct">-</span> <span class="token-command">toastty action run</span> <span class="token-action">panel.scratchpad.set-content</span> <span class="token-ref">content=@planHtml</span>
 
-$ toastty action.run release ● ok</code></pre>
+<span class="token-shell">$</span> <span class="token-command">toastty action run workspace.create</span> <span class="token-success">● ready</span></code></pre>
             </article>
             <article class="feature-card">
               <span class="feature-card-number">06</span>
               <h3>Ghostty under the hood</h3>
               <p>Built on libghostty's GPU-accelerated rendering. Your existing Ghostty config just works.</p>
-              <pre class="terminal-code"><code>$ git status
-On branch main
-nothing to commit, working tree clean
+              <pre class="terminal-code syntax-code"><code><span class="token-shell">$</span> <span class="token-command">git status</span>
+<span class="token-success">On branch main</span>
+<span class="token-soft">nothing to commit, working tree clean</span>
 
-$ cat ~/.config/ghostty/config
-# your existing config - just works
-theme = tokyonight
-font-family = JetBrains Mono
-unfocused-split-opacity = 0.7
-unfocused-split-fill = #4a4a66</code></pre>
+<span class="token-shell">$</span> <span class="token-command">cat ~/.config/ghostty/config</span>
+<span class="token-comment"># your existing config - just works</span>
+<span class="token-key">theme</span> <span class="token-punct">=</span> <span class="token-string">tokyonight</span>
+<span class="token-key">font-family</span> <span class="token-punct">=</span> <span class="token-string">JetBrains Mono</span>
+<span class="token-key">unfocused-split-opacity</span> <span class="token-punct">=</span> <span class="token-value">0.7</span>
+<span class="token-key">unfocused-split-fill</span> <span class="token-punct">=</span> <span class="token-value">#4a4a66</span></code></pre>
             </article>
           </div>
         </div>
