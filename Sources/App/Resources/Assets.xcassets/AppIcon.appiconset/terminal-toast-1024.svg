@@ -1,38 +1,79 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <title>Toastty App Icon — Heavy Bevel Toast Slice</title>
+  <title>Toastty App Icon - Refined Toast Terminal</title>
   <defs>
-    <linearGradient id="bg" x1="200" y1="0" x2="824" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#3d2618"/>
-      <stop offset="1" stop-color="#2a1407"/>
+    <linearGradient id="background" x1="178" y1="52" x2="846" y2="972" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20252a"/>
+      <stop offset="0.46" stop-color="#11161a"/>
+      <stop offset="1" stop-color="#080b0d"/>
     </linearGradient>
-    <linearGradient id="crust" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#E8A948"/>
-      <stop offset="50%" stop-color="#C4832E"/>
-      <stop offset="100%" stop-color="#8B5A1B"/>
+    <radialGradient id="amberGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 532) rotate(90) scale(390 420)">
+      <stop offset="0" stop-color="#f6a72e" stop-opacity="0.34"/>
+      <stop offset="0.48" stop-color="#f6a72e" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#f6a72e" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="crust" x1="512" y1="184" x2="512" y2="804" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffbf54"/>
+      <stop offset="0.42" stop-color="#f4a62d"/>
+      <stop offset="1" stop-color="#a96111"/>
     </linearGradient>
-    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#FFF5E0"/>
-      <stop offset="40%" stop-color="#F5E2C0"/>
-      <stop offset="100%" stop-color="#DCC8A0"/>
+    <linearGradient id="crustShade" x1="320" y1="218" x2="736" y2="806" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe2a0" stop-opacity="0.68"/>
+      <stop offset="0.4" stop-color="#f4a62d" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#6e3d08" stop-opacity="0.32"/>
     </linearGradient>
+    <linearGradient id="bread" x1="512" y1="274" x2="512" y2="732" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff8e9"/>
+      <stop offset="0.58" stop-color="#f7e6bd"/>
+      <stop offset="1" stop-color="#e6cc93"/>
+    </linearGradient>
+    <linearGradient id="breadGlow" x1="368" y1="304" x2="620" y2="716" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.62"/>
+      <stop offset="0.58" stop-color="#ffffff" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#b77923" stop-opacity="0.16"/>
+    </linearGradient>
+    <filter id="toastShadow" x="130" y="120" width="764" height="760" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="42" stdDeviation="34" flood-color="#000000" flood-opacity="0.42"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000000" flood-opacity="0.24"/>
+    </filter>
+    <filter id="promptShadow" x="300" y="360" width="410" height="300" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#6b3b08" flood-opacity="0.18"/>
+    </filter>
   </defs>
 
-  <!-- Background fill (macOS applies squircle mask) -->
-  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#background)"/>
+  <rect width="1024" height="1024" fill="url(#amberGlow)"/>
+  <rect x="78" y="78" width="868" height="868" rx="188" fill="#ffffff" fill-opacity="0.018" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
 
-  <!-- Toast slice, scaled to fill more of the icon frame -->
-  <g transform="translate(-10.75, 4.6) scale(6.15)">
-    <!-- Outer crust with golden gradient -->
-    <path d="M40 145 L35 65 Q33 28 60 25 L110 25 Q137 28 135 65 L130 145 Q130 150 85 150 Q40 150 40 145 Z" fill="url(#crust)" />
-    <!-- Highlight along top of crust -->
-    <path d="M60 27 L110 27 Q134 30 133 65" fill="none" stroke="#FFEBB480" stroke-width="2" stroke-linecap="round" />
-    <!-- Inner bread face with cream gradient -->
-    <path d="M48 140 L44 70 Q43 38 64 35 L106 35 Q127 38 126 70 L122 140 Q122 143 85 143 Q48 143 48 140 Z" fill="url(#face)" />
-    <!-- Terminal prompt chevron (shadow) -->
-    <path d="M62 72 L82 90 L62 108" stroke="#3A1E0A" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round" />
-    <!-- Terminal prompt chevron -->
-    <path d="M62 72 L82 90 L62 108" stroke="#1A1A1A" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round" />
-    <!-- Cursor underscore -->
-    <rect x="90" y="101" width="24" height="7" rx="3.5" fill="#1A1A1A" />
+  <g filter="url(#toastShadow)">
+    <path
+      d="M212 708L212 394C212 308 278 232 366 216C405 192 619 192 658 216C746 232 812 308 812 394L812 708C812 755 774 789 512 789C250 789 212 755 212 708Z"
+      fill="url(#crust)"
+    />
+    <path
+      d="M212 708L212 394C212 308 278 232 366 216C405 192 619 192 658 216C746 232 812 308 812 394L812 708C812 755 774 789 512 789C250 789 212 755 212 708Z"
+      fill="url(#crustShade)"
+      opacity="0.92"
+    />
+    <path
+      d="M278 680L278 414C278 348 326 294 394 282C431 272 593 272 630 282C698 294 746 348 746 414L746 680C746 708 712 729 512 729C312 729 278 708 278 680Z"
+      fill="url(#bread)"
+    />
+    <path
+      d="M278 680L278 414C278 348 326 294 394 282C431 272 593 272 630 282C698 294 746 348 746 414L746 680C746 708 712 729 512 729C312 729 278 708 278 680Z"
+      fill="url(#breadGlow)"
+    />
+    <path
+      d="M366 224C407 204 617 204 658 224C732 239 793 310 793 390"
+      fill="none"
+      stroke="#ffe3a0"
+      stroke-opacity="0.74"
+      stroke-width="14"
+      stroke-linecap="round"
+    />
+  </g>
+
+  <g filter="url(#promptShadow)" stroke="#171a1b" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M385 424L495 512L385 600" fill="none" stroke-width="58"/>
+    <path d="M564 596H682" fill="none" stroke-width="54"/>
   </g>
 </svg>
