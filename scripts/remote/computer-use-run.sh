@@ -14,7 +14,7 @@ KEEP_REMOTE=0
 PROMPT_FILE=""
 PROMPT_TEXT=""
 CODEX_COMPUTER_USE_MODEL="${CODEX_COMPUTER_USE_MODEL:-gpt-5.3-codex-spark}"
-CODEX_COMPUTER_USE_REASONING_EFFORT="${CODEX_COMPUTER_USE_REASONING_EFFORT:-high}"
+CODEX_COMPUTER_USE_REASONING_EFFORT="${CODEX_COMPUTER_USE_REASONING_EFFORT:-medium}"
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
 REMOTE_HOST="${TOASTTY_REMOTE_GUI_HOST:-}"
@@ -73,7 +73,7 @@ Optional local environment:
   TOASTTY_REMOTE_GUI_REPO_ROOT          Absolute Toastty repo path on the remote host
   TOASTTY_REMOTE_GUI_ROOT               Remote directory that will hold disposable worktrees and runs
   CODEX_COMPUTER_USE_MODEL              Codex model for app-server turns (default: gpt-5.3-codex-spark)
-  CODEX_COMPUTER_USE_REASONING_EFFORT   Codex reasoning effort for app-server turns (default: high)
+  CODEX_COMPUTER_USE_REASONING_EFFORT   Codex reasoning effort for app-server turns (default: medium)
 
 Default prompt:
   @Computer Use Toastty is already running on this Mac. Use computer use only.
