@@ -72,61 +72,108 @@
         </figure>
       </section>
 
-      <section class="workflow product-section" id="features" aria-labelledby="workflow-title">
-        <div class="section-shell two-up sidebar-story">
-          <figure class="screenshot-frame sidebar-frame">
-            <img src="./assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and agent status rows" loading="lazy" decoding="async">
-          </figure>
-          <div class="section-copy">
-            <h2 id="workflow-title">Know which agent needs you next.</h2>
-            <p>
-              Workspaces become an agent dashboard. Toastty surfaces ready, working, unread, and later-marked
-              sessions without making you leave the terminal.
-            </p>
-            <div class="feature-stack">
-              <article>
-                <span class="status-dot green" aria-hidden="true"></span>
-                <div>
-                  <h3>Live sidebar status</h3>
-                  <p>Claude, Codex, and Pi sessions can report readiness, working state, errors, and unread output.</p>
-                </div>
-              </article>
-              <article>
-                <span class="status-dot amber" aria-hidden="true"></span>
-                <div>
-                  <h3>Jump to active work</h3>
-                  <p>Use <kbd>⌘⇧A</kbd> to rotate through unread, approval, ready, and active sessions.</p>
-                </div>
-              </article>
-              <article>
-                <span class="status-dot cyan" aria-hidden="true"></span>
-                <div>
-                  <h3>Focus Mode</h3>
-                  <p>Focus on one panel at a time when you want to stay in the flow.</p>
-                </div>
-              </article>
+      <section class="feature-grid-section product-section" id="features" aria-label="Key features">
+        <div class="section-shell feature-grid">
+          <article class="feature-tile">
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="m12 3 8 4-8 4-8-4 8-4Z" />
+                <path d="m4 12 8 4 8-4" />
+                <path d="m4 17 8 4 8-4" />
+              </svg>
+            </span>
+            <div>
+              <h3>Workspaces in vertical tabs</h3>
+              <p>Organize conversations, contexts, and projects in a clean, persistent sidebar.</p>
             </div>
-          </div>
+          </article>
+          <article class="feature-tile">
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M3 12h4l2.2-6 5.6 12L17 12h4" />
+              </svg>
+            </span>
+            <div>
+              <h3>Real-time agent status</h3>
+              <p>See what each agent is doing right now with live activity and state indicators.</p>
+            </div>
+          </article>
+          <article class="feature-tile">
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 7h18s-3 0-3-7Z" />
+                <path d="M10 20a2.4 2.4 0 0 0 4 0" />
+              </svg>
+            </span>
+            <div>
+              <h3>Unread badges &amp; later flags</h3>
+              <p>Never miss important updates. Flag items for later and stay focused.</p>
+            </div>
+          </article>
+          <article class="feature-tile">
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M9 8v8a3 3 0 1 1-3-3h12a3 3 0 1 1-3 3V8a3 3 0 1 1 3 3H6a3 3 0 1 1 3-3Z" />
+              </svg>
+            </span>
+            <div>
+              <h3>Command palette</h3>
+              <p>Run actions, open workspaces, and search everything instantly.</p>
+            </div>
+          </article>
+          <article class="feature-tile">
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="m4 7 5 5-5 5" />
+                <path d="M12 19h8" />
+              </svg>
+            </span>
+            <div>
+              <h3>Terminal profiles</h3>
+              <p>Create and switch between powerful profiles for any environment.</p>
+            </div>
+          </article>
+          <article class="feature-tile">
+            <span class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M8 2v6" />
+                <path d="M16 2v6" />
+                <path d="M6 8h12v5a6 6 0 0 1-12 0V8Z" />
+                <path d="M12 19v3" />
+              </svg>
+            </span>
+            <div>
+              <h3>Automation socket</h3>
+              <p>Integrate Toastty into your tools and scripts via a local automation socket.</p>
+            </div>
+          </article>
         </div>
       </section>
 
-      <section class="panel-section product-section" id="right-panel" aria-labelledby="panel-title">
-        <div class="section-shell split-feature">
-          <div class="section-copy">
-            <h2 id="panel-title">Keep context beside the terminal.</h2>
+      <section class="workflow-showcase product-section" aria-labelledby="workflow-title">
+        <div class="section-shell workflow-showcase-layout">
+          <div class="section-copy workflow-copy">
+            <p class="section-kicker">Designed for developers</p>
+            <h2 id="workflow-title">Built for fast multi-agent workflows</h2>
             <p>
-              The side panel gives every workspace a place for local context. Fully automatable with the Toastty
-              CLI, along with the rest of the app.
+              Keep your context, agents, and terminals in one place. Toastty surfaces ready, working, unread,
+              and later-marked sessions while the side panel keeps docs, scratchpads, and browser views beside
+              the terminal.
             </p>
-            <ul class="plain-list">
-              <li>Open markdown and code without leaving Toastty.</li>
-              <li>Visualize ideas, architectures, mockups, data flows and more in an HTML scratchpad.</li>
-              <li>Open webpages in the built-in browser.</li>
-            </ul>
+            <div class="workflow-proof-list" aria-label="Workflow strengths">
+              <span><span class="proof-check" aria-hidden="true"></span>Native performance</span>
+              <span><span class="proof-check" aria-hidden="true"></span>Keyboard-first</span>
+              <span><span class="proof-check" aria-hidden="true"></span>Privacy-first &amp; offline-ready</span>
+            </div>
           </div>
-          <figure class="screenshot-frame wide-frame">
-            <img src="./assets/right_panel_cropped_0.6.2.jpg" alt="Toastty right panel showing README.md in a local document tab" loading="lazy" decoding="async">
-          </figure>
+          <div class="workflow-media" aria-label="Toastty multi-agent workflow screenshots">
+            <figure class="screenshot-frame workflow-sidebar-frame">
+              <img src="./assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and agent status rows" loading="lazy" decoding="async">
+            </figure>
+            <figure class="screenshot-frame workflow-panel-frame">
+              <img src="./assets/right_panel_cropped_0.6.2.jpg" alt="Toastty right panel showing README.md in a local document tab" loading="lazy" decoding="async">
+            </figure>
+          </div>
         </div>
       </section>
 
@@ -169,10 +216,10 @@
         </div>
       </section>
 
-      <section class="feature-band" aria-labelledby="features-title">
+      <section class="feature-band" aria-labelledby="native-title">
         <div class="section-shell feature-band-layout">
           <div class="section-heading">
-            <h2 id="features-title">Native terminal power, shaped for agents.</h2>
+            <h2 id="native-title">Native terminal power, shaped for agents.</h2>
             <p>Toastty stays close to the terminal while adding just enough app structure around it.</p>
           </div>
           <div class="feature-card-grid">
