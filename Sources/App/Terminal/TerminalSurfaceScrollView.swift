@@ -283,6 +283,7 @@ final class TerminalSurfaceScrollView: NSScrollView {
             "style": style.map { String(describing: $0) } ?? "nil",
             "visible": "\(visible)",
             "appliedCursor": appliedCursor.map(Self.cursorDescription) ?? "nil",
+            "currentCursor": CursorDiagnostics.cursorDescription(NSCursor.current),
             "frame": DraggableInteractionLog.rectDescription(frame),
             "bounds": DraggableInteractionLog.rectDescription(bounds),
             "windowNumber": "\(window.windowNumber)",
@@ -293,6 +294,14 @@ final class TerminalSurfaceScrollView: NSScrollView {
             "localMouseNearHorizontalEdge": "\(nearHorizontalEdge)",
             "localMouseNearVerticalEdge": "\(nearVerticalEdge)",
         ]
+        metadata.merge(
+            CursorDiagnostics.hitTestMetadata(
+                window: window,
+                windowLocation: windowMouseLocation,
+                referenceView: self
+            ),
+            uniquingKeysWith: { _, new in new }
+        )
         if let appliedCursor {
             metadata["currentCursorMatchesApplied"] = "\(NSCursor.current === appliedCursor)"
         }

@@ -2,6 +2,83 @@ import AppKit
 import CoreState
 import SwiftUI
 
+enum CursorDiagnostics {
+    static let environmentKey = "TOASTTY_BOUNDARY_CURSOR_DIAGNOSTICS"
+    static let enabled = truthy(ProcessInfo.processInfo.environment[environmentKey])
+
+    static func cursorDescription(_ cursor: NSCursor) -> String {
+        if cursor === NSCursor.arrow {
+            return "arrow"
+        }
+        if cursor === NSCursor.iBeam {
+            return "iBeam"
+        }
+        if cursor === NSCursor.pointingHand {
+            return "pointingHand"
+        }
+        if cursor === NSCursor.resizeLeftRight {
+            return "resizeLeftRight"
+        }
+        if cursor === NSCursor.resizeUpDown {
+            return "resizeUpDown"
+        }
+        return String(describing: cursor)
+    }
+
+    @MainActor
+    static func hitTestMetadata(
+        window: NSWindow?,
+        windowLocation: CGPoint,
+        referenceView: NSView?
+    ) -> [String: String] {
+        guard let contentView = window?.contentView else {
+            return ["windowHitView": "nil"]
+        }
+
+        let contentLocation = contentView.convert(windowLocation, from: nil)
+        let hitView = contentView.hitTest(contentLocation)
+        return [
+            "windowHitView": viewDescription(hitView),
+            "windowHitViewHierarchy": viewHierarchyDescription(hitView, stopAt: referenceView),
+        ]
+    }
+
+    @MainActor
+    static func viewDescription(_ view: NSView?) -> String {
+        guard let view else { return "nil" }
+        return String(describing: type(of: view))
+    }
+
+    @MainActor
+    static func viewHierarchyDescription(
+        _ view: NSView?,
+        stopAt: NSView? = nil,
+        maxDepth: Int = 8
+    ) -> String {
+        var currentView = view
+        var descriptions: [String] = []
+        var depth = 0
+
+        while let view = currentView, depth < maxDepth {
+            descriptions.append(viewDescription(view))
+            if let stopAt, view === stopAt {
+                break
+            }
+            currentView = view.superview
+            depth += 1
+        }
+
+        return descriptions.joined(separator: " <- ")
+    }
+
+    private static func truthy(_ value: String?) -> Bool {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+    }
+}
+
 enum BoundaryInteractionAxis: Equatable {
     case vertical
     case horizontal
@@ -76,10 +153,7 @@ struct BoundaryInteractionOverlay: NSViewRepresentable {
 final class BoundaryInteractionOverlayView: NSView {
     private static let trackingEventMask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
     private nonisolated static let windowMovementSuppressionReason = "boundary-interaction"
-    private nonisolated static let cursorDiagnosticsEnvironmentKey = "TOASTTY_BOUNDARY_CURSOR_DIAGNOSTICS"
-    private nonisolated static let cursorDiagnosticsEnabled = truthy(
-        ProcessInfo.processInfo.environment[cursorDiagnosticsEnvironmentKey]
-    )
+    private static let cursorWatchInterval: TimeInterval = 0.05
 
     var usesEventTrackingLoop = true
     var currentLocalMouseLocationProvider: (() -> CGPoint?)?
@@ -116,6 +190,10 @@ final class BoundaryInteractionOverlayView: NSView {
     private var isTrackingBoundarySequence = false
     private var pendingCursorReassertionDescriptorID: String?
     private var isCursorReassertionScheduled = false
+    private var cursorWatchDescriptorID: String?
+    private var isCursorWatchScheduled = false
+    private var cursorWatchSampleCount = 0
+    private var lastCursorWatchSnapshot: BoundaryCursorWatchSnapshot?
 
     override var isFlipped: Bool { true }
 
@@ -162,6 +240,7 @@ final class BoundaryInteractionOverlayView: NSView {
         orderedDescriptors = []
         descriptorsByID = [:]
         interactionSpecs = []
+        stopCursorWatch()
         onAccessibilityUpdateAfterInvalidation()
     }
 
@@ -373,8 +452,10 @@ final class BoundaryInteractionOverlayView: NSView {
                     setCursor(cursor)
                 }
                 scheduleCursorReassertion(for: descriptor)
+                startCursorWatch(for: descriptor)
             } else {
                 cancelCursorReassertion()
+                stopCursorWatch()
             }
             return
         }
@@ -395,8 +476,10 @@ final class BoundaryInteractionOverlayView: NSView {
                 setCursor(cursor)
             }
             scheduleCursorReassertion(for: descriptor)
+            startCursorWatch(for: descriptor)
         } else {
             cancelCursorReassertion()
+            stopCursorWatch()
         }
         deliverCallback(immediately: deliversCallbacksImmediately) {
             previous?.onHoverChanged(false)
@@ -442,6 +525,104 @@ final class BoundaryInteractionOverlayView: NSView {
             location: location
         )
         setCursor(cursor)
+    }
+
+    private func startCursorWatch(for descriptor: BoundaryInteractionDescriptor) {
+        guard CursorDiagnostics.enabled,
+              descriptor.cursor != nil else {
+            stopCursorWatch()
+            return
+        }
+
+        if cursorWatchDescriptorID != descriptor.id {
+            cursorWatchSampleCount = 0
+            lastCursorWatchSnapshot = nil
+        }
+        cursorWatchDescriptorID = descriptor.id
+        scheduleCursorWatchSample()
+    }
+
+    private func stopCursorWatch() {
+        cursorWatchDescriptorID = nil
+        lastCursorWatchSnapshot = nil
+    }
+
+    private func scheduleCursorWatchSample() {
+        guard CursorDiagnostics.enabled,
+              cursorWatchDescriptorID != nil,
+              isCursorWatchScheduled == false else {
+            return
+        }
+
+        isCursorWatchScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cursorWatchInterval) { [weak self] in
+            self?.performCursorWatchSample()
+        }
+    }
+
+    private func performCursorWatchSample() {
+        isCursorWatchScheduled = false
+        guard CursorDiagnostics.enabled,
+              let descriptorID = cursorWatchDescriptorID else {
+            return
+        }
+
+        guard let location = currentLocalMouseLocation(),
+              bounds.contains(location),
+              let descriptor = descriptor(at: location),
+              descriptor.id == descriptorID,
+              let targetCursor = descriptor.cursor else {
+            stopCursorWatch()
+            return
+        }
+
+        cursorWatchSampleCount += 1
+        let currentCursor = NSCursor.current
+        let windowMouseLocation = window?.mouseLocationOutsideOfEventStream
+        var metadata: [String: String] = [
+            "descriptorID": descriptor.id,
+            "descriptorCursor": CursorDiagnostics.cursorDescription(targetCursor),
+            "currentCursor": CursorDiagnostics.cursorDescription(currentCursor),
+            "currentCursorMatchesDescriptor": "\(currentCursor === targetCursor)",
+            "sampleCount": "\(cursorWatchSampleCount)",
+            "localMouseLocation": Self.pointDescription(location),
+            "bounds": Self.rectDescription(bounds),
+            "descriptorHitFrame": Self.rectDescription(descriptor.hitFrame),
+            "descriptorEffectiveHitFrame": effectiveHitFrame(for: descriptor.hitFrame)
+                .map(Self.rectDescription) ?? "nil",
+            "overlayHitView": CursorDiagnostics.viewDescription(hitTest(location)),
+        ]
+        if let windowMouseLocation {
+            metadata["windowMouseLocation"] = Self.pointDescription(windowMouseLocation)
+            metadata.merge(
+                CursorDiagnostics.hitTestMetadata(
+                    window: window,
+                    windowLocation: windowMouseLocation,
+                    referenceView: self
+                ),
+                uniquingKeysWith: { _, new in new }
+            )
+        }
+        for (key, value) in descriptor.metadata {
+            metadata["descriptor.\(key)"] = value
+        }
+
+        let snapshot = BoundaryCursorWatchSnapshot(
+            descriptorID: descriptor.id,
+            currentCursorID: ObjectIdentifier(currentCursor),
+            currentCursorMatchesDescriptor: currentCursor === targetCursor,
+            windowHitViewHierarchy: metadata["windowHitViewHierarchy"] ?? "nil"
+        )
+        if snapshot != lastCursorWatchSnapshot || snapshot.currentCursorMatchesDescriptor == false {
+            ToasttyLog.info(
+                "boundary cursor watch sample",
+                category: .input,
+                metadata: metadata
+            )
+            lastCursorWatchSnapshot = snapshot
+        }
+
+        scheduleCursorWatchSample()
     }
 
     private func setCursor(_ cursor: NSCursor) {
@@ -825,7 +1006,7 @@ final class BoundaryInteractionOverlayView: NSView {
         location: CGPoint? = nil,
         extraMetadata: [String: String] = [:]
     ) {
-        guard Self.cursorDiagnosticsEnabled else { return }
+        guard CursorDiagnostics.enabled else { return }
 
         var metadata = extraMetadata
         metadata["phase"] = phase
@@ -841,14 +1022,14 @@ final class BoundaryInteractionOverlayView: NSView {
         metadata["isCursorReassertionScheduled"] = "\(isCursorReassertionScheduled)"
         metadata["deferredCursorReassertionCount"] = "\(deferredCursorReassertionCount)"
         metadata["backingScaleFactor"] = String(format: "%.3f", backingScaleFactor())
-        metadata["currentCursor"] = Self.cursorDescription(NSCursor.current)
+        metadata["currentCursor"] = CursorDiagnostics.cursorDescription(NSCursor.current)
 
         if let descriptor {
             metadata["descriptorID"] = descriptor.id
             metadata["descriptorHitFrame"] = Self.rectDescription(descriptor.hitFrame)
             metadata["descriptorEffectiveHitFrame"] = effectiveHitFrame(for: descriptor.hitFrame)
                 .map(Self.rectDescription) ?? "nil"
-            metadata["descriptorCursor"] = descriptor.cursor.map(Self.cursorDescription) ?? "nil"
+            metadata["descriptorCursor"] = descriptor.cursor.map(CursorDiagnostics.cursorDescription) ?? "nil"
             if let cursor = descriptor.cursor {
                 metadata["currentCursorMatchesDescriptor"] = "\(NSCursor.current === cursor)"
             }
@@ -894,32 +1075,6 @@ final class BoundaryInteractionOverlayView: NSView {
         )
     }
 
-    private nonisolated static func truthy(_ value: String?) -> Bool {
-        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
-            return false
-        }
-        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
-    }
-
-    private static func cursorDescription(_ cursor: NSCursor) -> String {
-        if cursor === NSCursor.arrow {
-            return "arrow"
-        }
-        if cursor === NSCursor.iBeam {
-            return "iBeam"
-        }
-        if cursor === NSCursor.pointingHand {
-            return "pointingHand"
-        }
-        if cursor === NSCursor.resizeLeftRight {
-            return "resizeLeftRight"
-        }
-        if cursor === NSCursor.resizeUpDown {
-            return "resizeUpDown"
-        }
-        return String(describing: cursor)
-    }
-
     private static func pointDescription(_ point: CGPoint) -> String {
         String(format: "%.1f,%.1f", point.x, point.y)
     }
@@ -957,6 +1112,13 @@ private struct BoundaryInteractionSpec: Equatable {
     let cursorID: ObjectIdentifier?
     let accessibilityLabel: String?
     let accessibilityIdentifier: String?
+}
+
+private struct BoundaryCursorWatchSnapshot: Equatable {
+    let descriptorID: String
+    let currentCursorID: ObjectIdentifier
+    let currentCursorMatchesDescriptor: Bool
+    let windowHitViewHierarchy: String
 }
 
 struct BoundaryResizeHandleVisual: View {
