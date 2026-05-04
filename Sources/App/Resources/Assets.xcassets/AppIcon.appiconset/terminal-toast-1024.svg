@@ -2,13 +2,13 @@
   <title>Toastty App Icon - Refined Toast Terminal</title>
   <defs>
     <linearGradient id="background" x1="178" y1="52" x2="846" y2="972" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#20252a"/>
-      <stop offset="0.46" stop-color="#11161a"/>
-      <stop offset="1" stop-color="#080b0d"/>
+      <stop offset="0" stop-color="#3d2618"/>
+      <stop offset="0.54" stop-color="#2a1407"/>
+      <stop offset="1" stop-color="#160a05"/>
     </linearGradient>
     <radialGradient id="amberGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 532) rotate(90) scale(390 420)">
-      <stop offset="0" stop-color="#f6a72e" stop-opacity="0.34"/>
-      <stop offset="0.48" stop-color="#f6a72e" stop-opacity="0.12"/>
+      <stop offset="0" stop-color="#f6a72e" stop-opacity="0.28"/>
+      <stop offset="0.48" stop-color="#f6a72e" stop-opacity="0.09"/>
       <stop offset="1" stop-color="#f6a72e" stop-opacity="0"/>
     </radialGradient>
     <linearGradient id="crust" x1="512" y1="184" x2="512" y2="804" gradientUnits="userSpaceOnUse">
@@ -42,7 +42,7 @@
 
   <rect width="1024" height="1024" fill="url(#background)"/>
   <rect width="1024" height="1024" fill="url(#amberGlow)"/>
-  <rect x="78" y="78" width="868" height="868" rx="188" fill="#ffffff" fill-opacity="0.018" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+  <rect x="78" y="78" width="868" height="868" rx="188" fill="#ffffff" fill-opacity="0.012" stroke="#f0c083" stroke-opacity="0.16" stroke-width="2"/>
 
   <g filter="url(#toastShadow)">
     <path
