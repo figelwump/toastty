@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Toastty - Your home for agents, done your way</title>
+    <title>Toastty — The native home for coding with agents</title>
     <meta
       name="description"
-      content="Toastty is a flexible, customizable, and automatable home for your agents, with live agent status, workspaces, rich keyboard shortcuts, and extensions."
+      content="The native home for coding with agents. Workspaces, live agent status, keyboard-first control, and a growing extension panel. Built on Ghostty."
     >
     <meta property="og:title" content="Toastty — The native home for coding with agents">
     <meta property="og:description" content="Workspaces, live agent status, keyboard-first control, and a growing extension panel. Built on Ghostty.">
@@ -20,6 +20,9 @@
     <meta name="twitter:description" content="Workspaces, live agent status, keyboard-first control, and a growing extension panel. Built on Ghostty.">
     <meta name="twitter:image" content="./assets/social-preview.png">
     <meta name="twitter:image:alt" content="Toastty app interface with agent workspaces, terminal panels, and side panel context">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
@@ -27,6 +30,13 @@
       <a class="brand" href="#top" aria-label="Toastty home">
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 48 48" role="img">
+            <defs>
+              <linearGradient id="brandAmber" x1="24" y1="11.2" x2="24" y2="39.1" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#ffce6b" />
+                <stop offset="0.42" stop-color="#ffa62b" />
+                <stop offset="1" stop-color="#c87a18" />
+              </linearGradient>
+            </defs>
             <path class="toast-outline" d="M10.8 36V23C9.1 21.6 8.6 18.7 9.7 16.3C11.2 12.9 15.3 11.2 24 11.2C32.7 11.2 36.8 12.9 38.3 16.3C39.4 18.7 38.9 21.6 37.2 23V36C37.2 38.1 35.4 39.1 24 39.1C12.6 39.1 10.8 38.1 10.8 36Z" />
             <path class="toast-prompt" d="M18.1 20.7 23.7 24.5 18.1 28.3" />
             <path class="toast-cursor" d="M27 28.5h4.8" />
@@ -46,11 +56,9 @@
     <main id="top">
       <section class="hero section-shell">
         <div class="hero-copy">
-          <h1>Your home for agents, done <span>your way.</span></h1>
+          <h1>The native home for coding <span>with agents.</span></h1>
           <p>
-            A flexible, customizable and automatable home for your agents.
-            <br><br>
-            Live agent status, workspaces, rich keyboard shortcuts, and a growing list of extensions.
+            Workspaces, live agent status, keyboard-first control, and a growing extension panel. Built on Ghostty.
           </p>
           <div class="hero-actions" aria-label="Primary actions">
             <a class="button button-primary" href="https://github.com/figelwump/toastty/releases/latest">
@@ -118,8 +126,8 @@
               </svg>
             </span>
             <div>
-              <h3>Unread badges &amp; later flags</h3>
-              <p>Never miss important updates. Flag items for later and stay focused.</p>
+              <h3>Unread badges &amp; notifications</h3>
+              <p>Native macOS notifications and sidebar unread counts so you never miss when an agent needs you.</p>
             </div>
           </article>
           <article class="feature-tile">
@@ -130,7 +138,7 @@
             </span>
             <div>
               <h3>Command palette</h3>
-              <p>Run actions, open workspaces, and search everything instantly.</p>
+              <p>Run actions, open workspaces, and search for local files instantly.</p>
             </div>
           </article>
           <article class="feature-tile">
@@ -142,7 +150,7 @@
             </span>
             <div>
               <h3>Terminal profiles</h3>
-              <p>Create and switch between powerful profiles for any environment.</p>
+              <p>Auto-launch tmux, an SSH session, or any startup command when you open a new terminal.</p>
             </div>
           </article>
           <article class="feature-tile">
@@ -155,37 +163,68 @@
               </svg>
             </span>
             <div>
-              <h3>Automation socket</h3>
-              <p>Integrate Toastty into your tools and scripts via a local automation socket.</p>
+              <h3>Toastty CLI</h3>
+              <p>Integrate Toastty into your scripts, skills, and workflows via a local automation socket.</p>
             </div>
           </article>
         </div>
       </section>
 
-      <section class="workflow-showcase product-section" aria-labelledby="workflow-title">
-        <div class="section-shell workflow-showcase-layout">
-          <div class="section-copy workflow-copy">
-            <p class="section-kicker">Designed for developers</p>
-            <h2 id="workflow-title">Built for fast multi-agent workflows</h2>
+      <section class="agent-dashboard-section product-section" aria-labelledby="dashboard-title">
+        <div class="section-shell agent-dashboard-layout">
+          <figure class="screenshot-frame sidebar-frame">
+            <img src="./assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and agent status rows" loading="lazy" decoding="async">
+          </figure>
+          <div class="section-copy">
+            <h2 id="dashboard-title">Know which agent needs you next.</h2>
             <p>
-              Keep your context, agents, and terminals in one place. Toastty surfaces ready, working, unread,
-              and later-marked sessions while the side panel keeps docs, scratchpads, and browser views beside
-              the terminal.
+              Workspaces become an agent dashboard. Toastty surfaces ready, working, unread, and later-marked
+              sessions without making you leave the terminal.
             </p>
-            <div class="workflow-proof-list" aria-label="Workflow strengths">
-              <span><span class="proof-check" aria-hidden="true"></span>Native performance</span>
-              <span><span class="proof-check" aria-hidden="true"></span>Keyboard-first</span>
-              <span><span class="proof-check" aria-hidden="true"></span>Privacy-first &amp; offline-ready</span>
+            <div class="feature-stack">
+              <article>
+                <span class="status-dot green" aria-hidden="true"></span>
+                <div>
+                  <h3>Live sidebar status</h3>
+                  <p>Agent sessions can report readiness, working state, errors, and unread output.</p>
+                </div>
+              </article>
+              <article>
+                <span class="status-dot amber" aria-hidden="true"></span>
+                <div>
+                  <h3>Jump to active work</h3>
+                  <p>Use <kbd>⌘⇧A</kbd> to rotate through unread, approval, ready, and active sessions.</p>
+                </div>
+              </article>
+              <article>
+                <span class="status-dot cyan" aria-hidden="true"></span>
+                <div>
+                  <h3>Focus Mode</h3>
+                  <p>Focus on one panel at a time when you want to stay in the flow.</p>
+                </div>
+              </article>
             </div>
           </div>
-          <div class="workflow-media" aria-label="Toastty multi-agent workflow screenshots">
-            <figure class="screenshot-frame workflow-sidebar-frame">
-              <img src="./assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and agent status rows" loading="lazy" decoding="async">
-            </figure>
-            <figure class="screenshot-frame workflow-panel-frame">
-              <img src="./assets/right_panel_cropped_0.6.2.jpg" alt="Toastty right panel showing README.md in a local document tab" loading="lazy" decoding="async">
-            </figure>
+        </div>
+      </section>
+
+      <section class="side-panel-section product-section" aria-labelledby="side-panel-title">
+        <div class="section-shell side-panel-layout">
+          <div class="section-copy">
+            <h2 id="side-panel-title">Keep context beside the terminal.</h2>
+            <p>
+              Extensions — built-in today, user-built soon — live in a per-workspace side panel. Fully
+              automatable with the Toastty CLI.
+            </p>
+            <ul class="plain-list">
+              <li>Open markdown and code without leaving Toastty.</li>
+              <li>Visualize ideas, architectures, mockups, and data flows with sandboxed HTML pages in Toastty Scratchpads.</li>
+              <li>Open webpages in the built-in browser.</li>
+            </ul>
           </div>
+          <figure class="screenshot-frame wide-frame">
+            <img src="./assets/right_panel_cropped_0.6.2.jpg" alt="Toastty side panel showing README.md, scratchpad, and browser tabs" loading="lazy" decoding="async">
+          </figure>
         </div>
       </section>
 
@@ -195,10 +234,10 @@
             <img src="./assets/command_palette_0.6.2.png" alt="Toastty command palette filtering worktree-create skill files" loading="lazy" decoding="async">
           </figure>
           <div class="section-copy">
-            <h2 id="palette-title">Rich keyboard support</h2>
+            <h2 id="palette-title">Every action has a shortcut.</h2>
             <p>
-              Do everything you can do in the app with keyboard shortcuts. Quickly search for and open local files
-              from the command palette too.
+              Anything you can do with the mouse, you can do with the keyboard. Search and open local files
+              right from the command palette.
             </p>
           </div>
         </div>
@@ -208,22 +247,22 @@
             <a href="https://github.com/figelwump/toastty/blob/main/docs/keyboard-shortcuts.md">Full reference →</a>
           </div>
           <div class="shortcut-reference-grid">
-            <div class="shortcut-reference-column">
-              <span><span>Focus mode</span><kbd>⌘⇧F</kbd></span>
-              <span><span>Next active agent</span><kbd>⌘⇧A</kbd></span>
-            </div>
-            <div class="shortcut-reference-column">
-              <span><span>Sidebar</span><kbd>⌘B</kbd></span>
-              <span><span>Side panel</span><kbd>⌘⇧B</kbd></span>
-            </div>
-            <div class="shortcut-reference-column">
-              <span><span>Split horizontal</span><kbd>⌘D</kbd></span>
-              <span><span>Split vertical</span><kbd>⌘⇧D</kbd></span>
-            </div>
-            <div class="shortcut-reference-column">
-              <span><span>New workspace</span><kbd>⌘⇧N</kbd></span>
-              <span><span>Switch workspace</span><kbd>⌥1-9</kbd></span>
-            </div>
+            <ul class="shortcut-reference-column">
+              <li><span>Focus mode</span><kbd>⌘⇧F</kbd></li>
+              <li><span>Next active agent</span><kbd>⌘⇧A</kbd></li>
+            </ul>
+            <ul class="shortcut-reference-column">
+              <li><span>Sidebar</span><kbd>⌘B</kbd></li>
+              <li><span>Side panel</span><kbd>⌘⇧B</kbd></li>
+            </ul>
+            <ul class="shortcut-reference-column">
+              <li><span>Split horizontal</span><kbd>⌘D</kbd></li>
+              <li><span>Split vertical</span><kbd>⌘⇧D</kbd></li>
+            </ul>
+            <ul class="shortcut-reference-column">
+              <li><span>New workspace</span><kbd>⌘⇧N</kbd></li>
+              <li><span>Switch workspace</span><kbd>⌥1</kbd>–<kbd>9</kbd></li>
+            </ul>
           </div>
         </div>
       </section>
@@ -236,7 +275,6 @@
           </div>
           <div class="feature-card-grid">
             <article class="feature-card">
-              <span class="feature-card-number">04</span>
               <h3>Full layout flexibility</h3>
               <p>Split horizontal, vertical, resize with arrows, equalize, zoom one to full view. Layouts persist across restarts.</p>
               <div class="terminal-split-preview animated-split-preview" aria-hidden="true">
@@ -273,7 +311,6 @@
               </div>
             </article>
             <article class="feature-card">
-              <span class="feature-card-number">05</span>
               <h3>Automate your workflows</h3>
               <p>
                 Toastty's CLI can drive the app over its automation socket, so skills can prepare background
@@ -290,13 +327,14 @@
 <span class="token-shell">$</span> <span class="token-command">toastty action run workspace.create</span> <span class="token-success">● ready</span></code></pre>
             </article>
             <article class="feature-card">
-              <span class="feature-card-number">06</span>
               <h3>Ghostty under the hood</h3>
               <p>Built on libghostty's GPU-accelerated rendering. Your existing Ghostty config just works.</p>
               <pre class="terminal-code syntax-code"><code><span class="token-shell">$</span> <span class="token-command">cat ~/.config/ghostty/config</span>
-<span class="token-comment"># your existing config - just works</span>
+<span class="token-comment"># your existing config — just works</span>
 <span class="token-key">theme</span> <span class="token-punct">=</span> <span class="token-string">tokyonight</span>
 <span class="token-key">font-family</span> <span class="token-punct">=</span> <span class="token-string">JetBrains Mono</span>
+<span class="token-key">font-size</span> <span class="token-punct">=</span> <span class="token-value">14</span>
+<span class="token-key">background-opacity</span> <span class="token-punct">=</span> <span class="token-value">0.96</span>
 <span class="token-key">unfocused-split-opacity</span> <span class="token-punct">=</span> <span class="token-value">0.7</span>
 <span class="token-key">unfocused-split-fill</span> <span class="token-punct">=</span> <span class="token-value">#4a4a66</span></code></pre>
             </article>
@@ -307,10 +345,9 @@
       <section class="final-cta" aria-labelledby="cta-title">
         <div class="section-shell cta-grid">
           <div>
-            <h2 id="cta-title">Open source. Built for developers.</h2>
+            <h2 id="cta-title">Make Toastty your terminal home.</h2>
             <p>
-              Toastty is open source on GitHub. Download the latest release for macOS 14.0+ and make it your
-              terminal home for agent-driven work.
+              Free and open source for macOS 14.0+.
             </p>
           </div>
           <div class="cta-actions">
@@ -334,5 +371,17 @@
         </div>
       </section>
     </main>
+
+    <footer class="site-footer">
+      <div class="section-shell footer-inner">
+        <span class="footer-brand">Toastty</span>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="https://github.com/figelwump/toastty">GitHub</a>
+          <a href="https://github.com/figelwump/toastty/releases">Releases</a>
+          <a href="https://github.com/figelwump/toastty/issues">Issues</a>
+        </nav>
+        <span class="footer-meta">Open source · macOS 14.0+</span>
+      </div>
+    </footer>
   </body>
 </html>
