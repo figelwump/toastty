@@ -31,7 +31,6 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Unread badges and notifications** — sidebar badges and macOS notifications when an agent needs you
 - **Jump to the next session that needs you** — `Cmd+Shift+A` rotates through unreads, approval/error sessions, then active work
 - **Mark a session for later** — `Cmd+Shift+L` flags a managed session; the flag clears automatically when the session meaningfully advances
-- **Watch running commands** — `Cmd+Shift+M` gives a busy foreground command the same sidebar row, unread badge, and completion notification as agent work
 
 ### Workspaces and layout
 
@@ -52,6 +51,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 - **Ghostty rendering** — GPU-accelerated terminal engine with Ghostty config compatibility
 - **Focus Mode** — `Cmd+Shift+F` zooms the focused panel to full view to stay in the flow
+- **Watch running commands** — `Cmd+Shift+M` gives a busy foreground command a sidebar row, unread badge, and completion notification when it exits
 - **In-panel find** — search Ghostty scrollback or the focused local document with `Cmd+F`, navigate with `Cmd+G` and `Cmd+Shift+G`
 - **Persisted terminal history** — with shell integration, restored `zsh`/`bash`/`fish` panes keep their own command history, including inside `tmux` or `zmx`
 - **Terminal profiles** — launch named setups like `tmux`, `zmx`, or SSH from menu or shortcut ([details](docs/terminal-profiles.md))
@@ -126,7 +126,7 @@ Terminal command-click integrations use the right panel for common supporting fi
 ## Running Agents
 
 <p align="center">
-  <img src="website/assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and live agent status rows">
+  <img src="website/assets/sidebar_0.6.2.png" alt="Toastty sidebar with workspaces and live agent status rows" width="320">
 </p>
 
 Run agents the way you usually do — type `claude`, `codex`, or `pi` in any terminal pane and Toastty's command shims pick up live status automatically. Or launch from the `Agent` menu, the top bar, the command palette, or a keyboard shortcut. Either way, built-in session telemetry drives sidebar status, unread badges, and desktop notifications, and later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed.
