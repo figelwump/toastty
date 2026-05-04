@@ -45,4 +45,15 @@ struct TerminalDropPayloadBuilderTests {
         )
         #expect(payload == "'/tmp/image.png'")
     }
+
+    @Test
+    func shellEscapedPathPayloadHandlesNonImagePathsWithShellCharacters() throws {
+        let payload = try #require(
+            TerminalDropPayloadBuilder.shellEscapedPathPayload(
+                forFilePaths: ["/Users/test/Downloads/app (1) $final.dmg"]
+            )
+        )
+
+        #expect(payload == "'/Users/test/Downloads/app (1) $final.dmg' ")
+    }
 }

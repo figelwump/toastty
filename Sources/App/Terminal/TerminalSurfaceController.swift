@@ -167,13 +167,13 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return false }
             return self.delegate?.openSearchSelectionURL(url, from: self.panelID) ?? false
         }
-        terminalHostView.resolveImageFileDrop = { [weak self] urls in
+        terminalHostView.resolveFileDrop = { [weak self] urls in
             guard let self else { return nil }
-            return self.delegate?.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)
+            return self.delegate?.prepareFileDrop(from: urls, targetPanelID: self.panelID)
         }
-        terminalHostView.performImageFileDrop = { [weak self] drop in
+        terminalHostView.performFileDrop = { [weak self] drop in
             guard let self else { return false }
-            return self.delegate?.handlePreparedImageFileDrop(drop) ?? false
+            return self.delegate?.handlePreparedFileDrop(drop) ?? false
         }
         terminalHostView.handleLocalInterruptKey = { [weak self] kind in
             guard let self else { return }
@@ -868,7 +868,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         #endif
     }
 
-    func canAcceptImageFileDrop() -> Bool {
+    func canAcceptFileDrop() -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
         return ghosttySurface != nil
         #else
@@ -914,21 +914,21 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         )
     }
 
-    func handleImageFileDrop(_ imageFileURLs: [URL]) -> Bool {
+    func handleFileDrop(_ fileURLs: [URL]) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
         guard let ghosttySurface else {
             return false
         }
-        let filePaths = imageFileURLs.map { $0.path(percentEncoded: false) }
+        let filePaths = fileURLs.map { $0.path(percentEncoded: false) }
         guard let payload = TerminalDropPayloadBuilder.shellEscapedPathPayload(
             forFilePaths: filePaths
         ) else {
             ToasttyLog.warning(
-                "Rejected image file drop due to invalid file path payload",
+                "Rejected file drop due to invalid file path payload",
                 category: .input,
                 metadata: [
                     "panel_id": panelID.uuidString,
-                    "image_count": String(imageFileURLs.count),
+                    "file_count": String(fileURLs.count),
                 ]
             )
             return false
@@ -936,7 +936,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         sendSurfaceText(payload, to: ghosttySurface)
         return true
         #else
-        _ = imageFileURLs
+        _ = fileURLs
         return false
         #endif
     }

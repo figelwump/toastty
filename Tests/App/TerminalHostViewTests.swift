@@ -89,6 +89,35 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(normalized, flags)
     }
 
+    func testDragOperationAcceptsNonImageLocalFileURL() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let fileURL = URL(fileURLWithPath: "/tmp/toastty drop note.md").standardizedFileURL
+        let pasteboard = NSPasteboard.withUniqueName()
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([fileURL as NSURL]))
+
+        let targetPanelID = UUID()
+        var resolvedFileURLs: [URL] = []
+        var performedDrop: PreparedFileDrop?
+        hostView.resolveFileDrop = { urls in
+            resolvedFileURLs = urls
+            return PreparedFileDrop(targetPanelID: targetPanelID, fileURLs: urls)
+        }
+        hostView.performFileDrop = { drop in
+            performedDrop = drop
+            return true
+        }
+
+        let draggingInfo = TestDraggingInfo(pasteboard: pasteboard)
+        XCTAssertEqual(hostView.draggingEntered(draggingInfo), .copy)
+        XCTAssertTrue(hostView.prepareForDragOperation(draggingInfo))
+        XCTAssertTrue(hostView.performDragOperation(draggingInfo))
+
+        XCTAssertEqual(resolvedFileURLs.map(\.path), [fileURL.path])
+        XCTAssertEqual(performedDrop?.targetPanelID, targetPanelID)
+        XCTAssertEqual(performedDrop?.fileURLs.map(\.path), [fileURL.path])
+    }
+
     func testMouseMovedNormalizesCommandShiftHoverModifiersForLinkDiscovery() throws {
         let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         let window = TestWindow()
@@ -2163,6 +2192,73 @@ private final class HookCallCounter: @unchecked Sendable {
             lock.unlock()
         }
         return storage
+    }
+}
+
+private final class TestDraggingInfo: NSObject, NSDraggingInfo {
+    private let pasteboard: NSPasteboard
+    var numberOfValidItemsForDrop = 0
+    var draggingFormation: NSDraggingFormation = .none
+    var animatesToDestination = false
+
+    init(pasteboard: NSPasteboard) {
+        self.pasteboard = pasteboard
+    }
+
+    var draggingPasteboard: NSPasteboard {
+        pasteboard
+    }
+
+    var draggingDestinationWindow: NSWindow? {
+        nil
+    }
+
+    var draggingSourceOperationMask: NSDragOperation {
+        .copy
+    }
+
+    var draggingLocation: NSPoint {
+        .zero
+    }
+
+    var draggedImageLocation: NSPoint {
+        .zero
+    }
+
+    var draggedImage: NSImage? {
+        NSImage(size: .zero)
+    }
+
+    var draggingSource: Any? {
+        nil
+    }
+
+    var draggingSequenceNumber: Int {
+        0
+    }
+
+    var springLoadingHighlight: NSSpringLoadingHighlight {
+        .none
+    }
+
+    func slideDraggedImage(to screenPoint: NSPoint) {
+        _ = screenPoint
+    }
+
+    func resetSpringLoading() {}
+
+    func enumerateDraggingItems(
+        options enumOpts: NSDraggingItemEnumerationOptions = [],
+        for view: NSView?,
+        classes classArray: [AnyClass],
+        searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+        using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
+    ) {
+        _ = enumOpts
+        _ = view
+        _ = classArray
+        _ = searchOptions
+        _ = block
     }
 }
 

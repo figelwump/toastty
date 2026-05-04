@@ -26,7 +26,7 @@ GHOSTTY_XCFRAMEWORK_PATH=""
 GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
 GHOSTTY_INPUT_READINESS_REQUIRED=0
 RESTORE_GHOSTTY_ENABLED_WORKSPACE=0
-DROP_IMAGE_PATH_TO_CLEANUP=""
+DROP_FILE_PATH_TO_CLEANUP=""
 TERMINAL_PROFILES_PATH="$TOASTTY_RUNTIME_HOME/terminal-profiles.toml"
 PROFILE_SMOKE_PROFILE_ID="smoke-profile"
 PROFILE_SMOKE_TITLE="Profile Ready"
@@ -86,8 +86,8 @@ PREVIOUS_FRONT_BUNDLE_ID="$(frontmost_bundle_id)"
 cleanup() {
   local exit_code=$?
   restore_previous_front_app
-  if [[ -n "$DROP_IMAGE_PATH_TO_CLEANUP" && -f "$DROP_IMAGE_PATH_TO_CLEANUP" ]]; then
-    rm -f "$DROP_IMAGE_PATH_TO_CLEANUP"
+  if [[ -n "$DROP_FILE_PATH_TO_CLEANUP" && -f "$DROP_FILE_PATH_TO_CLEANUP" ]]; then
+    rm -f "$DROP_FILE_PATH_TO_CLEANUP"
   fi
   if [[ -n "${APP_PID:-}" ]]; then
     kill "$APP_PID" >/dev/null 2>&1 || true
@@ -812,23 +812,29 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
     exit 1
   fi
 
-  DROP_IMAGE_PATH="$(mktemp "/tmp/toastty drop ${RUN_ID} XXXXXX.png")"
-  DROP_IMAGE_PATH_TO_CLEANUP="$DROP_IMAGE_PATH"
-  DROP_IMAGE_PATH_JSON="$(json_escape_string "$DROP_IMAGE_PATH")"
-  DROP_IMAGE_RESPONSE="$(send_request "automation.terminal_drop_image_files" "{\"files\":[\"${DROP_IMAGE_PATH_JSON}\"],\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\",\"allowUnavailable\":false}")"
-  if [[ "$(extract_bool_field "$DROP_IMAGE_RESPONSE" "available")" != "true" ]]; then
+  DROP_FILE_PATH="$(mktemp "/tmp/toastty drop ${RUN_ID} XXXXXX.txt")"
+  DROP_FILE_PATH_TO_CLEANUP="$DROP_FILE_PATH"
+  DROP_FILE_PATH_JSON="$(json_escape_string "$DROP_FILE_PATH")"
+  DROP_FILE_RESPONSE="$(send_request "automation.terminal_drop_image_files" "{\"files\":[\"${DROP_FILE_PATH_JSON}\"],\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\",\"allowUnavailable\":false}")"
+  if [[ "$(extract_bool_field "$DROP_FILE_RESPONSE" "available")" != "true" ]]; then
     echo "error: terminal_drop_image_files reported unavailable surface" >&2
-    echo "response: ${DROP_IMAGE_RESPONSE}" >&2
+    echo "response: ${DROP_FILE_RESPONSE}" >&2
     exit 1
   fi
-  DROP_ACCEPTED_COUNT="$(extract_int_field "$DROP_IMAGE_RESPONSE" "acceptedImageCount")"
+  DROP_ACCEPTED_COUNT="$(extract_int_field "$DROP_FILE_RESPONSE" "acceptedFileCount")"
   if [[ -z "$DROP_ACCEPTED_COUNT" || "$DROP_ACCEPTED_COUNT" -lt 1 ]]; then
-    echo "error: terminal_drop_image_files did not accept image file" >&2
-    echo "response: ${DROP_IMAGE_RESPONSE}" >&2
+    echo "error: terminal_drop_image_files did not accept file" >&2
+    echo "response: ${DROP_FILE_RESPONSE}" >&2
+    exit 1
+  fi
+  DROP_LEGACY_ACCEPTED_COUNT="$(extract_int_field "$DROP_FILE_RESPONSE" "acceptedImageCount")"
+  if [[ -z "$DROP_LEGACY_ACCEPTED_COUNT" || "$DROP_LEGACY_ACCEPTED_COUNT" -lt 1 ]]; then
+    echo "error: terminal_drop_image_files did not preserve acceptedImageCount compatibility field" >&2
+    echo "response: ${DROP_FILE_RESPONSE}" >&2
     exit 1
   fi
 
-  DROP_EXPECTED_INPUT="'${DROP_IMAGE_PATH}'"
+  DROP_EXPECTED_INPUT="'${DROP_FILE_PATH}'"
   DROP_EXPECTED_INPUT_JSON="$(json_escape_string "$DROP_EXPECTED_INPUT")"
   DROP_FOUND=0
   DROP_VISIBLE_RESPONSE=""
@@ -842,7 +848,7 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
   done
 
   if [[ "$DROP_FOUND" -ne 1 ]]; then
-    echo "error: dropped image path not observed in terminal viewport during smoke run" >&2
+    echo "error: dropped file path not observed in terminal viewport during smoke run" >&2
     echo "target panel id: ${TERMINAL_TARGET_PANEL_ID}" >&2
     echo "expected input: ${DROP_EXPECTED_INPUT}" >&2
     echo "last terminal response: ${DROP_VISIBLE_RESPONSE}" >&2

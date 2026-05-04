@@ -1336,7 +1336,7 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func focusDroppedImagePanel(
+    func focusDroppedFilePanel(
         windowID: UUID,
         workspaceID: UUID,
         panelID: UUID

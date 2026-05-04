@@ -517,20 +517,21 @@ final class AppControlExecutor {
             }
             let allowUnavailable = args.boolValue("allowUnavailable") ?? false
             let resolved = try resolveTerminalTarget(payload: args)
-            switch terminalRuntimeRegistry.automationDropImageFiles(normalizedFiles, panelID: resolved.panelID) {
-            case .sent(let imageCount):
+            switch terminalRuntimeRegistry.automationDropFiles(normalizedFiles, panelID: resolved.panelID) {
+            case .sent(let fileCount):
                 return .init(
                     didMutateState: false,
                     result: [
                         "workspaceID": .string(resolved.workspaceID.uuidString),
                         "panelID": .string(resolved.panelID.uuidString),
                         "requestedFileCount": .int(normalizedFiles.count),
-                        "acceptedImageCount": .int(imageCount),
+                        "acceptedFileCount": .int(fileCount),
+                        "acceptedImageCount": .int(fileCount),
                         "available": .bool(true),
                     ]
                 )
-            case .noImageFiles:
-                throw AutomationSocketError.invalidPayload("files payload did not contain any image paths")
+            case .noFiles:
+                throw AutomationSocketError.invalidPayload("files payload did not contain any local file paths")
             case .unavailableSurface:
                 if allowUnavailable {
                     return .init(
@@ -539,6 +540,7 @@ final class AppControlExecutor {
                             "workspaceID": .string(resolved.workspaceID.uuidString),
                             "panelID": .string(resolved.panelID.uuidString),
                             "requestedFileCount": .int(normalizedFiles.count),
+                            "acceptedFileCount": .int(0),
                             "acceptedImageCount": .int(0),
                             "available": .bool(false),
                         ]

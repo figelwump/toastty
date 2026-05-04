@@ -14,10 +14,10 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     @discardableResult
     func openSearchSelectionURL(_ url: URL, from panelID: UUID) -> Bool
 
-    func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop?
+    func prepareFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedFileDrop?
 
     @discardableResult
-    func handlePreparedImageFileDrop(_ drop: PreparedImageFileDrop) -> Bool
+    func handlePreparedFileDrop(_ drop: PreparedFileDrop) -> Bool
 
     func handleLocalInterruptKey(for panelID: UUID, kind: TerminalLocalInterruptKind)
 

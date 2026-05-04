@@ -2,19 +2,18 @@ import AppKit
 import Combine
 import CoreState
 import Foundation
-import UniformTypeIdentifiers
 #if TOASTTY_HAS_GHOSTTY_KIT
 import GhosttyKit
 #endif
 
-struct PreparedImageFileDrop {
+struct PreparedFileDrop {
     let targetPanelID: UUID
-    let imageFileURLs: [URL]
+    let fileURLs: [URL]
 }
 
-enum AutomationImageFileDropResult {
-    case sent(imageCount: Int)
-    case noImageFiles
+enum AutomationFileDropResult {
+    case sent(fileCount: Int)
+    case noFiles
     case unavailableSurface
 }
 
@@ -529,19 +528,19 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return controller.renderAttachmentSnapshot()
     }
 
-    func automationDropImageFiles(_ filePaths: [String], panelID: UUID) -> AutomationImageFileDropResult {
+    func automationDropFiles(_ filePaths: [String], panelID: UUID) -> AutomationFileDropResult {
         guard let controller = runtimeStore.existingController(for: panelID) else {
             return .unavailableSurface
         }
 
         let candidateURLs = filePaths.map { URL(fileURLWithPath: $0).standardizedFileURL }
-        let imageFileURLs = Self.normalizedImageFileURLs(from: candidateURLs)
-        guard imageFileURLs.isEmpty == false else {
-            return .noImageFiles
+        let fileURLs = Self.normalizedFileURLs(from: candidateURLs)
+        guard fileURLs.isEmpty == false else {
+            return .noFiles
         }
 
-        if controller.handleImageFileDrop(imageFileURLs) {
-            return .sent(imageCount: imageFileURLs.count)
+        if controller.handleFileDrop(fileURLs) {
+            return .sent(fileCount: fileURLs.count)
         }
         return .unavailableSurface
     }
@@ -654,12 +653,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     @discardableResult
-    func focusPanelForImageDropIfPossible(_ panelID: UUID) -> Bool {
+    func focusPanelForFileDropIfPossible(_ panelID: UUID) -> Bool {
         guard let store else { return false }
         guard let selection = store.state.workspaceSelection(containingPanelID: panelID) else {
             return false
         }
-        guard store.focusDroppedImagePanel(
+        guard store.focusDroppedFilePanel(
             windowID: selection.windowID,
             workspaceID: selection.workspaceID,
             panelID: panelID
@@ -677,11 +676,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return true
     }
 
-    func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop? {
+    func prepareFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedFileDrop? {
         #if TOASTTY_HAS_GHOSTTY_KIT
         guard let store else { return nil }
-        let imageFileURLs = Self.normalizedImageFileURLs(from: urls)
-        guard imageFileURLs.isEmpty == false else { return nil }
+        let fileURLs = Self.normalizedFileURLs(from: urls)
+        guard fileURLs.isEmpty == false else { return nil }
         let state = store.state
         guard isValidDropTargetPanel(targetPanelID, state: state) else {
             return nil
@@ -689,10 +688,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
         guard let targetController = runtimeStore.existingController(for: targetPanelID) else {
             return nil
         }
-        guard targetController.canAcceptImageFileDrop() else {
+        guard targetController.canAcceptFileDrop() else {
             return nil
         }
-        return PreparedImageFileDrop(targetPanelID: targetPanelID, imageFileURLs: imageFileURLs)
+        return PreparedFileDrop(targetPanelID: targetPanelID, fileURLs: fileURLs)
         #else
         _ = urls
         return nil
@@ -700,75 +699,75 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     @discardableResult
-    func handlePreparedImageFileDrop(_ drop: PreparedImageFileDrop) -> Bool {
+    func handlePreparedFileDrop(_ drop: PreparedFileDrop) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
         guard let store else { return false }
         let state = store.state
         guard isValidDropTargetPanel(drop.targetPanelID, state: state) else {
             ToasttyLog.warning(
-                "Rejected image file drop because drop-target panel is invalid",
+                "Rejected file drop because drop-target panel is invalid",
                 category: .input,
                 metadata: [
                     "panel_id": drop.targetPanelID.uuidString,
-                    "image_count": String(drop.imageFileURLs.count),
+                    "file_count": String(drop.fileURLs.count),
                 ]
             )
             return false
         }
         guard let targetController = runtimeStore.existingController(for: drop.targetPanelID) else {
             ToasttyLog.warning(
-                "Rejected image file drop because drop-target controller is unavailable",
+                "Rejected file drop because drop-target controller is unavailable",
                 category: .input,
                 metadata: [
                     "panel_id": drop.targetPanelID.uuidString,
-                    "image_count": String(drop.imageFileURLs.count),
+                    "file_count": String(drop.fileURLs.count),
                 ]
             )
             return false
         }
-        guard targetController.canAcceptImageFileDrop() else {
+        guard targetController.canAcceptFileDrop() else {
             ToasttyLog.warning(
-                "Rejected image file drop because drop-target surface is unavailable",
+                "Rejected file drop because drop-target surface is unavailable",
                 category: .input,
                 metadata: [
                     "panel_id": drop.targetPanelID.uuidString,
-                    "image_count": String(drop.imageFileURLs.count),
+                    "file_count": String(drop.fileURLs.count),
                 ]
             )
             return false
         }
 
-        let handled = targetController.handleImageFileDrop(drop.imageFileURLs)
+        let handled = targetController.handleFileDrop(drop.fileURLs)
         let focusActionApplied = handled
-            ? focusPanelForImageDropIfPossible(drop.targetPanelID)
+            ? focusPanelForFileDropIfPossible(drop.targetPanelID)
             : false
         if handled {
             if !focusActionApplied {
                 ToasttyLog.warning(
-                    "Image file drop succeeded but drop-target panel focus action was rejected",
+                    "File drop succeeded but drop-target panel focus action was rejected",
                     category: .input,
                     metadata: [
                         "panel_id": drop.targetPanelID.uuidString,
-                        "image_count": String(drop.imageFileURLs.count),
+                        "file_count": String(drop.fileURLs.count),
                     ]
                 )
             }
             ToasttyLog.debug(
-                "Forwarded image file drop to drop-target terminal",
+                "Forwarded file drop to drop-target terminal",
                 category: .input,
                 metadata: [
                     "panel_id": drop.targetPanelID.uuidString,
-                    "image_count": String(drop.imageFileURLs.count),
+                    "file_count": String(drop.fileURLs.count),
                     "focus_action_applied": focusActionApplied ? "true" : "false",
                 ]
             )
         } else {
             ToasttyLog.warning(
-                "Failed to forward image file drop to drop-target terminal",
+                "Failed to forward file drop to drop-target terminal",
                 category: .input,
                 metadata: [
                     "panel_id": drop.targetPanelID.uuidString,
-                    "image_count": String(drop.imageFileURLs.count),
+                    "file_count": String(drop.fileURLs.count),
                     "focus_action_applied": focusActionApplied ? "true" : "false",
                 ]
             )
@@ -1346,31 +1345,20 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     #endif
 }
 
-private extension TerminalRuntimeRegistry {
-    static func normalizedImageFileURLs(from urls: [URL]) -> [URL] {
+extension TerminalRuntimeRegistry {
+    static func normalizedFileURLs(from urls: [URL]) -> [URL] {
         var normalized: [URL] = []
         var seenPaths: Set<String> = []
 
         for url in urls {
+            guard url.isFileURL else { continue }
             let fileURL = url.standardizedFileURL
-            guard fileURL.isFileURL else { continue }
-            guard isImageFileURL(fileURL) else { continue }
             let path = fileURL.path
             guard seenPaths.insert(path).inserted else { continue }
             normalized.append(fileURL)
         }
 
         return normalized
-    }
-
-    static func isImageFileURL(_ fileURL: URL) -> Bool {
-        if let contentType = try? fileURL.resourceValues(forKeys: [.contentTypeKey]).contentType {
-            return contentType.conforms(to: .image)
-        }
-        if let inferredType = UTType(filenameExtension: fileURL.pathExtension) {
-            return inferredType.conforms(to: .image)
-        }
-        return false
     }
 }
 

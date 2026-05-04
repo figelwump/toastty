@@ -1,7 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
 import Foundation
-import UniformTypeIdentifiers
 #if TOASTTY_HAS_GHOSTTY_KIT
 import CoreState
 import GhosttyKit
@@ -23,14 +22,14 @@ private extension NSView {
 final class TerminalHostView: NSView {
     var activatePanelIfNeeded: (() -> Bool)?
     var openCommandClickLink: ((URL, Bool) -> Bool)?
-    var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
-    var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
+    var resolveFileDrop: (([URL]) -> PreparedFileDrop?)?
+    var performFileDrop: ((PreparedFileDrop) -> Bool)?
     var openSearchSelectionURL: ((URL) -> Bool)?
     /// Gives the owning controller a chance to reclaim AppKit first responder
     /// when the host view finishes attaching or becomes visible again.
     var requestFirstResponderIfNeeded: (() -> Void)?
     var handleLocalInterruptKey: ((TerminalLocalInterruptKind) -> Void)?
-    private var pendingImageFileDrop: PreparedImageFileDrop?
+    private var pendingFileDrop: PreparedFileDrop?
     private var pendingVisibilitySyncGeneration = 0
     private var mouseTrackingArea: NSTrackingArea?
     private weak var observedWindow: NSWindow?
@@ -44,9 +43,8 @@ final class TerminalHostView: NSView {
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
 
-    private static let imageFileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+    private static let fileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
         .urlReadingFileURLsOnly: true,
-        .urlReadingContentsConformToTypes: [UTType.image.identifier],
     ]
     private static let searchWithGoogleMenuItemTitle = "Search with Google"
 
@@ -371,7 +369,7 @@ final class TerminalHostView: NSView {
         ghosttySurface = surface
         lastAppliedSurfaceFocus = nil
         rightMousePressWasForwarded = false
-        pendingImageFileDrop = nil
+        pendingFileDrop = nil
         lastKnownSurfaceVisibility = nil
         trackedPressedModifierKeyCodes.removeAll()
         ghosttyMouseCursorStyle = .horizontalText
@@ -706,16 +704,16 @@ final class TerminalHostView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let imageFileURLs = Self.imageFileURLs(from: sender.draggingPasteboard)
-        guard imageFileURLs.isEmpty == false else {
-            pendingImageFileDrop = nil
+        let fileURLs = Self.fileURLs(from: sender.draggingPasteboard)
+        guard fileURLs.isEmpty == false else {
+            pendingFileDrop = nil
             return []
         }
-        guard let preparedDrop = resolveImageFileDrop?(imageFileURLs) else {
-            pendingImageFileDrop = nil
+        guard let preparedDrop = resolveFileDrop?(fileURLs) else {
+            pendingFileDrop = nil
             return []
         }
-        pendingImageFileDrop = preparedDrop
+        pendingFileDrop = preparedDrop
         return .copy
     }
 
@@ -724,26 +722,26 @@ final class TerminalHostView: NSView {
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        pendingImageFileDrop != nil
+        pendingFileDrop != nil
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let pendingImageFileDrop else {
+        guard let pendingFileDrop else {
             return false
         }
-        self.pendingImageFileDrop = nil
+        self.pendingFileDrop = nil
 
         focusHostViewIfNeeded()
-        return performImageFileDrop?(pendingImageFileDrop) ?? false
+        return performFileDrop?(pendingFileDrop) ?? false
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
-        pendingImageFileDrop = nil
+        pendingFileDrop = nil
         super.draggingExited(sender)
     }
 
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
-        pendingImageFileDrop = nil
+        pendingFileDrop = nil
         super.concludeDragOperation(sender)
     }
 
@@ -1663,10 +1661,10 @@ final class TerminalHostView: NSView {
         return handled
     }
 
-    private static func imageFileURLs(from pasteboard: NSPasteboard) -> [URL] {
+    private static func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
         guard let objects = pasteboard.readObjects(
             forClasses: [NSURL.self],
-            options: imageFileURLReadOptions
+            options: fileURLReadOptions
         ) as? [URL] else {
             return []
         }

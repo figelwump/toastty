@@ -2250,7 +2250,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(store.pendingPanelFlashRequest)
     }
 
-    func testFocusDroppedImagePanelActivatesCurrentWindowWithoutPanelFlash() throws {
+    func testFocusDroppedFilePanelActivatesCurrentWindowWithoutPanelFlash() throws {
         let fixture = makeTwoPanelWorkspace(title: "One")
         let windowID = UUID()
         var activatedWindowIDs: [UUID] = []
@@ -2272,7 +2272,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            store.focusDroppedImagePanel(
+            store.focusDroppedFilePanel(
                 windowID: windowID,
                 workspaceID: fixture.workspace.id,
                 panelID: fixture.rightPanelID

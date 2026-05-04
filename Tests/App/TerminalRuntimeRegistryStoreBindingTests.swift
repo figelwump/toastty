@@ -1507,7 +1507,63 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testFocusPanelForImageDropActivatesAppAndRoutesToTargetWindow() throws {
+    func testNormalizedFileURLsAcceptsAnyLocalFileTypeAndDeduplicates() throws {
+        let markdown = URL(fileURLWithPath: "/tmp/toastty drop note.md")
+        let text = URL(fileURLWithPath: "/tmp/toastty drop text.txt")
+        let diskImage = URL(fileURLWithPath: "/tmp/toastty drop app.dmg")
+        let png = URL(fileURLWithPath: "/tmp/toastty drop image.png")
+
+        let normalized = TerminalRuntimeRegistry.normalizedFileURLs(
+            from: [
+                markdown,
+                text,
+                diskImage,
+                png,
+                markdown,
+                try XCTUnwrap(URL(string: "https://example.com/not-a-local-file.txt")),
+            ]
+        )
+
+        XCTAssertEqual(
+            normalized.map(\.path),
+            [
+                markdown.standardizedFileURL.path,
+                text.standardizedFileURL.path,
+                diskImage.standardizedFileURL.path,
+                png.standardizedFileURL.path,
+            ]
+        )
+    }
+
+    func testNormalizedFileURLsRejectsNonFileURLs() throws {
+        let normalized = TerminalRuntimeRegistry.normalizedFileURLs(
+            from: [
+                try XCTUnwrap(URL(string: "https://example.com/not-a-local-file.md")),
+                try XCTUnwrap(URL(string: "mailto:test@example.com")),
+            ]
+        )
+
+        XCTAssertTrue(normalized.isEmpty)
+    }
+
+    func testAutomationDropFilesReturnsNoFilesWhenNoPathsRemain() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let windowID = try XCTUnwrap(store.selectedWindow?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        _ = registry.controller(for: panelID, workspaceID: workspaceID, windowID: windowID)
+
+        switch registry.automationDropFiles([], panelID: panelID) {
+        case .noFiles:
+            break
+        case .sent, .unavailableSurface:
+            XCTFail("expected empty file drop payload to be rejected before surface handling")
+        }
+    }
+
+    func testFocusPanelForFileDropActivatesAppAndRoutesToTargetWindow() throws {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let leftPanelID = UUID()
         let rightPanelID = UUID()
@@ -1568,7 +1624,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
         registry.bind(store: store)
 
-        XCTAssertTrue(registry.focusPanelForImageDropIfPossible(rightPanelID))
+        XCTAssertTrue(registry.focusPanelForFileDropIfPossible(rightPanelID))
 
         XCTAssertEqual(store.state.selectedWindowID, secondWindowID)
         XCTAssertEqual(activatedWindowIDs, [secondWindowID])

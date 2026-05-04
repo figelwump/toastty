@@ -151,13 +151,13 @@ final class TerminalWindowRuntimeStoreTests: XCTestCase {
 
 @MainActor
 private final class TestTerminalSurfaceControllerDelegate: TerminalSurfaceControllerDelegate {
-    func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop? {
+    func prepareFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedFileDrop? {
         _ = urls
         _ = targetPanelID
         return nil
     }
 
-    func handlePreparedImageFileDrop(_ drop: PreparedImageFileDrop) -> Bool {
+    func handlePreparedFileDrop(_ drop: PreparedFileDrop) -> Bool {
         _ = drop
         return false
     }

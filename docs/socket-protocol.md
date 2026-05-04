@@ -218,7 +218,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `agent.launch`
 - `config.reload`
 - `terminal.send-text`
-- `terminal.drop-image-files`
+- `terminal.drop-image-files` (historical name; drops local file paths of any type)
 
 Notable action-specific behavior:
 
@@ -545,15 +545,17 @@ Result:
 - `workspaceID: UUID string`
 - `panelID: UUID string`
 - `requestedFileCount: Int`
-- `acceptedImageCount: Int`
+- `acceptedFileCount: Int`
+- `acceptedImageCount: Int` (deprecated compatibility duplicate of `acceptedFileCount`)
 - `available: Bool`
 
 Behavior:
 
 - Compatibility shim over `app_control.run_action` with `id: "terminal.drop-image-files"`.
+- Despite the historical image-specific name, this command accepts local file paths of any type.
 - Relative file paths require `cwd`.
 - Paths are normalized with Foundation path standardization.
-- If no usable image paths remain, return `INVALID_PAYLOAD`.
+- If no usable local file paths remain, return `INVALID_PAYLOAD`.
 - When the terminal surface is unavailable:
   - return `available: false` if `allowUnavailable=true`
   - otherwise return `INVALID_PAYLOAD`

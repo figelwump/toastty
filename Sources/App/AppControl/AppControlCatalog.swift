@@ -322,7 +322,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
         case .terminalSendText:
             return .init(id: rawValue, kind: .action, summary: "Send text to a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.text(required: true), .submit(required: false), .allowUnavailable(required: false)])
         case .terminalDropImageFiles:
-            return .init(id: rawValue, kind: .action, summary: "Drop image files into a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.files(required: true), .cwd(required: false), .allowUnavailable(required: false)])
+            return .init(id: rawValue, kind: .action, summary: "Drop local files into a terminal panel.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.files(required: true), .cwd(required: false), .allowUnavailable(required: false)])
         }
     }
 }

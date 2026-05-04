@@ -64,8 +64,8 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
   placement=newTab
 "$TOASTTY_CLI_PATH" action run terminal.drop-image-files \
   --panel "$PANEL_ID" \
-  files=/tmp/a.png \
-  files=/tmp/b.png \
+  files=/tmp/README.md \
+  files=/tmp/installer.dmg \
   allowUnavailable=true
 "$TOASTTY_CLI_PATH" --json action run workspace.create \
   --window "$WINDOW_ID" \
@@ -124,7 +124,7 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `agent.launch`
 - `config.reload`
 - `terminal.send-text`
-- `terminal.drop-image-files`
+- `terminal.drop-image-files` (historical name; drops local file paths of any type)
 
 Descriptors can also advertise compatibility aliases. Those aliases are accepted by the socket executor, but canonical IDs are preferred for new integrations.
 
