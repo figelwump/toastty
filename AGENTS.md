@@ -8,6 +8,7 @@
   - `docs/agents/automation.md` for smoke, remote, test, and dev-run details.
   - `docs/agents/menu-performance.md` for menu-related regressions and shortcuts.
   - `docs/agents/manual-interaction.md` for local UI scripting notes.
+  - `.agents/skills/toastty-computer-use/SKILL.md` for opportunistic remote Computer Use GUI debugging and verification beyond smoke-test coverage.
 
 ## Build And Generate
 
@@ -45,6 +46,7 @@ sv exec -- scripts/remote/test.sh -- ...
 - For live UI validation of a running app instance, follow `.agents/skills/toastty-dev-run/SKILL.md` and the `peekaboo` workflow if available.
 - Before required local `peekaboo`, run `peekaboo permissions --json`. If Accessibility is missing, stop and ask the user to grant it; do not improvise local GUI workarounds.
 - When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
+- When a GUI bug or fix needs human-like interaction beyond the supported smoke tests, use `.agents/skills/toastty-computer-use/SKILL.md` to write a focused Computer Use prompt and run `scripts/remote/computer-use-run.sh`.
 - In handoffs, say whether validation ran remotely, locally, or through `validate.sh` with local fallback.
 - Artifacts are stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`. Committed planning docs belong in `docs/plans/`, not `artifacts/`.
 
