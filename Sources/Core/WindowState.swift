@@ -3,12 +3,16 @@ import Foundation
 public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public static let defaultSidebarWidthBeforeAgentLaunch: Double = 180
     public static let defaultSidebarWidthAfterAgentLaunch: Double = 280
+    public static let minSidebarWidth: Double = 160
+    public static let maxSidebarWidth: Double = 480
+    public static let sidebarWidthComparisonEpsilon: Double = 0.0001
 
     public let id: UUID
     public var frame: CGRectCodable
     public var workspaceIDs: [UUID]
     public var selectedWorkspaceID: UUID?
     public var sidebarVisible: Bool
+    public var sidebarWidthPointsOverride: Double?
     public var terminalFontSizePointsOverride: Double?
     public var markdownTextScaleOverride: Double?
 
@@ -18,6 +22,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         workspaceIDs: [UUID],
         selectedWorkspaceID: UUID?,
         sidebarVisible: Bool = true,
+        sidebarWidthPointsOverride: Double? = nil,
         terminalFontSizePointsOverride: Double? = nil,
         markdownTextScaleOverride: Double? = nil
     ) {
@@ -26,8 +31,33 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         self.workspaceIDs = workspaceIDs
         self.selectedWorkspaceID = selectedWorkspaceID
         self.sidebarVisible = sidebarVisible
+        self.sidebarWidthPointsOverride = Self.normalizedSidebarWidthOverride(sidebarWidthPointsOverride)
         self.terminalFontSizePointsOverride = terminalFontSizePointsOverride.map(AppState.clampedTerminalFontPoints)
         self.markdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(markdownTextScaleOverride)
+    }
+
+    public static func clampedSidebarWidth(_ width: Double) -> Double {
+        min(max(width, minSidebarWidth), maxSidebarWidth)
+    }
+
+    public static func normalizedSidebarWidthOverride(_ width: Double?) -> Double? {
+        guard let width, width.isFinite else { return nil }
+        return clampedSidebarWidth(width)
+    }
+
+    public static func normalizedSidebarWidthOverride(_ width: Double?, defaultWidth: Double) -> Double? {
+        guard let width,
+              width.isFinite,
+              defaultWidth.isFinite else {
+            return nil
+        }
+
+        let clampedWidth = clampedSidebarWidth(width)
+        let clampedDefaultWidth = clampedSidebarWidth(defaultWidth)
+        guard abs(clampedWidth - clampedDefaultWidth) >= sidebarWidthComparisonEpsilon else {
+            return nil
+        }
+        return clampedWidth
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -36,6 +66,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         case workspaceIDs
         case selectedWorkspaceID
         case sidebarVisible
+        case sidebarWidthPointsOverride
         case terminalFontSizePointsOverride
         case markdownTextScaleOverride
     }
@@ -47,6 +78,12 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         workspaceIDs = try container.decode([UUID].self, forKey: .workspaceIDs)
         selectedWorkspaceID = try container.decodeIfPresent(UUID.self, forKey: .selectedWorkspaceID)
         sidebarVisible = try container.decodeIfPresent(Bool.self, forKey: .sidebarVisible) ?? true
+        sidebarWidthPointsOverride = Self.normalizedSidebarWidthOverride(
+            try container.decodeIfPresent(
+                Double.self,
+                forKey: .sidebarWidthPointsOverride
+            )
+        )
         terminalFontSizePointsOverride = try container.decodeIfPresent(
             Double.self,
             forKey: .terminalFontSizePointsOverride
@@ -66,6 +103,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(workspaceIDs, forKey: .workspaceIDs)
         try container.encodeIfPresent(selectedWorkspaceID, forKey: .selectedWorkspaceID)
         try container.encode(sidebarVisible, forKey: .sidebarVisible)
+        try container.encodeIfPresent(sidebarWidthPointsOverride, forKey: .sidebarWidthPointsOverride)
         try container.encodeIfPresent(terminalFontSizePointsOverride, forKey: .terminalFontSizePointsOverride)
         try container.encodeIfPresent(markdownTextScaleOverride, forKey: .markdownTextScaleOverride)
     }

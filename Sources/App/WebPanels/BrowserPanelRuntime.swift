@@ -161,8 +161,6 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
-        webView.cursorDiagnosticPanelID = panelID
-        webView.cursorDiagnosticPanelKind = WebPanelDefinition.browser.rawValue
         self.webView = webView
         super.init()
         webView.interactionDidRequestFocus = { [panelID] in

@@ -96,6 +96,7 @@ public enum AppAction: Equatable, Sendable {
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
     case toggleSidebar(windowID: UUID)
+    case setSidebarWidth(windowID: UUID, width: Double, defaultWidth: Double)
 }
 
 public extension AppAction {
@@ -219,6 +220,8 @@ public extension AppAction {
             return "markPanelNotificationsRead"
         case .toggleSidebar:
             return "toggleSidebar"
+        case .setSidebarWidth:
+            return "setSidebarWidth"
         }
     }
 }

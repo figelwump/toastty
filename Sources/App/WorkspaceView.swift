@@ -121,7 +121,6 @@ struct WorkspaceView: View {
     private static let workspaceNewTabButtonSize: CGFloat = 20
     nonisolated static let rightAuxPanelResizeHandleHitWidth: CGFloat = 10
     fileprivate nonisolated static let rightAuxPanelResizeHandleHairlineWidth: CGFloat = 1
-    fileprivate nonisolated static let rightAuxPanelResizeHandleHighlightWidth: CGFloat = 3
     private nonisolated static let workspaceTabDragActivationDistance: CGFloat = 4
 
     nonisolated static func mountedContentOpacity(isVisible: Bool) -> Double {
@@ -1062,19 +1061,20 @@ struct WorkspaceView: View {
                     focusedPanelModeActive: tab.focusedPanelModeActive,
                     renderedWidth: rightPanelRenderedWidth
                 ) {
-                    RightAuxPanelResizeHandle(
+                    RightAuxPanelResizeLayer(
                         workspaceID: workspace.id,
                         workspaceTabID: tab.id,
                         targetWidth: rightPanelTargetWidth,
+                        primaryContentWidth: primaryContentWidth,
+                        height: geometry.size.height,
                         appIsActive: appIsActive,
                         store: store
                     )
                     .frame(
-                        width: Self.rightAuxPanelResizeHandleHitWidth,
+                        width: geometry.size.width,
                         height: geometry.size.height,
                         alignment: .topLeading
                     )
-                    .position(x: primaryContentWidth, y: geometry.size.height / 2)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -2405,10 +2405,12 @@ struct WorkspaceView: View {
     }
 }
 
-private struct RightAuxPanelResizeHandle: View {
+private struct RightAuxPanelResizeLayer: View {
     let workspaceID: UUID
     let workspaceTabID: UUID
     let targetWidth: CGFloat
+    let primaryContentWidth: CGFloat
+    let height: CGFloat
     let appIsActive: Bool
     @ObservedObject var store: AppStore
 
@@ -2417,89 +2419,89 @@ private struct RightAuxPanelResizeHandle: View {
     @State private var dragging = false
 
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(width: WorkspaceView.rightAuxPanelResizeHandleHairlineWidth)
-                .allowsHitTesting(false)
-
-            Rectangle()
-                .fill(highlightColor)
-                .frame(width: WorkspaceView.rightAuxPanelResizeHandleHighlightWidth)
-                .animation(.easeOut(duration: 0.12), value: highlighted)
-                .allowsHitTesting(false)
-
-            PointerInteractionRegion(
-                name: "right-panel-resize-handle",
-                metadata: [
-                    "workspaceID": workspaceID.uuidString,
-                    "workspaceTabID": workspaceTabID.uuidString,
-                    "source": "workspace-divider-overlay",
-                    "targetWidth": String(format: "%.1f", targetWidth),
-                ],
-                cursor: .resizeLeftRight,
-                onBegan: { _ in
-                    resizeStartWidth = Double(targetWidth)
-                    updateInteraction(dragging: true)
-                },
-                onChanged: { value in
-                    guard let startingWidth = resizeStartWidth else { return }
-                    let nextWidth = startingWidth - Double(value.translation.width)
-                    _ = store.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: nextWidth))
-                },
-                onEnded: { _ in
-                    resizeStartWidth = nil
-                    updateInteraction(dragging: false)
-                },
-                onHoverChanged: { hovering in
-                    updateInteraction(hovered: hovering)
-                }
+        ZStack(alignment: .topLeading) {
+            BoundaryResizeHandleVisual(
+                highlighted: highlighted,
+                appIsActive: appIsActive,
+                width: WorkspaceView.rightAuxPanelResizeHandleHairlineWidth
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityLabel("Resize Right Panel")
-            .accessibilityIdentifier("right-panel.resize")
-            .onDisappear {
-                releaseInteraction()
-            }
+            .frame(
+                width: WorkspaceView.rightAuxPanelResizeHandleHitWidth,
+                height: height,
+                alignment: .topLeading
+            )
+            .position(x: primaryContentWidth, y: height / 2)
+            .allowsHitTesting(false)
+
+            BoundaryInteractionOverlay(descriptors: [boundaryDescriptor])
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .onDisappear {
+            releaseInteraction()
+        }
+    }
+
+    private var boundaryDescriptor: BoundaryInteractionDescriptor {
+        BoundaryInteractionDescriptor(
+            id: boundaryID,
+            hitFrame: WorkspaceView.rightAuxPanelResizeHandleFrame(
+                primaryContentWidth: primaryContentWidth,
+                height: height
+            ),
+            visualFrame: CGRect(
+                x: primaryContentWidth - (WorkspaceView.rightAuxPanelResizeHandleHairlineWidth / 2),
+                y: 0,
+                width: WorkspaceView.rightAuxPanelResizeHandleHairlineWidth,
+                height: height
+            ),
+            axis: .vertical,
+            cursor: .resizeLeftRight,
+            accessibilityLabel: "Resize Right Panel",
+            accessibilityIdentifier: "right-panel.resize",
+            metadata: [
+                "workspaceID": workspaceID.uuidString,
+                "workspaceTabID": workspaceTabID.uuidString,
+                "targetWidth": String(format: "%.1f", targetWidth),
+            ],
+            onBegan: { _ in
+                resizeStartWidth = Double(targetWidth)
+                updateInteraction(dragging: true)
+            },
+            onChanged: { value in
+                guard let startingWidth = resizeStartWidth else { return }
+                let nextWidth = startingWidth - Double(value.translation.width)
+                _ = store.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: nextWidth))
+            },
+            onEnded: { _ in
+                resizeStartWidth = nil
+                updateInteraction(dragging: false)
+            },
+            onHoverChanged: { hovering in
+                updateInteraction(hovered: hovering)
+            }
+        )
+    }
+
+    private var boundaryID: String {
+        "right-panel.resize.\(workspaceID.uuidString).\(workspaceTabID.uuidString)"
     }
 
     private var highlighted: Bool {
         hovered || dragging
     }
+}
 
-    private var highlightColor: Color {
-        highlighted
-            ? ToastyTheme.accent.opacity(appIsActive ? 0.9 : 0.55)
-            : Color.clear
-    }
+private extension RightAuxPanelResizeLayer {
 
-    private func updateInteraction(
+    func updateInteraction(
         hovered: Bool? = nil,
         dragging: Bool? = nil
     ) {
-        let nextHovered = hovered ?? self.hovered
-        let nextDragging = dragging ?? self.dragging
-        if nextHovered != self.hovered || nextDragging != self.dragging {
-            ToasttyLog.info(
-                "right panel resize handle interaction changed",
-                category: .input,
-                metadata: [
-                    "workspaceID": workspaceID.uuidString,
-                    "workspaceTabID": workspaceTabID.uuidString,
-                    "hovered": "\(nextHovered)",
-                    "dragging": "\(nextDragging)",
-                    "source": "workspace-divider-overlay",
-                    "appIsActive": "\(appIsActive)",
-                    "targetWidth": String(format: "%.1f", targetWidth),
-                ]
-            )
-        }
-        self.hovered = nextHovered
-        self.dragging = nextDragging
+        self.hovered = hovered ?? self.hovered
+        self.dragging = dragging ?? self.dragging
     }
 
-    private func releaseInteraction() {
+    func releaseInteraction() {
         guard hovered || dragging else { return }
 
         DispatchQueue.main.async {

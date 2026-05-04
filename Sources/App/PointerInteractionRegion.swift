@@ -66,13 +66,8 @@ final class PointerInteractionView: NSView {
     var onHoverChanged: ((Bool) -> Void)?
     var cursor: NSCursor? {
         didSet {
-            // Cursor rects in this view rely on z-order to apply, but the
-            // resize-handle's hit zone overlaps a sibling subtree (the right
-            // panel content) that sits on top in NSView z-order. We rely on
-            // tracking-area cursorUpdate events instead, which fire based on
-            // the tracking area's bounds. If the pointer is already inside,
-            // re-apply the new cursor immediately so the change takes effect
-            // without waiting for the next entry.
+            // If the pointer is already inside, re-apply the new cursor so a
+            // SwiftUI update takes effect without waiting for the next entry.
             if isPointerInside {
                 logCursorDiagnostic("cursor-did-set-reapply")
                 cursor?.set()
@@ -424,7 +419,7 @@ final class PointerInteractionView: NSView {
     }
 
     private var shouldLogCursorDiagnostics: Bool {
-        logName == "right-panel-resize-handle"
+        false
     }
 
     private static func cursorDescription(_ cursor: NSCursor) -> String {

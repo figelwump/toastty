@@ -924,7 +924,26 @@ public struct AppReducer {
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
             state.windows[windowIndex].sidebarVisible.toggle()
             return true
+
+        case .setSidebarWidth(let windowID, let width, let defaultWidth):
+            return setSidebarWidth(windowID: windowID, width: width, defaultWidth: defaultWidth, state: &state)
         }
+    }
+
+    private static func setSidebarWidth(
+        windowID: UUID,
+        width: Double,
+        defaultWidth: Double,
+        state: inout AppState
+    ) -> Bool {
+        guard width.isFinite, defaultWidth.isFinite else { return false }
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        let normalizedOverride = WindowState.normalizedSidebarWidthOverride(width, defaultWidth: defaultWidth)
+        guard state.windows[windowIndex].sidebarWidthPointsOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].sidebarWidthPointsOverride = normalizedOverride
+        return true
     }
 
     private static func setWindowTerminalFont(windowID: UUID, points: Double, state: inout AppState) -> Bool {

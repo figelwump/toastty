@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -19,6 +20,10 @@ struct AppWindowView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
+    @State private var appIsActive = true
+
+    static let sidebarResizeHandleHitWidth: CGFloat = 10
+    static let sidebarDividerWidth: CGFloat = 1
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
@@ -46,7 +51,7 @@ struct AppWindowView: View {
 
                     Rectangle()
                         .fill(ToastyTheme.hairline)
-                        .frame(width: 1)
+                        .frame(width: Self.sidebarDividerWidth)
                 }
 
                 WorkspaceView(
@@ -68,6 +73,25 @@ struct AppWindowView: View {
                 )
             }
             .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
+            .overlay(alignment: .topLeading) {
+                GeometryReader { geometry in
+                    if sidebarVisible {
+                        SidebarResizeLayer(
+                            windowID: windowID,
+                            sidebarWidth: effectiveSidebarWidth,
+                            defaultSidebarWidth: defaultSidebarWidth,
+                            height: geometry.size.height,
+                            appIsActive: appIsActive,
+                            store: store
+                        )
+                        .frame(
+                            width: geometry.size.width,
+                            height: geometry.size.height,
+                            alignment: .topLeading
+                        )
+                    }
+                }
+            }
 
             // Sidebar toggle button in the title bar area, right of traffic lights
             sidebarToggleButton
@@ -99,6 +123,7 @@ struct AppWindowView: View {
             agentGetStartedSheet
         }
         .onAppear {
+            appIsActive = NSApplication.shared.isActive
             scheduleWindowFocusRestore()
         }
         .onChange(of: slotFocusSignature) { _, _ in
@@ -139,13 +164,50 @@ struct AppWindowView: View {
             ) else { return }
             presentAgentGetStartedFlow()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            appIsActive = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            appIsActive = false
+        }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
     }
 
     static func effectiveSidebarWidth(
         hasEverLaunchedAgent: Bool
     ) -> CGFloat {
+        effectiveSidebarWidth(
+            hasEverLaunchedAgent: hasEverLaunchedAgent,
+            sidebarWidthPointsOverride: nil
+        )
+    }
+
+    static func effectiveSidebarWidth(
+        hasEverLaunchedAgent: Bool,
+        sidebarWidthPointsOverride: Double?
+    ) -> CGFloat {
+        if let override = WindowState.normalizedSidebarWidthOverride(sidebarWidthPointsOverride) {
+            return CGFloat(override)
+        }
+
+        return defaultSidebarWidth(hasEverLaunchedAgent: hasEverLaunchedAgent)
+    }
+
+    static func defaultSidebarWidth(hasEverLaunchedAgent: Bool) -> CGFloat {
         hasEverLaunchedAgent ? ToastyTheme.sidebarWidth : ToastyTheme.sidebarWidthBeforeAgentLaunch
+    }
+
+    static func sidebarResizeHandleFrame(
+        sidebarWidth: CGFloat,
+        height: CGFloat
+    ) -> CGRect {
+        let dividerCenterX = sidebarWidth + (Self.sidebarDividerWidth / 2)
+        return CGRect(
+            x: dividerCenterX - (Self.sidebarResizeHandleHitWidth / 2),
+            y: 0,
+            width: Self.sidebarResizeHandleHitWidth,
+            height: max(0, height)
+        )
     }
 
     static func sidebarToggleShowsUnreadBadge(
@@ -217,8 +279,13 @@ struct AppWindowView: View {
 
     private var effectiveSidebarWidth: CGFloat {
         Self.effectiveSidebarWidth(
-            hasEverLaunchedAgent: store.hasEverLaunchedAgent
+            hasEverLaunchedAgent: store.hasEverLaunchedAgent,
+            sidebarWidthPointsOverride: store.window(id: windowID)?.sidebarWidthPointsOverride
         )
+    }
+
+    private var defaultSidebarWidth: CGFloat {
+        Self.defaultSidebarWidth(hasEverLaunchedAgent: store.hasEverLaunchedAgent)
     }
 
     @MainActor
@@ -277,6 +344,116 @@ private struct WindowSlotFocusSignature: Equatable {
     let windowID: UUID
     let workspaceID: UUID?
     let focusedPanelID: UUID?
+}
+
+private struct SidebarResizeLayer: View {
+    let windowID: UUID
+    let sidebarWidth: CGFloat
+    let defaultSidebarWidth: CGFloat
+    let height: CGFloat
+    let appIsActive: Bool
+    @ObservedObject var store: AppStore
+
+    @State private var resizeStartWidth: Double?
+    @State private var hovered = false
+    @State private var dragging = false
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            BoundaryResizeHandleVisual(
+                highlighted: highlighted,
+                appIsActive: appIsActive,
+                width: AppWindowView.sidebarDividerWidth
+            )
+            .frame(
+                width: AppWindowView.sidebarResizeHandleHitWidth,
+                height: height,
+                alignment: .topLeading
+            )
+            .position(x: sidebarWidth + (AppWindowView.sidebarDividerWidth / 2), y: height / 2)
+            .allowsHitTesting(false)
+
+            BoundaryInteractionOverlay(descriptors: [boundaryDescriptor])
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onDisappear {
+            releaseInteraction()
+        }
+    }
+
+    private var boundaryDescriptor: BoundaryInteractionDescriptor {
+        BoundaryInteractionDescriptor(
+            id: boundaryID,
+            hitFrame: AppWindowView.sidebarResizeHandleFrame(
+                sidebarWidth: sidebarWidth,
+                height: height
+            ),
+            visualFrame: CGRect(
+                x: sidebarWidth,
+                y: 0,
+                width: AppWindowView.sidebarDividerWidth,
+                height: height
+            ),
+            axis: .vertical,
+            cursor: .resizeLeftRight,
+            accessibilityLabel: "Resize Sidebar",
+            accessibilityIdentifier: "sidebar.resize",
+            metadata: [
+                "windowID": windowID.uuidString,
+                "sidebarWidth": String(format: "%.1f", sidebarWidth),
+            ],
+            onBegan: { _ in
+                resizeStartWidth = Double(sidebarWidth)
+                updateInteraction(dragging: true)
+            },
+            onChanged: { value in
+                guard let startingWidth = resizeStartWidth else { return }
+                let nextWidth = startingWidth + Double(value.translation.width)
+                _ = store.send(
+                    .setSidebarWidth(
+                        windowID: windowID,
+                        width: nextWidth,
+                        defaultWidth: Double(defaultSidebarWidth)
+                    )
+                )
+            },
+            onEnded: { _ in
+                resizeStartWidth = nil
+                updateInteraction(dragging: false)
+            },
+            onHoverChanged: { hovering in
+                updateInteraction(hovered: hovering)
+            }
+        )
+    }
+
+    private var boundaryID: String {
+        "sidebar.resize.\(windowID.uuidString)"
+    }
+
+    private var highlighted: Bool {
+        hovered || dragging
+    }
+}
+
+private extension SidebarResizeLayer {
+    func updateInteraction(
+        hovered: Bool? = nil,
+        dragging: Bool? = nil
+    ) {
+        self.hovered = hovered ?? self.hovered
+        self.dragging = dragging ?? self.dragging
+    }
+
+    func releaseInteraction() {
+        resizeStartWidth = nil
+        guard hovered || dragging else { return }
+
+        DispatchQueue.main.async {
+            hovered = false
+            dragging = false
+        }
+    }
 }
 
 private struct PendingWorkspaceClose: Identifiable {
