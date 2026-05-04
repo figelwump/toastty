@@ -92,20 +92,18 @@ svg {
 }
 
 .brand-mark {
-  display: grid;
+  display: inline-grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   color: var(--text);
-  background: linear-gradient(180deg, #151a1e, #090c0e);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 10px;
-  box-shadow: 0 0 0 1px rgba(255, 166, 43, 0.12), 0 12px 30px rgba(255, 166, 43, 0.14);
 }
 
 .brand-mark svg {
-  width: 30px;
-  height: 30px;
+  width: 42px;
+  height: 42px;
+  overflow: visible;
+  filter: drop-shadow(0 8px 16px rgba(255, 166, 43, 0.16));
 }
 
 .button svg,
@@ -124,13 +122,13 @@ svg path {
 
 .brand-mark .toast-outline {
   stroke: var(--amber);
-  stroke-width: 3.4;
+  stroke-width: 3.2;
 }
 
 .brand-mark .toast-prompt,
 .brand-mark .toast-cursor {
   stroke: var(--text);
-  stroke-width: 3.5;
+  stroke-width: 3.6;
 }
 
 .button-secondary svg path,

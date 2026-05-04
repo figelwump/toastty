@@ -31,7 +31,7 @@
       <stop offset="0.58" stop-color="#ffffff" stop-opacity="0.08"/>
       <stop offset="1" stop-color="#b77923" stop-opacity="0.16"/>
     </linearGradient>
-    <filter id="toastShadow" x="130" y="120" width="764" height="760" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <filter id="toastShadow" x="130" y="120" width="764" height="780" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="42" stdDeviation="34" flood-color="#000000" flood-opacity="0.42"/>
       <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000000" flood-opacity="0.24"/>
     </filter>
@@ -46,24 +46,24 @@
 
   <g filter="url(#toastShadow)">
     <path
-      d="M212 708L212 394C212 308 278 232 366 216C405 192 619 192 658 216C746 232 812 308 812 394L812 708C812 755 774 789 512 789C250 789 212 755 212 708Z"
+      d="M250 754C229 727 218 640 224 514L229 404C234 323 295 264 374 254C398 197 450 166 512 166C574 166 626 197 650 254C729 264 790 323 795 404L800 514C806 640 795 727 774 754C731 801 293 801 250 754Z"
       fill="url(#crust)"
     />
     <path
-      d="M212 708L212 394C212 308 278 232 366 216C405 192 619 192 658 216C746 232 812 308 812 394L812 708C812 755 774 789 512 789C250 789 212 755 212 708Z"
+      d="M250 754C229 727 218 640 224 514L229 404C234 323 295 264 374 254C398 197 450 166 512 166C574 166 626 197 650 254C729 264 790 323 795 404L800 514C806 640 795 727 774 754C731 801 293 801 250 754Z"
       fill="url(#crustShade)"
       opacity="0.92"
     />
     <path
-      d="M278 680L278 414C278 348 326 294 394 282C431 272 593 272 630 282C698 294 746 348 746 414L746 680C746 708 712 729 512 729C312 729 278 708 278 680Z"
+      d="M315 696C300 669 294 606 299 512L304 427C308 367 351 326 410 318C430 279 467 258 512 258C557 258 594 279 614 318C673 326 716 367 720 427L725 512C730 606 724 669 709 696C675 729 349 729 315 696Z"
       fill="url(#bread)"
     />
     <path
-      d="M278 680L278 414C278 348 326 294 394 282C431 272 593 272 630 282C698 294 746 348 746 414L746 680C746 708 712 729 512 729C312 729 278 708 278 680Z"
+      d="M315 696C300 669 294 606 299 512L304 427C308 367 351 326 410 318C430 279 467 258 512 258C557 258 594 279 614 318C673 326 716 367 720 427L725 512C730 606 724 669 709 696C675 729 349 729 315 696Z"
       fill="url(#breadGlow)"
     />
     <path
-      d="M366 224C407 204 617 204 658 224C732 239 793 310 793 390"
+      d="M374 246C402 207 449 185 512 185C575 185 622 207 650 246C721 257 775 318 780 394"
       fill="none"
       stroke="#ffe3a0"
       stroke-opacity="0.74"
@@ -73,7 +73,7 @@
   </g>
 
   <g filter="url(#promptShadow)" stroke="#171a1b" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M385 424L495 512L385 600" fill="none" stroke-width="58"/>
-    <path d="M564 596H682" fill="none" stroke-width="54"/>
+    <path d="M379 430L504 512L379 594" fill="none" stroke-width="54"/>
+    <path d="M568 598H688" fill="none" stroke-width="52"/>
   </g>
 </svg>
