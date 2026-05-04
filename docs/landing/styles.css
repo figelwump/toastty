@@ -560,7 +560,8 @@ kbd {
 
 .terminal-split-preview {
   position: relative;
-  min-height: 170px;
+  min-height: 240px;
+  margin: 18px 0 0;
   padding: 8px;
 }
 
@@ -775,6 +776,14 @@ kbd {
     justify-items: start;
   }
 
+  .sidebar-story .section-copy {
+    order: 1;
+  }
+
+  .sidebar-story .sidebar-frame {
+    order: 2;
+  }
+
   .sidebar-frame {
     width: min(100%, 420px);
   }
@@ -867,10 +876,6 @@ kbd {
     align-items: flex-start;
     flex-direction: column;
     gap: 8px;
-  }
-
-  .terminal-split-preview {
-    min-height: 220px;
   }
 
   .split-layout-one,
