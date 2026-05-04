@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class TerminalCommandClickTargetResolverTests: XCTestCase {
-    func testResolveTreatsFileURLMarkdownAsNewTab() throws {
+    func testResolveTreatsFileURLMarkdownAsRightPanel() throws {
         let fixture = try makeFixture()
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -15,11 +15,11 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
-    func testResolveTreatsRelativeMarkdownPathAsRootRightWhenAlternateOpenIsRequested() throws {
+    func testResolveTreatsRelativeMarkdownPathAsNewTabWhenAlternateOpenIsRequested() throws {
         let fixture = try makeFixture()
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -30,7 +30,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .rootRight)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -43,7 +43,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(url))
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .couldNotResolve))
     }
 
     func testResolveMatchesUppercaseMarkdownExtension() throws {
@@ -57,7 +57,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -72,7 +72,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -87,11 +87,41 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
-    func testResolveFallsBackForUnsupportedLocalFileExtension() throws {
+    func testResolveTreatsJsonFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "package.json")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
+        )
+    }
+
+    func testResolveTreatsShellScriptAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "bootstrap.zsh")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
+        )
+    }
+
+    func testResolveTreatsTextFileAsLocalDocument() throws {
         let fixture = try makeFixture(fileName: "config.txt")
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -100,7 +130,40 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
+        )
+    }
+
+    func testResolveTreatsSwiftFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "App.swift")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .rightPanel)
+        )
+    }
+
+    func testResolveTreatsTypeScriptFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "panel.ts")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .rightPanel)
+        )
     }
 
     func testResolveFallsBackForRemoteMarkdownURL() throws {
@@ -113,6 +176,112 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(target, .passthrough(url))
+    }
+
+    func testResolveTreatsRelativeHTMLPathAsLocalBrowserFile() throws {
+        let fixture = try makeFixture(fileName: "scratchpad-context-menu-brainstorm.html")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/scratchpad-context-menu-brainstorm.html")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalBrowserFileTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveTreatsFileURLHTMLPathAsLocalBrowserFile() throws {
+        let fixture = try makeFixture(fileName: "scratchpad-context-menu-brainstorm.html")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalBrowserFileTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveRecoversTrailingPunctuationOnRelativeHTMLPath() throws {
+        let fixture = try makeFixture(fileName: "scratchpad-context-menu-brainstorm.html")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/scratchpad-context-menu-brainstorm.html,")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalBrowserFileTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveMissingRelativeHTMLPathPassesThrough() throws {
+        let fixture = try makeFixture()
+        let url = try XCTUnwrap(URL(string: "docs/missing.html"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(url))
+    }
+
+    func testResolveUnsupportedLocalFilePassesThrough() throws {
+        let fixture = try makeFixture(fileName: "archive.zip")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
+    }
+
+    func testResolveTreatsDirectoryNamedHTMLPathAsLocalDirectory() throws {
+        let fixture = try makeFixture(
+            fileName: "preview.html",
+            directoryNamedMarkdownFile: true
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDirectory(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveTreatsSymlinkedHTMLTargetAsLocalBrowserFile() throws {
+        let fixture = try makeFixture(
+            fileName: "linked-preview.html",
+            symlinkTargetName: "rendered.html"
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalBrowserFileTarget(path: fixture.markdownPath)
+        )
     }
 
     func testResolveTreatsRelativeDirectoryPathAsLocalDirectory() throws {
@@ -171,7 +340,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -186,7 +355,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -201,7 +370,25 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
+        )
+    }
+
+    func testResolveRecoversMalformedAbsoluteMarkdownPathWithAppendedProse() throws {
+        let fixture = try makeFixture(fileName: "toastty-markdown-as-code.md")
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(fixture.markdownPath) on branch experiment/markdown-as-code.")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
     }
 
@@ -216,8 +403,215 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
         )
+    }
+
+    func testResolveTreatsTrailingLineNumberAsLocalDocumentRevealTarget() throws {
+        let fixture = try makeFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/command-palette.md:42")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .rightPanel)
+        )
+    }
+
+    func testResolveRecoversUniqueNestedRelativeChildPathWithLineNumber() throws {
+        let fixture = try makeNestedChildDocumentFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "Sources/App/TerminalHostView.swift:89")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.documentPath, lineNumber: 89, placement: .rightPanel)
+        )
+    }
+
+    func testResolveDoesNotGuessAmbiguousNestedRelativeChildPath() throws {
+        let rootPath = try makeAmbiguousNestedChildDocumentFixture()
+        let url = try XCTUnwrap(URL(string: "Sources/App/TerminalHostView.swift:89"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .couldNotResolve))
+    }
+
+    func testResolveRecoversTrailingPunctuationAfterLineNumberRevealTarget() throws {
+        let fixture = try makeFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/command-palette.md:42.")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .rightPanel)
+        )
+    }
+
+    func testResolveTreatsAbsolutePathTrailingLineNumberAsLocalDocumentRevealTarget() throws {
+        let fixture = try makeFixture()
+        let absolutePathURL = try XCTUnwrap(URL(string: "\(fixture.markdownPath):42"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: absolutePathURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .rightPanel)
+        )
+    }
+
+    func testResolvePrefersExactColonFilenameOverTrailingLineParsing() throws {
+        let fixture = try makeFixture(fileName: "command-palette.md:42")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
+        )
+    }
+
+    func testResolveIgnoresZeroLineSuffixForSupportedLocalDocumentPaths() throws {
+        let fixture = try makeFixture()
+        let url = try XCTUnwrap(URL(string: "docs/command-palette.md:0"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .invalidLineNumber))
+    }
+
+    func testResolveClassifiesMissingRelativeLocalDocumentPathAsFileNotFound() throws {
+        let fixture = try makeFixture()
+        let url = try XCTUnwrap(URL(string: "docs/missing-plan.md:17"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .fileNotFound))
+    }
+
+    func testResolveTreatsTextFileNumericSuffixAsLocalDocumentReveal() throws {
+        let fixture = try makeFixture(fileName: "config.txt")
+        let url = try XCTUnwrap(URL(string: "docs/config.txt:42"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(
+                path: fixture.markdownPath,
+                lineNumber: 42,
+                placement: .rightPanel
+            )
+        )
+    }
+
+    func testResolveRecoversMalformedAbsoluteDirectoryPathWithAppendedProse() throws {
+        let fixture = try makeDirectoryFixture()
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(fixture.directoryPath) on branch experiment/markdown-as-code.")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDirectory(path: fixture.directoryPath)
+        )
+    }
+
+    func testResolveDoesNotRecoverMalformedAbsolutePathToExistingAncestor() throws {
+        let fixture = try makeDirectoryFixture()
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(fixture.rootPath)/missing-worktree on branch experiment/markdown-as-code.")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(malformedURL))
+    }
+
+    func testResolveDoesNotRecoverMalformedAbsolutePathThroughExistingFile() throws {
+        let fixture = try makeFixture(fileName: "toastty-markdown-as-code.md")
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(fixture.markdownPath)/extra on branch experiment")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(malformedURL))
+    }
+
+    func testResolveDoesNotRecoverShortMalformedAbsoluteComponent() throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-short-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let shortDirectoryURL = rootURL.appendingPathComponent("a", isDirectory: true)
+
+        try fileManager.createDirectory(at: shortDirectoryURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(shortDirectoryURL.standardizedFileURL.path) on branch experiment")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(malformedURL))
     }
 
     func testResolveFallsBackWhenResolvedSymlinkTargetIsNotMarkdown() throws {
@@ -323,5 +717,69 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             symlinkPath: symlinkURL.standardizedFileURL.path,
             symlinkURL: symlinkURL
         )
+    }
+
+    private func makeNestedChildDocumentFixture() throws -> (rootPath: String, documentPath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-nested-child-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let documentURL = rootURL
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("App", isDirectory: true)
+            .appendingPathComponent("Terminal", isDirectory: true)
+            .appendingPathComponent("TerminalHostView.swift", isDirectory: false)
+
+        try fileManager.createDirectory(at: documentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("struct TerminalHostView {}\n".utf8).write(to: documentURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            documentPath: documentURL.standardizedFileURL.resolvingSymlinksInPath().path
+        )
+    }
+
+    private func makeAmbiguousNestedChildDocumentFixture() throws -> String {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-ambiguous-child-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let terminalURL = rootURL
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("App", isDirectory: true)
+            .appendingPathComponent("Terminal", isDirectory: true)
+            .appendingPathComponent("TerminalHostView.swift", isDirectory: false)
+        let legacyURL = rootURL
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("App", isDirectory: true)
+            .appendingPathComponent("Legacy", isDirectory: true)
+            .appendingPathComponent("TerminalHostView.swift", isDirectory: false)
+
+        try fileManager.createDirectory(at: terminalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: legacyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("struct TerminalHostView {}\n".utf8).write(to: terminalURL)
+        try Data("struct TerminalHostViewLegacy {}\n".utf8).write(to: legacyURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return rootURL.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func expectedLocalDocumentTarget(
+        path: String,
+        lineNumber: Int? = nil,
+        placement: WebPanelPlacement
+    ) -> TerminalCommandClickTarget {
+        .localDocumentFile(
+            path: path,
+            lineNumber: lineNumber,
+            placement: placement
+        )
+    }
+
+    private func expectedLocalBrowserFileTarget(path: String) -> TerminalCommandClickTarget {
+        .localBrowserFile(URL(fileURLWithPath: path))
     }
 }

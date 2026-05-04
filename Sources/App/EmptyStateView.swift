@@ -1,35 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Branded empty state shown when no workspace is selected.
-/// Displays a Canvas-drawn toast character, headline, body copy, and recovery CTA.
-struct EmptyStateView: View {
-    let onCreateWorkspace: (() -> Void)?
-    @State private var isCreateWorkspaceHovered = false
+struct ToastCharacterView: View {
+    let size: CGFloat
 
-    init(onCreateWorkspace: (() -> Void)? = nil) {
-        self.onCreateWorkspace = onCreateWorkspace
+    init(size: CGFloat = 120) {
+        self.size = size
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            toastCharacter
-                .padding(.bottom, 28)
-            headline
-                .padding(.bottom, 10)
-            bodyText
-                .padding(.bottom, 32)
-            createWorkspaceCTA
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ToastyTheme.surfaceBackground)
-    }
-
-    // MARK: - Toast Character
-
-    private var toastCharacter: some View {
         Canvas { context, size in
             let cx = size.width / 2
             let cy = size.height / 2
@@ -59,13 +38,13 @@ struct EmptyStateView: View {
                 )
             }
 
-            // Toast body — crust
+            // Toast body - crust
             let crustRect = CGRect(x: cx - 28, y: cy - 22, width: 56, height: 48)
             let crustPath = RoundedRectangle(cornerRadius: 8)
                 .path(in: crustRect)
             context.fill(crustPath, with: .color(ToastyTheme.emptyStateToastCrust))
 
-            // Toast body — bread interior
+            // Toast body - bread interior
             let breadRect = crustRect.insetBy(dx: 4, dy: 4)
             let breadPath = RoundedRectangle(cornerRadius: 5)
                 .path(in: breadRect)
@@ -88,7 +67,7 @@ struct EmptyStateView: View {
                 .path(in: butterRect)
             context.fill(butterPath, with: .color(ToastyTheme.accent))
 
-            // Face — two dash eyes
+            // Face - two dash eyes
             let eyeY = cy + 6
             let eyeWidth: CGFloat = 5
             var leftEye = Path()
@@ -101,7 +80,7 @@ struct EmptyStateView: View {
             context.stroke(leftEye, with: .color(ToastyTheme.emptyStateToastFace), style: eyeStyle)
             context.stroke(rightEye, with: .color(ToastyTheme.emptyStateToastFace), style: eyeStyle)
 
-            // Face — smile
+            // Face - smile
             var smile = Path()
             smile.move(to: CGPoint(x: cx - 6, y: cy + 14))
             smile.addQuadCurve(
@@ -119,7 +98,7 @@ struct EmptyStateView: View {
             drawSteamWisp(context: &context, x: cx, baseY: cy - 30, height: 16, amplitude: 3.75)
             drawSteamWisp(context: &context, x: cx + 12, baseY: cy - 26, height: 14, amplitude: 4.5)
         }
-        .frame(width: 120, height: 120)
+        .frame(width: size, height: size)
     }
 
     private func drawSteamWisp(
@@ -141,6 +120,33 @@ struct EmptyStateView: View {
             with: .color(ToastyTheme.emptyStateMutedText.opacity(0.35)),
             style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
         )
+    }
+}
+
+/// Branded empty state shown when no workspace is selected.
+/// Displays a Canvas-drawn toast character, headline, body copy, and recovery CTA.
+struct EmptyStateView: View {
+    let onCreateWorkspace: (() -> Void)?
+    @State private var isCreateWorkspaceHovered = false
+
+    init(onCreateWorkspace: (() -> Void)? = nil) {
+        self.onCreateWorkspace = onCreateWorkspace
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer()
+            ToastCharacterView()
+                .padding(.bottom, 28)
+            headline
+                .padding(.bottom, 10)
+            bodyText
+                .padding(.bottom, 32)
+            createWorkspaceCTA
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ToastyTheme.surfaceBackground)
     }
 
     // MARK: - Text

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-final class PaletteTextField: NSTextField {}
+final class PaletteTextField: NSTextField, NSTextViewDelegate {}
 
 struct PaletteSearchField: NSViewRepresentable {
     @Binding var text: String
@@ -11,6 +11,7 @@ struct PaletteSearchField: NSViewRepresentable {
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onSubmit: () -> Void
+    let onAlternateSubmit: () -> Void
     let onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -19,6 +20,7 @@ struct PaletteSearchField: NSViewRepresentable {
             onMoveUp: onMoveUp,
             onMoveDown: onMoveDown,
             onSubmit: onSubmit,
+            onAlternateSubmit: onAlternateSubmit,
             onCancel: onCancel
         )
     }
@@ -36,6 +38,7 @@ struct PaletteSearchField: NSViewRepresentable {
             onMoveUp: onMoveUp,
             onMoveDown: onMoveDown,
             onSubmit: onSubmit,
+            onAlternateSubmit: onAlternateSubmit,
             onCancel: onCancel
         )
 
@@ -70,7 +73,9 @@ struct PaletteSearchField: NSViewRepresentable {
         private var onMoveUp: () -> Void
         private var onMoveDown: () -> Void
         private var onSubmit: () -> Void
+        private var onAlternateSubmit: () -> Void
         private var onCancel: () -> Void
+        private let currentEventModifierFlagsProvider: @MainActor (NSTextView) -> NSEvent.ModifierFlags
         private var lastHandledFocusRequestID: UUID?
         private var pendingFocusRequestID: UUID?
 
@@ -79,12 +84,22 @@ struct PaletteSearchField: NSViewRepresentable {
             onMoveUp: @escaping () -> Void,
             onMoveDown: @escaping () -> Void,
             onSubmit: @escaping () -> Void,
+            onAlternateSubmit: @escaping () -> Void,
+            currentEventModifierFlagsProvider: @escaping @MainActor (NSTextView) -> NSEvent.ModifierFlags = {
+                textView in
+                if let currentEvent = textView.window?.currentEvent ?? NSApp.currentEvent {
+                    return currentEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                }
+                return []
+            },
             onCancel: @escaping () -> Void
         ) {
             self.text = text
             self.onMoveUp = onMoveUp
             self.onMoveDown = onMoveDown
             self.onSubmit = onSubmit
+            self.onAlternateSubmit = onAlternateSubmit
+            self.currentEventModifierFlagsProvider = currentEventModifierFlagsProvider
             self.onCancel = onCancel
         }
 
@@ -93,12 +108,14 @@ struct PaletteSearchField: NSViewRepresentable {
             onMoveUp: @escaping () -> Void,
             onMoveDown: @escaping () -> Void,
             onSubmit: @escaping () -> Void,
+            onAlternateSubmit: @escaping () -> Void,
             onCancel: @escaping () -> Void
         ) {
             self.text = text
             self.onMoveUp = onMoveUp
             self.onMoveDown = onMoveDown
             self.onSubmit = onSubmit
+            self.onAlternateSubmit = onAlternateSubmit
             self.onCancel = onCancel
         }
 
@@ -136,7 +153,11 @@ struct PaletteSearchField: NSViewRepresentable {
 
             switch commandSelector {
             case #selector(NSResponder.insertNewline(_:)):
-                onSubmit()
+                if currentEventModifierFlagsProvider(textView).contains(.shift) {
+                    onAlternateSubmit()
+                } else {
+                    onSubmit()
+                }
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
                 onCancel()
@@ -159,7 +180,7 @@ struct PaletteSearchField: NSViewRepresentable {
         ) {
             guard pendingFocusRequestID == requestID else { return }
 
-            if focusAndSelectAll(in: textField) {
+            if focusAndApplyInitialSelection(in: textField) {
                 pendingFocusRequestID = nil
                 lastHandledFocusRequestID = requestID
                 return
@@ -181,13 +202,13 @@ struct PaletteSearchField: NSViewRepresentable {
         }
 
         @discardableResult
-        private func focusAndSelectAll(in textField: NSTextField) -> Bool {
+        func focusAndApplyInitialSelection(in textField: NSTextField) -> Bool {
             guard let window = textField.window else {
                 return false
             }
 
             if let editor = currentEditor(in: window, for: textField) {
-                editor.selectAll(nil)
+                applyInitialSelection(in: editor)
                 return true
             }
 
@@ -196,8 +217,16 @@ struct PaletteSearchField: NSViewRepresentable {
                 return false
             }
 
-            editor.selectAll(nil)
+            applyInitialSelection(in: editor)
             return true
+        }
+
+        private func applyInitialSelection(in editor: NSTextView) {
+            if editor.string == "@" {
+                editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
+            } else {
+                editor.selectAll(nil)
+            }
         }
 
         private func isEditing(_ textField: NSTextField) -> Bool {

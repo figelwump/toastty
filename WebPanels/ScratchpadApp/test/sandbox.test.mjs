@@ -1,0 +1,83 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import test from "node:test";
+import assert from "node:assert/strict";
+
+const sandboxSource = readFileSync(
+  resolve(import.meta.dirname, "../src/sandbox.ts"),
+  "utf8"
+);
+const mainSource = readFileSync(
+  resolve(import.meta.dirname, "../src/main.ts"),
+  "utf8"
+);
+const shellSource = readFileSync(
+  resolve(import.meta.dirname, "../index.html"),
+  "utf8"
+);
+
+test("shell CSP permits generated script elements without inline attributes", () => {
+  assert.match(shellSource, /script-src 'self' 'unsafe-inline'/);
+  assert.match(shellSource, /script-src-elem 'self' 'unsafe-inline'/);
+  assert.match(shellSource, /script-src-attr 'none'/);
+  assert.match(shellSource, /connect-src 'none'/);
+  assert.match(shellSource, /frame-src 'self' about:/);
+  assert.match(shellSource, /worker-src 'none'/);
+  assert.match(shellSource, /object-src 'none'/);
+});
+
+test("generated content CSP blocks network and native-adjacent surfaces", () => {
+  assert.match(sandboxSource, /default-src 'none'/);
+  assert.match(sandboxSource, /connect-src 'none'/);
+  assert.match(sandboxSource, /frame-src 'none'/);
+  assert.match(sandboxSource, /script-src 'unsafe-inline'/);
+  assert.match(sandboxSource, /script-src-elem 'unsafe-inline'/);
+  assert.match(sandboxSource, /script-src-attr 'none'/);
+  assert.match(sandboxSource, /worker-src 'none'/);
+  assert.match(sandboxSource, /object-src 'none'/);
+  assert.match(sandboxSource, /form-action 'none'/);
+  assert.doesNotMatch(sandboxSource, /script-src 'unsafe-inline' data: blob:/);
+  assert.doesNotMatch(sandboxSource, /worker-src blob:/);
+});
+
+test("generated iframe allows scripts without same-origin privileges", () => {
+  assert.match(mainSource, /iframe\.sandbox\.add\("allow-scripts"\)/);
+  assert.doesNotMatch(mainSource, /allow-same-origin/);
+});
+
+test("generated iframe forwards diagnostics through the parent frame", () => {
+  assert.match(sandboxSource, /toastty:scratchpad-generated-diagnostic:v1/);
+  assert.match(sandboxSource, /window\.parent\?\.postMessage\(\{ type: messageType, sessionToken, event \}/);
+  assert.match(sandboxSource, /securitypolicyviolation/);
+  assert.match(sandboxSource, /truncate\(event\.blockedURI, 512\)/);
+  assert.match(mainSource, /window\.addEventListener\("message"/);
+  assert.match(mainSource, /event\.source !== currentGeneratedContentWindow/);
+  assert.match(mainSource, /event\.data\.sessionToken !== currentGeneratedContentDiagnosticsToken/);
+  assert.match(mainSource, /optionalDiagnosticString\(event\.blockedURI, 512\)/);
+  assert.match(mainSource, /"generated-content"/);
+});
+
+test("generated iframe can be focused from native focus handoff", () => {
+  assert.match(mainSource, /focusActiveContent/);
+  assert.match(mainSource, /iframe\.tabIndex = -1/);
+  assert.match(mainSource, /currentGeneratedContentFrame\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(mainSource, /currentGeneratedContentWindow\?\.focus\(\)/);
+  assert.match(mainSource, /currentGeneratedContentReady/);
+});
+
+test("blank scratchpad documents render onboarding guidance instead of an empty iframe", () => {
+  assert.match(mainSource, /function renderEmptyGuidance/);
+  assert.match(mainSource, /isBlankUnboundScratchpadDocument\(bootstrap\)/);
+  assert.match(mainSource, /bootstrap\.sessionLinked !== true/);
+  assert.match(mainSource, /Scratchpad is ready/);
+  assert.match(mainSource, /github\.com\/figelwump\/toastty\/tree\/main\/\.agents\/skills\/toastty-scratchpad/);
+  assert.match(mainSource, /~\/\.claude\/skills/);
+  assert.match(mainSource, /~\/\.codex\/skills/);
+  assert.match(mainSource, /~\/\.agents\/skills/);
+  assert.match(mainSource, /Skip this next time/);
+  assert.match(mainSource, /Only one agent session can read or write a Scratchpad at a time/);
+  assert.match(mainSource, /navigator\.clipboard\.writeText\(scratchpadSkillInstallSnippet\)/);
+  // Snippet must be agent-prose, not a shell command.
+  assert.doesNotMatch(mainSource, /scratchpadSkillInstallSnippet[\s\S]*tar -xz/);
+  assert.doesNotMatch(mainSource, /scratchpadSkillInstallSnippet[\s\S]*mkdir -p/);
+});

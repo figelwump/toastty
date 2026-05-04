@@ -43,10 +43,10 @@ struct AppQuitConfirmationAssessment: Equatable, Sendable {
 
         if unsavedLocalDocumentDraftCount == 1,
            let firstUnsavedLocalDocumentDisplayName {
-            return "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved markdown changes. Quitting Toastty will discard them."
+            return "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved document changes. Quitting Toastty will discard them."
         }
 
-        return "Toastty has unsaved markdown changes. Quitting will discard them."
+        return "Toastty has unsaved document changes. Quitting will discard them."
     }
 
     private var localDocumentSaveInProgressInformativeText: String? {
@@ -59,7 +59,7 @@ struct AppQuitConfirmationAssessment: Equatable, Sendable {
             return "\"\(firstLocalDocumentSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before quitting Toastty."
         }
 
-        return "Toastty still has markdown saves in progress. Wait for them to finish before quitting."
+        return "Toastty still has document saves in progress. Wait for them to finish before quitting."
     }
 
     private var terminalInformativeText: String? {
@@ -105,14 +105,12 @@ enum AppQuitConfirmation {
         }
         let localDocumentPanelIDs = state.workspacesByID.values
             .reduce(into: Set<UUID>()) { result, workspace in
-                for tab in workspace.orderedTabs {
-                    for (panelID, panelState) in tab.panels {
-                        guard case .web(let webState) = panelState,
-                              webState.definition == .localDocument else {
-                            continue
-                        }
-                        result.insert(panelID)
+                for (panelID, panelState) in workspace.allPanelsByID {
+                    guard case .web(let webState) = panelState,
+                          webState.definition == .localDocument else {
+                        continue
                     }
+                    result.insert(panelID)
                 }
             }
             .sorted { lhs, rhs in

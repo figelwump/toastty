@@ -268,8 +268,12 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
     }
 
     func testOpenCommandClickLinkRoutesIntoTerminalPanelOwningWindow() throws {
-        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        var firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let sourcePanelID = try XCTUnwrap(firstWorkspace.focusedPanelID)
+        firstWorkspace.focusedPanelModeActive = true
+        firstWorkspace.focusModeRootNodeID = firstWorkspace.layoutTree.slotContaining(panelID: sourcePanelID)?.slotID
+        firstWorkspace.selectedPanelIDs = [sourcePanelID]
         let firstWindowID = UUID()
         let secondWindowID = UUID()
         let state = AppState(
@@ -296,7 +300,6 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         registry.bind(store: store)
-        let sourcePanelID = try XCTUnwrap(firstWorkspace.focusedPanelID)
 
         XCTAssertTrue(
             registry.openCommandClickLink(
@@ -308,21 +311,18 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         let firstWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspace.id])
         let secondWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
-        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspace.tabIDs.count + 1)
+        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspace.tabIDs.count)
+        XCTAssertEqual(firstWorkspaceAfter.panels.count, firstWorkspace.panels.count)
+        XCTAssertEqual(firstWorkspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        XCTAssertFalse(firstWorkspaceAfter.focusedPanelModeActive)
+        XCTAssertNil(firstWorkspaceAfter.focusModeRootNodeID)
+        XCTAssertTrue(firstWorkspaceAfter.selectedPanelIDs.isEmpty)
         XCTAssertEqual(secondWorkspaceAfter.panels.count, secondWorkspace.panels.count)
         XCTAssertEqual(secondWorkspaceAfter.tabIDs.count, secondWorkspace.tabIDs.count)
 
-        let browserTabID = try XCTUnwrap(firstWorkspaceAfter.resolvedSelectedTabID)
-        XCTAssertNotEqual(browserTabID, firstWorkspace.resolvedSelectedTabID)
-        let browserTab = try XCTUnwrap(firstWorkspaceAfter.tabsByID[browserTabID])
-        XCTAssertEqual(browserTab.panels.count, 1)
-        let originalTabID = try XCTUnwrap(firstWorkspace.resolvedSelectedTabID)
-        let originalTabAfter = try XCTUnwrap(firstWorkspaceAfter.tabsByID[originalTabID])
-        XCTAssertEqual(originalTabAfter.panels.count, firstWorkspace.panels.count)
-
-        guard let browserPanelID = browserTab.focusedPanelID,
-              case .web(let webState) = browserTab.panels[browserPanelID] else {
-            XCTFail("expected browser panel in source workspace")
+        let rightPanelTab = try XCTUnwrap(firstWorkspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel browser panel in source workspace")
             return
         }
         XCTAssertEqual(webState.definition, .browser)
@@ -330,8 +330,12 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testAlternateOpenCommandClickLinkUsesConfiguredAlternatePlacement() throws {
-        let workspace = WorkspaceState.bootstrap(title: "One")
+    func testAlternateOpenCommandClickLinkUsesConfiguredAlternateNewTabPlacement() throws {
+        var workspace = WorkspaceState.bootstrap(title: "One")
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+        let sourceTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.slotContaining(panelID: sourcePanelID)?.slotID
         let windowID = UUID()
         let state = AppState(
             windows: [
@@ -349,36 +353,128 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         store.setURLRoutingPreferences(
             URLRoutingPreferences(
                 destination: .toasttyBrowser,
-                browserPlacement: .newTab,
-                alternateBrowserPlacement: .rootRight
+                browserPlacement: .rightPanel,
+                alternateBrowserPlacement: .newTab
             )
         )
         let registry = TerminalRuntimeRegistry()
         registry.bind(store: store)
-        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
 
         XCTAssertTrue(
             registry.openCommandClickLink(
-                URL(string: "https://example.com/root-right")!,
+                URL(string: "https://example.com/new-tab")!,
                 useAlternatePlacement: true,
                 from: sourcePanelID
             )
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspace.id])
-        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
-        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count + 1)
-        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
-        guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
-            XCTFail("expected root-right browser panel in source workspace")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
+        XCTAssertTrue(try XCTUnwrap(workspaceAfter.tab(id: sourceTabID)).focusedPanelModeActive)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected browser panel in new tab")
             return
         }
         XCTAssertEqual(webState.definition, .browser)
-        XCTAssertEqual(webState.initialURL, "https://example.com/root-right")
+        XCTAssertEqual(webState.initialURL, "https://example.com/new-tab")
         try StateValidator.validate(store.state)
     }
 
-    func testOpenCommandClickMarkdownRelativePathOpensMarkdownTabInTerminalOwningWindow() throws {
+    func testOpenCommandClickHTMLRelativePathOpensBrowserInRightPanel() throws {
+        let fixture = try makeHTMLFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.slotContaining(panelID: sourcePanelID)?.slotID
+        workspace.selectedPanelIDs = [sourcePanelID]
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "artifacts/manual/scratchpad-context-menu-brainstorm.html")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        XCTAssertFalse(workspaceAfter.focusedPanelModeActive)
+        XCTAssertNil(workspaceAfter.focusModeRootNodeID)
+        XCTAssertTrue(workspaceAfter.selectedPanelIDs.isEmpty)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel browser panel")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, URL(fileURLWithPath: fixture.htmlPath).absoluteString)
+        try StateValidator.validate(store.state)
+    }
+
+    func testAlternateOpenCommandClickHTMLRelativePathOpensBrowserInNewTab() throws {
+        let fixture = try makeHTMLFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "artifacts/manual/scratchpad-context-menu-brainstorm.html")),
+                useAlternatePlacement: true,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 0)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected browser panel in new tab")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, URL(fileURLWithPath: fixture.htmlPath).absoluteString)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickMarkdownRelativePathOpensMarkdownInRightPanelInTerminalOwningWindow() throws {
         let fixture = try makeMarkdownFixture()
         let firstWorkspace = WorkspaceState(
             id: UUID(),
@@ -441,14 +537,14 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         let firstWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspaceWithTerminal.id])
         let secondWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
-        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspaceWithTerminal.tabIDs.count + 1)
+        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(firstWorkspaceAfter.panels.count, firstWorkspaceWithTerminal.panels.count)
+        XCTAssertEqual(firstWorkspaceAfter.rightAuxPanel.tabIDs.count, 1)
         XCTAssertEqual(secondWorkspaceAfter.tabIDs.count, secondWorkspace.tabIDs.count)
 
-        let selectedTabID = try XCTUnwrap(firstWorkspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(firstWorkspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected local document panel in source workspace")
+        let rightPanelTab = try XCTUnwrap(firstWorkspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document panel in source workspace")
             return
         }
 
@@ -458,7 +554,157 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testOpenCommandClickYamlRelativePathOpensLocalDocumentTabInTerminalOwningWindow() throws {
+    func testOpenCommandClickMarkdownRightPanelExitsFocusedPanelMode() throws {
+        let fixture = try makeMarkdownFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.slotContaining(panelID: sourcePanelID)?.slotID
+        workspace.selectedPanelIDs = [sourcePanelID]
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertFalse(workspaceAfter.focusedPanelModeActive)
+        XCTAssertNil(workspaceAfter.focusModeRootNodeID)
+        XCTAssertTrue(workspaceAfter.selectedPanelIDs.isEmpty)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        XCTAssertTrue(workspaceAfter.rightAuxPanel.isVisible)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document panel")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickExistingRightPanelMarkdownExitsFocusedPanelMode() throws {
+        let fixture = try makeMarkdownFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+        let workspaceAfterInitialOpen = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let rightPanelID = try XCTUnwrap(workspaceAfterInitialOpen.rightAuxPanel.activePanelID)
+        XCTAssertEqual(workspaceAfterInitialOpen.rightAuxPanel.tabIDs.count, 1)
+
+        XCTAssertTrue(store.send(.toggleFocusedPanelMode(workspaceID: workspaceID)))
+        XCTAssertTrue(try XCTUnwrap(store.state.workspacesByID[workspaceID]).focusedPanelModeActive)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfterDedupedOpen = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertFalse(workspaceAfterDedupedOpen.focusedPanelModeActive)
+        XCTAssertNil(workspaceAfterDedupedOpen.focusModeRootNodeID)
+        XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.tabIDs.count, 1)
+        XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.activePanelID, rightPanelID)
+        XCTAssertEqual(workspaceAfterDedupedOpen.rightAuxPanel.focusedPanelID, rightPanelID)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickMarkdownRelativePathUsesConfiguredLocalDocumentPlacement() throws {
+        let fixture = try makeMarkdownFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+        let sourceTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.slotContaining(panelID: sourcePanelID)?.slotID
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        store.setLocalDocumentRoutingPreferences(
+            LocalDocumentRoutingPreferences(
+                openingPlacement: .newTab,
+                alternateOpeningPlacement: .rightPanel
+            )
+        )
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 0)
+        XCTAssertTrue(try XCTUnwrap(workspaceAfter.tab(id: sourceTabID)).focusedPanelModeActive)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected configured local document placement to open a new tab")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickYamlRelativePathOpensLocalDocumentInRightPanelInTerminalOwningWindow() throws {
         let fixture = try makeMarkdownFixture(
             fileName: "config.yaml",
             content: "version: 1\nmode: smoke\n"
@@ -523,11 +769,12 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspaceWithTerminal.id])
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected local document panel in source workspace")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, firstWorkspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, firstWorkspaceWithTerminal.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document panel in source workspace")
             return
         }
 
@@ -583,6 +830,43 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenCommandClickMalformedAbsoluteDirectoryPathRecoversLocalDirectory() throws {
+        let fixture = try makeDirectoryFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "\(fixture.directoryPath) on branch experiment/markdown-as-code.")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
+        guard case .terminal(let newTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            XCTFail("expected focused split panel to be terminal")
+            return
+        }
+        XCTAssertEqual(newTerminalState.cwd, fixture.directoryPath)
+        try StateValidator.validate(store.state)
+    }
+
     func testAlternateOpenCommandClickDirectoryRelativePathCreatesDownSplitTerminal() throws {
         let fixture = try makeDirectoryFixture()
         var state = AppState.bootstrap()
@@ -629,7 +913,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testAlternateOpenCommandClickMarkdownFileURLUsesRootRightPlacement() throws {
+    func testAlternateOpenCommandClickMarkdownFileURLUsesNewTabPlacement() throws {
         let fixture = try makeMarkdownFixture()
         let workspace = WorkspaceState(
             id: UUID(),
@@ -682,11 +966,79 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count + 1)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected local document panel in new tab")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickMalformedAbsoluteMarkdownPathRecoversLocalDocument() throws {
+        let fixture = try makeMarkdownFixture(fileName: "toastty-markdown-as-code.md")
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "\(fixture.markdownPath) on branch experiment/markdown-as-code.")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
         XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
-        XCTAssertEqual(workspaceAfter.panels.count, workspaceWithTerminal.panels.count + 1)
-        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
-        guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
-            XCTFail("expected root-right local document panel in source workspace")
+        XCTAssertEqual(workspaceAfter.panels.count, workspaceWithTerminal.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected right-panel local document panel in source workspace")
             return
         }
 
@@ -769,7 +1121,346 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testOpenSearchSelectionURLAlwaysUsesToasttyNewTabPlacement() throws {
+    func testOpenCommandClickMarkdownLineRevealQueuesPendingRevealForCreatedPanelRuntime() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        registry.bind(store: store)
+        registry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+        webPanelRuntimeRegistry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md:17")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        let panelID = try XCTUnwrap(workspaceAfter.rightAuxPanel.activePanelID)
+        let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: panelID)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 17)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickAbsoluteMarkdownLineRevealQueuesPendingRevealForCreatedPanelRuntime() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        registry.bind(store: store)
+        registry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+        webPanelRuntimeRegistry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "\(fixture.markdownPath):17")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        let panelID = try XCTUnwrap(workspaceAfter.rightAuxPanel.activePanelID)
+        let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: panelID)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 17)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickRecoversNestedRelativeChildPathForLocalDocumentReveal() throws {
+        let fixture = try makeNestedChildDocumentFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        registry.bind(store: store)
+        registry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+        webPanelRuntimeRegistry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "Sources/App/TerminalHostView.swift:89")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        let panelID = try XCTUnwrap(workspaceAfter.rightAuxPanel.activePanelID)
+        guard case .web(let webState)? = workspaceAfter.rightAuxPanel.panelState(for: panelID) else {
+            XCTFail("expected recovered nested-child link to open a right-panel local document")
+            return
+        }
+
+        XCTAssertEqual(webState.filePath, fixture.documentPath)
+        XCTAssertEqual(
+            webPanelRuntimeRegistry.localDocumentRuntime(for: panelID).automationState().pendingRevealLine,
+            89
+        )
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickUnresolvedRelativeLocalDocumentPathDoesNotCreatePanel() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        var presentedAlert: (
+            windowID: UUID?,
+            url: URL,
+            issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+        )?
+        let registry = TerminalRuntimeRegistry(
+            presentLocalDocumentLinkAlert: { windowID, url, issue in
+                presentedAlert = (windowID, url, issue)
+            }
+        )
+        registry.bind(store: store)
+
+        let missingURL = try XCTUnwrap(URL(string: "docs/missing-plan.md:17"))
+
+        XCTAssertFalse(
+            registry.openCommandClickLink(
+                missingURL,
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.focusedPanelID, sourcePanelID)
+        XCTAssertEqual(presentedAlert?.windowID, windowID)
+        XCTAssertEqual(presentedAlert?.url, missingURL)
+        XCTAssertEqual(presentedAlert?.issue, .fileNotFound)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickInvalidLineNumberShowsAlertWithoutCreatingPanel() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        var presentedAlert: (
+            windowID: UUID?,
+            url: URL,
+            issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+        )?
+        let registry = TerminalRuntimeRegistry(
+            presentLocalDocumentLinkAlert: { windowID, url, issue in
+                presentedAlert = (windowID, url, issue)
+            }
+        )
+        registry.bind(store: store)
+        let invalidLineURL = try XCTUnwrap(URL(string: "docs/command-palette.md:0"))
+
+        XCTAssertFalse(
+            registry.openCommandClickLink(
+                invalidLineURL,
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.focusedPanelID, sourcePanelID)
+        XCTAssertEqual(presentedAlert?.windowID, windowID)
+        XCTAssertEqual(presentedAlert?.url, invalidLineURL)
+        XCTAssertEqual(presentedAlert?.issue, .invalidLineNumber)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenSearchSelectionURLUsesConfiguredURLPlacement() throws {
         let workspace = WorkspaceState.bootstrap(title: "One")
         let windowID = UUID()
         let state = AppState(
@@ -787,9 +1478,9 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         store.setURLRoutingPreferences(
             URLRoutingPreferences(
-                destination: .systemBrowser,
-                browserPlacement: .rootRight,
-                alternateBrowserPlacement: .rootRight
+                destination: .toasttyBrowser,
+                browserPlacement: .rightPanel,
+                alternateBrowserPlacement: .newTab
             )
         )
         let registry = TerminalRuntimeRegistry()
@@ -804,12 +1495,11 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspace.id])
-        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected search selection to open in a Toastty browser tab")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 1)
+        let rightPanelTab = try XCTUnwrap(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            XCTFail("expected search selection to open in a right-panel Toastty browser")
             return
         }
         XCTAssertEqual(webState.definition, .browser)
@@ -1092,6 +1782,28 @@ private extension TerminalRuntimeRegistryStoreBindingTests {
         )
     }
 
+    func makeNestedChildDocumentFixture() throws -> (rootPath: String, documentPath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-registry-nested-child-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let documentURL = rootURL
+            .appendingPathComponent("Sources", isDirectory: true)
+            .appendingPathComponent("App", isDirectory: true)
+            .appendingPathComponent("Terminal", isDirectory: true)
+            .appendingPathComponent("TerminalHostView.swift", isDirectory: false)
+
+        try fileManager.createDirectory(at: documentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("struct TerminalHostView {}\n".utf8).write(to: documentURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            documentPath: documentURL.standardizedFileURL.resolvingSymlinksInPath().path
+        )
+    }
+
     func makeDirectoryFixture() throws -> (rootPath: String, directoryPath: String) {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
@@ -1109,6 +1821,29 @@ private extension TerminalRuntimeRegistryStoreBindingTests {
         return (
             rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
             directoryPath: directoryURL.standardizedFileURL.path
+        )
+    }
+
+    func makeHTMLFixture() throws -> (rootPath: String, htmlPath: String, htmlURL: URL) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-registry-html-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let htmlURL = rootURL
+            .appendingPathComponent("artifacts", isDirectory: true)
+            .appendingPathComponent("manual", isDirectory: true)
+            .appendingPathComponent("scratchpad-context-menu-brainstorm.html", isDirectory: false)
+
+        try fileManager.createDirectory(at: htmlURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("<!doctype html><title>Scratchpad</title>\n".utf8).write(to: htmlURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let normalizedHTMLURL = htmlURL.standardizedFileURL.resolvingSymlinksInPath()
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            htmlPath: normalizedHTMLURL.path,
+            htmlURL: normalizedHTMLURL
         )
     }
 }
@@ -1149,6 +1884,17 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         _ = kind
         _ = now
         return false
+    }
+
+    func handleCommandFinished(panelID: UUID, exitCode: Int?, at now: Date) -> Bool {
+        _ = now
+        stopActiveCalls.append(
+            .init(
+                panelID: panelID,
+                reason: .ghosttyCommandFinished(exitCode: exitCode)
+            )
+        )
+        return true
     }
 
     func stopSessionForPanelIfActive(

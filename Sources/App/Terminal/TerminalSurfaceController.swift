@@ -27,6 +27,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var lastDisplayID: UInt32?
     private var surfaceCreationStabilityPasses = 0
     private var lastSurfaceCreationSignature: SurfaceCreationSignature?
+    private var lastSurfaceCreationBlockReason: String?
     private var lastSurfaceDeferralReason: SurfaceCreationDeferralReason?
     private var lastViewportDeferralReason: SurfaceCreationDeferralReason?
     private var temporarilyHiddenForViewportDeferral = false
@@ -117,6 +118,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         var surfaceFailureCount = 0
         var surfaceDeferredCount = 0
         var viewportDeferredCount = 0
+        var renderSnapshotMissingSurfaceCount = 0
+        var automationInputUnavailableCount = 0
     }
 
     private struct FocusModeResizeTrace {
@@ -664,6 +667,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastDisplayID = nil
         surfaceCreationStabilityPasses = 0
         lastSurfaceCreationSignature = nil
+        lastSurfaceCreationBlockReason = nil
         lastSurfaceDeferralReason = nil
         lastViewportDeferralReason = nil
         temporarilyHiddenForViewportDeferral = false
@@ -726,7 +730,16 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         // Automation input should follow actual surface/host readiness. Process
         // cwd inference can lag behind fresh split creation and block panels
         // that are already interactive from Ghostty's perspective.
-        guard let ghosttySurface, isReadyForAutomationInput(), focusHostViewIfNeeded() else {
+        guard let ghosttySurface else {
+            logAutomationInputUnavailable(reason: "no_surface")
+            return false
+        }
+        guard isReadyForAutomationInput() else {
+            logAutomationInputUnavailable(reason: automationInputUnavailableReason())
+            return false
+        }
+        guard focusHostViewIfNeeded() else {
+            logAutomationInputUnavailable(reason: "focus_host_failed")
             return false
         }
 
@@ -745,6 +758,40 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         return false
         #endif
     }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    private func automationInputUnavailableReason(now: Date = Date()) -> String {
+        guard lifecycleState.isReadyForFocus else {
+            return "lifecycle_not_ready"
+        }
+        guard ghosttySurface != nil else {
+            return "no_surface"
+        }
+        guard temporarilyHiddenForViewportDeferral == false else {
+            return "viewport_deferred"
+        }
+        if let lastAttachmentTransitionAt,
+           now.timeIntervalSince(lastAttachmentTransitionAt) < requiredAutomationInputStabilityInterval {
+            return "attachment_transition_stabilizing"
+        }
+        return "unknown"
+    }
+
+    private func logAutomationInputUnavailable(reason: String) {
+        diagnostics.automationInputUnavailableCount += 1
+        if diagnostics.automationInputUnavailableCount <= 3 {
+            logSurfaceDiagnostics(
+                level: .info,
+                message: "Automation terminal input unavailable",
+                extra: surfaceHostDiagnostics(
+                    hostView: terminalHostView,
+                    sourceContainer: activeSourceContainer,
+                    extra: ["reason": reason]
+                )
+            )
+        }
+    }
+    #endif
 
     private func isReadyForAutomationInput(now: Date = Date()) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
@@ -833,6 +880,24 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let sourceContainer = activeSourceContainer
         #if TOASTTY_HAS_GHOSTTY_KIT
         let ghosttySurfaceAvailable = ghosttySurface != nil
+        if ghosttySurfaceAvailable == false, lifecycleState.isReadyForFocus {
+            diagnostics.renderSnapshotMissingSurfaceCount += 1
+            if diagnostics.renderSnapshotMissingSurfaceCount <= 3 {
+                logSurfaceDiagnostics(
+                    level: .info,
+                    message: "Terminal render snapshot is ready without a Ghostty surface",
+                    extra: surfaceHostDiagnostics(
+                        hostView: terminalHostView,
+                        sourceContainer: sourceContainer,
+                        extra: [
+                            "render_snapshot_missing_surface_count": String(
+                                diagnostics.renderSnapshotMissingSurfaceCount
+                            ),
+                        ]
+                    )
+                )
+            }
+        }
         #else
         let ghosttySurfaceAvailable = false
         #endif
@@ -1006,16 +1071,22 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         case .deferred(let reason, let width, let height):
             diagnostics.surfaceDeferredCount += 1
             let reasonChanged = lastSurfaceDeferralReason != reason
+            lastSurfaceCreationBlockReason = "host_\(reason.rawValue)"
             lastSurfaceDeferralReason = reason
             if reasonChanged || diagnostics.surfaceDeferredCount <= 2 || diagnostics.surfaceDeferredCount.isMultiple(of: 60) {
                 logSurfaceDiagnostics(
+                    level: .info,
                     message: "Deferring Ghostty surface creation until host is stable",
-                    extra: [
-                        "reason": reason.rawValue,
-                        "host_width": String(width),
-                        "host_height": String(height),
-                        "stability_passes": String(surfaceCreationStabilityPasses),
-                    ]
+                    extra: surfaceHostDiagnostics(
+                        hostView: hostView,
+                        sourceContainer: activeSourceContainer,
+                        extra: [
+                            "reason": reason.rawValue,
+                            "host_width": String(width),
+                            "host_height": String(height),
+                            "stability_passes": String(surfaceCreationStabilityPasses),
+                        ]
+                    )
                 )
             }
             return
@@ -1027,10 +1098,16 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             inheritedSourceSurface = nil
         case .pending:
             diagnostics.surfaceDeferredCount += 1
+            lastSurfaceCreationBlockReason = "pending_split_source_surface"
             if diagnostics.surfaceDeferredCount <= 2 || diagnostics.surfaceDeferredCount.isMultiple(of: 60) {
                 logSurfaceDiagnostics(
+                    level: .info,
                     message: "Deferring split surface creation until source surface is available",
-                    extra: ["reason": "pending_split_source_surface"]
+                    extra: surfaceHostDiagnostics(
+                        hostView: hostView,
+                        sourceContainer: activeSourceContainer,
+                        extra: ["reason": "pending_split_source_surface"]
+                    )
                 )
             }
             return
@@ -1052,6 +1129,26 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let requestedWorkingDirectory = terminalState.workingDirectorySeed
         let isRestoredLaunch = terminalState.expectedProcessWorkingDirectory == nil &&
             TerminalRuntimeRegistry.normalizedCWDValue(terminalState.launchWorkingDirectory) != nil
+        ToasttyLog.debug(
+            "Determined terminal surface launch classification",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "is_restored_launch": isRestoredLaunch ? "true" : "false",
+                "requested_working_directory_sample": String(requestedWorkingDirectory.prefix(120)),
+                "launch_working_directory_present": TerminalRuntimeRegistry
+                    .normalizedCWDValue(terminalState.launchWorkingDirectory) == nil ? "false" : "true",
+                "launch_working_directory_sample": terminalState.launchWorkingDirectory.map {
+                    String($0.prefix(120))
+                } ?? "none",
+                "expected_process_working_directory_present": terminalState.expectedProcessWorkingDirectory == nil
+                    ? "false"
+                    : "true",
+                "expected_process_working_directory_sample": terminalState.expectedProcessWorkingDirectory.map {
+                    String($0.prefix(120))
+                } ?? "none",
+            ]
+        )
 
         // Snapshot child PIDs before surface creation so we can diff after
         // to find the newly spawned login/shell process for CWD tracking.
@@ -1059,6 +1156,26 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let launchConfiguration = delegate.surfaceLaunchConfiguration(for: panelID)
 
         diagnostics.surfaceAttemptCount += 1
+        if diagnostics.surfaceAttemptCount <= 3 || diagnostics.surfaceAttemptCount.isMultiple(of: 20) {
+            logSurfaceDiagnostics(
+                level: .info,
+                message: "Attempting Ghostty surface creation",
+                extra: surfaceHostDiagnostics(
+                    hostView: hostView,
+                    sourceContainer: activeSourceContainer,
+                    extra: [
+                        "font_points": String(format: "%.1f", fontPoints),
+                        "inherited_source_surface": inheritedSourceSurface == nil ? "false" : "true",
+                        "requested_working_directory_present": TerminalRuntimeRegistry
+                            .normalizedCWDValue(requestedWorkingDirectory) == nil ? "false" : "true",
+                        "launch_environment_count": String(launchConfiguration.environmentVariables.count),
+                        "launch_initial_input_present": launchConfiguration.normalizedInitialInput == nil
+                            ? "false"
+                            : "true",
+                    ]
+                )
+            )
+        }
         guard let createdSurface = ghosttyManager.makeSurface(
             hostView: hostView,
             workingDirectory: requestedWorkingDirectory,
@@ -1067,16 +1184,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             launchConfiguration: launchConfiguration
         ) else {
             diagnostics.surfaceFailureCount += 1
+            lastSurfaceCreationBlockReason = "surface_factory_failed"
             if diagnostics.surfaceFailureCount <= 5 || diagnostics.surfaceFailureCount.isMultiple(of: 20) {
                 logSurfaceDiagnostics(
+                    level: .warning,
                     message: "Ghostty surface creation attempt failed",
-                    extra: [
-                        "host_has_window": hostView.window == nil ? "false" : "true",
-                        "host_hidden": hostView.isHidden ? "true" : "false",
-                        "host_hidden_ancestor": hostView.hasHiddenAncestor ? "true" : "false",
-                        "host_width": String(format: "%.1f", hostView.bounds.width),
-                        "host_height": String(format: "%.1f", hostView.bounds.height),
-                    ]
+                    extra: surfaceHostDiagnostics(hostView: hostView, sourceContainer: activeSourceContainer)
                 )
             }
             return
@@ -1086,17 +1199,26 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         if inheritedSourceSurface != nil {
             delegate.consumeSplitSource(forNewPanelID: panelID)
         }
+        lastSurfaceCreationBlockReason = nil
         lastSurfaceDeferralReason = nil
         lastViewportDeferralReason = nil
         surfaceCreationStabilityPasses = 0
         lastSurfaceCreationSignature = nil
         lastPresentationSignature = nil
-        logSurfaceDiagnostics(message: "Ghostty surface creation succeeded")
+        ghosttySurface = surface
+        logSurfaceDiagnostics(
+            level: .info,
+            message: "Ghostty surface creation succeeded",
+            extra: surfaceHostDiagnostics(
+                hostView: hostView,
+                sourceContainer: activeSourceContainer,
+                extra: ["surface_handle": String(UInt(bitPattern: surface))]
+            )
+        )
         usesBackingPixelSurfaceSizing = false
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
         lastDisplayID = nil
-        ghosttySurface = surface
         delegate.registerSurfaceHandle(surface, for: panelID)
         synchronizeGhosttySurfaceFont(to: fontPoints, on: surface)
 
@@ -1218,9 +1340,22 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastViewportResumeSignature = nil
     }
 
-    private func logSurfaceDiagnostics(message: String, extra: [String: String] = [:]) {
+    private func logSurfaceDiagnostics(
+        level: ToasttyLogLevel = .debug,
+        message: String,
+        extra: [String: String] = [:],
+        file: StaticString = #fileID,
+        line: UInt = #line
+    ) {
         var metadata: [String: String] = [
             "panel_id": panelID.uuidString,
+            "lifecycle_state": lifecycleState.automationLabel,
+            "requested_focus": requestedFocus ? "true" : "false",
+            "has_surface": ghosttySurface == nil ? "false" : "true",
+            "last_surface_block_reason": lastSurfaceCreationBlockReason ?? "none",
+            "last_surface_deferral_reason": lastSurfaceDeferralReason?.rawValue ?? "none",
+            "last_viewport_deferral_reason": lastViewportDeferralReason?.rawValue ?? "none",
+            "surface_factory_failed": diagnostics.surfaceFailureCount > 0 ? "true" : "false",
             "attach_count": String(diagnostics.attachCount),
             "update_count": String(diagnostics.updateCount),
             "surface_attempt_count": String(diagnostics.surfaceAttemptCount),
@@ -1228,11 +1363,69 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             "surface_failure_count": String(diagnostics.surfaceFailureCount),
             "surface_deferred_count": String(diagnostics.surfaceDeferredCount),
             "viewport_deferred_count": String(diagnostics.viewportDeferredCount),
+            "render_snapshot_missing_surface_count": String(diagnostics.renderSnapshotMissingSurfaceCount),
+            "automation_input_unavailable_count": String(diagnostics.automationInputUnavailableCount),
         ]
+        if let activeAttachment {
+            metadata["active_attachment_id"] = activeAttachment.rawValue.uuidString
+            metadata["active_attachment_generation"] = String(activeAttachment.generation)
+        }
+        if let pendingDetachAttachment {
+            metadata["pending_detach_attachment_id"] = pendingDetachAttachment.rawValue.uuidString
+            metadata["pending_detach_attachment_generation"] = String(pendingDetachAttachment.generation)
+        }
         for (key, value) in extra {
             metadata[key] = value
         }
-        ToasttyLog.debug(message, category: .ghostty, metadata: metadata)
+        switch level {
+        case .debug:
+            ToasttyLog.debug(message, category: .ghostty, metadata: metadata, file: file, line: line)
+        case .info:
+            ToasttyLog.info(message, category: .ghostty, metadata: metadata, file: file, line: line)
+        case .warning:
+            ToasttyLog.warning(message, category: .ghostty, metadata: metadata, file: file, line: line)
+        case .error:
+            ToasttyLog.error(message, category: .ghostty, metadata: metadata, file: file, line: line)
+        }
+    }
+
+    private func surfaceHostDiagnostics(
+        hostView: NSView,
+        sourceContainer: NSView?,
+        extra: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata = [
+            "host_view_id": describeObjectIdentity(hostView),
+            "host_has_superview": hostView.superview == nil ? "false" : "true",
+            "host_superview_id": hostView.superview.map(describeObjectIdentity) ?? "nil",
+            "hosted_view_id": describeObjectIdentity(hostedView),
+            "hosted_view_has_window": hostedView.window == nil ? "false" : "true",
+            "hosted_view_superview_id": hostedView.superview.map(describeObjectIdentity) ?? "nil",
+            "hosted_view_superview_matches_source_container": hostedView.superview === sourceContainer ? "true" : "false",
+            "host_has_window": hostView.window == nil ? "false" : "true",
+            "host_window_id": hostView.window.map(describeObjectIdentity) ?? "nil",
+            "host_window_key": hostView.window?.isKeyWindow == true ? "true" : "false",
+            "host_window_visible": hostView.window?.isVisible == true ? "true" : "false",
+            "host_hidden": hostView.isHidden ? "true" : "false",
+            "host_hidden_ancestor": hostView.hasHiddenAncestor ? "true" : "false",
+            "host_width": String(format: "%.1f", hostView.bounds.width),
+            "host_height": String(format: "%.1f", hostView.bounds.height),
+            "source_container_exists": sourceContainer == nil ? "false" : "true",
+            "source_container_id": sourceContainer.map(describeObjectIdentity) ?? "nil",
+            "source_container_has_window": sourceContainer?.window == nil ? "false" : "true",
+            "source_container_hidden": sourceContainer?.isHidden == true ? "true" : "false",
+            "source_container_hidden_ancestor": sourceContainer?.hasHiddenAncestor == true ? "true" : "false",
+            "source_container_width": String(format: "%.1f", sourceContainer?.bounds.width ?? 0),
+            "source_container_height": String(format: "%.1f", sourceContainer?.bounds.height ?? 0),
+            "host_superview_matches_source_container": hostView.superview === sourceContainer ? "true" : "false",
+        ]
+        if let terminalHostView = hostView as? TerminalHostView {
+            metadata["host_effectively_visible"] = terminalHostView.isEffectivelyVisible ? "true" : "false"
+        }
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        return metadata
     }
 
     func armFocusModeResizeTrace(workspaceID: UUID) {

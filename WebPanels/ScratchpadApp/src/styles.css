@@ -1,0 +1,231 @@
+:root {
+  color-scheme: dark;
+  --scratchpad-bg: #15171c;
+  --scratchpad-fg: #d9dee8;
+  --scratchpad-muted: #8e97a6;
+  --scratchpad-border: rgba(255, 255, 255, 0.1);
+  --scratchpad-panel: #1e2229;
+  --scratchpad-panel-strong: #242936;
+  --scratchpad-accent: #6bb6ff;
+  --scratchpad-code-bg: #101217;
+  --scratchpad-code-fg: #e9edf5;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --scratchpad-bg: #f7f8fa;
+  --scratchpad-fg: #1d2430;
+  --scratchpad-muted: #637083;
+  --scratchpad-border: rgba(20, 27, 38, 0.12);
+  --scratchpad-panel: #ffffff;
+  --scratchpad-panel-strong: #eef2f7;
+  --scratchpad-accent: #1b6cc2;
+  --scratchpad-code-bg: #f2f5f9;
+  --scratchpad-code-fg: #1d2430;
+}
+
+html,
+body,
+.scratchpad-shell {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--scratchpad-bg);
+  color: var(--scratchpad-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-size: 13px;
+}
+
+.scratchpad-shell {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
+.scratchpad-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: white;
+}
+
+.scratchpad-empty {
+  align-self: center;
+  justify-self: center;
+  width: min(460px, calc(100% - 48px));
+  padding: 22px 24px;
+  border: 1px solid var(--scratchpad-border);
+  border-radius: 8px;
+  background: var(--scratchpad-panel);
+}
+
+.scratchpad-empty h1 {
+  margin: 0 0 8px;
+  color: var(--scratchpad-fg);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.scratchpad-empty p {
+  margin: 0;
+  color: var(--scratchpad-muted);
+  line-height: 1.45;
+}
+
+.scratchpad-empty--guide {
+  align-self: stretch;
+  justify-self: stretch;
+  width: auto;
+  max-width: 760px;
+  margin: auto;
+  padding: clamp(18px, 4vw, 34px);
+  overflow: auto;
+  border: 0;
+  background: transparent;
+}
+
+.scratchpad-guide-header {
+  max-width: 620px;
+  margin-bottom: 18px;
+}
+
+.scratchpad-guide-header h1 {
+  margin-bottom: 10px;
+  font-size: clamp(20px, 3vw, 28px);
+  font-weight: 700;
+}
+
+.scratchpad-guide-header p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.scratchpad-guide-header p + p {
+  margin-top: 8px;
+}
+
+.scratchpad-guide-steps {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+  counter-reset: scratchpad-guide-step;
+}
+
+.scratchpad-guide-step {
+  position: relative;
+  padding: 14px 16px 14px 46px;
+  border: 1px solid var(--scratchpad-border);
+  border-radius: 8px;
+  background: var(--scratchpad-panel);
+  counter-increment: scratchpad-guide-step;
+}
+
+.scratchpad-guide-step::before {
+  content: counter(scratchpad-guide-step);
+  position: absolute;
+  top: 13px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--scratchpad-panel-strong);
+  color: var(--scratchpad-fg);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.scratchpad-guide-step h2 {
+  margin: 0 0 6px;
+  color: var(--scratchpad-fg);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.scratchpad-guide-step p {
+  font-size: 13px;
+}
+
+.scratchpad-guide-footer {
+  padding: 14px 16px;
+  border: 1px dashed var(--scratchpad-border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+.scratchpad-guide-footer h2 {
+  margin: 0 0 6px;
+  color: var(--scratchpad-fg);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.scratchpad-guide-footer p {
+  margin: 0 0 8px;
+  color: var(--scratchpad-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.scratchpad-guide-footer p:last-child {
+  margin-bottom: 0;
+}
+
+.scratchpad-snippet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.scratchpad-snippet-header h2 {
+  margin: 0;
+}
+
+.scratchpad-copy-button {
+  min-width: 58px;
+  padding: 4px 9px;
+  border: 1px solid var(--scratchpad-border);
+  border-radius: 5px;
+  background: var(--scratchpad-panel-strong);
+  color: var(--scratchpad-fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.scratchpad-copy-button:hover,
+.scratchpad-copy-button:focus-visible {
+  border-color: var(--scratchpad-accent);
+}
+
+.scratchpad-snippet {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 86px;
+  margin-top: 10px;
+  padding: 10px 11px;
+  resize: vertical;
+  border: 1px solid var(--scratchpad-border);
+  border-radius: 6px;
+  background: var(--scratchpad-code-bg);
+  color: var(--scratchpad-code-fg);
+  font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  line-height: 1.45;
+  white-space: pre;
+}

@@ -21,6 +21,7 @@ struct PreparedAgentLaunchArtifacts {
 enum AgentLaunchInstrumentationError: LocalizedError {
     case invalidClaudeSettingsArgument
     case unsupportedClaudeSettingsFormat
+    case missingPiExtensionResource
 
     var errorDescription: String? {
         switch self {
@@ -28,11 +29,15 @@ enum AgentLaunchInstrumentationError: LocalizedError {
             return "Claude launch profile has an invalid --settings argument."
         case .unsupportedClaudeSettingsFormat:
             return "Claude settings must decode to a JSON object."
+        case .missingPiExtensionResource:
+            return "Toastty could not find its bundled Pi extension."
         }
     }
 }
 
 enum AgentLaunchInstrumentation {
+    nonisolated(unsafe) static var piExtensionPathProviderForTesting: (() -> String?)?
+
     static func prepare(
         agent: AgentKind,
         argv: [String],
@@ -58,6 +63,10 @@ enum AgentLaunchInstrumentation {
                 sessionID: sessionID,
                 fileManager: fileManager
             )
+        }
+
+        if agent == .pi {
+            return try preparePiLaunch(argv: argv, sessionID: sessionID, fileManager: fileManager)
         }
 
         return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
@@ -180,6 +189,55 @@ enum AgentLaunchInstrumentation {
             try? fileManager.removeItem(at: artifactsDirectoryURL)
             throw error
         }
+    }
+
+    private static func preparePiLaunch(
+        argv: [String],
+        sessionID: String,
+        fileManager: FileManager
+    ) throws -> PreparedAgentLaunchCommand {
+        let artifactsDirectoryURL = try makeArtifactsDirectory(
+            prefix: "toastty-pi-launch",
+            sessionID: sessionID,
+            fileManager: fileManager
+        )
+
+        let telemetryLogURL = artifactsDirectoryURL.appendingPathComponent("pi-telemetry.jsonl", isDirectory: false)
+        let environment = [
+            "TOASTTY_PI_TELEMETRY_LOG_PATH": telemetryLogURL.path,
+        ]
+
+        let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .pi, argv: argv)
+        guard piLaunchAllowsExtensionInjection(argv: argv, commandIndex: insertionIndex) else {
+            return PreparedAgentLaunchCommand(
+                argv: argv,
+                environment: environment,
+                artifacts: PreparedAgentLaunchArtifacts(
+                    directoryURL: artifactsDirectoryURL,
+                    codexSessionLogURL: nil,
+                    cleanupPolicy: .deleteImmediately
+                )
+            )
+        }
+
+        guard let extensionPath = resolvedPiExtensionPath() else {
+            try? fileManager.removeItem(at: artifactsDirectoryURL)
+            throw AgentLaunchInstrumentationError.missingPiExtensionResource
+        }
+
+        return PreparedAgentLaunchCommand(
+            argv: insertingArguments(
+                ["--extension", extensionPath],
+                into: argv,
+                afterIndex: insertionIndex
+            ),
+            environment: environment,
+            artifacts: PreparedAgentLaunchArtifacts(
+                directoryURL: artifactsDirectoryURL,
+                codexSessionLogURL: nil,
+                cleanupPolicy: .deleteImmediately
+            )
+        )
     }
 }
 
@@ -452,6 +510,55 @@ private extension AgentLaunchInstrumentation {
             + Array(argv.dropFirst(boundedIndex + 1))
     }
 
+    static func piLaunchAllowsExtensionInjection(argv: [String], commandIndex: Int) -> Bool {
+        let startIndex = min(max(commandIndex + 1, 0), argv.count)
+        for argument in argv.dropFirst(startIndex) {
+            if argument == "--" {
+                return true
+            }
+            if argument == "--no-extensions" || argument == "-ne" {
+                return false
+            }
+        }
+        return true
+    }
+
+    static func resolvedPiExtensionPath() -> String? {
+        if let path = piExtensionPathProviderForTesting?(),
+           normalizedNonEmptyValue(path) != nil {
+            return path
+        }
+
+        let resourceName = "toastty-pi-extension"
+        let resourceExtension = "js"
+        let subdirectory = "AgentExtensions"
+        let bundles: [Bundle] = [
+            .main,
+            Bundle(for: AgentLaunchInstrumentationBundleMarker.self),
+        ]
+        for bundle in bundles {
+            if let url = bundle.url(forResource: resourceName, withExtension: resourceExtension) {
+                return url.path
+            }
+            if let url = bundle.url(
+                forResource: resourceName,
+                withExtension: resourceExtension,
+                subdirectory: subdirectory
+            ) {
+                return url.path
+            }
+        }
+
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources/AgentExtensions/\(resourceName).\(resourceExtension)")
+        if FileManager.default.fileExists(atPath: sourceURL.path) {
+            return sourceURL.path
+        }
+
+        return nil
+    }
+
     static func normalizedNonEmptyValue(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               trimmed.isEmpty == false else {
@@ -460,6 +567,8 @@ private extension AgentLaunchInstrumentation {
         return trimmed
     }
 }
+
+private final class AgentLaunchInstrumentationBundleMarker {}
 
 extension AgentLaunchInstrumentation {
     // Internal test seam for validating Codex config escaping behavior directly.

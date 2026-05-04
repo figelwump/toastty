@@ -1026,9 +1026,9 @@ final class TerminalMetadataService {
                 "exit_code": exitCode.map(String.init) ?? "none",
             ]
         )
-        _ = sessionLifecycleTracker?.stopSessionForPanelIfActive(
+        _ = sessionLifecycleTracker?.handleCommandFinished(
             panelID: panelID,
-            reason: .ghosttyCommandFinished(exitCode: exitCode),
+            exitCode: exitCode,
             at: now
         )
 
@@ -1037,7 +1037,7 @@ final class TerminalMetadataService {
         }
         guard let workspace = state.workspacesByID[workspaceID],
               let panelState = workspace.panelState(for: panelID),
-              case .terminal(let terminalState) = panelState else {
+              case .terminal = panelState else {
             return false
         }
 

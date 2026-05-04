@@ -66,9 +66,14 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
 
 public struct AgentCatalog: Equatable, Sendable {
     public let profiles: [AgentProfile]
+    public let showsTopBarButtons: Bool
 
-    public init(profiles: [AgentProfile]) {
+    public init(
+        profiles: [AgentProfile],
+        showsTopBarButtons: Bool = true
+    ) {
         self.profiles = profiles
+        self.showsTopBarButtons = showsTopBarButtons
     }
 
     public static let empty = Self(profiles: [])

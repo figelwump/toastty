@@ -16,6 +16,11 @@ public enum SlotFocusDirection: String, Codable, Equatable, Sendable {
     case right
 }
 
+public enum PanelTabNavigationDirection: String, Codable, Equatable, Sendable {
+    case previous
+    case next
+}
+
 public enum SplitResizeDirection: String, Codable, Equatable, Sendable {
     case up
     case down
@@ -28,7 +33,9 @@ public enum AppAction: Equatable, Sendable {
     case updateWindowFrame(windowID: UUID, frame: CGRectCodable)
     case selectWorkspace(windowID: UUID, workspaceID: UUID)
     case selectWorkspaceTab(workspaceID: UUID, tabID: UUID)
-    case createWorkspace(windowID: UUID, title: String?)
+    case moveWorkspace(windowID: UUID, fromIndex: Int, toIndex: Int)
+    case moveWorkspaceTab(workspaceID: UUID, fromIndex: Int, toIndex: Int)
+    case createWorkspace(windowID: UUID, title: String?, activate: Bool)
     case createWorkspaceTab(workspaceID: UUID, seed: WindowLaunchSeed?)
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
@@ -43,7 +50,16 @@ public enum AppAction: Equatable, Sendable {
     case closePanel(panelID: UUID)
     case reopenLastClosedPanel(workspaceID: UUID)
     case createWebPanel(workspaceID: UUID, panel: WebPanelState, placement: WebPanelPlacement)
+    case setRightAuxPanelVisibility(workspaceID: UUID, isVisible: Bool)
+    case toggleRightAuxPanel(workspaceID: UUID)
+    case setRightAuxPanelWidth(workspaceID: UUID, width: Double)
+    case selectRightAuxPanelTab(workspaceID: UUID, tabID: UUID, focus: Bool)
+    case selectAdjacentRightAuxPanelTab(workspaceID: UUID, direction: PanelTabNavigationDirection)
+    case closeRightAuxPanelTab(workspaceID: UUID, tabID: UUID)
+    case focusRightAuxPanel(workspaceID: UUID, panelID: UUID)
+    case clearRightAuxPanelFocus(workspaceID: UUID)
     case toggleFocusedPanelMode(workspaceID: UUID)
+    case exitFocusedPanelMode(workspaceID: UUID)
     case setConfiguredTerminalFont(points: Double?)
     case setDefaultTerminalProfile(profileID: String?)
     case setWindowTerminalFont(windowID: UUID, points: Double)
@@ -76,6 +92,7 @@ public enum AppAction: Equatable, Sendable {
     case createTerminalPanel(workspaceID: UUID, slotID: UUID)
     case updateTerminalPanelMetadata(panelID: UUID, title: String?, cwd: String?)
     case updateWebPanelMetadata(panelID: UUID, title: String?, url: String?)
+    case updateScratchpadPanelState(panelID: UUID, scratchpad: ScratchpadState, title: String?)
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
     case toggleSidebar(windowID: UUID)
@@ -92,6 +109,10 @@ public extension AppAction {
             return "selectWorkspace"
         case .selectWorkspaceTab:
             return "selectWorkspaceTab"
+        case .moveWorkspace:
+            return "moveWorkspace"
+        case .moveWorkspaceTab:
+            return "moveWorkspaceTab"
         case .createWorkspace:
             return "createWorkspace"
         case .createWorkspaceTab:
@@ -122,8 +143,26 @@ public extension AppAction {
             return "reopenLastClosedPanel"
         case .createWebPanel:
             return "createWebPanel"
+        case .setRightAuxPanelVisibility:
+            return "setRightAuxPanelVisibility"
+        case .toggleRightAuxPanel:
+            return "toggleRightAuxPanel"
+        case .setRightAuxPanelWidth:
+            return "setRightAuxPanelWidth"
+        case .selectRightAuxPanelTab:
+            return "selectRightAuxPanelTab"
+        case .selectAdjacentRightAuxPanelTab:
+            return "selectAdjacentRightAuxPanelTab"
+        case .closeRightAuxPanelTab:
+            return "closeRightAuxPanelTab"
+        case .focusRightAuxPanel:
+            return "focusRightAuxPanel"
+        case .clearRightAuxPanelFocus:
+            return "clearRightAuxPanelFocus"
         case .toggleFocusedPanelMode:
             return "toggleFocusedPanelMode"
+        case .exitFocusedPanelMode:
+            return "exitFocusedPanelMode"
         case .setConfiguredTerminalFont:
             return "setConfiguredTerminalFont"
         case .setDefaultTerminalProfile:
@@ -172,6 +211,8 @@ public extension AppAction {
             return "updateTerminalPanelMetadata"
         case .updateWebPanelMetadata:
             return "updateWebPanelMetadata"
+        case .updateScratchpadPanelState:
+            return "updateScratchpadPanelState"
         case .recordDesktopNotification:
             return "recordDesktopNotification"
         case .markPanelNotificationsRead:

@@ -1,7 +1,7 @@
 # toastty command palette
 
 Date: 2026-04-13
-Updated: 2026-04-18
+Updated: 2026-04-20
 
 This document describes the design and implementation plan for a command palette
 in Toastty. It covers presentation, command sourcing, search and ranking,
@@ -21,12 +21,14 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 5. The palette does not introduce a second command system. It is a thin
    projection over existing command helpers, command controllers, menu titles,
    and shortcut definitions.
-6. Default mode shows commands. `@` is a file-open mode in v1, routing local
-   documents to local-document panels and HTML files to browser panels.
+6. Default mode shows commands. `@` is a file-open mode in v1, routing
+   supported local-document formats to local-document panels and HTML files to
+   browser panels.
 7. Search uses fuzzy scoring with contiguity and word-boundary bonuses, boosted
-   by persisted usage frequency.
-8. A `PaletteProvider` protocol keeps modes pluggable. `#` is intentionally
-   reserved for future heading/symbol-style queries rather than file search.
+   by persisted usage frequency within the active result family.
+8. v1 only needs two internal palette modes: commands and `@` file-open.
+   `#` is intentionally reserved for future heading/symbol-style queries rather
+   than file search.
 
 ## current baseline
 
@@ -50,6 +52,8 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 - The local-document implementation is now the reference shape for file-backed
   editable documents. That work includes:
   - `LocalDocumentPanelCreateRequest`
+  - `LocalDocumentClassifier` as the source of truth for supported extensions,
+    including non-markdown structured text/code formats
   - path normalization and same-workspace reuse by file path
   - `Open Local File…`, `Open Local File in Tab…`, and `Open Local File in Split…`
 - The command palette plan should align with that local-document shape rather
@@ -105,7 +109,8 @@ That means:
 - reuse the existing local-document and browser command paths
 - keep routing and supported extensions aligned with the local-document
   implementation rather than inventing a second file-open path
-- defer broader provider systems, richer prefix modes, and menu polish until
+- keep v1 scoped to one contextual root and make that scope visible in the UI
+- defer broader cross-root search, richer prefix modes, and menu polish until
   after `@` mode lands
 
 ## goals
@@ -117,9 +122,11 @@ That means:
 - Make panel-local actions behave intuitively: split, close, detach, and
   similar actions should apply to the origin workspace's current focused-panel
   state.
-- Provide a contextual file-open mode in v1 for local documents and HTML files.
-- Rank results by relevance and usage frequency so the palette gets faster the
-  more it is used.
+- Provide a contextual file-open mode in v1 for supported local-document
+  formats and HTML files, with the active file-search scope visible in the
+  shell.
+- Rank results by relevance and usage frequency within the active mode so the
+  palette gets faster the more it is used.
 - Keep the palette keyboard-native: open, type, navigate with arrows or
   `Ctrl+N` / `Ctrl+P`, then execute or dismiss without needing the mouse.
 - Design the provider interface so future sources such as headings, symbols,
@@ -136,6 +143,7 @@ That means:
   v1.
 - Turning `@` into an everything-search mode in v1. It is a contextual file-open
   mode first.
+- Mixing broader out-of-scope file results into default `@` results in v1.
 
 ## chosen design: minimal spotlight
 
@@ -592,7 +600,7 @@ small.
 | Prefix | Mode | Data source | Placeholder |
 |--------|------|-------------|-------------|
 | (none) | Commands | Command catalog | "Type a command..." |
-| `@` | File open | Contextual file scan + file router | "Open a file..." |
+| `@` | File open | Contextual file scan + routed local-file open | "Open a local file..." |
 
 `#` is reserved for future heading/symbol/anchor-style queries once file-backed
 panels and richer navigation exist.
@@ -603,6 +611,10 @@ panels and richer navigation exist.
 automation interface. A future CLI should not route through providers or
 through `CommandPaletteCatalog`; it should project separately over the same
 underlying command layer.
+
+V1 does not need a broad plugin surface. Whether the implementation lands as a
+formal `PaletteProvider` protocol or a lighter internal mode abstraction, the
+first slice only needs two result families: commands and `@` file-open.
 
 ```swift
 struct PaletteQueryContext {
@@ -642,12 +654,30 @@ Important behavior:
 
 ### file-open provider (`@` mode)
 
-`@` is a file-open mode, not a markdown-only mode.
+`@` is a file-open mode, not a markdown-only mode and not a general filesystem
+finder.
+
+#### v1 mode entry and presentation
+
+- `@` is only recognized as the leading first character in the query field
+- bare `@` switches the shell into file-open mode but does not dump every file
+  immediately; it should prompt the user to type a search query
+- deleting back past the leading `@` returns the palette to command mode
+- the shell should show the resolved file-search scope so users can see whether
+  they are searching a repo root or a raw cwd
+- file rows should render:
+  - primary label = file name
+  - secondary label = relative path from the active scope
+
+This keeps the UX honest: `@` is "open a supported local file from here", not
+"search the machine".
 
 #### v1 supported file types
 
-- Local documents:
+- Supported local-document formats:
   - use `LocalDocumentClassifier.supportedFilenameExtensions`
+  - this automatically picks up newly added local-document formats instead of
+    freezing the palette to a markdown-era subset
 - HTML:
   - `.html`
   - `.htm`
@@ -665,16 +695,23 @@ Root resolution priority:
 3. otherwise fall back to the first terminal panel in slot order in the
    selected tab that has a live cwd:
    - again prefer inferred repo root over raw cwd
-4. otherwise show an empty state because no contextual root can be resolved
+4. otherwise show an explicit empty state because no contextual root can be
+   resolved
+
+V1 resolves exactly one active scope. It does not mix in out-of-scope matches
+from other directories and it does not silently fall back to broader filesystem
+search.
 
 This keeps `@` useful without turning it into a general-purpose file finder.
 
 #### scanning behavior
 
 - use `FileManager.default.enumerator` in a background `Task`
-- v1 uses bounded async search and returns one batch of results per query
-- cancel the in-flight task when the query changes
-- cache results for the life of the palette session
+- build one index per resolved scope for the life of the palette session
+- do not rescan the filesystem on every query change; filter cached results in
+  memory after the index is available
+- cancel any in-flight index task when the active scope changes or the palette
+  closes
 - invalidate the cache on the next palette open
 - skip hidden directories and common heavy build/vendor directories:
   - `.git`
@@ -682,6 +719,24 @@ This keeps `@` useful without turning it into a general-purpose file finder.
   - `build`
   - `Derived`
   - `.build`
+- do not follow symlinked directories that escape the resolved root
+
+#### ranking
+
+- use the same ranking model as command mode: fuzzy match quality first, then
+  usage frequency as a tiebreak
+- track file-open usage separately from command usage, keyed by normalized file
+  identity rather than command ID
+- do not apply cross-scope penalties in v1 because `@` only searches one active
+  scope at a time
+
+#### empty states
+
+File-open mode should distinguish between:
+
+- no contextual root available
+- no supported local files under the active scope
+- no matches for the current query
 
 #### routed execution
 
@@ -696,13 +751,13 @@ enum FileOpenDestination {
 
 Execution must go through the existing app-owned openers:
 
-- Local documents:
-  - call `createMarkdownPanelFromCommand(...)`
+- Supported local-document formats:
+  - call `createLocalDocumentPanelFromCommand(...)`
   - preserve the local-document implementation's path normalization and
     same-workspace reuse by file path
 - HTML:
   - call `createBrowserPanelFromCommand(...)` with `initialURL` set to the local
-    `file://` URL string
+    normalized `file://` URL string
 
 This is the durable abstraction for future file types. When more file types are
 supported later, `@` stays the same and only the router table grows.
@@ -712,12 +767,24 @@ supported later, `@` stays the same and only the router table grows.
 For v1, file-open results should use the default placement of the destination
 opener:
 
-- local document -> `MarkdownPanelCreateRequest.defaultPlacement`
+- local document -> `LocalDocumentPanelCreateRequest.defaultPlacement`
 - html -> `BrowserPanelCreateRequest.defaultPlacement`
 
 This keeps the first version simple and consistent with existing app-owned open
-flows. Alternate placements can come later through modifier keys or secondary
-results.
+flows. Alternate placements such as `Shift+Enter` should wait for a follow-up
+once the default routed open path is stable.
+
+#### future broader scope
+
+Broader-than-contextual search is worth supporting later for things such as
+global config files, but it should arrive as an explicit scope change rather
+than as mixed out-of-scope results with invisible ranking penalties.
+
+That means v1 should preserve the option to add later affordances such as:
+
+- an alternate scope prefix like `@@`
+- a visible scope switcher inside the palette
+- user-configured extra directories
 
 ## shortcut interception
 
@@ -804,7 +871,8 @@ app-owned command paths; it does not add new reducer-owned core state.
 - add `FileOpenProvider`
 - scan contextual roots
 - support local-document formats and HTML in v1
-- route local documents to local-document panels and HTML to browser panels
+- route supported local-document formats to local-document panels and HTML to
+  browser panels
 - keep `#` reserved
 
 ### step 6: polish and validation
@@ -874,8 +942,9 @@ app-owned command paths; it does not add new reducer-owned core state.
 - palette open/dismiss lifecycle from the shortcut
 - command execution through existing helper/controller paths
 - command availability in the origin window
-- `@` mode returning local-document and HTML results from a fixture tree
-- local-document result executing through `createMarkdownPanelFromCommand(...)`
+- `@` mode returning markdown, non-markdown local-document, and HTML results
+  from a fixture tree
+- local-document result executing through `createLocalDocumentPanelFromCommand(...)`
 - HTML result executing through `createBrowserPanelFromCommand(...)`
 
 ### automation
@@ -1221,13 +1290,13 @@ Changes:
 
 ### wave 7: `@` file-open mode
 
-Goal: `@` opens local documents and HTML files from a contextual tree, routing each
-result to the right destination.
+Goal: `@` opens supported local-document formats and HTML files from a
+contextual tree, routing each result to the right destination.
 
 Prerequisite: the local-document command path must stay the single source of
 truth for supported document formats and panel reuse behavior.
 
-**7a. Provider and routing**
+**7a. Mode, scope, and routing**
 
 New files:
 
@@ -1236,13 +1305,15 @@ New files:
 
 Changes:
 
-- detect `@` as the active provider prefix
-- scan the contextual file root
-- produce routed file results
-- route local-document files through `createMarkdownPanelFromCommand(...)`
+- detect leading `@` as the active file-open mode prefix
+- resolve and display the active file scope
+- build a session-scoped index for that scope
+- produce routed file results with file name + relative path display
+- route local-document files through `createLocalDocumentPanelFromCommand(...)`
 - route HTML files through `createBrowserPanelFromCommand(...)`
+- keep default placement only in v1
 
-**7b. Local-document alignment**
+**7b. Local-document alignment and ranking**
 
 Do not bypass the local-document implementation details that already exist in
 the app. The palette must preserve:
@@ -1250,6 +1321,8 @@ the app. The palette must preserve:
 - path normalization
 - supported local-document extensions
 - same-workspace reuse by file path for local documents
+- file-open usage tracking separate from command usage tracking if usage-ranked
+  file results ship in wave 7
 
 That means the palette should not construct raw local-document web panels
 directly.
@@ -1257,9 +1330,15 @@ directly.
 **7c. Wave-7 validation**
 
 - provider tests for extension support and skip lists
+- provider tests that at least one newly supported non-markdown local-document
+  extension is returned through `@` mode
+- scope-resolution tests for focused terminal cwd vs fallback terminal cwd
+- mode-transition tests for leading `@`, bare `@`, and deleting back into
+  command mode
 - routing tests for local-document vs HTML
 - integration test that opening the same local document twice reuses the same
   local-document panel in the current workspace
+- empty-state tests for no contextual root and no matches
 
 ### wave 8: polish, docs, and end-to-end validation
 
@@ -1270,7 +1349,7 @@ Goal: smooth presentation, clear discoverability, and stable verification.
 - fade in/out animation
 - better empty states
 
-**7b. Menu integration**
+**8b. Menu integration**
 
 - add `Command Palette…` to the menu bar
 - wire it to `Cmd+Shift+P`
@@ -1324,16 +1403,17 @@ Update:
   keys, including `Ctrl+N` / `Ctrl+P`.
 - Initial command-mode open should feel effectively instant.
 - Query updates in command mode should stay under a tight interactive budget.
-- `@` mode may take longer on first uncached scan, but cached queries should
-  remain responsive enough that streaming is unnecessary in v1.
+- `@` mode may take longer on first uncached scope index, but filtering within
+  that indexed scope should remain responsive enough that streaming is
+  unnecessary in v1.
 
 ## open questions
 
-- Should a later version of `@` expose a user-visible toggle between repo-root
-  scope and raw cwd scope?
-- Should v1 file-open results always use the destination opener's default
-  placement, or should the palette support an alternate placement modifier in
-  the first release?
+- When broader-than-contextual file search ships later, what is the best
+  explicit scope-switch UX: alternate prefix, in-palette scope switcher, or
+  both?
+- Should file-open usage ranking use simple frequency only, or should it also
+  include a recency/decay signal?
 - Does the palette need to persist its last query during a single app session,
   or should each open start fresh?
 - What is the right max visible row count before scrolling begins?

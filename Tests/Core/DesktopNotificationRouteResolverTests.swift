@@ -66,7 +66,7 @@ struct DesktopNotificationRouteResolverTests {
         let reducer = AppReducer()
         let windowID = try #require(state.windows.first?.id)
         let firstWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace", activate: true), state: &state))
         let secondWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let secondPanelID = try #require(state.workspacesByID[secondWorkspaceID]?.focusedPanelID)
         let hint = DesktopNotificationSelectionHint(workspaceID: firstWorkspaceID, panelID: secondPanelID)

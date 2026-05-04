@@ -15,6 +15,7 @@ struct AppWindowView: View {
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let toggleCommandPalette: @MainActor (UUID) -> Void
+    let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
@@ -61,6 +62,7 @@ struct AppWindowView: View {
                     agentLaunchService: agentLaunchService,
                     showAgentGetStartedFlow: presentAgentGetStartedFlow,
                     toggleCommandPalette: toggleCommandPalette,
+                    presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
                     sidebarVisible: sidebarVisible
                 )
@@ -116,7 +118,7 @@ struct AppWindowView: View {
             let closeConfirmationSummary: LocalDocumentCloseConfirmationSummary
             if let workspace = store.state.workspacesByID[request.workspaceID] {
                 closeConfirmationSummary = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
-                    panelIDs: workspace.orderedTabs.flatMap { Array($0.panels.keys) }
+                    panelIDs: workspace.allPanelsByID.keys
                 )
             } else {
                 closeConfirmationSummary = .none
@@ -173,7 +175,7 @@ struct AppWindowView: View {
             store.send(.toggleSidebar(windowID: windowID))
         } label: {
             SidebarToggleIconView(
-                color: sidebarVisible ? ToastyTheme.inactiveText : ToastyTheme.accent,
+                color: sidebarVisible ? ToastyTheme.accent : ToastyTheme.inactiveText,
                 sidebarVisible: sidebarVisible,
                 hasUnread: sidebarToggleHasUnreadBadge
             )
@@ -301,17 +303,17 @@ private struct PendingWorkspaceClose: Identifiable {
             )
         } else if localDocumentSaveInProgressCount > 1 {
             paragraphs.append(
-                "This workspace still has markdown saves in progress. Wait for them to finish before closing the workspace."
+                "This workspace still has document saves in progress. Wait for them to finish before closing the workspace."
             )
         }
 
         if unsavedLocalDocumentDraftCount == 1,
            let firstUnsavedLocalDocumentDisplayName {
             paragraphs.append(
-                "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved markdown changes. Closing the workspace will discard them."
+                "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved document changes. Closing the workspace will discard them."
             )
         } else if unsavedLocalDocumentDraftCount > 1 {
-            paragraphs.append("This workspace has unsaved markdown changes. Closing the workspace will discard them.")
+            paragraphs.append("This workspace has unsaved document changes. Closing the workspace will discard them.")
         }
 
         paragraphs.append("Closing this workspace will close all terminals and panels within it.")

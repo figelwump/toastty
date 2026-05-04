@@ -6,6 +6,97 @@ import Testing
 
 struct ToasttyCLITests {
     @Test
+    func actionListParsesStructuredCommand() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["action", "list"],
+            environment: [:]
+        )
+
+        guard case .appControlList(let kind) = invocation.command else {
+            Issue.record("expected app control list command")
+            return
+        }
+
+        #expect(kind == .action)
+    }
+
+    @Test
+    func actionRunParsesSelectorsAndRepeatableValues() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "action", "run", "terminal.drop-image-files",
+                "--window", windowID.uuidString,
+                "--workspace", workspaceID.uuidString,
+                "files=/tmp/a.png",
+                "files=/tmp/b.png",
+                "cwd=/tmp",
+                "allowUnavailable=true",
+            ],
+            environment: [:]
+        )
+
+        guard case .appControlRun(let kind, let id, let args) = invocation.command else {
+            Issue.record("expected app control run command")
+            return
+        }
+
+        #expect(kind == .action)
+        #expect(id == "terminal.drop-image-files")
+        #expect(args["windowID"] == .string(windowID.uuidString))
+        #expect(args["workspaceID"] == .string(workspaceID.uuidString))
+        #expect(args["files"] == .array([.string("/tmp/a.png"), .string("/tmp/b.png")]))
+        #expect(args["cwd"] == .string("/tmp"))
+        #expect(args["allowUnavailable"] == .string("true"))
+    }
+
+    @Test
+    func queryRunParsesStructuredCommand() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "query", "run", "terminal.visible-text",
+                "--panel", panelID.uuidString,
+                "contains=needle",
+            ],
+            environment: [:]
+        )
+
+        guard case .appControlRun(let kind, let id, let args) = invocation.command else {
+            Issue.record("expected app control query run command")
+            return
+        }
+
+        #expect(kind == .query)
+        #expect(id == "terminal.visible-text")
+        #expect(args["panelID"] == .string(panelID.uuidString))
+        #expect(args["contains"] == .string("needle"))
+    }
+
+    @Test
+    func actionRunRejectsMalformedKeyValueArguments() {
+        do {
+            _ = try ToasttyCLI.parse(
+                arguments: [
+                    "action", "run", "workspace.rename",
+                    "title",
+                ],
+                environment: [:]
+            )
+            Issue.record("expected parse failure")
+        } catch let error as ToasttyCLIError {
+            guard case .usage(let message) = error else {
+                Issue.record("expected usage error")
+                return
+            }
+            #expect(message.contains("expected key=value"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
     func agentPrepareManagedLaunchBuildsStructuredRequest() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(

@@ -1,6 +1,6 @@
 # Toastty CLI Reference
 
-Toastty bundles a `toastty` CLI that communicates with the running app over its automation Unix socket. The CLI is primarily used by agents and wrapper scripts to report session status, file changes, and notifications back to the sidebar.
+Toastty bundles a `toastty` CLI that communicates with the running app over its automation Unix socket. The CLI is used both for agent/session reporting and for machine-first app control of a normal running Toastty instance.
 
 When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, pointing at the bundled executable. All examples below assume you invoke the CLI through that path.
 
@@ -14,7 +14,166 @@ When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environmen
 
 **Socket resolution order:** `--socket-path` flag > `TOASTTY_SOCKET_PATH` env var > app-resolved default socket path. For runtime-isolated launches, that default starts from the stable runtime-home-derived socket path and can resolve to a per-process sibling such as `events-v1-<pid>.sock` if the stable path is already owned by a live listener.
 
+## Smoke test
+
+For a one-command local validation of the CLI's default live-control surface against a normal Toastty launch, run:
+
+```bash
+./scripts/automation/smoke-cli-live-control.sh
+```
+
+This smoke builds the app, launches a runtime-isolated non-automation instance, reads that run's `instance.json`, and validates the CLI against the matching live socket. It also strips inherited `TOASTTY_*` launch context first so an existing managed-agent shell session does not accidentally target some other running Toastty instance.
+
 ## Commands
+
+### `action list`
+
+List the always-on app-control actions exposed by the running app.
+
+```
+toastty action list
+```
+
+Human-readable output prints one command per line as `id<TAB>summary`. With `--json`, the CLI returns the raw socket response, including each command descriptor's `id`, `summary`, `selectors`, `parameters`, and `aliases`.
+
+```bash
+"$TOASTTY_CLI_PATH" action list
+"$TOASTTY_CLI_PATH" --json action list
+```
+
+### `action run`
+
+Run an app action against a live Toastty instance. This surface is available in normal launches by default; it does not require automation mode.
+
+```
+toastty action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [--stdin <key>] [key=value ...]
+```
+
+Selectors map directly to the socket request's `windowID`, `workspaceID`, and `panelID` arguments. Additional `key=value` arguments are passed through as action arguments. Repeating the same key produces an array, which is how repeatable arguments such as `files=... files=...` are encoded.
+
+The CLI sends `key=value` arguments as strings. The app-control executor coerces supported argument types such as booleans (`true`, `false`, `1`, `0`, `yes`, `no`), integers, UUIDs, and string arrays.
+
+`--stdin <key>` reads UTF-8 stdin and sends it as the named argument. Use it for payloads that are awkward to pass as a shell argument, such as Scratchpad HTML content.
+
+```bash
+"$TOASTTY_CLI_PATH" action run window.sidebar.toggle --window "$WINDOW_ID"
+"$TOASTTY_CLI_PATH" action run workspace.rename --workspace "$WORKSPACE_ID" title="Infra"
+"$TOASTTY_CLI_PATH" action run panel.create.local-document \
+  --workspace "$WORKSPACE_ID" \
+  filePath=/tmp/README.md \
+  placement=newTab
+"$TOASTTY_CLI_PATH" action run terminal.drop-image-files \
+  --panel "$PANEL_ID" \
+  files=/tmp/a.png \
+  files=/tmp/b.png \
+  allowUnavailable=true
+"$TOASTTY_CLI_PATH" --json action run workspace.create \
+  --window "$WINDOW_ID" \
+  title=background-worktree \
+  activate=false
+"$TOASTTY_CLI_PATH" action run workspace.move \
+  --window "$WINDOW_ID" \
+  index=3 \
+  toIndex=1
+"$TOASTTY_CLI_PATH" action run workspace.tab.move \
+  --workspace "$WORKSPACE_ID" \
+  index=2 \
+  toIndex=1
+"$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
+  sessionID="$TOASTTY_SESSION_ID" \
+  filePath=artifacts/scratchpad.html \
+  title="Review notes"
+printf '%s' "$html" | "$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
+  --stdin content \
+  sessionID="$TOASTTY_SESSION_ID"
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+  sessionID="$TOASTTY_SESSION_ID"
+```
+
+`workspace.create` accepts optional `title` and `activate` arguments. When
+`activate=false`, Toastty appends the workspace without changing the currently
+visible selection, returns the created `workspaceID` and `windowID`, and marks
+the background workspace as `New` in the sidebar until the user visits it once.
+
+`workspace.move` and `workspace.tab.move` use 1-based `index` and `toIndex`
+arguments. Reordering keeps the selected workspace or tab selected, but changes
+which item each numeric shortcut targets because shortcuts follow the current
+visual order.
+
+Prefer `action list --json` to discover the current canonical IDs. Common actions include:
+
+- `window.create`
+- `window.sidebar.toggle`
+- `workspace.create`
+- `workspace.select`
+- `workspace.move`
+- `workspace.rename`
+- `workspace.close`
+- `workspace.tab.create`
+- `workspace.tab.select`
+- `workspace.tab.move`
+- `workspace.tab.rename`
+- `workspace.tab.close`
+- `panel.close`
+- `panel.create.browser`
+- `panel.create.local-document`
+- `panel.scratchpad.set-content`
+- `panel.scratchpad.rebind`
+- `panel.scratchpad.export`
+- `panel.focus-mode.toggle`
+- `agent.launch`
+- `config.reload`
+- `terminal.send-text`
+- `terminal.drop-image-files`
+
+Descriptors can also advertise compatibility aliases. Those aliases are accepted by the socket executor, but canonical IDs are preferred for new integrations.
+
+Scratchpad actions are intended for agent and automation integrations:
+
+- `panel.scratchpad.set-content` creates or updates the Scratchpad linked to an active managed session. It requires `sessionID` plus either `filePath` or `content`, accepts optional `title` and `expectedRevision`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`.
+- `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
+- `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
+
+### `query list`
+
+List the always-on app-control queries exposed by the running app.
+
+```
+toastty query list
+```
+
+Like `action list`, human-readable output prints `id<TAB>summary`, and `--json` returns the full descriptor payload.
+
+```bash
+"$TOASTTY_CLI_PATH" query list
+"$TOASTTY_CLI_PATH" --json query list
+```
+
+### `query run`
+
+Run a read-only app query against a live Toastty instance.
+
+```
+toastty query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+```
+
+Query selectors and `key=value` argument handling follow the same rules as `action run`.
+
+```bash
+"$TOASTTY_CLI_PATH" query run workspace.snapshot --workspace "$WORKSPACE_ID"
+"$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$PANEL_ID" contains="ready"
+```
+
+Prefer `query list --json` to discover the current canonical IDs. Common queries include:
+
+- `workspace.snapshot`
+- `terminal.state` (returns `windowID`, `workspaceID`, `panelID`, and terminal metadata)
+- `terminal.visible-text`
+- `panel.local-document.state`
+- `panel.browser.state`
+- `panel.scratchpad.state`
+
+`panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 
 ### `notify`
 
@@ -133,7 +292,7 @@ toastty session stop --session <id> [--panel <id>] [--reason <text>]
 
 ### `session ingest-agent-event`
 
-Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude and Codex instrumentation — it reads structured event JSON from stdin and translates it into `session status` and `session stop` calls over the socket.
+Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, and Pi instrumentation — it reads structured event JSON from stdin and translates it into `session status` and `session stop` calls over the socket.
 
 ```
 toastty session ingest-agent-event --source <source> [--session <id>] [--panel <id>]
@@ -141,13 +300,13 @@ toastty session ingest-agent-event --source <source> [--session <id>] [--panel <
 
 | Option | Required | Env var fallback | Description |
 |---|---|---|---|
-| `--source <source>` | yes | — | `claude-hooks` or `codex-notify` |
+| `--source <source>` | yes | — | `claude-hooks`, `codex-notify`, or `pi-extension` |
 | `--session <id>` | no | `TOASTTY_SESSION_ID` | Session ID |
 | `--panel <id>` | no | `TOASTTY_PANEL_ID` | Panel UUID |
 
 This command is not intended for third-party integrations. Custom agents should use `session status` and `session stop` directly.
 
-Toastty's built-in Claude and Codex launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If the helper cannot reach the app, it keeps the agent process alive but appends the CLI failure details to `telemetry-failures.log` in that session's temporary launch artifacts directory. Codex keeps that directory only while the session is active; Claude can retain hook artifacts briefly after session stop so late hooks fail softly instead of hitting missing-file shell errors.
+Toastty's built-in Claude, Codex, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If the helper cannot reach the app, it keeps the agent process alive but appends the CLI failure details to `telemetry-failures.log` in that session's temporary launch artifacts directory. Codex keeps that directory only while the session is active; Claude can retain hook artifacts briefly after session stop so late hooks fail softly instead of hitting missing-file shell errors.
 
 ## Environment variables
 
@@ -163,6 +322,20 @@ When Toastty launches an agent, these variables are injected into the agent's en
 | `TOASTTY_REPO_ROOT` | Git repository root (if available) |
 
 Most CLI flags fall back to their corresponding environment variable when not provided explicitly, so agents launched by Toastty can often omit flags like `--session` and `--panel`.
+
+To recover the owning Toastty window for the current thread, query the current panel:
+
+```bash
+window_id="$("$TOASTTY_CLI_PATH" --json query run terminal.state --panel "$TOASTTY_PANEL_ID" \
+  | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data["result"].get("windowID")
+if not value:
+    raise SystemExit("missing windowID in terminal.state result")
+print(value)
+')"
+```
 
 ## Exit codes
 
@@ -191,6 +364,27 @@ When `--json` is passed, responses follow the automation protocol envelope:
 ```
 
 Error responses set `ok: false` and include an `error` object with `code` and `message` fields.
+
+For `action list` and `query list`, `result.commands` contains an array of descriptors:
+
+```json
+{
+  "id": "workspace.rename",
+  "kind": "action",
+  "summary": "Rename a workspace.",
+  "selectors": ["windowID", "workspaceID"],
+  "parameters": [
+    {
+      "name": "title",
+      "summary": "Title text.",
+      "valueType": "string",
+      "required": true,
+      "repeatable": false
+    }
+  ],
+  "aliases": []
+}
+```
 
 ## Custom agent integration example
 

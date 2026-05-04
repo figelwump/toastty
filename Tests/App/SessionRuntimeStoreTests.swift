@@ -303,6 +303,82 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func handleCommandFinishedMarksBackgroundProcessWatchReadyAndUnread() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_010)
+
+        sessionStore.startProcessWatch(
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            displayTitleOverride: "bundle exec rspec",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        #expect(
+            sessionStore.handleCommandFinished(
+                panelID: backgroundPanelID,
+                exitCode: 0,
+                at: startedAt.addingTimeInterval(1)
+            )
+        )
+
+        let record = try #require(sessionStore.sessionRegistry.activeSession(for: backgroundPanelID))
+        #expect(record.agent == .processWatch)
+        #expect(record.displayTitleOverride == "bundle exec rspec")
+        #expect(record.status?.kind == .ready)
+        #expect(record.status?.detail == "Completed")
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
+    }
+
+    @Test
+    func handleCommandFinishedMarksBackgroundProcessWatchErrorAndUnread() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_020)
+
+        sessionStore.startProcessWatch(
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            displayTitleOverride: "npm test",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        #expect(
+            sessionStore.handleCommandFinished(
+                panelID: backgroundPanelID,
+                exitCode: 1,
+                at: startedAt.addingTimeInterval(1)
+            )
+        )
+
+        let record = try #require(sessionStore.sessionRegistry.activeSession(for: backgroundPanelID))
+        #expect(record.status?.kind == .error)
+        #expect(record.status?.detail == "Exit 1")
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
+    }
+
+    @Test
     func focusPanelCollapsesUnreadReadySessionToIdle() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
@@ -335,6 +411,40 @@ struct SessionRuntimeStoreTests {
         #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.detail == "Finished")
         let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
         #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func focusPanelRemovesReadyProcessWatchAfterRead() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_030)
+
+        sessionStore.startProcessWatch(
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            displayTitleOverride: "bundle exec rspec",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        #expect(
+            sessionStore.handleCommandFinished(
+                panelID: backgroundPanelID,
+                exitCode: 0,
+                at: startedAt.addingTimeInterval(1)
+            )
+        )
+
+        #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
+        #expect(sessionStore.sessionRegistry.activeSession(for: backgroundPanelID) == nil)
+        #expect(sessionStore.panelStatus(for: backgroundPanelID) == nil)
     }
 
     @Test
@@ -453,6 +563,139 @@ struct SessionRuntimeStoreTests {
         #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .error)
         let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
         #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func focusPanelRemovesErroredProcessWatchAfterRead() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_040)
+
+        sessionStore.startProcessWatch(
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            displayTitleOverride: "npm test",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        #expect(
+            sessionStore.handleCommandFinished(
+                panelID: backgroundPanelID,
+                exitCode: 2,
+                at: startedAt.addingTimeInterval(1)
+            )
+        )
+
+        #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
+        #expect(sessionStore.sessionRegistry.activeSession(for: backgroundPanelID) == nil)
+        #expect(sessionStore.panelStatus(for: backgroundPanelID) == nil)
+    }
+
+    @Test
+    func stopSessionForPanelIfOlderThanKeepsCompletedProcessWatchAliveUntilRead() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_050)
+
+        sessionStore.startProcessWatch(
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            displayTitleOverride: "bundle exec rspec",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        #expect(
+            sessionStore.handleCommandFinished(
+                panelID: backgroundPanelID,
+                exitCode: 0,
+                at: startedAt.addingTimeInterval(1)
+            )
+        )
+
+        #expect(
+            sessionStore.stopSessionForPanelIfOlderThan(
+                panelID: backgroundPanelID,
+                minimumRuntime: 2,
+                reason: .idleAtPrompt,
+                at: startedAt.addingTimeInterval(3)
+            ) == false
+        )
+        #expect(sessionStore.sessionRegistry.activeSession(for: backgroundPanelID)?.status?.kind == .ready)
+    }
+
+    @Test
+    func idleAtPromptFallbackCompletesBackgroundProcessWatchAndSendsNotification() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            },
+            isApplicationActive: { false }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_060)
+
+        sessionStore.startProcessWatch(
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            displayTitleOverride: "bundle exec rspec",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        #expect(
+            sessionStore.stopSessionForPanelIfOlderThan(
+                panelID: backgroundPanelID,
+                minimumRuntime: 1,
+                reason: .idleAtPrompt,
+                at: startedAt.addingTimeInterval(2)
+            )
+        )
+
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+
+        let record = try #require(sessionStore.sessionRegistry.activeSession(for: backgroundPanelID))
+        #expect(record.status?.kind == .ready)
+        #expect(record.status?.detail == "Completed")
+
+        let notification = try #require(await recorder.notifications().first)
+        #expect(notification.title == "Command finished")
+        #expect(notification.body == "bundle exec rspec")
+        #expect(notification.workspaceID == selection.workspaceID)
+        #expect(notification.panelID == backgroundPanelID)
+
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
     }
 
     @Test
@@ -1589,6 +1832,137 @@ struct SessionRuntimeStoreTests {
             sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
                 SessionStatus(kind: .working, summary: "Working", detail: "Running pwd")
         )
+    }
+
+    @Test
+    func laterFlagPersistsWhenReadSessionIsFocused() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_300)
+
+        sessionStore.startSession(
+            sessionID: "sess-later-focus",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-later-focus",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Review this change"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        sessionStore.setLaterFlag(sessionID: "sess-later-focus", isFlagged: true)
+
+        #expect(sessionStore.isLaterFlagged(sessionID: "sess-later-focus"))
+        #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
+        #expect(sessionStore.isLaterFlagged(sessionID: "sess-later-focus"))
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .idle)
+    }
+
+    @Test
+    func laterFlagClearsWhenSessionReturnsToWorking() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_301)
+
+        sessionStore.startSession(
+            sessionID: "sess-later-working",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-later-working",
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Review requested"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        sessionStore.setLaterFlag(sessionID: "sess-later-working", isFlagged: true)
+
+        sessionStore.updateStatus(
+            sessionID: "sess-later-working",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Responding"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(sessionStore.isLaterFlagged(sessionID: "sess-later-working") == false)
+    }
+
+    @Test
+    func laterFlagClearsWhenSessionTransitionsToNewActionableStatus() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_302)
+
+        sessionStore.startSession(
+            sessionID: "sess-later-actionable",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-later-actionable",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Editing"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        sessionStore.setLaterFlag(sessionID: "sess-later-actionable", isFlagged: true)
+
+        sessionStore.updateStatus(
+            sessionID: "sess-later-actionable",
+            status: SessionStatus(kind: .error, summary: "Error", detail: "Command failed"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(sessionStore.isLaterFlagged(sessionID: "sess-later-actionable") == false)
+    }
+
+    @Test
+    func laterFlagSurvivesWorkingDetailRefresh() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_303)
+
+        sessionStore.startSession(
+            sessionID: "sess-later-refresh",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-later-refresh",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Reading files"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        sessionStore.setLaterFlag(sessionID: "sess-later-refresh", isFlagged: true)
+
+        sessionStore.updateStatus(
+            sessionID: "sess-later-refresh",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Running tests"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(sessionStore.isLaterFlagged(sessionID: "sess-later-refresh"))
     }
 
     private func makeTwoPanelAppState() -> AppState {

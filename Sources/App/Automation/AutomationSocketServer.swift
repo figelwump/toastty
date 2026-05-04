@@ -82,6 +82,7 @@ final class AutomationSocketServer: @unchecked Sendable {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
+        reloadConfigurationAction: (@MainActor () -> Void)? = nil,
         recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
         testHooks: AutomationSocketServerTestHooks = .disabled
     ) throws {
@@ -100,6 +101,7 @@ final class AutomationSocketServer: @unchecked Sendable {
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
+            reloadConfigurationAction: reloadConfigurationAction,
             automationConfig: automationConfig
         )
         try startListening()
@@ -794,10 +796,36 @@ private final class AutomationSocketClient: @unchecked Sendable {
                 if result < 0 && errno == EINTR {
                     continue
                 }
+                if result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    guard waitUntilWritable(timeoutMilliseconds: 1000) else {
+                        break
+                    }
+                    continue
+                }
                 break
             }
         }
         close()
+    }
+
+    private func waitUntilWritable(timeoutMilliseconds: Int32) -> Bool {
+        var descriptor = pollfd(fd: fileDescriptor, events: Int16(POLLOUT), revents: 0)
+
+        while true {
+            let result = withUnsafeMutablePointer(to: &descriptor) { pointer in
+                Darwin.poll(pointer, 1, timeoutMilliseconds)
+            }
+            if result > 0 {
+                return (descriptor.revents & Int16(POLLOUT)) != 0
+            }
+            if result == 0 {
+                return false
+            }
+            if errno == EINTR {
+                continue
+            }
+            return false
+        }
     }
 }
 
@@ -808,6 +836,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
+    private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let automationConfig: AutomationConfig?
     private let startedAt = Date()
 
@@ -815,6 +844,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private var currentFixtureName: String
     private var notificationStore = NotificationStore()
     private var sessionUpdateCoalescer = SessionUpdateCoalescer()
+    @MainActor
+    private lazy var appControlExecutor = AppControlExecutor(
+        store: store,
+        terminalRuntimeRegistry: terminalRuntimeRegistry,
+        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+        sessionRuntimeStore: sessionRuntimeStore,
+        focusedPanelCommandController: focusedPanelCommandController,
+        agentLaunchService: agentLaunchService,
+        reloadConfigurationAction: reloadConfigurationAction
+    )
 
     init(
         store: AppStore,
@@ -823,6 +862,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
+        reloadConfigurationAction: (@MainActor () -> Void)?,
         automationConfig: AutomationConfig?
     ) {
         self.store = store
@@ -831,6 +871,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
+        self.reloadConfigurationAction = reloadConfigurationAction
         self.automationConfig = automationConfig
         self.currentFixtureName = automationConfig?.fixtureName ?? "default"
     }
@@ -922,6 +963,43 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             response["stateVersion"] = .int(stateVersion)
             return response
 
+        case "app_control.list_actions":
+            return try automationObject(
+                AppControlCatalogListing(commands: appControlExecutor.listActionDescriptors())
+            )
+
+        case "app_control.run_action":
+            guard let actionID = payload.string("id"), actionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("id is required")
+            }
+            let outcome = try appControlExecutor.runAction(
+                id: actionID,
+                args: try parseArgsPayload(payload)
+            )
+            guard outcome.didMutateState || outcome.result != nil else {
+                throw AutomationSocketError.invalidPayload("action could not be applied: \(actionID)")
+            }
+            var response = outcome.result ?? [:]
+            if outcome.didMutateState {
+                stateVersion += 1
+                response["stateVersion"] = .int(stateVersion)
+            }
+            return response
+
+        case "app_control.list_queries":
+            return try automationObject(
+                AppControlCatalogListing(commands: appControlExecutor.listQueryDescriptors())
+            )
+
+        case "app_control.run_query":
+            guard let queryID = payload.string("id"), queryID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("id is required")
+            }
+            return try appControlExecutor.runQuery(
+                id: queryID,
+                args: try parseArgsPayload(payload)
+            )
+
         case "automation.ping":
             return [
                 "status": .string("ok"),
@@ -962,8 +1040,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let actionID = payload.string("action"), actionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("action is required")
             }
-            let args = payload.object("args") ?? [:]
-            try performAction(actionID: actionID, args: args)
+            let outcome = try appControlExecutor.runAction(
+                id: actionID,
+                args: try parseArgsPayload(payload)
+            )
+            guard outcome.didMutateState || outcome.result != nil else {
+                throw AutomationSocketError.invalidPayload("action could not be applied: \(actionID)")
+            }
             stateVersion += 1
             return [
                 "stateVersion": .int(stateVersion),
@@ -971,172 +1054,70 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "automation.terminal_send_text":
             try requireAutomationMode(for: command)
-            guard let text = payload.string("text") else {
-                throw AutomationSocketError.invalidPayload("text is required")
-            }
             if payload["waitForSurfaceMs"] != nil {
                 throw AutomationSocketError.invalidPayload("waitForSurfaceMs is deprecated; use allowUnavailable=true with client-side retry")
             }
-            let submit = payload.bool("submit") ?? false
-            let allowUnavailable = payload.bool("allowUnavailable") ?? false
-            let resolved = try resolveTerminalTarget(payload: payload)
-            if terminalRuntimeRegistry.sendText(text, submit: submit, panelID: resolved.panelID) {
-                return [
-                    "workspaceID": .string(resolved.workspaceID.uuidString),
-                    "panelID": .string(resolved.panelID.uuidString),
-                    "submitted": .bool(submit),
-                    "available": .bool(true),
-                ]
-            }
-
-            if allowUnavailable {
-                return [
-                    "workspaceID": .string(resolved.workspaceID.uuidString),
-                    "panelID": .string(resolved.panelID.uuidString),
-                    "submitted": .bool(submit),
-                    "available": .bool(false),
-                ]
-            }
-
-            throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
+            return try appControlExecutor.runAction(
+                id: AppControlActionID.terminalSendText.rawValue,
+                args: payload
+            ).result ?? [:]
 
         case "automation.terminal_drop_image_files":
             try requireAutomationMode(for: command)
-            guard payload["files"] != nil else {
-                throw AutomationSocketError.invalidPayload("files is required")
-            }
-            let rawFiles = payload.stringArray("files")
-            guard rawFiles.isEmpty == false else {
-                throw AutomationSocketError.invalidPayload("files must include at least one path")
-            }
-
-            let normalizedFiles: [String]
-            do {
-                normalizedFiles = try SocketEventNormalizer.normalizeFiles(rawFiles, cwd: payload.string("cwd"))
-            } catch let normalizationError as SocketEventNormalizationError {
-                switch normalizationError {
-                case .missingCWDForRelativePath(let path):
-                    throw AutomationSocketError.invalidPayload(
-                        "cwd is required when files include relative path: \(path)"
-                    )
-                }
-            }
-
-            let allowUnavailable = payload.bool("allowUnavailable") ?? false
-            let resolved = try resolveTerminalTarget(payload: payload)
-            switch terminalRuntimeRegistry.automationDropImageFiles(
-                normalizedFiles,
-                panelID: resolved.panelID
-            ) {
-            case .sent(let imageCount):
-                return [
-                    "workspaceID": .string(resolved.workspaceID.uuidString),
-                    "panelID": .string(resolved.panelID.uuidString),
-                    "requestedFileCount": .int(normalizedFiles.count),
-                    "acceptedImageCount": .int(imageCount),
-                    "available": .bool(true),
-                ]
-
-            case .noImageFiles:
-                throw AutomationSocketError.invalidPayload("files payload did not contain any image paths")
-
-            case .unavailableSurface:
-                if allowUnavailable {
-                    return [
-                        "workspaceID": .string(resolved.workspaceID.uuidString),
-                        "panelID": .string(resolved.panelID.uuidString),
-                        "requestedFileCount": .int(normalizedFiles.count),
-                        "acceptedImageCount": .int(0),
-                        "available": .bool(false),
-                    ]
-                }
-                throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
-            }
+            return try appControlExecutor.runAction(
+                id: AppControlActionID.terminalDropImageFiles.rawValue,
+                args: payload
+            ).result ?? [:]
 
         case "automation.terminal_visible_text":
             try requireAutomationMode(for: command)
-            let resolved = try resolveTerminalTarget(payload: payload)
-            guard let text = terminalRuntimeRegistry.readVisibleText(panelID: resolved.panelID) else {
-                throw AutomationSocketError.invalidPayload("terminal visible text unavailable for panelID \(resolved.panelID.uuidString)")
-            }
-
-            var result: [String: AutomationJSONValue] = [
-                "workspaceID": .string(resolved.workspaceID.uuidString),
-                "panelID": .string(resolved.panelID.uuidString),
-                "text": .string(text),
-            ]
-
-            if let needle = payload.string("contains"), needle.isEmpty == false {
-                result["contains"] = .bool(text.contains(needle))
-            }
-
-            return result
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.terminalVisibleText.rawValue,
+                args: payload
+            )
 
         case "automation.launch_agent":
             try requireAutomationMode(for: command)
-            guard let profileID = normalizedOptionalText(payload.string("profileID"))
-                ?? normalizedOptionalText(payload.string("agent")) else {
-                throw AutomationSocketError.invalidPayload("profileID is required")
+            var args = payload
+            if args["profileID"] == nil, let legacyAgent = args["agent"] {
+                args["profileID"] = legacyAgent
             }
-
-            let panelID = payload.uuid("panelID")
-            let workspaceID = payload.uuid("workspaceID")
-            let result = try agentLaunchService.launch(
-                profileID: profileID,
-                workspaceID: workspaceID,
-                panelID: panelID
+            let result = try appControlExecutor.runAction(
+                id: AppControlActionID.agentLaunch.rawValue,
+                args: args
             )
             stateVersion += 1
-            var response: [String: AutomationJSONValue] = [
-                "profileID": .string(result.agent.rawValue),
-                "agent": .string(result.agent.rawValue),
-                "displayName": .string(result.displayName),
-                "sessionID": .string(result.sessionID),
-                "windowID": .string(result.windowID.uuidString),
-                "workspaceID": .string(result.workspaceID.uuidString),
-                "panelID": .string(result.panelID.uuidString),
-                "command": .string(result.commandLine),
-                "stateVersion": .int(stateVersion),
-            ]
-            if let cwd = result.cwd {
-                response["cwd"] = .string(cwd)
-            }
-            if let repoRoot = result.repoRoot {
-                response["repoRoot"] = .string(repoRoot)
-            }
+            var response = result.result ?? [:]
+            response["stateVersion"] = .int(stateVersion)
             return response
 
         case "automation.terminal_state":
             try requireAutomationMode(for: command)
-            let resolved = try resolveTerminalTarget(payload: payload)
-            return try terminalStateSnapshot(
-                workspaceID: resolved.workspaceID,
-                panelID: resolved.panelID
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.terminalState.rawValue,
+                args: payload
             )
 
         case "automation.local_document_panel_state",
              "automation.markdown_panel_state":
             try requireAutomationMode(for: command)
-            let resolved = try resolveLocalDocumentTarget(payload: payload)
-            let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
-            runtime.apply(webState: resolved.webState)
-            return localDocumentPanelStateSnapshot(
-                workspaceID: resolved.workspaceID,
-                panelID: resolved.panelID,
-                webState: resolved.webState,
-                runtimeState: runtime.automationState()
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.panelLocalDocumentState.rawValue,
+                args: payload
             )
 
         case "automation.browser_panel_state":
             try requireAutomationMode(for: command)
-            let resolved = try resolveBrowserTarget(payload: payload)
-            let runtime = webPanelRuntimeRegistry.browserRuntime(for: resolved.panelID)
-            runtime.apply(webState: resolved.webState)
-            return browserPanelStateSnapshot(
-                workspaceID: resolved.workspaceID,
-                panelID: resolved.panelID,
-                webState: resolved.webState,
-                runtimeState: runtime.automationState()
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.panelBrowserState.rawValue,
+                args: payload
+            )
+
+        case "automation.scratchpad_panel_state":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.panelScratchpadState.rawValue,
+                args: payload
             )
 
         case "automation.dump_state":
@@ -1155,8 +1136,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "automation.workspace_snapshot":
             try requireAutomationMode(for: command)
-            let workspaceID = try resolveWorkspaceID(args: payload)
-            return try workspaceSnapshot(workspaceID: workspaceID)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.workspaceSnapshot.rawValue,
+                args: payload
+            )
 
         case "automation.workspace_render_snapshot":
             try requireAutomationMode(for: command)
@@ -1382,10 +1365,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         func webPanelPlacement() throws -> WebPanelPlacement {
             guard let rawValue = args.string("placement")?.trimmingCharacters(in: .whitespacesAndNewlines),
                   rawValue.isEmpty == false else {
-                return .rootRight
+                return .rightPanel
             }
             guard let placement = WebPanelPlacement(rawValue: rawValue) else {
-                throw AutomationSocketError.invalidPayload("placement must be one of: rootRight, newTab, splitRight")
+                throw AutomationSocketError.invalidPayload("placement must be one of: rightPanel, newTab, splitRight")
             }
             return placement
         }
@@ -1580,7 +1563,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "sidebar.workspaces.new":
             let windowID = try resolveWindowID(args: args)
             let title = args.string("title")
-            didMutate = store.send(.createWorkspace(windowID: windowID, title: title))
+            didMutate = store.send(.createWorkspace(windowID: windowID, title: title, activate: true))
 
         case "window.sidebar.toggle":
             didMutate = store.send(.toggleSidebar(windowID: try resolveWindowID(args: args)))
@@ -1769,6 +1752,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
            webState.definition == .localDocument {
             return (workspaceID, focusedPanelID, webState)
         }
+        if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
+           webState.definition == .localDocument {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .localDocument {
+            return (workspaceID, activePanelID, webState)
+        }
 
         for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
@@ -1813,6 +1806,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
            case .web(let webState) = panelState,
            webState.definition == .browser {
             return (workspaceID, focusedPanelID, webState)
+        }
+        if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
+           webState.definition == .browser {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .browser {
+            return (workspaceID, activePanelID, webState)
         }
 
         for leaf in workspace.layoutTree.allSlotInfos {
@@ -1964,6 +1967,42 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         let selectedTabIndex: Int? = selectedTabID.flatMap { tabID in
             workspace.tabIDs.firstIndex(of: tabID).map { $0 + 1 }
         }
+        let rightPanelTabIDs = workspace.rightAuxPanel.tabIDs.map { AutomationJSONValue.string($0.uuidString) }
+        let rightPanelPanelIDs = workspace.rightAuxPanel.orderedTabs.map { AutomationJSONValue.string($0.panelID.uuidString) }
+        let rightPanelTabs = workspace.rightAuxPanel.orderedTabs.map { tab -> AutomationJSONValue in
+            let panelKind: String
+            let webDefinition: AutomationJSONValue
+            let panelTitle: String
+            switch tab.panelState {
+            case .terminal(let terminalState):
+                panelKind = "terminal"
+                webDefinition = .null
+                panelTitle = terminalState.title
+            case .web(let webState):
+                panelKind = "web"
+                webDefinition = .string(webState.definition.rawValue)
+                panelTitle = webState.title
+            }
+            return .object([
+                "tabID": .string(tab.id.uuidString),
+                "panelID": .string(tab.panelID.uuidString),
+                "panelKind": .string(panelKind),
+                "webDefinition": webDefinition,
+                "title": .string(panelTitle),
+            ])
+        }
+        let rightPanel: AutomationJSONValue = .object([
+            "isVisible": .bool(workspace.rightAuxPanel.isVisible),
+            "width": .double(workspace.rightAuxPanel.width),
+            "hasCustomWidth": .bool(workspace.rightAuxPanel.hasCustomWidth),
+            "tabCount": .int(workspace.rightAuxPanel.tabIDs.count),
+            "activeTabID": workspace.rightAuxPanel.activeTabID.map { .string($0.uuidString) } ?? .null,
+            "activePanelID": workspace.rightAuxPanel.activePanelID.map { .string($0.uuidString) } ?? .null,
+            "focusedPanelID": workspace.rightAuxPanel.focusedPanelID.map { .string($0.uuidString) } ?? .null,
+            "tabIDs": .array(rightPanelTabIDs),
+            "panelIDs": .array(rightPanelPanelIDs),
+            "tabs": .array(rightPanelTabs),
+        ])
         let rootSplitRatio: AutomationJSONValue
         switch workspace.layoutTree {
         case .split(_, _, let ratio, _, _):
@@ -1979,8 +2018,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             "selectedTabIndex": selectedTabIndex.map { .int($0) } ?? .null,
             "tabIDs": .array(tabIDs),
             "slotCount": .int(slotInfos.count),
-            "panelCount": .int(workspace.panels.count),
+            "layoutPanelCount": .int(workspace.panels.count),
+            "panelCount": .int(workspace.allPanelsByID.count),
             "focusedPanelID": workspace.focusedPanelID.map { .string($0.uuidString) } ?? .null,
+            "rightPanel": rightPanel,
             "rootSplitRatio": rootSplitRatio,
             "slotIDs": .array(slotIDs),
             "slotPanelIDs": .array(slotPanelIDs),
@@ -2113,6 +2154,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private func normalizedOptionalText(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func parseArgsPayload(_ payload: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
+        if let args = payload.object("args") {
+            return args
+        }
+        if payload["args"] != nil {
+            throw AutomationSocketError.invalidPayload("args must be an object")
+        }
+        return [:]
     }
 
     private static func sha256Hex(_ string: String) -> String {
@@ -2322,42 +2373,4 @@ private struct AutomationRuntimeStateDump: Encodable, Sendable {
     let appState: AppState
     let sessionRegistry: SessionRegistry
     let notifications: [ToasttyNotification]
-}
-
-private enum AutomationSocketError: Error {
-    case invalidJSON
-    case invalidEnvelope(String)
-    case incompatibleProtocol
-    case unknownEventType
-    case unknownCommand
-    case invalidPayload(String)
-    case internalError(String)
-
-    var response: AutomationResponseEnvelope {
-        AutomationResponseEnvelope(
-            requestID: "unknown",
-            ok: false,
-            result: nil,
-            error: errorBody
-        )
-    }
-
-    var errorBody: AutomationResponseError {
-        switch self {
-        case .invalidJSON:
-            return AutomationResponseError(code: "INVALID_JSON", message: "request body must be valid JSON")
-        case .invalidEnvelope(let message):
-            return AutomationResponseError(code: "INVALID_ENVELOPE", message: message)
-        case .incompatibleProtocol:
-            return AutomationResponseError(code: "INCOMPATIBLE_PROTOCOL", message: "unsupported protocolVersion")
-        case .unknownEventType:
-            return AutomationResponseError(code: "UNKNOWN_EVENT_TYPE", message: "eventType is not supported")
-        case .unknownCommand:
-            return AutomationResponseError(code: "UNKNOWN_COMMAND", message: "command is not supported")
-        case .invalidPayload(let message):
-            return AutomationResponseError(code: "INVALID_PAYLOAD", message: message)
-        case .internalError(let message):
-            return AutomationResponseError(code: "INTERNAL_ERROR", message: message)
-        }
-    }
 }

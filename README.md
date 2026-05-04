@@ -1,14 +1,14 @@
 # Toastty
 
 <p align="center">
-  <img src="docs/assets/toastty-hero.png" alt="Toastty — built for coding with agents" width="1840">
+  <img src="docs/assets/toastty-hero.png" alt="Toastty — built for coding with agents" width="3680">
 </p>
 
 Toastty is a flexible, native, powerful home for working with agents.
 
 It's a native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
 
-Toastty builds on the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, real-time coding agent status in the sidebar, notifications and unread badges when agents need attention, and jumping to the next unread/active agent session.
+Toastty builds on the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, real-time coding agent status in the sidebar, notifications and unread badges when agents need attention, manual later flags for sessions you want to revisit, and jumping to the next unread/active agent session.
 
 There are also little features throughout: scrollback search, configurable terminal profiles for setups like `tmux`, `zmx`, or `ssh`, keyboard shortcuts to navigate workspaces and panels, horizontal tabs per-workspace, and panel-aware text size and zoom control.
 
@@ -26,20 +26,24 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 ## Features
 
-- **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
-- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions, then working sessions.
-- **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
-- **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
-- **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`
-- **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu, top bar, or command palette, with live sidebar status and notifications
-- **Command palette** — Open a keyboard-first palette with `Cmd+Shift+P` to run built-in commands, switch workspaces, launch configured agents, and split with terminal profiles
+- **Workspaces in vertical tabs** — Named workspaces as vertical tabs, drag to reorder them, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
+- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions; active sessions then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active sessions, then wrapped working panels.
+- **Automatic agent status** — For Claude, Codex, and Pi, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
+- **Command palette** — Open a keyboard-first palette with `Cmd+Shift+P` to run built-in commands, switch workspaces, launch configured agents, and split with terminal profiles
+- **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
+- **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`, and drag to reorder within the workspace
+- **Right panel** — Keep supporting work beside the active terminal with per-tab Scratchpad, browser, and local-document tabs; toggle it with `Cmd+Shift+B`
+- **Scratchpad** — Keep rich agent-authored notes, plans, and review surfaces in session-linked right-panel tabs; Scratchpad documents persist locally and can be rebound or exported
+- **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu, top bar, or command palette, with live sidebar status and notifications
+- **Later flags** — Mark a managed session for follow-up without pinning or reordering it; the flag stays until you clear it or the session meaningfully advances
+- **Watch running commands** — Mark a busy terminal with `Cmd+Shift+M` to surface a session-style row, unread badge, and completion notification when that foreground command exits
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
-- **Scrollback find** — Search the active terminal's Ghostty scrollback in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
+- **In-panel find** — Search the active terminal's Ghostty scrollback or the focused local document in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
 - **Persisted terminal history** — With shell integration installed, restored `zsh`, `bash`, and `fish` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
-- **Local documents and directory opens** — Open supported local files (`.md`, `.markdown`, `.mdown`, `.mkd`, `.yaml`, `.yml`, `.toml`) in tabs or splits; Markdown documents render as preview/edit panels, while YAML and TOML use code views with line numbers. `Cmd`-clicking a local directory path in the terminal opens a split rooted at that directory.
+- **Local documents and directory opens** — Open supported local files in tabs or splits as editable code views with line numbers: Markdown, plain-text files (`.txt`), YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts, and common source files (`.swift`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.py`, `.go`, `.rs`). Local `.html` and `.htm` files open as browser panels. Backed local documents also expose `Open in Default App` as a header escape hatch. `Cmd`-clicking a local directory path in the terminal opens a split rooted at that directory.
 - **Text size and zoom control** — `Cmd+=`, `Cmd+-`, and `Cmd+0` adjust terminal font size for focused terminals, local-document text size for focused local documents, or page zoom for focused browser panels; terminal and local-document overrides persist per window, and browser zoom persists per browser panel
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
@@ -51,20 +55,25 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+N` | New window |
 | `Cmd+B` | Show or hide sidebar |
 | `Cmd+T` | New tab |
+| `Cmd+Shift+B` | Show or hide the right panel |
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |
 | `Option+Shift+E` | Rename tab |
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+Shift+P` | Open the command palette |
+| `Cmd+Ctrl+B` | New browser in the right panel |
+| `Cmd+Ctrl+S` | New Scratchpad in the right panel |
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
 | `Cmd+[` | Focus previous pane |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then working panels; flash the current sidebar selection if nothing remains |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels; flash the current sidebar selection if nothing remains |
+| `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
-| `Cmd+F` | Find in active terminal scrollback |
-| `Cmd+G` | Find next in active terminal scrollback |
-| `Cmd+Shift+G` | Find previous in active terminal scrollback |
+| `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
+| `Cmd+F` | Find in the focused terminal scrollback or local document |
+| `Cmd+G` | Find next in the focused terminal scrollback or local document |
+| `Cmd+Shift+G` | Find previous in the focused terminal scrollback or local document |
 | `Cmd+=` / `Cmd+Shift+=` | Increase the focused panel's text size or zoom |
 | `Cmd+-` | Decrease the focused panel's text size or zoom |
 | `Cmd+0` | Reset the focused panel's text size or zoom |
@@ -75,6 +84,8 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+1`–`Cmd+9` | Switch tab |
 | `Cmd+Shift+[` | Previous tab |
 | `Cmd+Shift+]` | Next tab |
+| `Cmd+Ctrl+[` | Previous right-panel tab |
+| `Cmd+Ctrl+]` | Next right-panel tab |
 | `Option+Shift+[` | Previous tab (wrapping, terminal-proof) |
 | `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
@@ -87,9 +98,23 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md).
 
+## Right Panel
+
+The right panel is a workspace-side tab strip for supporting material that should stay next to the active terminal instead of taking over the main pane layout. Use it for Scratchpad notes, browser panels, and local documents while the main workspace remains focused on terminals and splits.
+
+Each horizontal workspace tab keeps its own right-panel tabs, active tab, width, and visibility in the persisted layout. `Cmd+Shift+B` shows or hides the right panel; when showing it, Toastty focuses the active right-panel tab if one exists. `Cmd+Ctrl+[` and `Cmd+Ctrl+]` cycle through right-panel tabs, `Cmd+Ctrl+B` opens a new browser there, and `Cmd+Ctrl+S` creates a new Scratchpad.
+
+`Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. After the `toastty-scratchpad` skill is installed for an agent, you can usually skip manual creation and ask the agent for a visual; the agent can create and bind its own Scratchpad on demand.
+
+Terminal command-click integrations use the right panel for common supporting files: supported local documents open as editable local-document tabs, and local HTML files open in the browser.
+
 ## Running Agents
 
-Toastty can launch coding agents directly into terminal panels from the `Agent` menu, the top bar, the command palette, or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically — no separate agent skill or manual wiring needed.
+Toastty can launch coding agents directly into terminal panels from the `Agent` menu, the top bar, the command palette, or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically, while later flags stay attached to the managed session until you clear them or the session advances — no separate agent skill or manual wiring needed.
+
+Use `Cmd+Shift+L` to mark a managed session for later follow-up without pinning it; later-flagged sessions join the active `Cmd+Shift+A` rotation after urgent unread or approval/error work, and the flag clears automatically when the session meaningfully advances.
+
+Use `Cmd+Shift+M` to watch a busy foreground terminal command and get the same sidebar row, unread, and completion-notification affordances for non-agent terminal work. Watched commands are intentionally not later-flaggable.
 
 For full details see [docs/running-agents.md](docs/running-agents.md).
 
@@ -108,16 +133,21 @@ shortcutKey = "c"
 [claude]
 displayName = "Claude Code"
 argv = ["claude"]
+
+[pi]
+displayName = "Pi"
+argv = ["pi"]
 ```
 
 Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. `shortcutKey` is optional; when set, Toastty binds `Cmd+Opt+<key>` to launch that profile.
 
 ### Profile IDs and special behavior
 
-The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes two well-known IDs that receive first-party instrumentation:
+The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes three well-known IDs that receive first-party instrumentation:
 
 - **`codex`** — Injects Codex session recording, notification hooks, and a log watcher that surfaces live status (working, needs approval, idle) in the sidebar
 - **`claude`** — Injects Claude Code lifecycle hooks that report session state back to the sidebar automatically
+- **`pi`** — Injects Toastty's bundled Pi extension for session, tool, and changed-file telemetry while preserving user Pi extensions
 
 This matching is keyed on **the profile ID**, not on the command in `argv`:
 
@@ -132,15 +162,19 @@ argv = ["/my/codex-wrapper"]  # (ID is "codex", regardless of argv)
 argv = ["codex"]              # (ID is "my-codex", not "codex")
 ```
 
-Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
+For Pi, Toastty adds its own `--extension <toastty-pi-extension.js>` argument after the actual `pi` executable. User `--extension` arguments remain additive; `pi --no-extensions` or `pi -ne` disables Toastty's injected extension for that launch too. Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
 
 ## CLI
 
-Toastty bundles a `toastty` CLI for communicating with the running app over its automation socket. When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, and the CLI is how agents and wrapper scripts report status back to the sidebar.
+Toastty bundles a `toastty` CLI for communicating with the running app over its Unix socket. When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment. The CLI handles both session telemetry (`session`, `notify`) and live app control (`action`, `query`).
 
 | Command | Description |
 |---|---|
+| `action list` | List the live app-control actions exposed by the running app |
+| `action run` | Run an app action against a live Toastty instance |
 | `notify <title> <body>` | Emit a macOS desktop notification |
+| `query list` | List the live read-only app-control queries exposed by the running app |
+| `query run` | Run a read-only app query against a live Toastty instance |
 | `session start` | Create a new agent session |
 | `session status` | Update session state (`idle`, `working`, `needs_approval`, `ready`, `error`) |
 | `session update-files` | Report files changed during a session |
@@ -155,6 +189,16 @@ Most flags fall back to `TOASTTY_*` environment variables that Toastty injects a
 ```
 
 For the full command reference including all flags, environment variables, JSON output format, and exit codes, see [docs/cli-reference.md](docs/cli-reference.md).
+
+### Workflow automation with the CLI
+
+The CLI can also drive higher-level workflows against a normal running Toastty instance. This repo's `worktree-create` skill is one example: it resolves the current Toastty window, creates a background workspace, opens `WORKTREE_HANDOFF.md` in a split, and sends the startup command into the new terminal via `query run` and `action run`.
+
+If you want to point an agent at that pattern and have it adapt the workflow for another repo, use this prompt:
+
+```text
+Read `.agents/skills/worktree-create/SKILL.md` and `.agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh`, then adapt that workflow for this repo. Reuse the same Toastty CLI pattern: resolve the current window/panel, create a workspace, open a handoff document in a split, and send the startup command into the new terminal.
+```
 
 ## Configuration
 
@@ -171,7 +215,7 @@ Use `Toastty > Manage Config…` to open or create the live config file inside T
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local terminal UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
-- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
+- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations (`codex`, `claude`, and `pi`) inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
 - the `View` menu uses contextual labels for this shortcut family: focused terminals and local documents show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
 
 Example:

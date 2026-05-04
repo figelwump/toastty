@@ -474,7 +474,7 @@ struct AppReducerTests {
         let windowID = try #require(state.windows.first?.id)
         let originalWorkspaceCount = state.windows.first?.workspaceIDs.count ?? 0
 
-        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil, activate: true), state: &state))
 
         let window = try #require(state.windows.first(where: { $0.id == windowID }))
         #expect(window.workspaceIDs.count == originalWorkspaceCount + 1)
@@ -482,7 +482,64 @@ struct AppReducerTests {
         let selectedWorkspaceID = try #require(window.selectedWorkspaceID)
         let selectedWorkspace = try #require(state.workspacesByID[selectedWorkspaceID])
         #expect(selectedWorkspace.title == "Workspace 2")
+        #expect(selectedWorkspace.hasBeenVisited == true)
 
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func createWorkspaceWithoutActivationKeepsCurrentSelectionAndStartsUnvisited() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let originalWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Background", activate: false), state: &state))
+
+        let window = try #require(state.window(id: windowID))
+        #expect(window.selectedWorkspaceID == originalWorkspaceID)
+        let backgroundWorkspaceID = try #require(window.workspaceIDs.last)
+        #expect(backgroundWorkspaceID != originalWorkspaceID)
+        let backgroundWorkspace = try #require(state.workspacesByID[backgroundWorkspaceID])
+        #expect(backgroundWorkspace.title == "Background")
+        #expect(backgroundWorkspace.hasBeenVisited == false)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func selectingBackgroundWorkspaceMarksItVisited() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Background", activate: false), state: &state))
+
+        let backgroundWorkspaceID = try #require(state.window(id: windowID)?.workspaceIDs.last)
+        #expect(reducer.send(.selectWorkspace(windowID: windowID, workspaceID: backgroundWorkspaceID), state: &state))
+
+        let backgroundWorkspace = try #require(state.workspacesByID[backgroundWorkspaceID])
+        #expect(backgroundWorkspace.hasBeenVisited == true)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingSelectedWorkspaceMarksFallbackWorkspaceVisited() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let originalWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let originalPanelID = try #require(state.workspacesByID[originalWorkspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Background", activate: false), state: &state))
+
+        let backgroundWorkspaceID = try #require(state.window(id: windowID)?.workspaceIDs.last)
+        #expect(state.workspacesByID[backgroundWorkspaceID]?.hasBeenVisited == false)
+        #expect(reducer.send(.closePanel(panelID: originalPanelID), state: &state))
+
+        let window = try #require(state.window(id: windowID))
+        #expect(window.selectedWorkspaceID == backgroundWorkspaceID)
+        #expect(state.workspacesByID[backgroundWorkspaceID]?.hasBeenVisited == true)
         try StateValidator.validate(state)
     }
 
@@ -492,7 +549,7 @@ struct AppReducerTests {
         let reducer = AppReducer()
         let windowID = try #require(state.windows.first?.id)
 
-        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil, activate: true), state: &state))
 
         let window = try #require(state.windows.first(where: { $0.id == windowID }))
         let selectedWorkspaceID = try #require(window.selectedWorkspaceID)
@@ -709,7 +766,7 @@ struct AppReducerTests {
         state.workspacesByID[secondWorkspace.id] = secondWorkspace
         state.selectedWindowID = firstWindowID
 
-        #expect(reducer.send(.createWorkspace(windowID: secondWindowID, title: nil), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: secondWindowID, title: nil, activate: true), state: &state))
 
         #expect(state.selectedWindowID == firstWindowID)
         let updatedFirstWindow = try #require(state.windows.first(where: { $0.id == firstWindowID }))
@@ -1412,18 +1469,63 @@ struct AppReducerTests {
     }
 
     @Test
-    func createWebPanelRootRightWrapsExistingLayoutAndFocusesIt() throws {
+    func createWebPanelRightPanelDoesNotMutateMainLayoutOrFocus() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let selectedTabIDBefore = workspaceBefore.selectedTabID
+        let focusedPanelIDBefore = workspaceBefore.focusedPanelID
+        let layoutTreeBefore = workspaceBefore.layoutTree
         let leafCountBefore = workspaceBefore.layoutTree.allSlotInfos.count
+        let mainPanelCountBefore = workspaceBefore.panels.count
 
         #expect(
             reducer.send(
                 .createWebPanel(
                     workspaceID: workspaceID,
                     panel: WebPanelState(definition: .browser, initialURL: "https://example.com/root"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.selectedTabID == selectedTabIDBefore)
+        #expect(workspaceAfter.focusedPanelID == focusedPanelIDBefore)
+        #expect(workspaceAfter.layoutTree == layoutTreeBefore)
+        #expect(workspaceAfter.layoutTree.allSlotInfos.count == leafCountBefore)
+        #expect(workspaceAfter.panels.count == mainPanelCountBefore)
+        #expect(workspaceAfter.rightAuxPanel.isVisible)
+        #expect(workspaceAfter.rightAuxPanel.tabIDs.count == 1)
+
+        let rightPanelTab = try #require(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            Issue.record("expected right-panel tab to contain the browser panel")
+            return
+        }
+
+        #expect(webState.initialURL == "https://example.com/root")
+        #expect(webState.currentURL == nil)
+        #expect(workspaceAfter.panelState(for: rightPanelTab.panelID) == rightPanelTab.panelState)
+        #expect(workspaceAfter.slotID(containingPanelID: rightPanelTab.panelID) == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func legacyRootRightPlacementAliasesRightPanel() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Legacy Browser"),
                     placement: .rootRight
                 ),
                 state: &state
@@ -1431,21 +1533,847 @@ struct AppReducerTests {
         )
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfter.layoutTree.allSlotInfos.count == leafCountBefore + 1)
-        guard case .split(_, let orientation, _, _, let second) = workspaceAfter.layoutTree else {
-            Issue.record("expected root-right browser creation to wrap the layout in a split")
+        #expect(workspaceAfter.layoutTree == workspaceBefore.layoutTree)
+        #expect(workspaceAfter.rightAuxPanel.tabIDs.count == 1)
+        let rightPanelTab = try #require(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = rightPanelTab.panelState else {
+            Issue.record("expected right-panel tab to contain the browser panel")
             return
         }
-        #expect(orientation == .horizontal)
-        guard case .slot(_, let browserPanelID) = second,
-              case .web(let webState) = workspaceAfter.panels[browserPanelID] else {
-            Issue.record("expected rightmost root slot to contain the browser panel")
-            return
-        }
+        #expect(webState.title == "Legacy Browser")
 
-        #expect(workspaceAfter.focusedPanelID == browserPanelID)
-        #expect(webState.initialURL == "https://example.com/root")
-        #expect(webState.currentURL == nil)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func repeatedRightPanelBrowserCreationAddsScopedTabsWithoutChangingLayout() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let layoutTreeBefore = try #require(state.workspacesByID[workspaceID]?.layoutTree)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First Browser"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second Browser"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.layoutTree == layoutTreeBefore)
+        #expect(workspaceAfter.rightAuxPanel.tabIDs.count == 2)
+        #expect(workspaceAfter.rightAuxPanel.orderedTabs.compactMap { tab -> String? in
+            guard case .web(let webState) = tab.panelState else { return nil }
+            return webState.title
+        } == ["First Browser", "Second Browser"])
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func rightPanelLocalDocumentCreationDedupesByNormalizedPath() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(
+                        definition: .localDocument,
+                        title: "README.md",
+                        localDocument: LocalDocumentState(filePath: "/tmp/project/README.md")
+                    ),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(
+                        definition: .localDocument,
+                        title: "README Updated",
+                        localDocument: LocalDocumentState(filePath: "/tmp/project/../project/README.md")
+                    ),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.rightAuxPanel.tabIDs.count == 1)
+        let tab = try #require(workspaceAfter.rightAuxPanel.activeTab)
+        guard case .web(let webState) = tab.panelState else {
+            Issue.record("expected right-panel tab to contain local document panel")
+            return
+        }
+        #expect(webState.title == "README Updated")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func rightPanelStateIsScopedToSelectedWorkspaceTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let firstMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: 520), state: &state))
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        let secondMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        #expect(secondMainTabID != firstMainTabID)
+        var workspaceAfterNewTab = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterNewTab.rightAuxPanel.tabIDs.isEmpty)
+        #expect(workspaceAfterNewTab.rightAuxPanel.hasCustomWidth == false)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.setRightAuxPanelWidth(workspaceID: workspaceID, width: 310), state: &state))
+
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: firstMainTabID), state: &state))
+        let firstTabWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(firstTabWorkspace.rightAuxPanel.width == 520)
+        #expect(firstTabWorkspace.rightAuxPanel.hasCustomWidth)
+        #expect(firstTabWorkspace.rightAuxPanel.orderedTabs.count == 1)
+        guard case .web(let firstWebState)? = firstTabWorkspace.rightAuxPanel.activeTab?.panelState else {
+            Issue.record("expected first tab right panel to contain web panel")
+            return
+        }
+        #expect(firstWebState.title == "First tab docs")
+
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: secondMainTabID), state: &state))
+        workspaceAfterNewTab = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterNewTab.rightAuxPanel.width == 310)
+        #expect(workspaceAfterNewTab.rightAuxPanel.hasCustomWidth)
+        #expect(workspaceAfterNewTab.rightAuxPanel.orderedTabs.count == 1)
+        guard case .web(let secondWebState)? = workspaceAfterNewTab.rightAuxPanel.activeTab?.panelState else {
+            Issue.record("expected second tab right panel to contain web panel")
+            return
+        }
+        #expect(secondWebState.title == "Second tab docs")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func rightPanelLocalDocumentDedupeIsScopedToSelectedWorkspaceTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let firstMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        let localDocument = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            localDocument: LocalDocumentState(filePath: "/tmp/project/README.md")
+        )
+
+        #expect(reducer.send(.createWebPanel(workspaceID: workspaceID, panel: localDocument, placement: .rightPanel), state: &state))
+        let firstPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let secondMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        #expect(secondMainTabID != firstMainTabID)
+
+        #expect(reducer.send(.createWebPanel(workspaceID: workspaceID, panel: localDocument, placement: .rightPanel), state: &state))
+        let secondPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(secondPanelID != firstPanelID)
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: firstMainTabID), state: &state))
+        #expect(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID == firstPanelID)
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: secondMainTabID), state: &state))
+        #expect(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID == secondPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func creatingRightPanelWebPanelFocusesCreatedSubTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let mainFocusedPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let firstRightPanelID = try #require(workspace.rightAuxPanel.activePanelID)
+        #expect(workspace.rightAuxPanel.focusedPanelID == firstRightPanelID)
+        #expect(workspace.focusedPanelID == mainFocusedPanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        workspace = try #require(state.workspacesByID[workspaceID])
+        let secondRightPanelID = try #require(workspace.rightAuxPanel.activePanelID)
+        #expect(secondRightPanelID != firstRightPanelID)
+        #expect(workspace.rightAuxPanel.tabIDs.count == 2)
+        #expect(workspace.rightAuxPanel.focusedPanelID == secondRightPanelID)
+        #expect(workspace.focusedPanelID == mainFocusedPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func focusingBackgroundRightPanelSelectsOwningWorkspaceTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let firstMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let firstRightPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        #expect(state.workspacesByID[workspaceID]?.resolvedSelectedTabID != firstMainTabID)
+
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: firstRightPanelID), state: &state))
+
+        let workspaceAfterFocus = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterFocus.resolvedSelectedTabID == firstMainTabID)
+        #expect(workspaceAfterFocus.rightAuxPanel.focusedPanelID == firstRightPanelID)
+        #expect(workspaceAfterFocus.rightAuxPanel.activePanelID == firstRightPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func selectingBackgroundRightPanelTabSelectsOwningWorkspaceTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let firstMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let firstRightTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        let firstRightPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let secondMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        #expect(secondMainTabID != firstMainTabID)
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        #expect(
+            reducer.send(
+                .selectRightAuxPanelTab(
+                    workspaceID: workspaceID,
+                    tabID: firstRightTabID,
+                    focus: true
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfterSelect = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterSelect.resolvedSelectedTabID == firstMainTabID)
+        #expect(workspaceAfterSelect.rightAuxPanel.activeTabID == firstRightTabID)
+        #expect(workspaceAfterSelect.rightAuxPanel.focusedPanelID == firstRightPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingFocusedRightPanelTabFocusesSuccessorSubTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let firstRightTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        let firstRightPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let secondRightTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        let secondRightPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        #expect(secondRightTabID != firstRightTabID)
+        #expect(secondRightPanelID != firstRightPanelID)
+
+        #expect(
+            reducer.send(
+                .selectRightAuxPanelTab(
+                    workspaceID: workspaceID,
+                    tabID: firstRightTabID,
+                    focus: true
+                ),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.closeRightAuxPanelTab(workspaceID: workspaceID, tabID: firstRightTabID), state: &state))
+
+        let workspaceAfterClose = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterClose.rightAuxPanel.activeTabID == secondRightTabID)
+        #expect(workspaceAfterClose.rightAuxPanel.focusedPanelID == secondRightPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingUnfocusedRightPanelTabPreservesFocusedSubTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let firstRightTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        let firstRightPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let secondRightTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+
+        #expect(
+            reducer.send(
+                .selectRightAuxPanelTab(
+                    workspaceID: workspaceID,
+                    tabID: firstRightTabID,
+                    focus: true
+                ),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.closeRightAuxPanelTab(workspaceID: workspaceID, tabID: secondRightTabID), state: &state))
+
+        let workspaceAfterClose = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterClose.rightAuxPanel.activeTabID == firstRightTabID)
+        #expect(workspaceAfterClose.rightAuxPanel.focusedPanelID == firstRightPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func updateScratchpadPanelStateMutatesRightPanelScratchpad() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let sourcePanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        let initialScratchpad = ScratchpadState(documentID: UUID(), revision: 1)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(
+                        definition: .scratchpad,
+                        title: "Initial Scratchpad",
+                        scratchpad: initialScratchpad
+                    ),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let panelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        let nextScratchpad = ScratchpadState(
+            documentID: initialScratchpad.documentID,
+            sessionLink: ScratchpadSessionLink(
+                sessionID: "session-1",
+                agent: .codex,
+                sourcePanelID: sourcePanelID,
+                sourceWorkspaceID: workspaceID
+            ),
+            revision: 2
+        )
+
+        #expect(
+            reducer.send(
+                .updateScratchpadPanelState(
+                    panelID: panelID,
+                    scratchpad: nextScratchpad,
+                    title: "Updated Scratchpad"
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfterUpdate = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterUpdate.panels[panelID] == nil)
+        guard case .web(let webState)? = workspaceAfterUpdate.rightAuxPanel.panelState(for: panelID) else {
+            Issue.record("expected right-panel scratchpad web state")
+            return
+        }
+        #expect(webState.title == "Updated Scratchpad")
+        #expect(webState.scratchpad == nextScratchpad)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingRightPanelTabClearsUnreadNotificationForPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let rightTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        let panelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(
+            reducer.send(
+                .recordDesktopNotification(workspaceID: workspaceID, panelID: panelID),
+                state: &state
+            )
+        )
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadPanelIDs == [panelID])
+
+        #expect(reducer.send(.closeRightAuxPanelTab(workspaceID: workspaceID, tabID: rightTabID), state: &state))
+        let workspaceAfterClose = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterClose.unreadPanelIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func settingRightPanelWidthMarksWidthAsUserCustom() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .setRightAuxPanelWidth(
+                    workspaceID: workspaceID,
+                    width: RightAuxPanelState.defaultWidth
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfterResize = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterResize.rightAuxPanel.width == RightAuxPanelState.defaultWidth)
+        #expect(workspaceAfterResize.rightAuxPanel.hasCustomWidth)
+        #expect(
+            reducer.send(
+                .setRightAuxPanelWidth(
+                    workspaceID: workspaceID,
+                    width: RightAuxPanelState.defaultWidth
+                ),
+                state: &state
+            ) == false
+        )
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func togglingEmptyRightPanelShowsAndHidesPanelShell() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleRightAuxPanel(workspaceID: workspaceID), state: &state))
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.tabIDs.isEmpty)
+
+        #expect(reducer.send(.toggleRightAuxPanel(workspaceID: workspaceID), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.isVisible == false)
+        #expect(workspace.rightAuxPanel.tabIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func settingEmptyRightPanelVisibilityShowsPanelShell() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.setRightAuxPanelVisibility(workspaceID: workspaceID, isVisible: true), state: &state))
+
+        let workspaceAfterShow = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterShow.rightAuxPanel.isVisible)
+        #expect(workspaceAfterShow.rightAuxPanel.tabIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func showingRightPanelFocusesActiveTabWhenPresent() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let rightPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(reducer.send(.toggleRightAuxPanel(workspaceID: workspaceID), state: &state))
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.isVisible == false)
+        #expect(workspace.rightAuxPanel.focusedPanelID == nil)
+
+        #expect(reducer.send(.toggleRightAuxPanel(workspaceID: workspaceID), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.focusedPanelID == rightPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func focusSlotCyclesThroughVisibleRightPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let mainPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let rightPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: mainPanelID), state: &state))
+
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .next), state: &state))
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.focusedPanelID == mainPanelID)
+        #expect(workspace.rightAuxPanel.focusedPanelID == rightPanelID)
+
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .next), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.focusedPanelID == mainPanelID)
+        #expect(workspace.rightAuxPanel.focusedPanelID == nil)
+
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .previous), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.focusedPanelID == rightPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func directionalFocusMovesBetweenMainPaneAndRightPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let mainPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let rightPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: mainPanelID), state: &state))
+
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .right), state: &state))
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.focusedPanelID == rightPanelID)
+
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .left), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.focusedPanelID == mainPanelID)
+        #expect(workspace.rightAuxPanel.focusedPanelID == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func selectingAdjacentRightPanelTabFocusesWrappedTarget() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let firstTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        let firstPanelID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activePanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let secondTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        #expect(secondTabID != firstTabID)
+
+        #expect(
+            reducer.send(
+                .selectAdjacentRightAuxPanelTab(workspaceID: workspaceID, direction: .previous),
+                state: &state
+            )
+        )
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.activeTabID == firstTabID)
+        #expect(workspace.rightAuxPanel.focusedPanelID == firstPanelID)
+
+        #expect(
+            reducer.send(
+                .selectAdjacentRightAuxPanelTab(workspaceID: workspaceID, direction: .previous),
+                state: &state
+            )
+        )
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.activeTabID == secondTabID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func emptyRightPanelShellDoesNotLeakAcrossWorkspaceTabs() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let firstMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        #expect(reducer.send(.toggleRightAuxPanel(workspaceID: workspaceID), state: &state))
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.resolvedSelectedTabID == firstMainTabID)
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.tabIDs.isEmpty)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let secondMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        #expect(secondMainTabID != firstMainTabID)
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.resolvedSelectedTabID == secondMainTabID)
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.tabIDs.count == 1)
+
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: firstMainTabID), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.rightAuxPanel.isVisible)
+        #expect(workspace.rightAuxPanel.tabIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingFinalRightPanelTabKeepsPanelShellVisible() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        let tabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+        #expect(reducer.send(.closeRightAuxPanelTab(workspaceID: workspaceID, tabID: tabID), state: &state))
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.rightAuxPanel.isVisible)
+        #expect(workspaceAfter.rightAuxPanel.tabIDs.isEmpty)
+        #expect(workspaceAfter.rightAuxPanel.activeTabID == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closingBackgroundRightPanelTabClosesOwningWorkspaceTabPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let firstMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let firstRightTabID = try #require(state.workspacesByID[workspaceID]?.rightAuxPanel.activeTabID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let secondMainTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        #expect(secondMainTabID != firstMainTabID)
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second tab docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        #expect(reducer.send(.closeRightAuxPanelTab(workspaceID: workspaceID, tabID: firstRightTabID), state: &state))
+
+        let workspaceAfterClose = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterClose.resolvedSelectedTabID == secondMainTabID)
+        #expect(workspaceAfterClose.tab(id: firstMainTabID)?.rightAuxPanel.tabIDs.isEmpty == true)
+        #expect(workspaceAfterClose.tab(id: firstMainTabID)?.rightAuxPanel.isVisible == true)
+        #expect(workspaceAfterClose.tab(id: secondMainTabID)?.rightAuxPanel.tabIDs.count == 1)
 
         try StateValidator.validate(state)
     }
@@ -2050,6 +2978,234 @@ struct AppReducerTests {
     }
 
     @Test
+    func resizeFocusedSlotSplitAdjustsFocusedRightPanelWidth() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let initialWidth = workspaceBefore.rightAuxPanel.width
+        let initialLayoutTree = workspaceBefore.layoutTree
+        #expect(workspaceBefore.rightAuxPanel.focusedPanelID != nil)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .left, amount: 2),
+                state: &state
+            )
+        )
+
+        var workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.rightAuxPanel.width == initialWidth + 10)
+        #expect(workspaceAfter.rightAuxPanel.hasCustomWidth)
+        #expect(workspaceAfter.layoutTree == initialLayoutTree)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 1),
+                state: &state
+            )
+        )
+
+        workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.rightAuxPanel.width == initialWidth + 5)
+        #expect(workspaceAfter.layoutTree == initialLayoutTree)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedSlotSplitDoesNotResizeMainLayoutVerticallyWhenRightPanelFocused() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical), state: &state))
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceBefore.rightAuxPanel.focusedPanelID != nil)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .up, amount: 2),
+                state: &state
+            ) == false
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.layoutTree == workspaceBefore.layoutTree)
+        #expect(workspaceAfter.rightAuxPanel.width == workspaceBefore.rightAuxPanel.width)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedSlotSplitIgnoresPreservedRightPanelFocusInFocusedPanelMode() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+
+        let focusedPanelID = UUID()
+        let siblingPanelID = UUID()
+        let focusedSlotID = UUID()
+        let siblingSlotID = UUID()
+        let rootNodeID = UUID()
+        workspace.panels = [
+            focusedPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
+            siblingPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
+        ]
+        workspace.layoutTree = .split(
+            nodeID: rootNodeID,
+            orientation: .vertical,
+            ratio: 0.5,
+            first: .slot(slotID: focusedSlotID, panelID: focusedPanelID),
+            second: .slot(slotID: siblingSlotID, panelID: siblingPanelID)
+        )
+        workspace.focusedPanelID = focusedPanelID
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = rootNodeID
+
+        let rightAuxPanelID = UUID()
+        let rightAuxTabID = UUID()
+        let webState = WebPanelState(definition: .browser, title: "Docs")
+        workspace.rightAuxPanel = RightAuxPanelState(
+            isVisible: true,
+            activeTabID: rightAuxTabID,
+            tabIDs: [rightAuxTabID],
+            tabsByID: [
+                rightAuxTabID: RightAuxPanelTabState(
+                    id: rightAuxTabID,
+                    identity: RightAuxPanelTabIdentity.identity(for: webState, panelID: rightAuxPanelID),
+                    panelID: rightAuxPanelID,
+                    panelState: .web(webState)
+                ),
+            ],
+            focusedPanelID: rightAuxPanelID
+        )
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .down, amount: 2),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, _, let resizedRatio, _, _) = workspaceAfter.layoutTree else {
+            Issue.record("expected vertical split root after resize")
+            return
+        }
+        #expect(resizedRatio > 0.5)
+        #expect(workspaceAfter.rightAuxPanel.width == workspace.rightAuxPanel.width)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedSlotSplitAdjustsRightPanelWidthFromSingleAdjacentMainPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let mainPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: mainPanelID), state: &state))
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let initialWidth = workspaceBefore.rightAuxPanel.width
+        let initialLayoutTree = workspaceBefore.layoutTree
+        #expect(workspaceBefore.rightAuxPanel.focusedPanelID == nil)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 2),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.rightAuxPanel.width == initialWidth - 10)
+        #expect(workspaceAfter.rightAuxPanel.hasCustomWidth)
+        #expect(workspaceAfter.layoutTree == initialLayoutTree)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedSlotSplitPrefersRightPanelBoundaryForRightEdgeMainPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        let mainRightPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: mainRightPanelID), state: &state))
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let initialWidth = workspaceBefore.rightAuxPanel.width
+        guard case .split(_, _, let initialRatio, _, _) = workspaceBefore.layoutTree else {
+            Issue.record("expected horizontal split root before resize")
+            return
+        }
+
+        #expect(
+            reducer.send(
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 2),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, _, let resizedRatio, _, _) = workspaceAfter.layoutTree else {
+            Issue.record("expected horizontal split root after resize")
+            return
+        }
+
+        #expect(workspaceAfter.rightAuxPanel.width == initialWidth - 10)
+        #expect(workspaceAfter.rightAuxPanel.hasCustomWidth)
+        #expect(resizedRatio == initialRatio)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func resizeFocusedSlotSplitUsesNearestMatchingAncestor() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -2557,6 +3713,57 @@ struct AppReducerTests {
     }
 
     @Test
+    func toggleFocusedPanelModePreservesVisibleRightPanelState() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceBefore.rightAuxPanel.isVisible)
+
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        let focusedModeWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(focusedModeWorkspace.focusedPanelModeActive)
+        #expect(focusedModeWorkspace.rightAuxPanel.isVisible)
+
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        let restoredWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(restoredWorkspace.focusedPanelModeActive == false)
+        #expect(restoredWorkspace.rightAuxPanel.isVisible)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func toggleFocusedPanelModePreservesHiddenRightPanelState() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        let focusedModeWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(focusedModeWorkspace.focusedPanelModeActive)
+        #expect(focusedModeWorkspace.rightAuxPanel.isVisible == false)
+
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        let restoredWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(restoredWorkspace.focusedPanelModeActive == false)
+        #expect(restoredWorkspace.rightAuxPanel.isVisible == false)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func toggleFocusedPanelModeRecoversFromStaleFocusedPanel() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -2613,19 +3820,23 @@ struct AppReducerTests {
     }
 
     @Test
-    func rootRightWebPanelCreationInFocusModePromotesNewRootIntoFocusMode() throws {
+    func rightPanelWebPanelCreationInFocusModeDoesNotPromoteNewRoot() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
 
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelIDBefore = workspaceBefore.focusedPanelID
+        let focusModeRootNodeIDBefore = workspaceBefore.focusModeRootNodeID
+        let layoutTreeBefore = workspaceBefore.layoutTree
 
         #expect(
             reducer.send(
                 .createWebPanel(
                     workspaceID: workspaceID,
                     panel: WebPanelState(definition: .browser),
-                    placement: .rootRight
+                    placement: .rightPanel
                 ),
                 state: &state
             )
@@ -2633,23 +3844,16 @@ struct AppReducerTests {
 
         let workspace = try #require(state.workspacesByID[workspaceID])
         #expect(workspace.focusedPanelModeActive)
-        guard case .split(let splitNodeID, .horizontal, _, _, let second) = workspace.layoutTree else {
-            Issue.record("expected root-right browser creation to wrap the layout in a horizontal split")
-            return
-        }
-        guard case .slot(_, let panelID) = second else {
-            Issue.record("expected new browser panel to occupy the rightmost root slot")
-            return
-        }
-
-        #expect(workspace.focusModeRootNodeID == splitNodeID)
-        #expect(workspace.focusedPanelID == panelID)
+        #expect(workspace.layoutTree == layoutTreeBefore)
+        #expect(workspace.focusModeRootNodeID == focusModeRootNodeIDBefore)
+        #expect(workspace.focusedPanelID == focusedPanelIDBefore)
+        #expect(workspace.rightAuxPanel.tabIDs.count == 1)
 
         try StateValidator.validate(state)
     }
 
     @Test
-    func rootRightWebPanelCreationExpandsFocusedSubtreeBackToWholeLayout() throws {
+    func rightPanelWebPanelCreationDoesNotExpandFocusedSubtree() throws {
         let leftPanelID = UUID()
         let topRightPanelID = UUID()
         let bottomRightPanelID = UUID()
@@ -2703,7 +3907,7 @@ struct AppReducerTests {
                 .createWebPanel(
                     workspaceID: workspaceID,
                     panel: WebPanelState(definition: .browser),
-                    placement: .rootRight
+                    placement: .rightPanel
                 ),
                 state: &state
             )
@@ -2711,17 +3915,10 @@ struct AppReducerTests {
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(updatedWorkspace.focusedPanelModeActive)
-        guard case .split(let splitNodeID, .horizontal, _, _, let second) = updatedWorkspace.layoutTree else {
-            Issue.record("expected root-right browser creation to wrap the whole layout in a horizontal split")
-            return
-        }
-        guard case .slot(_, let browserPanelID) = second else {
-            Issue.record("expected new browser panel to occupy the rightmost root slot")
-            return
-        }
-
-        #expect(updatedWorkspace.focusModeRootNodeID == splitNodeID)
-        #expect(updatedWorkspace.focusedPanelID == browserPanelID)
+        #expect(updatedWorkspace.layoutTree == workspace.layoutTree)
+        #expect(updatedWorkspace.focusModeRootNodeID == rightBranchNodeID)
+        #expect(updatedWorkspace.focusedPanelID == topRightPanelID)
+        #expect(updatedWorkspace.rightAuxPanel.tabIDs.count == 1)
 
         try StateValidator.validate(state)
     }
@@ -3070,7 +4267,7 @@ struct AppReducerTests {
         let windowID = try #require(state.windows.first?.id)
         let firstWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace", activate: true), state: &state))
         let secondWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
         var firstWorkspace = try #require(state.workspacesByID[firstWorkspaceID])
@@ -3157,6 +4354,88 @@ struct AppReducerTests {
             )
         )
         #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 0)
+    }
+
+    @Test
+    func moveWorkspaceTabReordersTabsAndKeepsSelectedTabID() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let originalTabIDs = workspace.tabIDs
+        let selectedTabID = originalTabIDs[1]
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: selectedTabID), state: &state))
+
+        #expect(reducer.send(.moveWorkspaceTab(workspaceID: workspaceID, fromIndex: 1, toIndex: 2), state: &state))
+
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.tabIDs == [originalTabIDs[0], originalTabIDs[2], originalTabIDs[1]])
+        #expect(workspace.selectedTabID == selectedTabID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func moveWorkspaceTabRejectsSameIndexWithoutStateChurn() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        let originalState = state
+        #expect(reducer.send(.moveWorkspaceTab(workspaceID: workspaceID, fromIndex: 1, toIndex: 1), state: &state) == false)
+        #expect(state == originalState)
+    }
+
+    @Test
+    func moveWorkspaceTabRejectsOutOfBoundsIndices() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        let originalState = state
+        #expect(reducer.send(.moveWorkspaceTab(workspaceID: workspaceID, fromIndex: -1, toIndex: 0), state: &state) == false)
+        #expect(reducer.send(.moveWorkspaceTab(workspaceID: workspaceID, fromIndex: 0, toIndex: 2), state: &state) == false)
+        #expect(state == originalState)
+    }
+
+    @Test
+    func moveWorkspaceReordersWorkspacesAndKeepsSelectedWorkspaceID() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Two", activate: true), state: &state))
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Three", activate: true), state: &state))
+
+        var window = try #require(state.windows.first)
+        let originalWorkspaceIDs = window.workspaceIDs
+        let selectedWorkspaceID = originalWorkspaceIDs[1]
+        #expect(reducer.send(.selectWorkspace(windowID: windowID, workspaceID: selectedWorkspaceID), state: &state))
+
+        #expect(reducer.send(.moveWorkspace(windowID: windowID, fromIndex: 1, toIndex: 0), state: &state))
+
+        window = try #require(state.windows.first)
+        #expect(window.workspaceIDs == [originalWorkspaceIDs[1], originalWorkspaceIDs[0], originalWorkspaceIDs[2]])
+        #expect(window.selectedWorkspaceID == selectedWorkspaceID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func moveWorkspaceRejectsSameIndexAndOutOfBoundsIndices() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Two", activate: true), state: &state))
+
+        let originalState = state
+        #expect(reducer.send(.moveWorkspace(windowID: windowID, fromIndex: 1, toIndex: 1), state: &state) == false)
+        #expect(reducer.send(.moveWorkspace(windowID: windowID, fromIndex: 0, toIndex: 2), state: &state) == false)
+        #expect(state == originalState)
     }
 
     // MARK: - Toggle Sidebar

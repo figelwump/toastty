@@ -1,6 +1,6 @@
 # toastty socket protocol (v1)
 
-Date: 2026-04-17
+Date: 2026-04-20
 
 This document describes the current socket protocol implemented by
 `Sources/App/Automation/AutomationSocketServer.swift`.
@@ -8,28 +8,29 @@ This document describes the current socket protocol implemented by
 Important scope note:
 
 - The socket server is created for normal launches as well as automation launches so session and notification events can still reach the app.
-- The same server accepts both automation requests and event-style envelopes
-  (`session.*`, `notification.emit`).
+- The same server accepts always-on app-control requests, automation-only requests, and event-style envelopes (`session.*`, `notification.emit`).
+- `app_control.*` commands are available in normal launches by default.
 - `automation.*` commands still require automation mode.
 - This is a narrow implementation doc, not an aspirational protocol design.
 
 CLI note:
 
-- The repo ships a thin `toastty` CLI wrapper for `notify` and the `session`
-  subcommands.
-- Toastty-managed Claude and Codex launches primarily use
+- The repo ships a `toastty` CLI wrapper for app control (`action` / `query`), notifications, and the `session` subcommands.
+- Toastty-managed Claude, Codex, and Pi launches primarily use
   `session ingest-agent-event` to translate provider events into `session.status`
   updates. `session ingest-agent-event` is handled locally inside the CLI; it is
   not a socket event type.
-- Manual wrappers should generally use `session start`, `session status`,
-  optional `session update-files`, and `session stop` directly.
+- Manual wrappers should generally use:
+  - `toastty action list` / `toastty query list` for discovery
+  - `toastty action run` / `toastty query run` for live app control
+  - `session start`, `session status`, optional `session update-files`, and `session stop` for agent lifecycle reporting
 
 ## 1) transport and lifecycle
 
 - Transport: Unix domain socket only.
 - The server creates the parent directory with mode `0700` and the socket file with
   mode `0600`.
-- Event-style envelopes are available whenever the app listener is running.
+- Event-style envelopes and `app_control.*` requests are available whenever the app listener is running.
 - `automation.*` commands require automation mode enabled through either:
   - `--automation`
   - a truthy `TOASTTY_AUTOMATION` environment value
@@ -151,7 +152,164 @@ Terminal target resolution rules:
 - If the resolved workspace has no terminal panels, the server returns
   `INVALID_PAYLOAD`.
 
-## 5) implemented automation commands
+## 5) implemented app-control requests
+
+These commands are available in normal launches by default and are the preferred
+API for live app control.
+
+### `app_control.list_actions`
+
+Request payload: empty
+
+Result:
+
+- `commands: [AppControlCommandDescriptor]`
+
+Each descriptor includes:
+
+- `id: String`
+- `kind: "action"`
+- `summary: String`
+- `selectors: [windowID | workspaceID | panelID]`
+- `parameters: [name, summary, valueType, required, repeatable, allowedValues?]`
+- `aliases: [String]`
+
+Use this for discovery rather than hard-coding the full catalog in external tools. Aliases are accepted for compatibility, but new integrations should prefer canonical IDs.
+
+### `app_control.run_action`
+
+Request payload:
+
+- `id: String`
+- `args?: Object`
+
+Result:
+
+- action-specific object
+- `stateVersion: Int` when the action mutates app state
+
+Selectors are passed inside `args`:
+
+- `windowID?: UUID string`
+- `workspaceID?: UUID string`
+- `panelID?: UUID string`
+
+Canonical action IDs are machine-first and parameterized. Common actions include:
+
+- `window.create`
+- `window.sidebar.toggle`
+- `workspace.create`
+- `workspace.select`
+- `workspace.move`
+- `workspace.rename`
+- `workspace.close`
+- `workspace.tab.create`
+- `workspace.tab.select`
+- `workspace.tab.move`
+- `workspace.tab.rename`
+- `workspace.tab.close`
+- `panel.close`
+- `panel.create.browser`
+- `panel.create.local-document`
+- `panel.scratchpad.set-content`
+- `panel.scratchpad.rebind`
+- `panel.scratchpad.export`
+- `panel.focus-mode.toggle`
+- `agent.launch`
+- `config.reload`
+- `terminal.send-text`
+- `terminal.drop-image-files`
+
+Notable action-specific behavior:
+
+- `workspace.create`
+  - `args.title` is optional.
+  - `args.activate` is optional and defaults to `true`.
+  - When `args.activate=false`, Toastty creates the workspace without changing
+    the visible workspace selection.
+  - Background-created workspaces remain marked as new until selected once.
+  - The action result includes `workspaceID` and `windowID`.
+- `workspace.move`
+  - requires `args.index` and `args.toIndex`, both 1-based workspace positions
+    in the target window.
+  - Reorders the window's workspace list without changing the selected
+    workspace ID.
+- `workspace.tab.move`
+  - requires `args.index` and `args.toIndex`, both 1-based tab positions in the
+    target workspace.
+  - Reorders the workspace's tab list without changing the selected tab ID.
+- `panel.scratchpad.set-content`
+  - requires `args.sessionID`.
+  - requires exactly one of `args.filePath` or `args.content`.
+  - `args.filePath` is read as UTF-8. Relative paths resolve from the active
+    session's `cwd` when available, then from the app process working directory.
+  - `args.title` is optional.
+  - `args.expectedRevision` is optional. New documents accept `0`; existing
+    documents reject stale revisions.
+  - Content is stored as HTML in the Scratchpad document store and is limited to
+    1,048,576 UTF-8 bytes.
+  - The action creates or updates the Scratchpad linked to the active managed
+    session, opens new Scratchpads in the right panel, restores focus to the
+    source terminal after auto-create, and marks unfocused Scratchpads updated.
+  - The result includes `windowID`, `workspaceID`, `panelID`, `documentID`,
+    `revision`, and `created`.
+- `panel.scratchpad.rebind`
+  - requires `args.sessionID` for an active managed session.
+  - Targets an existing Scratchpad panel using `args.panelID`, workspace/window
+    selectors, or the focused/active Scratchpad resolution order.
+  - The target session must be in the same workspace tab as the Scratchpad, and
+    a session may only be linked to one Scratchpad at a time.
+  - `panel.scratchpad.bind` is accepted as a compatibility alias.
+  - The result includes `windowID`, `workspaceID`, `panelID`, `documentID`,
+    `revision`, and `sessionID`.
+- `panel.scratchpad.export`
+  - Targets by `args.sessionID` when provided, otherwise by the normal
+    Scratchpad panel selectors.
+  - Writes the Scratchpad HTML to an app-chosen local file path.
+  - The result includes `workspaceID`, `panelID`, `filePath`, `documentID`,
+    `revision`, and `title`.
+
+### `app_control.list_queries`
+
+Request payload: empty
+
+Result:
+
+- `commands: [AppControlCommandDescriptor]`
+
+The response shape matches `app_control.list_actions`, except each descriptor
+has `kind: "query"`.
+
+### `app_control.run_query`
+
+Request payload:
+
+- `id: String`
+- `args?: Object`
+
+Result:
+
+- query-specific object
+
+Selectors are passed inside `args` using the same keys as `app_control.run_action`.
+
+Common query IDs include:
+
+- `workspace.snapshot`
+- `terminal.state`
+- `terminal.visible-text`
+- `panel.local-document.state`
+- `panel.browser.state`
+- `panel.scratchpad.state`
+
+`panel.scratchpad.state` resolves a Scratchpad panel from `panelID`, or from
+`workspaceID` / `windowID` using focused layout Scratchpad, focused right-panel
+Scratchpad, active right-panel Scratchpad, any right-panel Scratchpad, then
+layout Scratchpad order. It returns Scratchpad document metadata, linked session
+ID when present, host lifecycle state, bootstrap content hashes, and recent
+Scratchpad diagnostics.
+
+## 6) implemented automation commands
 
 ### `automation.ping`
 
@@ -208,14 +366,39 @@ Result:
 
 - `stateVersion: Int`
 
+Behavior:
+
+- This is now a compatibility shim over the shared app-control executor.
+- Canonical IDs come from `app_control.list_actions`; legacy aliases are still accepted for compatibility.
+- New integrations should prefer `app_control.run_action`.
+
 Supported action IDs:
 
+- `window.create`
+- `window.sidebar.toggle`
 - `workspace.tab.new`
 - `workspace.tab.select`
   - requires `args.index` (1-based) or `args.tabID`
+- `workspace.tab.move`
+  - requires `args.index` and `args.toIndex` (1-based)
 - `workspace.tab.close`
   - accepts `args.index` (1-based) or `args.tabID`
   - if neither is provided, closes the selected tab
+- `workspace.tab.rename`
+  - requires `args.title`
+  - accepts `args.index` (1-based) or `args.tabID`
+- `workspace.select`
+  - requires `args.workspaceID` or `args.index` (1-based)
+- `workspace.create`
+  - `args.title` is optional
+  - `args.activate` is optional and defaults to `true`
+  - `args.activate=false` keeps the current workspace selected and marks the
+    created background workspace as new until selected once
+- `workspace.move`
+  - requires `args.index` and `args.toIndex` (1-based)
+- `workspace.rename`
+  - requires `args.title`
+- `workspace.close`
 - `workspace.split.horizontal`
 - `workspace.split.vertical`
 - `workspace.split.right`
@@ -240,10 +423,10 @@ Supported action IDs:
   - unread traversal still wraps within the current workspace before moving on
   - a `ready` session only participates while unread; once visited it collapses back to `idle`
   - if no unread panel exists, it next falls back to managed-session panels whose live status is `needsApproval` or `error`
-  - if no attention-required panel exists, it then falls back to managed-session panels whose live status is `working`
-  - active fallback scans the rest of the current workspace first, then sibling workspaces later in the current window's workspace order
-  - after that it scans later windows in window order, trying each window's selected workspace first and then the remaining workspaces in that window order
-  - only after those passes does it wrap back to earlier panels in the current workspace
+  - if no attention-required panel exists, it builds an active-session cycle anchored to the current focus
+  - that active cycle first includes working panels ahead of the current focus, then later-flagged active panels that have not already appeared, then wrapped working panels, and finally the starting focused active panel when it still belongs to the cycle
+  - repeated invocations continue through that same active cycle without repeating a target until the cycle wraps or the active set changes
+  - manual focus changes, window/workspace/layout changes, panel removals, active status-kind changes, later-flag changes, or unread/attention preemption reset the active cycle and rebuild it from the new focus
   - if no target exists, the selected sidebar row flashes instead of changing focus
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
@@ -255,18 +438,39 @@ Supported action IDs:
   - `args.amount` is optional and clamps to at least `1`
 - `workspace.equalize-splits`
 - `panel.create.browser`
-  - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
-  - When `args.placement` is omitted, the default is now `rootRight` rather than `newTab`
+  - `args.placement` is optional: `rightPanel`, `newTab`, or `splitRight`; legacy `rootRight` is still accepted as an alias for `rightPanel`
+  - When `args.placement` is omitted, the default is now `rightPanel` rather than `newTab`
   - `args.url` is optional
 - `panel.create.localDocument`
-  - opens a supported local document: `md`, `markdown`, `mdown`, `mkd`, `yaml`, `yml`, or `toml`
+  - opens a supported local document: Markdown (`md`, `markdown`, `mdown`, `mkd`), YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts (`sh`, `bash`, `zsh`), or common source files (`swift`, `js`, `mjs`, `cjs`, `jsx`, `ts`, `mts`, `cts`, `tsx`, `py`, `go`, `rs`)
   - requires `args.filePath`
-  - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
-  - when `args.placement` is omitted, the default is `rootRight`
+  - `args.placement` is optional: `rightPanel`, `newTab`, or `splitRight`; legacy `rootRight` is still accepted as an alias for `rightPanel`
+  - when `args.placement` is omitted, the default is `rightPanel`
   - if the same normalized file is already open in the target workspace, the action focuses that existing panel instead of creating a duplicate
   - unsupported or extension-less file paths return `INVALID_PAYLOAD`
 - `panel.create.markdown`
   - legacy alias for `panel.create.localDocument`
+- `panel.create.local-document`
+  - canonical ID for `panel.create.localDocument`
+- `panel.scratchpad.set-content`
+  - requires `args.sessionID`
+  - requires exactly one of `args.filePath` or `args.content`
+  - accepts optional `args.title` and `args.expectedRevision`
+  - creates or updates the Scratchpad linked to the active managed session
+  - returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and
+    `created`
+- `panel.scratchpad.rebind`
+  - requires `args.sessionID`
+  - targets an existing Scratchpad panel by `args.panelID`, workspace/window
+    selectors, or focused/active Scratchpad resolution
+  - returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and
+    `sessionID`
+- `panel.scratchpad.export`
+  - targets by `args.sessionID` when provided, otherwise by the normal
+    Scratchpad panel selectors
+  - writes the Scratchpad HTML to an app-chosen local file path
+  - returns `workspaceID`, `panelID`, `filePath`, `documentID`, `revision`, and
+    `title`
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
   - terminal-only window font increase
@@ -288,13 +492,13 @@ Supported action IDs:
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.browser_zoom.increase`
   - browser-panel page zoom increase
-  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order
 - `app.browser_zoom.decrease`
   - browser-panel page zoom decrease
-  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order
 - `app.browser_zoom.reset`
   - browser-panel page zoom reset to `100%`
-  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order
 - `sidebar.workspaces.new`
   - `args.title` is optional
   - `args.windowID` is required when multiple windows exist
@@ -319,6 +523,7 @@ Result:
 
 Behavior:
 
+- Compatibility shim over `app_control.run_action` with `id: "terminal.send-text"`.
 - `waitForSurfaceMs` is explicitly rejected as deprecated.
 - When the terminal surface is unavailable:
   - return `available: false` if `allowUnavailable=true`
@@ -345,6 +550,7 @@ Result:
 
 Behavior:
 
+- Compatibility shim over `app_control.run_action` with `id: "terminal.drop-image-files"`.
 - Relative file paths require `cwd`.
 - Paths are normalized with Foundation path standardization.
 - If no usable image paths remain, return `INVALID_PAYLOAD`.
@@ -367,6 +573,10 @@ Result:
 - `panelID: UUID string`
 - `text: String`
 - `contains?: Bool`
+
+Behavior:
+
+- Compatibility shim over `app_control.run_query` with `id: "terminal.visible-text"`.
 
 ### `automation.launch_agent`
 
@@ -411,6 +621,7 @@ Result:
 
 Validation:
 
+- Compatibility shim over `app_control.run_action` with `id: "agent.launch"`.
 - requires automation mode like other `automation.*` commands.
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
@@ -426,12 +637,18 @@ Request payload:
 
 Result:
 
+- `windowID: UUID string`
 - `workspaceID: UUID string`
 - `panelID: UUID string`
 - `title: String`
 - `cwd: String`
 - `shell: String`
 - `profileID: String | null`
+
+Behavior:
+
+- Compatibility shim over `app_control.run_query` with `id: "terminal.state"`.
+- The resolved terminal always reports its owning `windowID`, whether you target it by `panelID`, `workspaceID`, or `windowID`.
 
 ### `automation.local_document_panel_state`
 
@@ -447,7 +664,7 @@ Result:
 - `panelID: UUID string`
 - `stateTitle: String`
 - `stateFilePath: String | null`
-- `stateFormat: "markdown" | "yaml" | "toml" | null`
+- `stateFormat: "markdown" | "yaml" | "toml" | "json" | "jsonl" | "config" | "csv" | "tsv" | "xml" | "shell" | null`
 - `hostLifecycleState: String`
 - `hostAttachmentID: UUID string | null`
 - `currentTheme: String`
@@ -457,7 +674,7 @@ Result:
 - `bootstrapContractVersion: Int | null`
 - `bootstrapFilePath: String | null`
 - `bootstrapDisplayName: String | null`
-- `bootstrapFormat: "markdown" | "yaml" | "toml" | null`
+- `bootstrapFormat: "markdown" | "yaml" | "toml" | "json" | "jsonl" | "config" | "csv" | "tsv" | "xml" | "shell" | null`
 - `bootstrapShouldHighlight: Bool | null`
 - `bootstrapContentRevision: Int | null`
 - `bootstrapIsEditing: Bool | null`
@@ -472,7 +689,8 @@ Result:
 
 Behavior:
 
-- `panelID` is optional; when omitted, Toastty resolves the local-document panel from `workspaceID` or `windowID`, then prefers the focused local-document panel in that workspace and otherwise falls back to the first local-document panel in layout order.
+- Compatibility shim over `app_control.run_query` with `id: "panel.local-document.state"`.
+- `panelID` is optional; when omitted, Toastty resolves the local-document panel from `workspaceID` or `windowID`, then prefers the focused right-panel local document, the active right-panel local document, the focused layout local document, and otherwise the first local-document panel in layout order.
 - `automation.markdown_panel_state` is accepted as a legacy alias and returns the same payload.
 - All `bootstrap*` fields are `null` when the panel runtime does not currently have an active bootstrap payload.
 
@@ -498,7 +716,47 @@ Result:
 
 Behavior:
 
-- `panelID` is optional; when omitted, Toastty resolves the browser panel from `workspaceID` or `windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order.
+- Compatibility shim over `app_control.run_query` with `id: "panel.browser.state"`.
+- `panelID` is optional; when omitted, Toastty resolves the browser panel from `workspaceID` or `windowID`, then prefers the focused right-panel browser, the active right-panel browser, the focused layout browser, and otherwise the first browser panel in layout order.
+
+### `automation.scratchpad_panel_state`
+
+Request payload:
+
+- `panelID?: UUID string`
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
+
+Result:
+
+- `workspaceID: UUID string`
+- `panelID: UUID string`
+- `stateTitle: String`
+- `stateDocumentID: UUID string | null`
+- `stateRevision: Int | null`
+- `stateSessionID: String | null`
+- `hostLifecycleState: String`
+- `hostAttachmentID: UUID string | null`
+- `currentTheme: String`
+- `hasCurrentBootstrap: Bool`
+- `pendingBootstrapScript: Bool`
+- `currentAssetPath: String | null`
+- `diagnosticCount: Int`
+- `recentDiagnostics: [{ sequence, source, kind, level, message, metadata }]`
+- `bootstrapContractVersion: Int | null`
+- `bootstrapDocumentID: UUID string | null`
+- `bootstrapDisplayName: String | null`
+- `bootstrapRevision: Int | null`
+- `bootstrapMissingDocument: Bool | null`
+- `bootstrapMessage: String | null`
+- `bootstrapTheme: String | null`
+- `bootstrapContentLength: Int | null`
+- `bootstrapContentSHA256: String | null`
+
+Behavior:
+
+- Compatibility shim over `app_control.run_query` with `id: "panel.scratchpad.state"`.
+- `panelID` is optional; when omitted, Toastty resolves the Scratchpad panel from `workspaceID` or `windowID`, then prefers the focused layout Scratchpad, the focused right-panel Scratchpad, the active right-panel Scratchpad, any right-panel Scratchpad, and otherwise the first layout Scratchpad.
 
 ### `automation.workspace_snapshot`
 
@@ -515,15 +773,23 @@ Result:
 - `selectedTabIndex: Int | null`
 - `tabIDs: [UUID string]`
 - `slotCount: Int`
-- `panelCount: Int`
+- `layoutPanelCount: Int`
+- `panelCount: Int` (layout panels plus right-panel tabs across the workspace)
 - `focusedPanelID: UUID string | null`
 - `rootSplitRatio: Double | null`
 - `slotIDs: [UUID string]`
 - `slotPanelIDs: [UUID string]`
 - `slotMappings: [{ slotID, panelID }]`
+- `rightPanel: { isVisible, width, hasCustomWidth, tabCount, activeTabID, activePanelID, focusedPanelID, tabIDs, panelIDs, tabs }`
+  - describes the selected workspace tab's right panel; switching workspace tabs changes this object with the selected tab
+  - `width` is the stored custom width. When `hasCustomWidth` is false, the visible panel width is resolved responsively from the workspace width.
 - `layoutSignature: String`
 
 `selectedTabIndex` is 1-based when present.
+
+Behavior:
+
+- Compatibility shim over `app_control.run_query` with `id: "workspace.snapshot"`.
 
 ### `automation.workspace_render_snapshot`
 
@@ -591,7 +857,7 @@ Behavior:
   - `sessionRegistry`
   - `notifications`
 
-## 6) implemented event types
+## 7) implemented event types
 
 Legacy note:
 
@@ -616,7 +882,7 @@ Validation:
 
 - `panelID` must refer to a live panel
 - `agent` must be a valid lowercase agent ID
-- Built-in examples include `claude` and `codex`
+- Built-in examples include `claude`, `codex`, and `pi`
 
 Result:
 
@@ -736,7 +1002,7 @@ Result:
 - `sendSystemNotification: Bool`
 - `stateVersion`
 
-## 7) error codes
+## 8) error codes
 
 Current response error codes:
 
@@ -748,7 +1014,7 @@ Current response error codes:
 - `INVALID_PAYLOAD`
 - `INTERNAL_ERROR`
 
-## 8) implementation notes that are not separate protocol guarantees
+## 9) implementation notes that are not separate protocol guarantees
 
 - `session.update_files` coalescing currently uses a 0.5 second window per session.
 - The protocol does not currently expose a standalone schema version beyond

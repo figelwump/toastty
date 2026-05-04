@@ -18,6 +18,13 @@ func toasttyResponderUsesReservedClosePanelShortcut(_ responder: NSResponder?) -
         return false
     }
 
+    // Local-document find behaves like panel chrome rather than document
+    // content. Keep app-owned shortcuts available while its field editor is
+    // active so Cmd+F/G continue targeting the hosted local-document panel.
+    if toasttyResponderBelongsToLocalDocumentSearchTextInput(responder) {
+        return false
+    }
+
     // Browser chrome text fields should keep browser/panel shortcuts app-owned
     // even while the AppKit field editor is active.
     if toasttyResponderBelongsToBrowserChromeTextInput(responder) {
@@ -48,6 +55,32 @@ private func toasttyResponderBelongsToBrowserChromeTextInput(_ responder: NSResp
         }
         if let textView = responder as? NSTextView,
            textView.delegate is BrowserChromeTextField {
+            return true
+        }
+        currentResponder = responder.nextResponder
+    }
+
+    return false
+}
+
+@MainActor
+private func toasttyResponderBelongsToLocalDocumentSearchTextInput(_ responder: NSResponder?) -> Bool {
+    if responder is LocalDocumentSearchTextField {
+        return true
+    }
+
+    if let textView = responder as? NSTextView,
+       textView.delegate is LocalDocumentSearchTextField {
+        return true
+    }
+
+    var currentResponder = responder?.nextResponder
+    while let responder = currentResponder {
+        if responder is LocalDocumentSearchTextField {
+            return true
+        }
+        if let textView = responder as? NSTextView,
+           textView.delegate is LocalDocumentSearchTextField {
             return true
         }
         currentResponder = responder.nextResponder

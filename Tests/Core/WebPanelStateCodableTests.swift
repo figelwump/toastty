@@ -4,6 +4,17 @@ import Testing
 
 struct WebPanelStateCodableTests {
     @Test
+    func webPanelPlacementEncodesCanonicalRightPanelAndDecodesLegacyRootRight() throws {
+        let encoded = try JSONEncoder().encode(WebPanelPlacement.rightPanel)
+        let encodedString = try #require(String(data: encoded, encoding: .utf8))
+
+        #expect(encodedString == "\"rightPanel\"")
+        #expect(try JSONDecoder().decode(WebPanelPlacement.self, from: Data("\"rightPanel\"".utf8)) == .rightPanel)
+        #expect(try JSONDecoder().decode(WebPanelPlacement.self, from: Data("\"rootRight\"".utf8)) == .rightPanel)
+        #expect(WebPanelPlacement(rawValue: "rootRight") == .rightPanel)
+    }
+
+    @Test
     func localDocumentStateRoundTripsWithTypedPayload() throws {
         let state = WebPanelState(
             definition: .localDocument,
@@ -66,6 +77,110 @@ struct WebPanelStateCodableTests {
 
         #expect(decoded == state)
         #expect(decoded.localDocument?.format == .yaml)
+    }
+
+    @Test
+    func localDocumentStateRoundTripsJsonFormat() throws {
+        let state = WebPanelState(
+            definition: .localDocument,
+            title: "package.json",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/project/package.json",
+                format: .json
+            )
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+
+        #expect(decoded == state)
+        #expect(decoded.localDocument?.format == .json)
+    }
+
+    @Test
+    func localDocumentStateRoundTripsCodeFormat() throws {
+        let state = WebPanelState(
+            definition: .localDocument,
+            title: "App.swift",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/project/App.swift",
+                format: .code
+            )
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+
+        #expect(decoded == state)
+        #expect(decoded.localDocument?.format == .code)
+    }
+
+    @Test
+    func localDocumentFormatRawValuesRoundTripThroughCodable() throws {
+        let formats: [LocalDocumentFormat] = [
+            .markdown,
+            .yaml,
+            .toml,
+            .json,
+            .jsonl,
+            .config,
+            .csv,
+            .tsv,
+            .xml,
+            .shell,
+            .code,
+        ]
+
+        for format in formats {
+            let data = try JSONEncoder().encode(format)
+            let decoded = try JSONDecoder().decode(LocalDocumentFormat.self, from: data)
+            #expect(decoded == format)
+        }
+    }
+
+    @Test
+    func scratchpadStateRoundTripsWithTypedPayload() throws {
+        let documentID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let sourcePanelID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let sourceWorkspaceID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let state = WebPanelState(
+            definition: .scratchpad,
+            title: "Plan",
+            scratchpad: ScratchpadState(
+                documentID: documentID,
+                sessionLink: ScratchpadSessionLink(
+                    sessionID: "sess-123",
+                    agent: .codex,
+                    sourcePanelID: sourcePanelID,
+                    sourceWorkspaceID: sourceWorkspaceID,
+                    repoRoot: "/tmp/project",
+                    cwd: "/tmp/project/Sources",
+                    displayTitle: "Codex",
+                    startedAt: Date(timeIntervalSince1970: 123)
+                ),
+                revision: 7
+            )
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let scratchpad = try #require(json["scratchpad"] as? [String: Any])
+        let sessionLink = try #require(scratchpad["sessionLink"] as? [String: Any])
+
+        #expect(json["definition"] as? String == "scratchpad")
+        #expect(scratchpad["documentID"] as? String == documentID.uuidString)
+        #expect(scratchpad["revision"] as? Int == 7)
+        #expect(sessionLink["sessionID"] as? String == "sess-123")
+        #expect(sessionLink["agent"] as? String == "codex")
+        #expect(sessionLink["sourcePanelID"] as? String == sourcePanelID.uuidString)
+        #expect(sessionLink["sourceWorkspaceID"] as? String == sourceWorkspaceID.uuidString)
+        #expect(sessionLink["repoRoot"] as? String == "/tmp/project")
+        #expect(sessionLink["cwd"] as? String == "/tmp/project/Sources")
+
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+        #expect(decoded == state)
+        #expect(decoded.scratchpad?.documentID == documentID)
+        #expect(decoded.scratchpad?.revision == 7)
     }
 
     @Test

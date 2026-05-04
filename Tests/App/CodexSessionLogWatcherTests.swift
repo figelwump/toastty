@@ -324,11 +324,42 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesExternallyTaggedCodexUserTurnOperationEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-05-01T19:12:54.834Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"Investigate the sidebar working state","text_elements":[]}],"cwd":"/tmp/workspace"}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Investigate the sidebar working state"
+            )
+        ])
+    }
+
     func testWatcherParsesCurrentCodexInterruptOperationEvents() async throws {
         let events = try await recordEvents(
             from:
                 """
                 {"ts":"2026-04-13T23:55:37.876Z","dir":"from_tui","kind":"op","payload":{"type":"interrupt"}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
+        ])
+    }
+
+    func testWatcherParsesExternallyTaggedCodexInterruptOperationEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-05-01T19:12:03.577Z","dir":"from_tui","kind":"op","payload":"Interrupt"}
                 """,
             expectedCount: 1
         )

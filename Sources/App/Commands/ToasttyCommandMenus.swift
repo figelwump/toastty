@@ -113,6 +113,11 @@ struct TerminalProfileMenuModel: Equatable {
 
 @MainActor
 struct ToasttyCommandMenus: Commands {
+    enum FindCommandTarget: Equatable {
+        case localDocument(UUID)
+        case terminal(UUID)
+    }
+
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
@@ -121,6 +126,7 @@ struct ToasttyCommandMenus: Commands {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
+    let processWatchCommandController: ProcessWatchCommandController
     let agentLaunchService: AgentLaunchService
     let terminalProfilesMenuController: TerminalProfilesMenuController
     let canCheckForUpdates: Bool
@@ -166,6 +172,16 @@ struct ToasttyCommandMenus: Commands {
         commandSelection?.workspace
     }
 
+    private var commandRightPanelToggleTitle: String {
+        ToasttyBuiltInCommand.toggleRightPanelTitle(
+            rightPanelVisible: commandWorkspace?.rightAuxPanel.isVisible == true
+        )
+    }
+
+    private var canToggleCommandRightPanel: Bool {
+        commandWorkspace != nil
+    }
+
     private var focusedLocalDocumentPanelSelection: FocusedLocalDocumentPanelCommandSelection? {
         store.focusedLocalDocumentPanelSelection(preferredWindowID: preferredCommandWindowID)
     }
@@ -175,6 +191,20 @@ struct ToasttyCommandMenus: Commands {
             return false
         }
         return webPanelRuntimeRegistry.canSaveLocalDocumentPanel(panelID: focusedLocalDocumentPanelSelection.panelID)
+    }
+
+    private var commandFocusedLocalDocumentSearchState: LocalDocumentSearchState? {
+        guard let panelID = focusedLocalDocumentPanelSelection?.panelID else {
+            return nil
+        }
+        return webPanelRuntimeRegistry.localDocumentSearchState(panelID: panelID)
+    }
+
+    private var commandFocusedLocalDocumentSearchFieldFocused: Bool {
+        guard let panelID = focusedLocalDocumentPanelSelection?.panelID else {
+            return false
+        }
+        return webPanelRuntimeRegistry.isLocalDocumentSearchFieldFocused(panelID: panelID)
     }
 
     private var focusedScaleCommandTarget: FocusedScaleCommandTarget? {
@@ -189,6 +219,7 @@ struct ToasttyCommandMenus: Commands {
                 matching: AppStore.nextUnreadOrActionRequiredFallbackStatusKinds
                     .union(AppStore.nextUnreadOrWorkingFallbackStatusKinds)
             )
+            .union(sessionRuntimeStore.activeLaterPanelIDs())
         )
     }
 
@@ -207,6 +238,13 @@ struct ToasttyCommandMenus: Commands {
             return nil
         }
         return panelID
+    }
+
+    private var canShowScratchpadForCurrentSession: Bool {
+        guard let commandFocusedTerminalPanelID else {
+            return false
+        }
+        return sessionRuntimeStore.sessionRegistry.activeSession(for: commandFocusedTerminalPanelID) != nil
     }
 
     private var commandFocusedTerminalSearchState: TerminalSearchState? {
@@ -230,20 +268,48 @@ struct ToasttyCommandMenus: Commands {
         return Self.textInputOwnsFindCommands(
             modalWindowPresent: keyWindow.sheetParent != nil || NSApp.modalWindow != nil,
             firstResponderIsTextInput: toasttyResponderUsesReservedTextInput(keyWindow.firstResponder),
-            terminalSearchFieldIsFocused: commandFocusedTerminalSearchFieldFocused
+            terminalSearchFieldIsFocused: commandFocusedTerminalSearchFieldFocused,
+            localDocumentSearchFieldIsFocused: commandFocusedLocalDocumentSearchFieldFocused
         )
     }
 
-    private var canStartScrollbackSearch: Bool {
-        guard commandFocusedTerminalPanelID != nil else {
-            return false
-        }
-        return textInputOwnsFindCommands == false
+    private var commandFindStartTarget: FindCommandTarget? {
+        Self.resolvedFindStartTarget(
+            focusedLocalDocumentPanelID: focusedLocalDocumentPanelSelection?.panelID,
+            focusedTerminalPanelID: commandFocusedTerminalPanelID
+        )
     }
 
-    private var canNavigateScrollbackSearch: Bool {
-        commandFocusedTerminalPanelID != nil &&
-        commandFocusedTerminalSearchState != nil &&
+    private var commandFindNavigationTarget: FindCommandTarget? {
+        Self.resolvedFindNavigationTarget(
+            focusedLocalDocumentPanelID: focusedLocalDocumentPanelSelection?.panelID,
+            localDocumentSearchState: commandFocusedLocalDocumentSearchState,
+            focusedTerminalPanelID: commandFocusedTerminalPanelID,
+            terminalSearchState: commandFocusedTerminalSearchState
+        )
+    }
+
+    private var commandFindHideTarget: FindCommandTarget? {
+        Self.resolvedFindHideTarget(
+            focusedLocalDocumentPanelID: focusedLocalDocumentPanelSelection?.panelID,
+            localDocumentSearchState: commandFocusedLocalDocumentSearchState,
+            focusedTerminalPanelID: commandFocusedTerminalPanelID,
+            terminalSearchState: commandFocusedTerminalSearchState
+        )
+    }
+
+    private var canStartFind: Bool {
+        commandFindStartTarget != nil &&
+        textInputOwnsFindCommands == false
+    }
+
+    private var canNavigateFind: Bool {
+        commandFindNavigationTarget != nil &&
+        textInputOwnsFindCommands == false
+    }
+
+    private var canHideFind: Bool {
+        commandFindHideTarget != nil &&
         textInputOwnsFindCommands == false
     }
 
@@ -325,13 +391,13 @@ struct ToasttyCommandMenus: Commands {
             Divider()
 
             Button("Find…") {
-                startScrollbackSearchFromCommandSelection()
+                startFindFromCommandSelection()
             }
             .keyboardShortcut(
                 ToasttyKeyboardShortcuts.find.key,
                 modifiers: ToasttyKeyboardShortcuts.find.modifiers
             )
-            .disabled(!canStartScrollbackSearch)
+            .disabled(!canStartFind)
 
             Button("Find Next") {
                 findNextFromCommandSelection()
@@ -340,7 +406,7 @@ struct ToasttyCommandMenus: Commands {
                 ToasttyKeyboardShortcuts.findNext.key,
                 modifiers: ToasttyKeyboardShortcuts.findNext.modifiers
             )
-            .disabled(!canNavigateScrollbackSearch)
+            .disabled(!canNavigateFind)
 
             Button("Find Previous") {
                 findPreviousFromCommandSelection()
@@ -349,12 +415,12 @@ struct ToasttyCommandMenus: Commands {
                 ToasttyKeyboardShortcuts.findPrevious.key,
                 modifiers: ToasttyKeyboardShortcuts.findPrevious.modifiers
             )
-            .disabled(!canNavigateScrollbackSearch)
+            .disabled(!canNavigateFind)
 
             Button("Hide Find") {
                 hideFindFromCommandSelection()
             }
-            .disabled(!canNavigateScrollbackSearch)
+            .disabled(!canHideFind)
         }
 
         CommandGroup(after: .toolbar) {
@@ -410,6 +476,15 @@ struct ToasttyCommandMenus: Commands {
                 modifiers: ToasttyBuiltInCommand.toggleSidebar.requiredShortcut.modifiers
             )
             .disabled(commandSelection == nil)
+
+            Button(commandRightPanelToggleTitle) {
+                toggleRightPanelFromCommandSelection()
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.toggleRightPanel.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.toggleRightPanel.requiredShortcut.modifiers
+            )
+            .disabled(!canToggleCommandRightPanel)
         }
 
         CommandMenu("Workspace") {
@@ -446,7 +521,7 @@ struct ToasttyCommandMenus: Commands {
                 store.createBrowserPanelFromCommand(
                     preferredWindowID: preferredWindowID,
                     request: BrowserPanelCreateRequest(
-                        placementOverride: .rootRight
+                        placementOverride: .rightPanel
                     )
                 )
             }
@@ -499,10 +574,43 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
+            Button(ToasttyBuiltInCommand.newScratchpad.title) {
+                createBlankScratchpad(preferredWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.newScratchpad.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.newScratchpad.requiredShortcut.modifiers
+            )
+            .disabled(commandWorkspace == nil)
+
+            Button(ToasttyBuiltInCommand.showScratchpadForCurrentSession.title) {
+                showScratchpadForCurrentSession(preferredWindowID)
+            }
+            .disabled(canShowScratchpadForCurrentSession == false)
+
+            Divider()
+
             Button(ToasttyBuiltInCommand.closePanel.title) {
                 closeFocusedPanelFromCommandSelection()
             }
-            .disabled(commandWorkspace?.focusedPanelID == nil)
+            .disabled(
+                focusedPanelCommandController.canCloseFocusedPanel(in: commandWorkspace?.id) == false
+            )
+
+            Button(ToasttyBuiltInCommand.watchRunningCommand.title) {
+                processWatchCommandController.watchFocusedProcess(
+                    preferredWindowID: commandSelection?.windowID ?? preferredCommandWindowID
+                )
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.watchRunningCommand.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.watchRunningCommand.requiredShortcut.modifiers
+            )
+            .disabled(
+                processWatchCommandController.canWatchFocusedProcess(
+                    preferredWindowID: commandSelection?.windowID ?? preferredCommandWindowID
+                ) == false
+            )
 
             Button(commandWorkspace?.focusedPanelModeActive == true ? "Restore Layout" : "Focus Panel") {
                 toggleFocusedPanelFromCommandSelection()
@@ -569,6 +677,30 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
 
+            Button(ToasttyBuiltInCommand.selectPreviousRightPanelTab.title) {
+                store.selectAdjacentRightAuxPanelTab(
+                    preferredWindowID: preferredWindowID,
+                    direction: .previous
+                )
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.selectPreviousRightPanelTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.selectPreviousRightPanelTab.requiredShortcut.modifiers
+            )
+            .disabled(store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID) == false)
+
+            Button(ToasttyBuiltInCommand.selectNextRightPanelTab.title) {
+                store.selectAdjacentRightAuxPanelTab(
+                    preferredWindowID: preferredWindowID,
+                    direction: .next
+                )
+            }
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.selectNextRightPanelTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.selectNextRightPanelTab.requiredShortcut.modifiers
+            )
+            .disabled(store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID) == false)
+
             Button(ToasttyBuiltInCommand.jumpToNextActive.title) {
                 store.focusNextUnreadOrActivePanelFromCommand(
                     preferredWindowID: commandSelection?.windowID ?? preferredWindowID,
@@ -614,29 +746,82 @@ struct ToasttyCommandMenus: Commands {
         _ = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: workspaceID)
     }
 
+    private func toggleRightPanelFromCommandSelection() {
+        guard let workspaceID = commandWorkspace?.id else { return }
+        _ = store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+    }
+
     private func closeFocusedPanelFromCommandSelection() {
         _ = focusedPanelCommandController.closeFocusedPanel(in: commandWorkspace?.id)
     }
 
-    private func startScrollbackSearchFromCommandSelection() {
-        guard let panelID = commandFocusedTerminalPanelID else { return }
-        _ = terminalRuntimeRegistry.startSearch(panelID: panelID)
+    private func showScratchpadForCurrentSession(_ preferredWindowID: UUID?) {
+        _ = store.showScratchpadForCurrentSession(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore,
+            documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+        )
+    }
+
+    private func createBlankScratchpad(_ preferredWindowID: UUID?) {
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return
+        }
+
+        do {
+            _ = try store.createBlankScratchpadPanel(
+                workspaceID: workspaceID,
+                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+            )
+        } catch {
+            NSLog("Blank Scratchpad creation failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func startFindFromCommandSelection() {
+        switch commandFindStartTarget {
+        case .localDocument(let panelID):
+            _ = webPanelRuntimeRegistry.startSearchLocalDocumentPanel(panelID: panelID)
+        case .terminal(let panelID):
+            _ = terminalRuntimeRegistry.startSearch(panelID: panelID)
+        case nil:
+            return
+        }
     }
 
     private func findNextFromCommandSelection() {
-        guard let panelID = commandFocusedTerminalPanelID else { return }
-        _ = terminalRuntimeRegistry.findNext(panelID: panelID)
+        switch commandFindNavigationTarget {
+        case .localDocument(let panelID):
+            _ = webPanelRuntimeRegistry.findNextLocalDocumentPanel(panelID: panelID)
+        case .terminal(let panelID):
+            _ = terminalRuntimeRegistry.findNext(panelID: panelID)
+        case nil:
+            return
+        }
     }
 
     private func findPreviousFromCommandSelection() {
-        guard let panelID = commandFocusedTerminalPanelID else { return }
-        _ = terminalRuntimeRegistry.findPrevious(panelID: panelID)
+        switch commandFindNavigationTarget {
+        case .localDocument(let panelID):
+            _ = webPanelRuntimeRegistry.findPreviousLocalDocumentPanel(panelID: panelID)
+        case .terminal(let panelID):
+            _ = terminalRuntimeRegistry.findPrevious(panelID: panelID)
+        case nil:
+            return
+        }
     }
 
     private func hideFindFromCommandSelection() {
-        guard let panelID = commandFocusedTerminalPanelID else { return }
-        _ = terminalRuntimeRegistry.endSearch(panelID: panelID)
-        terminalRuntimeRegistry.restoreTerminalFocusAfterSearch(panelID: panelID)
+        switch commandFindHideTarget {
+        case .localDocument(let panelID):
+            _ = webPanelRuntimeRegistry.endSearchLocalDocumentPanel(panelID: panelID)
+            _ = webPanelRuntimeRegistry.restoreLocalDocumentFocusAfterSearch(panelID: panelID)
+        case .terminal(let panelID):
+            _ = terminalRuntimeRegistry.endSearch(panelID: panelID)
+            terminalRuntimeRegistry.restoreTerminalFocusAfterSearch(panelID: panelID)
+        case nil:
+            return
+        }
     }
 
     private func canLaunchAgent(profileID: String) -> Bool {
@@ -798,12 +983,63 @@ struct ToasttyCommandMenus: Commands {
     nonisolated static func textInputOwnsFindCommands(
         modalWindowPresent: Bool,
         firstResponderIsTextInput: Bool,
-        terminalSearchFieldIsFocused: Bool
+        terminalSearchFieldIsFocused: Bool,
+        localDocumentSearchFieldIsFocused: Bool
     ) -> Bool {
         if modalWindowPresent {
             return true
         }
-        return firstResponderIsTextInput && terminalSearchFieldIsFocused == false
+        return firstResponderIsTextInput &&
+            terminalSearchFieldIsFocused == false &&
+            localDocumentSearchFieldIsFocused == false
+    }
+
+    nonisolated static func resolvedFindStartTarget(
+        focusedLocalDocumentPanelID: UUID?,
+        focusedTerminalPanelID: UUID?
+    ) -> FindCommandTarget? {
+        if let focusedLocalDocumentPanelID {
+            return .localDocument(focusedLocalDocumentPanelID)
+        }
+        if let focusedTerminalPanelID {
+            return .terminal(focusedTerminalPanelID)
+        }
+        return nil
+    }
+
+    nonisolated static func resolvedFindNavigationTarget(
+        focusedLocalDocumentPanelID: UUID?,
+        localDocumentSearchState: LocalDocumentSearchState?,
+        focusedTerminalPanelID: UUID?,
+        terminalSearchState: TerminalSearchState?
+    ) -> FindCommandTarget? {
+        if let focusedLocalDocumentPanelID,
+           localDocumentSearchState?.isPresented == true,
+           localDocumentSearchState?.query.isEmpty == false {
+            return .localDocument(focusedLocalDocumentPanelID)
+        }
+        if let focusedTerminalPanelID,
+           terminalSearchState != nil {
+            return .terminal(focusedTerminalPanelID)
+        }
+        return nil
+    }
+
+    nonisolated static func resolvedFindHideTarget(
+        focusedLocalDocumentPanelID: UUID?,
+        localDocumentSearchState: LocalDocumentSearchState?,
+        focusedTerminalPanelID: UUID?,
+        terminalSearchState: TerminalSearchState?
+    ) -> FindCommandTarget? {
+        if let focusedLocalDocumentPanelID,
+           localDocumentSearchState?.isPresented == true {
+            return .localDocument(focusedLocalDocumentPanelID)
+        }
+        if let focusedTerminalPanelID,
+           terminalSearchState != nil {
+            return .terminal(focusedTerminalPanelID)
+        }
+        return nil
     }
 
     nonisolated static func resolvedCommandWindowID(focusedWindowID: UUID?, keyWindowID: UUID?) -> UUID? {

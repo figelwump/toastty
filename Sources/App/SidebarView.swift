@@ -1,7 +1,35 @@
 import CoreState
 import SwiftUI
 
+private struct SidebarSemanticTextBridge: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.isHidden = true
+        label.isEditable = false
+        label.isSelectable = false
+        label.drawsBackground = false
+        label.isBezeled = false
+        label.isBordered = false
+        label.setAccessibilityElement(false)
+        return label
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        nsView.stringValue = text
+    }
+}
+
 struct SidebarView: View {
+    struct WorkspaceDragState: Equatable {
+        let workspaceID: UUID
+        let sourceIndex: Int
+        let startPointerY: CGFloat
+        var translationHeight: CGFloat
+        var targetIndex: Int
+    }
+
     let windowID: UUID
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -10,6 +38,8 @@ struct SidebarView: View {
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
+    /// Test seam for asserting row geometry used by drag reordering.
+    let workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)?
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
@@ -21,6 +51,8 @@ struct SidebarView: View {
     @State private var lastHandledSidebarFlashRequestID: UUID?
     @State private var sidebarFlashClearWorkItem: DispatchWorkItem?
     @State private var sidebarFlashResetWorkItem: DispatchWorkItem?
+    @State private var activeWorkspaceDrag: WorkspaceDragState?
+    @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
 
     /// Fixed height for the session detail text area (1 line at the detail
     /// font size). Reserving a constant height prevents the sidebar from
@@ -34,6 +66,59 @@ struct SidebarView: View {
     private static let sessionStatusesTopSpacing: CGFloat = 0
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
+    private nonisolated static let workspaceDragActivationDistance: CGFloat = 4
+
+    nonisolated static func workspaceReorderTargetIndex(
+        orderedWorkspaceIDs: [UUID],
+        measuredRowFramesByID: [UUID: CGRect],
+        draggedWorkspaceID: UUID,
+        pointerY: CGFloat
+    ) -> Int? {
+        guard pointerY.isFinite else { return nil }
+
+        let measuredFrames = orderedWorkspaceIDs.compactMap { workspaceID -> CGRect? in
+            guard workspaceID != draggedWorkspaceID else { return nil }
+            return measuredRowFramesByID[workspaceID]
+        }
+        guard measuredFrames.count == max(orderedWorkspaceIDs.count - 1, 0) else { return nil }
+        guard measuredFrames.isEmpty == false else { return 0 }
+
+        for (index, frame) in measuredFrames.enumerated() {
+            if pointerY < frame.midY {
+                return index
+            }
+        }
+        return measuredFrames.count
+    }
+
+    nonisolated static func workspaceInsertionIndicatorFrame(
+        orderedWorkspaceIDs: [UUID],
+        measuredRowFramesByID: [UUID: CGRect],
+        draggedWorkspaceID: UUID,
+        targetIndex: Int
+    ) -> CGRect? {
+        let measuredFrames = orderedWorkspaceIDs.compactMap { workspaceID -> CGRect? in
+            guard workspaceID != draggedWorkspaceID else { return nil }
+            return measuredRowFramesByID[workspaceID]
+        }
+        guard measuredFrames.count == max(orderedWorkspaceIDs.count - 1, 0) else { return nil }
+        guard measuredFrames.isEmpty == false else { return nil }
+        guard targetIndex >= 0, targetIndex <= measuredFrames.count else { return nil }
+
+        let referenceFrame: CGRect
+        let y: CGFloat
+        if targetIndex == 0 {
+            referenceFrame = measuredFrames[0]
+            y = referenceFrame.minY
+        } else if targetIndex == measuredFrames.count {
+            referenceFrame = measuredFrames[measuredFrames.count - 1]
+            y = referenceFrame.maxY
+        } else {
+            referenceFrame = measuredFrames[targetIndex]
+            y = referenceFrame.minY
+        }
+        return CGRect(x: referenceFrame.minX, y: y, width: referenceFrame.width, height: 2)
+    }
 
     init(
         windowID: UUID,
@@ -41,7 +126,8 @@ struct SidebarView: View {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
-        scrollRequestObserver: ((UUID, Bool) -> Void)? = nil
+        scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
+        workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil
     ) {
         self.windowID = windowID
         self.store = store
@@ -49,6 +135,7 @@ struct SidebarView: View {
         self.sessionRuntimeStore = sessionRuntimeStore
         self.terminalRuntimeContext = terminalRuntimeContext
         self.scrollRequestObserver = scrollRequestObserver
+        self.workspaceRowFrameObserver = workspaceRowFrameObserver
     }
 
     private var selectedWorkspaceID: UUID? {
@@ -68,7 +155,8 @@ struct SidebarView: View {
                                         workspace: workspace,
                                         shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
                                         isSelected: selectedWorkspaceID == workspaceID,
-                                        index: index + 1
+                                        index: index + 1,
+                                        orderedWorkspaceIDs: window.workspaceIDs
                                     )
                                     .id(workspaceID)
                                 }
@@ -80,6 +168,30 @@ struct SidebarView: View {
                         }
                     }
                     .padding(.horizontal, 8)
+                    .coordinateSpace(name: SidebarWorkspaceListCoordinateSpace.name)
+                    .onPreferenceChange(WorkspaceRowFramePreferenceKey.self) { framesByID in
+                        measuredWorkspaceRowFramesByID = framesByID
+                        workspaceRowFrameObserver?(framesByID)
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if let activeWorkspaceDrag,
+                           activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex,
+                           let indicatorFrame = Self.workspaceInsertionIndicatorFrame(
+                               orderedWorkspaceIDs: store.window(id: windowID)?.workspaceIDs ?? [],
+                               measuredRowFramesByID: measuredWorkspaceRowFramesByID,
+                               draggedWorkspaceID: activeWorkspaceDrag.workspaceID,
+                               targetIndex: activeWorkspaceDrag.targetIndex
+                           ) {
+                            Rectangle()
+                                .fill(ToastyTheme.accent)
+                                .frame(width: indicatorFrame.width, height: indicatorFrame.height)
+                                .offset(
+                                    x: indicatorFrame.minX,
+                                    y: indicatorFrame.minY - (indicatorFrame.height / 2)
+                                )
+                                .allowsHitTesting(false)
+                        }
+                    }
                 }
                 // Keep the titlebar region opaque while letting rows scroll
                 // underneath it instead of showing through the traffic-light area.
@@ -96,7 +208,7 @@ struct SidebarView: View {
 
             Button {
                 cancelWorkspaceRename()
-                store.send(.createWorkspace(windowID: windowID, title: nil))
+                store.send(.createWorkspace(windowID: windowID, title: nil, activate: true))
             } label: {
                 HStack(spacing: 6) {
                     Canvas { context, _ in
@@ -134,6 +246,7 @@ struct SidebarView: View {
         .background(ToastyTheme.chromeBackground)
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
+            pruneTransientWorkspaceDragState()
         }
         .onChange(of: store.pendingRenameWorkspaceRequest) { _, _ in
             guard let request = store.consumePendingWorkspaceRenameRequest(windowID: windowID),
@@ -149,6 +262,7 @@ struct SidebarView: View {
             schedulePendingSidebarSessionFlashRequestHandling()
         }
         .onDisappear {
+            cancelWorkspaceDrag()
             sidebarFlashClearWorkItem?.cancel()
             sidebarFlashResetWorkItem?.cancel()
         }
@@ -168,44 +282,60 @@ struct SidebarView: View {
         workspace: WorkspaceState,
         shortcutLabel: String?,
         isSelected: Bool,
-        index: Int
+        index: Int,
+        orderedWorkspaceIDs: [UUID]
     ) -> some View {
-        Group {
+        let row = Group {
             if renamingWorkspaceID == workspaceID {
                 workspaceRenameRow(
                     workspaceID: workspaceID,
                     workspace: workspace,
                     shortcutLabel: shortcutLabel,
-                    isSelected: isSelected
+                    isSelected: isSelected,
+                    sourceIndex: index - 1,
+                    orderedWorkspaceIDs: orderedWorkspaceIDs
                 )
             } else {
                 workspaceButton(
                     workspaceID: workspaceID,
                     workspace: workspace,
                     shortcutLabel: shortcutLabel,
-                    isSelected: isSelected
+                    isSelected: isSelected,
+                    sourceIndex: index - 1,
+                    orderedWorkspaceIDs: orderedWorkspaceIDs
                 )
             }
         }
-        .contextMenu {
-            Button(ToasttyKeyboardShortcuts.renameWorkspace.menuTitle("Rename Workspace")) {
-                beginWorkspaceRename(workspace)
-            }
+        .offset(y: activeWorkspaceDrag?.workspaceID == workspaceID ? activeWorkspaceDrag?.translationHeight ?? 0 : 0)
+        .zIndex(activeWorkspaceDrag?.workspaceID == workspaceID ? 1 : 0)
+        .accessibilityIdentifier("sidebar.workspace.\(index)")
 
-            Button(ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"), role: .destructive) {
-                requestWorkspaceClose(workspaceID: workspaceID)
+        row.contextMenu {
+            if activeWorkspaceDrag == nil {
+                Button(ToasttyKeyboardShortcuts.renameWorkspace.menuTitle("Rename Workspace")) {
+                    beginWorkspaceRename(workspace)
+                }
+
+                Button(ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"), role: .destructive) {
+                    requestWorkspaceClose(workspaceID: workspaceID)
+                }
             }
         }
-        .accessibilityIdentifier("sidebar.workspace.\(index)")
     }
 
     private func workspaceButton(
         workspaceID: UUID,
         workspace: WorkspaceState,
         shortcutLabel: String?,
-        isSelected: Bool
+        isSelected: Bool,
+        sourceIndex: Int,
+        orderedWorkspaceIDs: [UUID]
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        let accessibilityLabel = Self.workspaceAccessibilityLabel(
+            for: workspace,
+            isSelected: isSelected
+        )
 
         return workspaceRowChrome(
             workspaceID: workspaceID,
@@ -213,25 +343,61 @@ struct SidebarView: View {
             isFlashing: flashingWorkspaceID == workspaceID
         ) {
             VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
-                } label: {
-                    workspaceHeaderContent {
-                        workspacePrimaryContent(
-                            workspace: workspace,
-                            shortcutLabel: shortcutLabel,
-                            selectionSubtitle: nil,
-                            isSelected: isSelected
-                        ) {
-                            Text(workspace.title)
-                                .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
-                                .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
+                workspaceHeaderContent {
+                    workspacePrimaryContent(
+                        workspace: workspace,
+                        shortcutLabel: shortcutLabel,
+                        selectionSubtitle: nil,
+                        isSelected: isSelected
+                    ) {
+                        Self.styledWorkspaceTitleText(
+                            workspace.title,
+                            isSelected: isSelected,
+                            hasBeenVisited: workspace.hasBeenVisited
+                        )
+                            .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
-                .buttonStyle(SidebarRowButtonStyle())
+                .contentShape(Rectangle())
+                .overlay {
+                    PointerInteractionRegion(
+                        name: "workspace-sidebar-row",
+                        metadata: [
+                            "workspaceID": workspaceID.uuidString,
+                            "sourceIndex": "\(sourceIndex)",
+                        ],
+                        onBegan: { _ in
+                            beginWorkspaceInteraction(workspaceID: workspaceID)
+                        },
+                        onChanged: { value in
+                            updateWorkspaceDrag(
+                                workspaceID: workspaceID,
+                                sourceIndex: sourceIndex,
+                                orderedWorkspaceIDs: orderedWorkspaceIDs,
+                                value: value
+                            )
+                        },
+                        onEnded: { value in
+                            finishWorkspaceInteraction(
+                                workspaceID: workspaceID,
+                                workspace: workspace,
+                                value: value
+                            )
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityAction {
+                    handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
+                }
+                .background {
+                    SidebarSemanticTextBridge(text: accessibilityLabel)
+                }
 
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
@@ -246,7 +412,9 @@ struct SidebarView: View {
         workspaceID: UUID,
         workspace: WorkspaceState,
         shortcutLabel: String?,
-        isSelected: Bool
+        isSelected: Bool,
+        sourceIndex _: Int,
+        orderedWorkspaceIDs _: [UUID]
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
 
@@ -280,7 +448,6 @@ struct SidebarView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
                         .padding(.horizontal, 10)
@@ -299,8 +466,9 @@ struct SidebarView: View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? ToastyTheme.elevatedBackground
-                : hoveredWorkspaceID == workspaceID ? ToastyTheme.elevatedBackground
+                : activeWorkspaceDrag == nil && hoveredWorkspaceID == workspaceID ? ToastyTheme.elevatedBackground
                 : Color.clear)
+            .background(workspaceRowFrameMeasurement(workspaceID: workspaceID))
             .overlay {
                 Rectangle()
                     .fill(ToastyTheme.accent.opacity(0.28 * (isFlashing ? flashingSessionOverlayOpacity : 0)))
@@ -312,6 +480,7 @@ struct SidebarView: View {
             }
             .contentShape(Rectangle())
             .onHover { isHovering in
+                guard activeWorkspaceDrag == nil else { return }
                 if isHovering {
                     hoveredWorkspaceID = workspaceID
                 } else if hoveredWorkspaceID == workspaceID {
@@ -341,6 +510,10 @@ struct SidebarView: View {
             HStack(spacing: 6) {
                 titleView()
 
+                if Self.showsNewWorkspaceBadge(isSelected: isSelected, hasBeenVisited: workspace.hasBeenVisited) {
+                    workspaceNewBadge()
+                }
+
                 if workspace.unreadNotificationCount > 0 {
                     Circle()
                         .fill(ToastyTheme.badgeBlue)
@@ -368,6 +541,24 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private func workspaceNewBadge() -> some View {
+        Text(Self.workspaceNewBadgeLabel)
+            .font(ToastyTheme.fontWorkspaceNewBadge)
+            .foregroundStyle(ToastyTheme.workspaceNewBadgeText)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                ToastyTheme.workspaceNewBadgeBackground,
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(ToastyTheme.workspaceNewBadgeBorder, lineWidth: 1)
+            }
+            .fixedSize()
+            .accessibilityIdentifier("sidebar.workspace.newBadge")
     }
 
     @ViewBuilder
@@ -400,9 +591,20 @@ struct SidebarView: View {
         isHovered: Bool
     ) -> some View {
         let status = workspaceSessionStatus.status
+        let isLaterFlagged = sessionRuntimeStore.isLaterFlagged(sessionID: workspaceSessionStatus.sessionID)
         let showsUnreadSessionAccent = showsUnreadSessionAccent(
             for: workspaceSessionStatus.panelID,
             in: workspace
+        )
+        let accessibilityLabel = Self.sessionAccessibilityLabel(
+            agentName: workspaceSessionStatus.displayTitle,
+            chipKind: Self.sessionStatusChipKind(
+                for: status,
+                showsUnreadSessionAccent: showsUnreadSessionAccent
+            ),
+            detailText: normalizedSessionDetail(status.detail),
+            cwd: Self.abbreviatedPathLabel(workspaceSessionStatus.cwd),
+            isLaterFlagged: isLaterFlagged
         )
         let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
         let isActivePanel = store.selectedWorkspaceID(in: windowID) == workspace.id
@@ -420,6 +622,7 @@ struct SidebarView: View {
                     sessionStatusLabel(
                         workspaceSessionStatus,
                         status: status,
+                        isLaterFlagged: isLaterFlagged,
                         showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isActivePanel: isActivePanel,
                         isHovered: isHovered,
@@ -428,29 +631,59 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { isHovering in
+                    guard activeWorkspaceDrag == nil else { return }
                     if isHovering {
                         hoveredPanelID = workspaceSessionStatus.panelID
                     } else if hoveredPanelID == workspaceSessionStatus.panelID {
                         hoveredPanelID = nil
                     }
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilityLabel)
                 .accessibilityIdentifier("sidebar.workspace.session.\(workspaceSessionStatus.sessionID)")
             } else {
                 sessionStatusLabel(
                     workspaceSessionStatus,
                     status: status,
+                    isLaterFlagged: isLaterFlagged,
                     showsUnreadSessionAccent: showsUnreadSessionAccent,
                     isActivePanel: isActivePanel,
                     isHovered: false,
                     isFlashing: isFlashing
                 )
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilityLabel)
             }
+        }
+        .contextMenu {
+            if workspaceSessionStatus.agent != .processWatch {
+                Button(
+                    ToasttyKeyboardShortcuts.toggleLaterFlag.menuTitle(
+                        Self.laterFlagActionTitle(isFlaggedForLater: isLaterFlagged)
+                    )
+                ) {
+                    sessionRuntimeStore.setLaterFlag(
+                        sessionID: workspaceSessionStatus.sessionID,
+                        isFlagged: !isLaterFlagged
+                    )
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        // SwiftUI context menus can collapse the hosted AppKit text tree into
+        // drawing-only layers. Keep a zero-size hidden text bridge so row text
+        // remains discoverable to host-based tests and AppKit inspectors.
+        .background {
+            SidebarSemanticTextBridge(text: accessibilityLabel)
+                .frame(width: 0, height: 0)
         }
     }
 
     private func sessionStatusLabel(
         _ workspaceSessionStatus: WorkspaceSessionStatus,
         status: SessionStatus,
+        isLaterFlagged: Bool,
         showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
         isHovered: Bool,
@@ -475,7 +708,7 @@ struct SidebarView: View {
                 }
 
                 Self.styledSessionAgentText(
-                    workspaceSessionStatus.agent.displayName,
+                    workspaceSessionStatus.displayTitle,
                     statusKind: status.kind,
                     showsUnreadSessionAccent: showsUnreadSessionAccent
                 )
@@ -487,6 +720,24 @@ struct SidebarView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if isLaterFlagged {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(
+                            ToastyTheme.accent.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
+                        )
+                        .accessibilityHidden(true)
+                } else if workspaceSessionStatus.agent == .processWatch {
+                    // Watched processes cannot be flagged (see SessionRegistry.setLaterFlag),
+                    // so this slot is mutually exclusive with the flag icon above.
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(
+                            ToastyTheme.sidebarSessionWatchIcon.opacity(showsUnreadSessionAccent ? 0.98 : 0.88)
+                        )
+                        .accessibilityHidden(true)
+                }
             }
 
             if status.kind != .idle || detailText != nil {
@@ -532,6 +783,215 @@ struct SidebarView: View {
                 .stroke(ToastyTheme.accent.opacity(flashOpacity), lineWidth: 1.75)
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    private func workspaceRowFrameMeasurement(workspaceID: UUID) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: WorkspaceRowFramePreferenceKey.self,
+                value: [
+                    workspaceID: geometry.frame(in: .named(SidebarWorkspaceListCoordinateSpace.name))
+                ]
+            )
+        }
+    }
+
+    nonisolated static func workspaceDragActivationExceeded(translation: CGSize) -> Bool {
+        abs(translation.height) >= workspaceDragActivationDistance
+    }
+
+    nonisolated static func pointerMovementWithinTapTolerance(translation: CGSize) -> Bool {
+        let distanceSquared = (translation.width * translation.width) + (translation.height * translation.height)
+        return distanceSquared < (workspaceDragActivationDistance * workspaceDragActivationDistance)
+    }
+
+    private func updateWorkspaceDrag(
+        workspaceID: UUID,
+        sourceIndex: Int,
+        orderedWorkspaceIDs: [UUID],
+        value: PointerInteractionValue
+    ) {
+        let baseMetadata = workspaceDragLogMetadata(
+            workspaceID: workspaceID,
+            sourceIndex: sourceIndex,
+            value: value
+        )
+        if renamingWorkspaceID != nil {
+            ToasttyLog.info(
+                "workspace sidebar drag ignored",
+                category: .input,
+                metadata: baseMetadata.merging(["reason": "renaming-workspace"], uniquingKeysWith: { _, new in new })
+            )
+            return
+        }
+        guard Self.workspaceDragActivationExceeded(translation: value.translation) else {
+            ToasttyLog.info(
+                "workspace sidebar drag below activation threshold",
+                category: .input,
+                metadata: baseMetadata
+            )
+            return
+        }
+
+        hoveredWorkspaceID = nil
+        hoveredPanelID = nil
+
+        var dragState = activeWorkspaceDrag
+        if dragState?.workspaceID != workspaceID {
+            let startPointerY = (measuredWorkspaceRowFramesByID[workspaceID]?.minY ?? 0) + value.startLocation.y
+            dragState = WorkspaceDragState(
+                workspaceID: workspaceID,
+                sourceIndex: sourceIndex,
+                startPointerY: startPointerY,
+                translationHeight: value.translation.height,
+                targetIndex: sourceIndex
+            )
+            ToasttyLog.info(
+                "workspace sidebar drag activated",
+                category: .input,
+                metadata: baseMetadata.merging(
+                    [
+                        "startPointerY": "\(startPointerY)",
+                        "orderedWorkspaceCount": "\(orderedWorkspaceIDs.count)",
+                    ],
+                    uniquingKeysWith: { _, new in new }
+                )
+            )
+        } else {
+            dragState?.translationHeight = value.translation.height
+        }
+
+        let pointerY = (dragState?.startPointerY ?? value.location.y) + value.translation.height
+        let targetIndex = Self.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: orderedWorkspaceIDs,
+            measuredRowFramesByID: measuredWorkspaceRowFramesByID,
+            draggedWorkspaceID: workspaceID,
+            pointerY: pointerY
+        ) ?? sourceIndex
+        let previousTargetIndex = dragState?.targetIndex
+        dragState?.targetIndex = targetIndex
+        activeWorkspaceDrag = dragState
+        if previousTargetIndex != targetIndex {
+            ToasttyLog.info(
+                "workspace sidebar drag target changed",
+                category: .input,
+                metadata: baseMetadata.merging(
+                    [
+                        "pointerY": "\(pointerY)",
+                        "targetIndex": "\(targetIndex)",
+                        "previousTargetIndex": previousTargetIndex.map(String.init) ?? "nil",
+                    ],
+                    uniquingKeysWith: { _, new in new }
+                )
+            )
+        }
+    }
+
+    private func finishWorkspaceInteraction(
+        workspaceID: UUID,
+        workspace: WorkspaceState,
+        value: PointerInteractionValue
+    ) {
+        if activeWorkspaceDrag?.workspaceID == workspaceID {
+            ToasttyLog.info(
+                "workspace sidebar drag finishing",
+                category: .input,
+                metadata: workspaceDragLogMetadata(workspaceID: workspaceID, sourceIndex: nil, value: value)
+            )
+            finishWorkspaceDrag()
+            return
+        }
+
+        guard activeWorkspaceDrag == nil else { return }
+        guard Self.pointerMovementWithinTapTolerance(translation: value.translation) else { return }
+        ToasttyLog.info(
+            "workspace sidebar pointer ended as tap",
+            category: .input,
+            metadata: workspaceDragLogMetadata(workspaceID: workspaceID, sourceIndex: nil, value: value)
+        )
+        handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
+    }
+
+    private func finishWorkspaceDrag() {
+        guard let activeWorkspaceDrag else { return }
+        cancelWorkspaceDrag()
+
+        guard activeWorkspaceDrag.targetIndex != activeWorkspaceDrag.sourceIndex else {
+            ToasttyLog.info(
+                "workspace sidebar drag finished without reorder",
+                category: .input,
+                metadata: [
+                    "workspaceID": activeWorkspaceDrag.workspaceID.uuidString,
+                    "sourceIndex": "\(activeWorkspaceDrag.sourceIndex)",
+                    "targetIndex": "\(activeWorkspaceDrag.targetIndex)",
+                    "translationHeight": "\(activeWorkspaceDrag.translationHeight)",
+                ]
+            )
+            return
+        }
+        ToasttyLog.info(
+            "workspace sidebar drag committing reorder",
+            category: .input,
+            metadata: [
+                "workspaceID": activeWorkspaceDrag.workspaceID.uuidString,
+                "sourceIndex": "\(activeWorkspaceDrag.sourceIndex)",
+                "targetIndex": "\(activeWorkspaceDrag.targetIndex)",
+                "translationHeight": "\(activeWorkspaceDrag.translationHeight)",
+            ]
+        )
+        _ = store.send(
+            .moveWorkspace(
+                windowID: windowID,
+                fromIndex: activeWorkspaceDrag.sourceIndex,
+                toIndex: activeWorkspaceDrag.targetIndex
+            )
+        )
+    }
+
+    private func cancelWorkspaceDrag() {
+        activeWorkspaceDrag = nil
+    }
+
+    private func beginWorkspaceInteraction(workspaceID: UUID) {
+        guard let activeWorkspaceDrag else { return }
+        ToasttyLog.info(
+            "workspace sidebar stale drag cancelled on new pointer sequence",
+            category: .input,
+            metadata: [
+                "newWorkspaceID": workspaceID.uuidString,
+                "activeWorkspaceID": activeWorkspaceDrag.workspaceID.uuidString,
+                "sourceIndex": "\(activeWorkspaceDrag.sourceIndex)",
+                "targetIndex": "\(activeWorkspaceDrag.targetIndex)",
+                "translationHeight": "\(activeWorkspaceDrag.translationHeight)",
+            ]
+        )
+        cancelWorkspaceDrag()
+    }
+
+    private func workspaceDragLogMetadata(
+        workspaceID: UUID,
+        sourceIndex: Int?,
+        value: PointerInteractionValue
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "workspaceID": workspaceID.uuidString,
+            "startLocation": DraggableInteractionLog.pointDescription(value.startLocation),
+            "location": DraggableInteractionLog.pointDescription(value.location),
+            "translation": DraggableInteractionLog.sizeDescription(value.translation),
+        ]
+        if let sourceIndex {
+            metadata["sourceIndex"] = "\(sourceIndex)"
+        }
+        if let activeWorkspaceDrag {
+            metadata["activeWorkspaceID"] = activeWorkspaceDrag.workspaceID.uuidString
+            metadata["activeSourceIndex"] = "\(activeWorkspaceDrag.sourceIndex)"
+            metadata["activeTargetIndex"] = "\(activeWorkspaceDrag.targetIndex)"
+            metadata["activeTranslationHeight"] = "\(activeWorkspaceDrag.translationHeight)"
+        }
+        if let measuredFrame = measuredWorkspaceRowFramesByID[workspaceID] {
+            metadata["measuredFrame"] = DraggableInteractionLog.rectDescription(measuredFrame)
+        }
+        return metadata
     }
 
     @MainActor
@@ -795,6 +1255,21 @@ struct SidebarView: View {
         }
     }
 
+    private func pruneTransientWorkspaceDragState() {
+        guard let window = store.window(id: windowID) else {
+            measuredWorkspaceRowFramesByID = [:]
+            cancelWorkspaceDrag()
+            return
+        }
+
+        let workspaceIDs = Set(window.workspaceIDs)
+        measuredWorkspaceRowFramesByID = measuredWorkspaceRowFramesByID.filter { workspaceIDs.contains($0.key) }
+        if let activeWorkspaceDrag,
+           workspaceIDs.contains(activeWorkspaceDrag.workspaceID) == false {
+            cancelWorkspaceDrag()
+        }
+    }
+
     private func workspaceSubtitle(paneCount: Int) -> String {
         paneCount == 1 ? "1 pane" : "\(paneCount) panes"
     }
@@ -857,6 +1332,33 @@ struct SidebarView: View {
         }
     }
 
+    static func laterFlagActionTitle(isFlaggedForLater: Bool) -> String {
+        isFlaggedForLater ? "Clear Later Flag" : "Flag for Later"
+    }
+
+    static func sessionAccessibilityLabel(
+        agentName: String,
+        chipKind: SessionStatusKind?,
+        detailText: String?,
+        cwd: String?,
+        isLaterFlagged: Bool
+    ) -> String {
+        var components = [agentName]
+        if let chipKind {
+            components.append(sessionStatusChipLabel(for: chipKind))
+        }
+        if let detailText {
+            components.append(detailText)
+        }
+        if let cwd {
+            components.append(cwd)
+        }
+        if isLaterFlagged {
+            components.append("flagged for later")
+        }
+        return components.joined(separator: ", ")
+    }
+
     static func canFocusSessionPanel(_ panelID: UUID, in workspace: WorkspaceState) -> Bool {
         workspace.panelState(for: panelID) != nil && workspace.slotID(containingPanelID: panelID) != nil
     }
@@ -880,6 +1382,45 @@ struct SidebarView: View {
 
     static func sessionTextUsesItalic(for kind: SessionStatusKind) -> Bool {
         kind == .working
+    }
+
+    static let workspaceNewBadgeLabel = "New"
+
+    static func workspaceAccessibilityLabel(
+        for workspace: WorkspaceState,
+        isSelected: Bool
+    ) -> String {
+        guard showsNewWorkspaceBadge(isSelected: isSelected, hasBeenVisited: workspace.hasBeenVisited) else {
+            return workspace.title
+        }
+        return "\(workspace.title) \(workspaceNewBadgeLabel)"
+    }
+
+    static func showsNewWorkspaceBadge(isSelected: Bool, hasBeenVisited: Bool) -> Bool {
+        isSelected == false && hasBeenVisited == false
+    }
+
+    static func workspaceTitleFontWeight(isSelected: Bool, hasBeenVisited: Bool) -> Font.Weight {
+        if isSelected || hasBeenVisited == false {
+            return .semibold
+        }
+        return .medium
+    }
+
+    static func styledWorkspaceTitleText(
+        _ text: String,
+        isSelected: Bool,
+        hasBeenVisited: Bool
+    ) -> Text {
+        Text(text).font(
+            Font.system(
+                size: 13,
+                weight: workspaceTitleFontWeight(
+                    isSelected: isSelected,
+                    hasBeenVisited: hasBeenVisited
+                )
+            )
+        )
     }
 
     static func styledSessionAgentText(
@@ -946,5 +1487,17 @@ struct SidebarView: View {
 private struct SidebarRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+    }
+}
+
+private enum SidebarWorkspaceListCoordinateSpace {
+    static let name = "sidebar-workspaces.list"
+}
+
+private struct WorkspaceRowFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
     }
 }

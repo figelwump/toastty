@@ -41,8 +41,8 @@ These flags are read by the app itself when Toastty launches normally.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `TOASTTY_RUNTIME_HOME` | unset | Enables an isolated runtime sandbox for dev/test runs. When set, Toastty stores config, workspace layouts, terminal profiles, pane restore journals, the default log path, `instance.json`, and UI-managed defaults under this directory instead of the shared user locations. The preferred automation socket path is also derived from this sandbox identity, but lives under the system temp directory to stay within Unix socket path-length limits. If that stable runtime-home socket path is already owned by a live Toastty listener, Toastty preserves the existing listener and falls back to a per-process sibling path such as `events-v1-<pid>.sock`. Explicit overrides such as `TOASTTY_TERMINAL_PROFILES_PATH`, `TOASTTY_LOG_FILE`, and `TOASTTY_SOCKET_PATH` still win. |
-| `TOASTTY_DEV_WORKTREE_ROOT` | unset | Enables a stable worktree-derived runtime sandbox for manual dev/debug/test runs when `TOASTTY_RUNTIME_HOME` is not set. Toastty derives `artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home` under this worktree root, then uses that runtime home for config, workspace layouts, terminal profiles, pane restore journals, logs, `instance.json`, and UI-managed defaults. Use this for repeated manual launches from one worktree. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set it to `$(SRCROOT)`. |
+| `TOASTTY_RUNTIME_HOME` | unset | Enables an isolated runtime sandbox for dev/test runs. When set, Toastty stores config, workspace layouts, Scratchpad documents, terminal profiles, pane restore journals, the default log path, `instance.json`, and UI-managed defaults under this directory instead of the shared user locations. The preferred automation socket path is also derived from this sandbox identity, but lives under the system temp directory to stay within Unix socket path-length limits. If that stable runtime-home socket path is already owned by a live Toastty listener, Toastty preserves the existing listener and falls back to a per-process sibling path such as `events-v1-<pid>.sock`. Explicit overrides such as `TOASTTY_TERMINAL_PROFILES_PATH`, `TOASTTY_LOG_FILE`, and `TOASTTY_SOCKET_PATH` still win. |
+| `TOASTTY_DEV_WORKTREE_ROOT` | unset | Enables a stable worktree-derived runtime sandbox for manual dev/debug/test runs when `TOASTTY_RUNTIME_HOME` is not set. Toastty derives `artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home` under this worktree root, then uses that runtime home for config, workspace layouts, Scratchpad documents, terminal profiles, pane restore journals, logs, `instance.json`, and UI-managed defaults. Use this for repeated manual launches from one worktree. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set it to `$(SRCROOT)`. |
 | `TOASTTY_DEBUG_LOGIN_SHELL` | unset | Debug-only override for the terminal login shell used by embedded Ghostty surfaces. When set to an absolute shell path such as `/usr/local/bin/fish`, Toastty temporarily applies that path as `SHELL` while Ghostty finalizes its default command selection, so Xcode Run schemes can reproduce shell-specific behavior without changing the user's account shell. |
 | `TOASTTY_DEBUG_ALLOW_REAL_SHELL_INTEGRATION_INSTALL` | unset | Debug-only escape hatch for manual shell-integration validation from a runtime-isolated Xcode run. When set to `1` in a `DEBUG` build, Toastty's `Install Shell Integration…` flow is allowed to modify the real detected shell init file instead of stopping at the runtime-isolation guard. When this flag and `TOASTTY_DEBUG_LOGIN_SHELL` are both set, the installer also uses the debug login shell override for shell detection. Off by default. Release builds ignore this flag. |
 | `TOASTTY_GHOSTTY_CONFIG_PATH` | unset | Overrides Ghostty config loading with a specific config file. Must be an absolute path or use a `~/` prefix. Toastty loads that file and then Ghostty recursive includes. |
@@ -147,6 +147,8 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
 | `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-tabs-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
+| `TOASTTY_WORKSPACE_TABS_SOCKET_TIMEOUT` | `2` | Timeout in seconds for ordinary workspace-tabs smoke socket requests. |
+| `TOASTTY_WORKSPACE_TABS_SCREENSHOT_TIMEOUT` | `10` | Timeout in seconds for screenshot capture socket requests, which can take longer than ordinary state queries. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/shortcut-trace.sh`
@@ -223,6 +225,29 @@ CLI notes:
 - `result.json` distinguishes `pass`, `agent_error`, `timeout`, and `setup_error`. Computer Use permission or app-discovery problems on the Mini currently land as `setup_error`.
 - The remote host must be awake, unlocked, logged into the GUI session, and have the Codex Computer Use plugin already installed with macOS permissions granted.
 - The first live spike proved the `app-server` transport works unattended on the Mini, but Toastty still needs explicit Computer Use approval in that Codex session. Approve `com.GiantThings.toastty` in Codex on the Mini; until that happens, the default `@Computer Use` prompt exits with `approval_denied`.
+
+### `scripts/remote/test.sh`
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TOASTTY_REMOTE_GUI_HOST` | unset | SSH host for the dedicated remote validation machine. Required. |
+| `TOASTTY_REMOTE_GUI_REPO_ROOT` | local Toastty repo path | Absolute Toastty repo path on the remote host. The wrapper creates disposable remote git worktrees from this repo. |
+| `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and remote test runs. |
+| `RUN_LABEL` | timestamped `test-*` value | Optional stable label for the remote test run. Prefer `--run-label` for explicit CLI usage. |
+| `ARCH` | remote machine arch | Used only by the script's default remote `xcodebuild` arguments when no explicit options are passed after `--`. |
+
+CLI notes:
+
+- `./scripts/remote/test.sh [options] [-- <xcodebuild-options>...]` runs `xcodebuild test` remotely and copies the remote logs plus `.xcresult` bundle back into `artifacts/remote-tests/<run-label>/`.
+- `--scope working-tree` syncs the current local working tree, including uncommitted changes, into a disposable remote worktree.
+- `--scope head` exports the current checked-out commit without uncommitted changes.
+- `--scope ref --ref <rev>` exports an explicit local git ref.
+- The wrapper always runs the `test` action and owns `-derivedDataPath` plus `-resultBundlePath`. Do not pass those after `--`.
+- If no explicit xcodebuild options are passed after `--`, the wrapper defaults to `-workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=<remote-arch>"`.
+- The wrapper does not fall back to a local run. If remote preflight fails, it writes a `setup_error` result locally and exits non-zero.
+- Remote test runs call `./scripts/dev/bootstrap-worktree.sh` inside the disposable remote worktree before invoking `xcodebuild test`.
+- The wrapper sets `TOASTTY_RUNTIME_HOME=<remote-run>/runtime-home` and `TOASTTY_DEV_WORKTREE_ROOT=<remote-worktree>` for the remote `xcodebuild` environment so AppKit-presenting or host-app tests stay runtime-isolated from the remote user's shared state.
+- Pass `--keep-remote` to keep the remote worktree and run directory for follow-up debugging.
 
 ### `scripts/release/release.sh`
 

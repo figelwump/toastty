@@ -33,6 +33,10 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             "Select Next Tab\t⇧⌘]"
         )
         XCTAssertEqual(
+            ToasttyKeyboardShortcuts.selectPreviousRightPanelTab.menuTitle("Select Previous Right Panel Tab"),
+            "Select Previous Right Panel Tab\t⌃⌘["
+        )
+        XCTAssertEqual(
             ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"),
             "Close workspace\t⇧⌘W"
         )
@@ -42,12 +46,17 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
         XCTAssertEqual(ToasttyKeyboardShortcuts.commandPalette.symbolLabel, "⇧⌘P")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWindow.symbolLabel, "⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel, "⌘B")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.toggleRightPanel.symbolLabel, "⇧⌘B")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.newScratchpad.symbolLabel, "⌃⌘S")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWorkspace.symbolLabel, "⇧⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameWorkspace.symbolLabel, "⇧⌘E")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameTab.symbolLabel, "⌥⇧E")
         XCTAssertEqual(ToasttyKeyboardShortcuts.selectPreviousTab.symbolLabel, "⇧⌘[")
         XCTAssertEqual(ToasttyKeyboardShortcuts.selectNextTab.symbolLabel, "⇧⌘]")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.selectPreviousRightPanelTab.symbolLabel, "⌃⌘[")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.selectNextRightPanelTab.symbolLabel, "⌃⌘]")
         XCTAssertEqual(ToasttyKeyboardShortcuts.closeWorkspace.symbolLabel, "⇧⌘W")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.watchRunningCommand.symbolLabel, "⇧⌘M")
         XCTAssertEqual(ToasttyKeyboardShortcuts.find.symbolLabel, "⌘F")
         XCTAssertEqual(ToasttyKeyboardShortcuts.findNext.symbolLabel, "⌘G")
         XCTAssertEqual(ToasttyKeyboardShortcuts.findPrevious.symbolLabel, "⇧⌘G")
@@ -62,13 +71,18 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.commandPalette,
             ToasttyKeyboardShortcuts.newWindow,
             ToasttyKeyboardShortcuts.toggleSidebar,
+            ToasttyKeyboardShortcuts.toggleRightPanel,
+            ToasttyKeyboardShortcuts.newScratchpad,
             ToasttyKeyboardShortcuts.newWorkspace,
             ToasttyKeyboardShortcuts.renameWorkspace,
             ToasttyKeyboardShortcuts.renameTab,
             ToasttyKeyboardShortcuts.selectPreviousTab,
             ToasttyKeyboardShortcuts.selectNextTab,
+            ToasttyKeyboardShortcuts.selectPreviousRightPanelTab,
+            ToasttyKeyboardShortcuts.selectNextRightPanelTab,
             ToasttyKeyboardShortcuts.closeWorkspace,
             ToasttyKeyboardShortcuts.toggleFocusedPanel,
+            ToasttyKeyboardShortcuts.watchRunningCommand,
             ToasttyKeyboardShortcuts.find,
             ToasttyKeyboardShortcuts.findNext,
             ToasttyKeyboardShortcuts.findPrevious,

@@ -4,7 +4,7 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 ## Quick start
 
-1. If you want to type `codex`, `claude`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
+1. If you want to type `codex`, `claude`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
 2. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
 3. Uncomment or add a profile in `~/.toastty/agents.toml`
 4. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
@@ -25,15 +25,27 @@ shortcutKey = "c"
 [claude]
 displayName = "Claude Code"
 argv = ["claude"]
+
+[pi]
+displayName = "Pi"
+argv = ["pi"]
 ```
 
 ### Fields
 
+Top-level options:
+
+| Option | Default | Description |
+|---|---|---|
+| `showTopBarButtons` | `true` | Set to `false` to hide dedicated agent buttons from the top bar, including the empty-state `Get Started…` button. Agent menu entries, command palette results, keyboard shortcuts, and typed-command shims still work. |
+
+Profile fields:
+
 | Field | Required | Description |
 |---|---|---|
-| `displayName` | yes | Label shown in the Agent menu, top-bar buttons, and command palette |
+| `displayName` | yes | Label shown in the Agent menu, command palette, and top-bar buttons when enabled |
 | `argv` | yes | The exact command Toastty executes, as a JSON-style string array |
-| `manualCommandNames` | no | For built-in `[codex]` / `[claude]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
+| `manualCommandNames` | no | For built-in `[codex]` / `[claude]` / `[pi]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
 | `shortcutKey` | no | Single ASCII letter or digit; registers `Cmd+Opt+<key>` |
 
 ### Profile ID rules
@@ -48,7 +60,7 @@ If two agent profiles share the same `shortcutKey`, or an agent shortcut conflic
 
 ## Well-known profile IDs
 
-Toastty recognizes two well-known profile IDs that receive first-party instrumentation: `codex` and `claude`. Any other ID launches the configured command without agent-specific wiring.
+Toastty recognizes three well-known profile IDs that receive first-party instrumentation: `codex`, `claude`, and `pi`. Any other ID launches the configured command without agent-specific wiring.
 
 ### How matching works
 
@@ -65,13 +77,13 @@ argv = ["/usr/local/bin/my-codex-wrapper"]
 argv = ["codex"]
 ```
 
-The profile ID is stored as an `AgentKind` internally. When a launch resolves to `AgentKind.codex` or `AgentKind.claude`, Toastty activates the corresponding instrumentation path. When the ID is anything else, the command runs as-is with only the base session context injected.
+The profile ID is stored as an `AgentKind` internally. When a launch resolves to `AgentKind.codex`, `AgentKind.claude`, or `AgentKind.pi`, Toastty activates the corresponding instrumentation path. When the ID is anything else, the command runs as-is with only the base session context injected.
 
-Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`.
+Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. Add `showTopBarButtons = false` before any profile table to keep agent launch buttons out of the top bar while preserving the menu, command palette, and shortcuts.
 
 ### Wrapper-compatible launch commands
 
-Built-in Codex and Claude instrumentation also works when the configured
+Built-in Codex, Claude, and Pi instrumentation also works when the configured
 command uses a wrapper or prefix command, as long as the actual agent command
 still appears as its own `argv` element somewhere in the list. For predictable
 manual tracking of those wrapper executables when you type them into a Toastty
@@ -101,10 +113,18 @@ argv = [
   "--dangerously-skip-permissions",
 ]
 manualCommandNames = ["run-sandboxed.sh"]
+
+[pi]
+displayName = "Pi"
+argv = [
+  "agent-safehouse",
+  "pi",
+]
+manualCommandNames = ["agent-safehouse"]
 ```
 
-Toastty inserts its Codex / Claude-specific flags after the actual `codex` /
-`claude` command in those examples, not after the wrapper binary.
+Toastty inserts its agent-specific flags after the actual `codex`, `claude`, or
+`pi` command in those examples, not after the wrapper binary.
 
 If you prefer shell helpers, menu launches can also target a shell function or
 wrapper script directly:
@@ -151,6 +171,16 @@ When the profile ID is `claude`, Toastty:
 These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). Non-actionable notifications such as `auth_success` are ignored.
 When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the temporary launch artifacts directory, but still exits successfully so Claude keeps running. Claude can retain those hook artifacts briefly after session stop so late hook invocations turn into no-op delivery instead of missing-file shell errors.
 
+### What `pi` enables
+
+When the profile ID is `pi`, Toastty:
+
+1. **Injects a bundled Toastty-owned Pi extension** with `--extension <toastty-pi-extension.js>`. Toastty does not install files into Pi's user extension directories.
+2. **Preserves user extensions**. User-provided `--extension` / `-e` arguments remain in `argv`; Pi treats extensions as additive, so Toastty adds its extension alongside them.
+3. **Respects Pi extension opt-out flags**. If `--no-extensions` or `-ne` appears before `--`, Toastty does not inject its Pi extension for that launch.
+4. **Reports compact telemetry** through `toastty session ingest-agent-event --source pi-extension`, covering the submitted prompt, final assistant summary, semantic tool-call progress, tool errors, and changed-file paths when Pi exposes them. Successful tool results update changed-file metadata without replacing the sidebar with generic `Finished ...` messages.
+5. **Avoids prompt and tool-output forwarding**. The extension records bounded metadata only and is a no-op outside Toastty when required `TOASTTY_*` environment variables are absent.
+
 ## Launch flow
 
 When you trigger an agent launch (menu click, top-bar button, command palette submission, keyboard shortcut, or socket command):
@@ -161,34 +191,34 @@ When you trigger an agent launch (menu click, top-bar button, command palette su
 4. **Render shell command** — Toastty builds a single shell command line with all `TOASTTY_*` context variables inline, the instrumentation environment, and the profile's `argv`
 5. **Start session** — A session record is created in the session runtime store with initial status "Idle / Ready for prompt"
 6. **Send to terminal** — The rendered command line is sent to the target terminal panel and submitted
-7. **Begin monitoring** — For Codex, the log watcher starts polling; for Claude, hooks report events back through the CLI
+7. **Begin monitoring** — For Codex, the log watcher starts polling; for Claude, hooks report events back through the CLI; for Pi, the bundled extension reports events back through the CLI
 
-When the agent process exits and the session is stopped, Toastty cleans up Codex launch artifacts immediately. Claude hook artifacts can remain after session stop so late hook invocations do not fail at the shell layer before they turn into no-op telemetry delivery.
+When the agent process exits and the session is stopped, Toastty cleans up Codex and Pi launch artifacts immediately. Claude hook artifacts can remain after session stop so late hook invocations do not fail at the shell layer before they turn into no-op telemetry delivery.
 
 ## Manual command shims
 
-Outside the Agent menu, Toastty can also track manual `codex` and `claude`
+Outside the Agent menu, Toastty can also track manual `codex`, `claude`, and `pi`
 invocations typed directly into Toastty terminals. By default, Toastty prepends
 managed wrappers for those commands into the terminal `PATH`, and those wrappers
 prepare the same managed-session context before handing off to the real binary.
 
 If you are setting this up from inside the app, the top-bar `Get Started…`
-button routes to the same shell-integration flow as `Toastty > Install Shell
-Integration…`.
+button, when visible, routes to the same shell-integration flow as
+`Toastty > Install Shell Integration…`.
 
-If a built-in `[codex]` or `[claude]` profile uses extra wrapper executables for
+If a built-in `[codex]`, `[claude]`, or `[pi]` profile uses extra wrapper executables for
 typed launches, list those wrapper basenames in `manualCommandNames`. Entries
-must be basenames only, with no paths or spaces, and must not be `codex` or
-`claude`. Toastty installs managed wrappers for those names too, so commands such as
-`run-sandboxed.sh claude ...` or `agent-safehouse codex ...` can start managed
+must be basenames only, with no paths or spaces, and must not be `codex`,
+`claude`, or `pi`. Toastty installs managed wrappers for those names too, so commands such as
+`run-sandboxed.sh claude ...`, `agent-safehouse codex ...`, or `agent-safehouse pi ...` can start managed
 sessions when typed directly in a Toastty terminal.
 
 If you leave `manualCommandNames` empty, Toastty still keeps recognizing simple
 built-in wrapper-prefix profiles for compatibility, such as
 `run-sandboxed.sh claude ...` or `agent-safehouse codex ...`.
 
-`manualCommandNames` is limited to built-in `[codex]` and `[claude]` profiles,
-and the wrapper command still needs to leave the real `codex` or `claude`
+`manualCommandNames` is limited to built-in `[codex]`, `[claude]`, and `[pi]` profiles,
+and the wrapper command still needs to leave the real `codex`, `claude`, or `pi`
 command visible later in `argv`. Toastty uses that later `argv` element to pick
 the correct built-in instrumentation path.
 
@@ -204,7 +234,7 @@ This means:
 - A shell helper can still lead to a managed session if its body calls a
   shimmed executable by bare name on `PATH`, such as
   `run-sandboxed.sh claude ...`.
-- Standalone wrapper executables that hide `codex` or `claude` inside the
+- Standalone wrapper executables that hide `codex`, `claude`, or `pi` inside the
   wrapper implementation are not supported for manual typed launches. For
   manual tracking, keep the real agent command as its own `argv` element in the
   configured wrapper chain.
@@ -237,7 +267,7 @@ Every agent launched through Toastty receives these environment variables, set i
 |---|---|
 | `TOASTTY_SESSION_ID` | Unique session UUID |
 | `TOASTTY_PANEL_ID` | UUID of the terminal panel the agent was launched into |
-| `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude/Codex helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
+| `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude, Codex, and Pi helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
 | `TOASTTY_CLI_PATH` | Path to the bundled `toastty` CLI executable |
 | `TOASTTY_CWD` | Panel's working directory (if available) |
 | `TOASTTY_REPO_ROOT` | Inferred git repository root (if available) |
@@ -253,9 +283,25 @@ Actionable lifecycle events — `needs_approval`, `ready`, and `error` — drive
 
 While a managed agent session is active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel so the session status path stays authoritative.
 
+### Later flags
+
+Use `Cmd+Shift+L` to flag or clear the focused managed session for later follow-up.
+
+Later flags are intentionally a lower-priority reminder, not a pin. When you use `Cmd+Shift+A`, Toastty first targets unread panels, then sessions that need approval or show errors, then forward working sessions. Later-flagged sessions only surface after those higher-priority cases are exhausted.
+
+Toastty also clears the later flag automatically when the session meaningfully advances. In practice that means the flag goes away when the session resumes working from a non-working state or transitions into a new actionable state such as `needs_approval`, `ready`, or `error`.
+
+### Watch running commands
+
+Use `Cmd+Shift+M` while the focused terminal is running a foreground command to watch that command as a temporary session-style row in the sidebar.
+
+This is separate from managed agent launches. Toastty uses the same unread-badge and desktop-notification path for watched commands, reporting success as `Command finished` and non-zero exits as `Command failed`. The watch stays tied to that terminal panel until the foreground command completes.
+
+Watched commands are intentionally not later-flaggable. The watch itself is already the reminder, so Toastty hides the later-flag affordance for those rows instead of stacking both features on the same panel.
+
 ## Custom and third-party agents
 
-For agents that are not `codex` or `claude`, Toastty still provides the base `TOASTTY_*` session context. Toastty has already created the session before your command starts, so the agent (or a wrapper script) should update and stop that existing session via the injected `TOASTTY_CLI_PATH`:
+For agents that are not `codex`, `claude`, or `pi`, Toastty still provides the base `TOASTTY_*` session context. Toastty has already created the session before your command starts, so the agent (or a wrapper script) should update and stop that existing session via the injected `TOASTTY_CLI_PATH`:
 
 ```bash
 "$TOASTTY_CLI_PATH" session status --session "$TOASTTY_SESSION_ID" --kind working --summary "Thinking"
@@ -266,7 +312,7 @@ For agents that are not `codex` or `claude`, Toastty still provides the base `TO
 
 Manual integrations can report any supported session state, including `error`, through `session status --kind ...`.
 
-The `toastty session ingest-agent-event` subcommand is a CLI-local helper for the built-in Claude/Codex instrumentation. It is not a general-purpose integration point.
+The `toastty session ingest-agent-event` subcommand is a CLI-local helper for the built-in Claude, Codex, and Pi instrumentation. It is not a general-purpose integration point.
 
 ## Instructions for agents
 
@@ -279,7 +325,8 @@ If a user asks you to help configure Toastty agent profiles, your goal is to pro
 3. Prefer Toastty's well-known profile IDs when they apply:
    - Use profile ID `codex` when the launch command is Codex
    - Use profile ID `claude` when the launch command is Claude Code
-4. For any other agent, choose a lowercase ID that matches Toastty's ID rules and reflects the command being launched, such as `gemini`, `pi`, or `amp`.
+   - Use profile ID `pi` when the launch command is Pi
+4. For any other agent, choose a lowercase ID that matches Toastty's ID rules and reflects the command being launched, such as `gemini` or `amp`.
 5. Propose the exact `agents.toml` contents to the user before writing the file. Confirm profile IDs, display names, launch commands, and optional shortcuts.
 6. Only create or update `~/.toastty/agents.toml` after the user confirms.
 
@@ -300,11 +347,12 @@ Common launch commands you may encounter include:
 |---|---|---|
 | Codex | `codex` | `codex` |
 | Claude Code | `claude` | `claude` |
+| Pi | `pi` | `pi` |
 | Gemini CLI | `gemini` or `gemini-cli` | match the executable name |
-| Aider | `pi` | `pi` |
+| Aider | `aider` | `aider` |
 | Custom wrapper | absolute path or script name | stable lowercase ID that matches the wrapper |
 
-The command you detect should usually become the first element of `argv`. For agents other than `codex` and `claude`, prefer using the executable name as the profile ID when that produces a valid Toastty ID. Include additional fixed flags in later array entries only when the user wants them every time Toastty launches that profile.
+The command you detect should usually become the first element of `argv`. For agents other than `codex`, `claude`, and `pi`, prefer using the executable name as the profile ID when that produces a valid Toastty ID. Include additional fixed flags in later array entries only when the user wants them every time Toastty launches that profile.
 
 ### Generation rules
 
@@ -314,7 +362,7 @@ Generate TOML that follows the same schema documented above:
 - `argv` must be a TOML string array
 - `shortcutKey` is optional and must be a single ASCII letter or digit
 
-Remember that only the profile IDs `codex` and `claude` receive first-party Toastty instrumentation. If you launch Codex or Claude Code under another ID, the command still runs, but Toastty will not inject the built-in session hooks for that agent.
+Remember that only the profile IDs `codex`, `claude`, and `pi` receive first-party Toastty instrumentation. If you launch one of those agents under another ID, the command still runs, but Toastty will not inject the built-in session hooks for that agent.
 
 ### Example suggestion
 
@@ -340,10 +388,10 @@ If the user confirms, you can create or update `~/.toastty/agents.toml` with the
 
 **"The target terminal is not at an interactive prompt"** — Toastty asks Ghostty whether the terminal surface is currently at a prompt. Wait for the current command to finish, or use a different panel.
 
-**Agent launches but sidebar does not update** — If the profile ID is not `codex` or `claude`, Toastty does not inject instrumentation automatically. Either use a well-known profile ID or report status manually via the `toastty` CLI.
+**Agent launches but sidebar does not update** — If the profile ID is not `codex`, `claude`, or `pi`, Toastty does not inject instrumentation automatically. Either use a well-known profile ID or report status manually via the `toastty` CLI. For Pi, `--no-extensions` and `-ne` intentionally disable Toastty's injected extension for that launch.
 
 **Shortcut does not work** — Check for conflicts with other agent or terminal-profile shortcuts. Toastty logs a warning when it detects a conflict.
 
 **Claude settings conflict** — If your Claude profile includes `--settings` pointing to a file, Toastty merges its hooks into those settings. If the settings argument is malformed or the file cannot be read, Toastty logs a warning and launches without instrumentation.
 
-**Telemetry helper failures** — Inspect `telemetry-failures.log` inside the managed session's temporary launch artifacts directory if the sidebar stops updating. For Codex, do that while the session is still active. Claude can retain its hook artifacts briefly after session stop, so the same log may still be available for late-hook failures. The helper scripts keep the agent process running, but they now preserve socket and CLI stderr there instead of discarding it.
+**Telemetry helper failures** — Inspect `telemetry-failures.log` inside the managed session's temporary launch artifacts directory if the sidebar stops updating. For Codex, do that while the session is still active. Claude can retain its hook artifacts briefly after session stop, so the same log may still be available for late-hook failures. Pi also writes compact JSONL telemetry to `pi-telemetry.jsonl` while the session is active. The helper scripts keep the agent process running, but they preserve socket and CLI stderr there instead of discarding it.

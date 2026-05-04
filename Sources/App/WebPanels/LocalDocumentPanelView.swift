@@ -5,6 +5,7 @@ struct LocalDocumentPanelView: View {
     let webState: WebPanelState
     @ObservedObject var runtime: LocalDocumentPanelRuntime
     let isEffectivelyVisible: Bool
+    let isActivePanel: Bool
     let textScale: Double
 
     var body: some View {
@@ -12,6 +13,7 @@ struct LocalDocumentPanelView: View {
             runtime: runtime,
             webState: webState,
             isEffectivelyVisible: isEffectivelyVisible,
+            isActivePanel: isActivePanel,
             textScale: textScale
         )
         .frame(

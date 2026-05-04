@@ -1,0 +1,12 @@
+{
+  "name": "toastty-scratchpad-panel",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check-bundle-sync": "node scripts/check-bundle-sync.mjs",
+    "test": "node --test test/*.test.mjs && npm run check-bundle-sync"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.11"
+  }
+}

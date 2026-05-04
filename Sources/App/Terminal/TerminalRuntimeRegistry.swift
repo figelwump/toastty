@@ -55,10 +55,18 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
+    typealias LocalDocumentLinkAlertPresenter = @MainActor (
+        UUID?,
+        URL,
+        LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+    ) -> Void
+
     private let focusCoordinator: TerminalFocusCoordinator
     private let activateApp: @MainActor () -> Void
+    private let presentLocalDocumentLinkAlert: LocalDocumentLinkAlertPresenter
     private let runtimeStore = TerminalWindowRuntimeStore()
     private weak var store: AppStore?
+    private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private var stateObservation: AnyCancellable?
@@ -147,6 +155,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
         #endif
         configureGhosttyActionHandler()
         bindStateObservation(to: store)
+    }
+
+    func bind(webPanelRuntimeRegistry: WebPanelRuntimeRegistry) {
+        self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
     }
 
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
@@ -456,16 +468,29 @@ final class TerminalRuntimeRegistry: ObservableObject {
     convenience init() {
         self.init(
             focusCoordinator: TerminalFocusCoordinator(),
-            activateApp: { NSApp.activate(ignoringOtherApps: true) }
+            activateApp: { NSApp.activate(ignoringOtherApps: true) },
+            presentLocalDocumentLinkAlert: TerminalRuntimeRegistry.presentLocalDocumentLinkAlert
+        )
+    }
+
+    convenience init(
+        presentLocalDocumentLinkAlert: @escaping LocalDocumentLinkAlertPresenter
+    ) {
+        self.init(
+            focusCoordinator: TerminalFocusCoordinator(),
+            activateApp: { NSApp.activate(ignoringOtherApps: true) },
+            presentLocalDocumentLinkAlert: presentLocalDocumentLinkAlert
         )
     }
 
     init(
         focusCoordinator: TerminalFocusCoordinator,
-        activateApp: @escaping @MainActor () -> Void
+        activateApp: @escaping @MainActor () -> Void,
+        presentLocalDocumentLinkAlert: @escaping LocalDocumentLinkAlertPresenter = TerminalRuntimeRegistry.presentLocalDocumentLinkAlert
     ) {
         self.focusCoordinator = focusCoordinator
         self.activateApp = activateApp
+        self.presentLocalDocumentLinkAlert = presentLocalDocumentLinkAlert
     }
 
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
@@ -757,6 +782,64 @@ final class TerminalRuntimeRegistry: ObservableObject {
 }
 
 private extension TerminalRuntimeRegistry {
+    static func presentLocalDocumentLinkAlert(
+        preferredWindowID: UUID?,
+        url: URL,
+        issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+    ) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localDocumentLinkAlertTitle(for: issue)
+        alert.informativeText = localDocumentLinkAlertMessage(for: url, issue: issue)
+        alert.addConfiguredButton(withTitle: "OK", behavior: .defaultAction)
+
+        if let window = resolveWindow(id: preferredWindowID) {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    static func localDocumentLinkAlertTitle(
+        for issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+    ) -> String {
+        switch issue {
+        case .fileNotFound:
+            return "File not found"
+        case .invalidLineNumber:
+            return "Invalid line number"
+        case .couldNotResolve:
+            return "Couldn't resolve file link"
+        }
+    }
+
+    static func localDocumentLinkAlertMessage(
+        for url: URL,
+        issue: LocalFileLinkResolver.UnresolvedLocalDocumentIssue
+    ) -> String {
+        let pathDescription = rawLocalDocumentLinkDescription(for: url)
+        switch issue {
+        case .fileNotFound:
+            return "Toastty couldn't find \(pathDescription)."
+        case .invalidLineNumber:
+            return "\(pathDescription) uses an invalid line number."
+        case .couldNotResolve:
+            return "Toastty couldn't resolve \(pathDescription)."
+        }
+    }
+
+    static func rawLocalDocumentLinkDescription(for url: URL) -> String {
+        let rawPath = url.path.isEmpty ? url.absoluteString : url.path
+        return "“\(rawPath)”"
+    }
+
+    static func resolveWindow(id windowID: UUID?) -> NSWindow? {
+        guard let windowID else {
+            return nil
+        }
+        return NSApp.windows.first(where: { $0.identifier?.rawValue == windowID.uuidString })
+    }
+
     func bindStateObservation(to store: AppStore) {
         stateObservation?.cancel()
         observedWindowFontPointsByID = effectiveWindowFontPointsByID(in: store.state)
@@ -923,48 +1006,168 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         let selection = state.workspaceSelection(containingPanelID: panelID)
         let preferredWindowID = selection?.windowID
         let cwd = terminalPanelState(for: panelID, state: state)?.expectedProcessWorkingDirectory
-
-        switch TerminalCommandClickTargetResolver.resolve(
+        let target = TerminalCommandClickTargetResolver.resolve(
             hoveredURL: url,
             cwd: cwd,
-            useAlternatePlacement: useAlternatePlacement
-        ) {
-        case .localDocumentFile(let path, let placement):
-            return store.createLocalDocumentPanelFromCommand(
+            useAlternatePlacement: useAlternatePlacement,
+            localDocumentPreferences: store.localDocumentRoutingPreferences
+        )
+
+        let result: Bool
+        let openedRightPanelInToastty: Bool
+        switch target {
+        case .localDocumentFile(let path, let lineNumber, let placement):
+            let outcome = store.createLocalDocumentPanelFromCommandOutcome(
                 preferredWindowID: preferredWindowID,
                 request: LocalDocumentPanelCreateRequest(
                     filePath: path,
+                    lineNumber: lineNumber,
                     placementOverride: placement
                 )
             )
+            result = outcome != nil
+            openedRightPanelInToastty = result && placement == .rightPanel
+            if let lineNumber,
+               let panelID = outcome?.panelID {
+                _ = webPanelRuntimeRegistry?.requestLocalDocumentReveal(
+                    panelID: panelID,
+                    lineNumber: lineNumber
+                )
+            }
         case .localDirectory(let path):
             guard let workspaceID = selection?.workspaceID else {
+                ToasttyLog.warning(
+                    "Terminal command-click resolved to local directory without workspace selection",
+                    category: .input,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "path": path,
+                        "url": url.absoluteString,
+                        "alternate_placement": useAlternatePlacement ? "true" : "false",
+                    ]
+                )
                 return false
             }
             let direction: SlotSplitDirection = useAlternatePlacement ? .down : .right
-            return splitFocusedSlotInDirectionWithWorkingDirectory(
+            result = splitFocusedSlotInDirectionWithWorkingDirectory(
                 workspaceID: workspaceID,
                 direction: direction,
                 workingDirectory: path
             )
+            openedRightPanelInToastty = false
+        case .localBrowserFile(let fileURL):
+            let placement = store.urlRoutingPreferences.resolvedBrowserPlacement(
+                alternateOpen: useAlternatePlacement
+            )
+            result = store.openURLInBrowser(
+                preferredWindowID: preferredWindowID,
+                url: fileURL,
+                placement: placement
+            )
+            openedRightPanelInToastty = result && placement == .rightPanel
+        case .unresolvedLocalDocument(let unresolvedURL, let issue):
+            presentLocalDocumentLinkAlert(preferredWindowID, unresolvedURL, issue)
+            result = false
+            openedRightPanelInToastty = false
         case .passthrough(let passthroughURL):
-            return AppURLRouter.open(
+            let openResult = AppURLRouter.openResult(
                 passthroughURL,
                 preferredWindowID: preferredWindowID,
                 appStore: store,
                 useAlternatePlacement: useAlternatePlacement
             )
+            result = openResult.didOpen
+            openedRightPanelInToastty = openResult.openedRightPanelInToastty
         }
+
+        if openedRightPanelInToastty,
+           let workspaceID = selection?.workspaceID {
+            _ = store.send(.exitFocusedPanelMode(workspaceID: workspaceID))
+        }
+
+        let targetMetadata: [String: String]
+        let targetKind: String
+        switch target {
+        case .localDocumentFile(let path, let lineNumber, let placement):
+            targetKind = "local_document"
+            targetMetadata = [
+                "resolved_path": path,
+                "line_number": lineNumber.map(String.init) ?? "none",
+                "placement": placement.rawValue,
+            ]
+        case .localDirectory(let path):
+            targetKind = "local_directory"
+            targetMetadata = [
+                "resolved_path": path,
+                "split_direction": useAlternatePlacement ? SlotSplitDirection.down.rawValue : SlotSplitDirection.right.rawValue,
+            ]
+        case .localBrowserFile(let fileURL):
+            let placement = store.urlRoutingPreferences.resolvedBrowserPlacement(
+                alternateOpen: useAlternatePlacement
+            )
+            targetKind = "local_browser_file"
+            targetMetadata = [
+                "resolved_url": fileURL.absoluteString,
+                "placement": placement.rawValue,
+            ]
+        case .unresolvedLocalDocument(let unresolvedURL, let issue):
+            targetKind = "unresolved_local_document"
+            targetMetadata = [
+                "resolved_url": unresolvedURL.absoluteString,
+                "issue": issue.rawValue,
+            ]
+        case .passthrough(let passthroughURL):
+            targetKind = "passthrough"
+            targetMetadata = [
+                "resolved_url": passthroughURL.absoluteString,
+            ]
+        }
+
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "url": url.absoluteString,
+            "target_kind": targetKind,
+            "alternate_placement": useAlternatePlacement ? "true" : "false",
+            "result": result ? "true" : "false",
+        ]
+        if let preferredWindowID {
+            metadata["preferred_window_id"] = preferredWindowID.uuidString
+        }
+        if let workspaceID = selection?.workspaceID {
+            metadata["workspace_id"] = workspaceID.uuidString
+        }
+        if let cwd {
+            metadata["cwd"] = cwd
+        }
+        metadata.merge(targetMetadata) { _, new in new }
+
+        if result {
+            ToasttyLog.info(
+                "Resolved terminal command-click link",
+                category: .input,
+                metadata: metadata
+            )
+        } else {
+            ToasttyLog.warning(
+                "Failed to open resolved terminal command-click link",
+                category: .input,
+                metadata: metadata
+            )
+        }
+        return result
     }
 
     @discardableResult
     func openSearchSelectionURL(_ url: URL, from panelID: UUID) -> Bool {
         guard let store else { return false }
         let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
-        return store.openURLInBrowser(
+        return AppURLRouter.open(
+            url,
             preferredWindowID: preferredWindowID,
-            url: url,
-            placement: .newTab
+            appStore: store,
+            requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
+                self?.webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+            }
         )
     }
 

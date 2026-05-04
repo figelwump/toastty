@@ -16,7 +16,7 @@ If you keep shell startup files in version control, the installer is still the e
 
 This is command-history restore only. It does not restore running programs, SSH sessions, REPL state, shell-local variables, or half-typed input.
 
-The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `claude`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
+The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `claude`, `pi`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
 
 Source the Toastty snippet after other `PATH`, history, and prompt-hook changes. It does not need to be the literal last line, but anything that rewrites `PATH`, replaces `PROMPT_COMMAND`, or overwrites prompt hooks after it can undo Toastty's shim ordering or prompt-time journal/title hooks.
 
@@ -52,45 +52,69 @@ _toastty_ensure_pane_journal_directory() {
 	return 0
 }
 
-_toastty_import_pane_journal_if_needed() {
+_toastty_schedule_pane_journal_import_if_needed() {
 	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+	[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+	[[ "${TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED:-}" == "1" ]] && return
+
+	typeset -g _TOASTTY_PANE_JOURNAL_IMPORT_PENDING=1
+	export TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED=1
+}
+
+_toastty_import_pane_journal_if_needed() {
+	[[ "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" == "1" ]] || return
 
 	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
-	[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+	if [[ -z "$pane_journal_file" || ! -r "$pane_journal_file" ]]; then
+		unset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+		unset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+		export TOASTTY_PANE_JOURNAL_IMPORTED=1
+		return
+	fi
 
 	local entry=""
 	while IFS= read -r -d '' entry; do
 		print -sr -- "$entry"
 	done < "$pane_journal_file"
+
+	unset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+	unset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+	export TOASTTY_PANE_JOURNAL_IMPORTED=1
 }
 
 _toastty_initialize_pane_journal() {
 	[[ -z ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]] || return
 
 	if _toastty_ensure_pane_journal_directory; then
-		_toastty_import_pane_journal_if_needed
-		typeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+		_toastty_schedule_pane_journal_import_if_needed
+		unset _TOASTTY_PENDING_JOURNAL_ENTRY
 	fi
 
-	unset TOASTTY_LAUNCH_REASON
 	typeset -g _TOASTTY_PANE_JOURNAL_INITIALIZED=1
 }
 
-_toastty_append_last_history_entry_to_journal() {
+_toastty_command_should_write_pane_journal() {
+	local cmd="$1"
+	[[ -n "$cmd" ]] || return 1
+
+	if [[ -o hist_ignore_space ]]; then
+		case "$cmd" in
+		([[:space:]]*) return 1 ;;
+		esac
+	fi
+
+	return 0
+}
+
+_toastty_append_pending_history_entry_to_journal() {
 	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
 	[[ -n "$pane_journal_file" ]] || return
 
-	local current_histcmd="${HISTCMD:-0}"
-	[[ "$current_histcmd" == <-> ]] || return
-	local last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
-	[[ "$last_histcmd" == <-> ]] || last_histcmd=0
-	(( current_histcmd > last_histcmd )) || return
-
-	local entry="$(fc -ln -1)"
-	typeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
-	[[ -n "$entry" ]] || return
+	(( ${+_TOASTTY_PENDING_JOURNAL_ENTRY} )) || return
+	local entry="${_TOASTTY_PENDING_JOURNAL_ENTRY}"
 
 	printf '%s\0' "$entry" >> "$pane_journal_file" 2>/dev/null || return
+	unset _TOASTTY_PENDING_JOURNAL_ENTRY
 }
 
 _toastty_emit_title() {
@@ -108,14 +132,18 @@ _toastty_emit_title() {
 
 _toastty_precmd() {
 	if [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
-		_toastty_append_last_history_entry_to_journal
+		_toastty_import_pane_journal_if_needed
+		_toastty_append_pending_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"
 	_toastty_emit_title "$cwd"
 }
 
 _toastty_preexec() {
-	local cmd="${1%%$'\n'*}"
+	local entry="$1"
+	local cmd="${entry%%$'\n'*}"
+	unset _TOASTTY_PENDING_JOURNAL_ENTRY
+	_toastty_command_should_write_pane_journal "$entry" && typeset -g _TOASTTY_PENDING_JOURNAL_ENTRY="$entry"
 	_toastty_emit_title "$cmd"
 }
 
@@ -136,6 +164,9 @@ Then add this near the end of `~/.zshrc`:
 ```zsh
 source "$HOME/.toastty/shell/toastty-profile-shell-integration.zsh"
 ```
+
+When `setopt HIST_IGNORE_SPACE` is active, leading-space commands stay out of
+the pane journal too.
 
 ## Bash
 
@@ -171,27 +202,93 @@ _toastty_ensure_pane_journal_directory() {
 	return 0
 }
 
-_toastty_import_pane_journal_if_needed() {
-	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+_toastty_schedule_shared_history_import_if_needed() {
+	[[ -z "${_TOASTTY_SHARED_HISTORY_IMPORTED:-}" ]] || return
+	_TOASTTY_SHARED_HISTORY_IMPORT_PENDING=1
+}
 
+_toastty_schedule_pane_journal_import_if_needed() {
+	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+	[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+	[[ "${TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED:-}" == "1" ]] && return
+
+	_TOASTTY_PANE_JOURNAL_IMPORT_PENDING=1
+	export TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED=1
+}
+
+_toastty_load_shared_history_if_needed() {
+	[[ -z "${_TOASTTY_SHARED_HISTORY_IMPORTED:-}" ]] || return
+
+	local histfile="${HISTFILE:-}"
+	if [[ -n "$histfile" && -r "$histfile" ]]; then
+		builtin history -n "$histfile"
+	fi
+	_TOASTTY_SHARED_HISTORY_IMPORTED=1
+}
+
+_toastty_read_last_history_line() {
+	_TOASTTY_LAST_HISTORY_NUMBER=0
+	_TOASTTY_LAST_HISTORY_ENTRY=""
+
+	local history_output=""
+	history_output=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 1 2>/dev/null)
+	[[ -n "$history_output" ]] || return
+
+	local entry="$history_output"
+	entry="${entry#"${entry%%[![:space:]]*}"}"
+	local history_number="${entry%%[!0-9]*}"
+	if [[ -n "$history_number" ]]; then
+		entry="${entry#"$history_number"}"
+		entry="${entry#"${entry%%[![:space:]]*}"}"
+	fi
+
+	_TOASTTY_LAST_HISTORY_NUMBER="${history_number:-0}"
+	_TOASTTY_LAST_HISTORY_ENTRY="$entry"
+}
+
+_toastty_import_startup_history_if_needed() {
+	[[ -n "${_TOASTTY_SHARED_HISTORY_IMPORT_PENDING:-}" || -n "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" ]] || return
+
+	unset _TOASTTY_SHARED_HISTORY_IMPORT_PENDING
+	_toastty_load_shared_history_if_needed
+
+	[[ -n "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" ]] || return
 	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
-	[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+	if [[ -z "$pane_journal_file" || ! -r "$pane_journal_file" ]]; then
+		unset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+		unset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+		export TOASTTY_PANE_JOURNAL_IMPORTED=1
+		return
+	fi
 
 	local entry=""
 	while IFS= read -r -d '' entry; do
 		builtin history -s -- "$entry"
 	done < "$pane_journal_file"
+
+	unset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+	unset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+	export TOASTTY_PANE_JOURNAL_IMPORTED=1
+}
+
+_toastty_prepare_history_for_prompt_if_needed() {
+	[[ -z "${_TOASTTY_PROMPT_HISTORY_READY:-}" ]] || return
+
+	_toastty_import_startup_history_if_needed
+	_toastty_read_last_history_line
+	_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER="${_TOASTTY_LAST_HISTORY_NUMBER:-0}"
+	_TOASTTY_JOURNAL_LAST_HISTORY_ENTRY="${_TOASTTY_LAST_HISTORY_ENTRY:-}"
+	_TOASTTY_PROMPT_HISTORY_READY=1
 }
 
 _toastty_initialize_pane_journal() {
 	[[ -z "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]] || return
 
 	if _toastty_ensure_pane_journal_directory; then
-		_toastty_import_pane_journal_if_needed
-		_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+		_toastty_schedule_shared_history_import_if_needed
+		_toastty_schedule_pane_journal_import_if_needed
 	fi
 
-	unset TOASTTY_LAUNCH_REASON
 	_TOASTTY_PANE_JOURNAL_INITIALIZED=1
 }
 
@@ -199,17 +296,19 @@ _toastty_append_last_history_entry_to_journal() {
 	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
 	[[ -n "$pane_journal_file" ]] || return
 
-	local current_histcmd="${HISTCMD:-0}"
-	[[ "$current_histcmd" =~ ^[0-9]+$ ]] || return
-	local last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
-	[[ "$last_histcmd" =~ ^[0-9]+$ ]] || last_histcmd=0
-	(( current_histcmd > last_histcmd )) || return
+	# Bash's HISTCMD can stay pinned at 1 in the restored interactive shells
+	# Toastty launches on macOS, even while the visible history tail advances.
+	_toastty_read_last_history_line
+	local current_history_number="${_TOASTTY_LAST_HISTORY_NUMBER:-0}"
+	[[ "$current_history_number" =~ ^[0-9]+$ ]] || return
+	local last_history_number="${_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER:-0}"
+	[[ "$last_history_number" =~ ^[0-9]+$ ]] || last_history_number=0
+	(( current_history_number > last_history_number )) || return
 
-	local entry=""
-	entry=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 1)
-	entry="${entry#*[[:digit:]][* ] }"
-	_TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
+	local entry="${_TOASTTY_LAST_HISTORY_ENTRY:-}"
 	[[ -n "$entry" ]] || return
+	_TOASTTY_JOURNAL_LAST_HISTORY_NUMBER="$current_history_number"
+	_TOASTTY_JOURNAL_LAST_HISTORY_ENTRY="$entry"
 
 	printf '%s\0' "$entry" >> "$pane_journal_file" 2>/dev/null || return
 }
@@ -230,6 +329,7 @@ _toastty_emit_title() {
 
 _toastty_prompt_command() {
 	if [[ -n "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]]; then
+		_toastty_prepare_history_for_prompt_if_needed
 		_toastty_append_last_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"
@@ -251,6 +351,8 @@ Then add this near the end of `~/.bash_profile` on macOS, or `~/.bashrc` if that
 ```bash
 source "$HOME/.toastty/shell/toastty-profile-shell-integration.bash"
 ```
+
+The Bash snippet loads the readable `HISTFILE` once per shell before restore-time pane history import, so fresh shells see shared-history search immediately while restored pane-local commands stay at the top of recall.
 
 ## Fish
 

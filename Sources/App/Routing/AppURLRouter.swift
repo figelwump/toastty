@@ -7,14 +7,38 @@ enum URLOpenDestination: String, Equatable {
     case systemBrowser = "system-browser"
 }
 
-enum URLBrowserOpenPlacement: String, Equatable {
-    case rootRight
+enum URLBrowserOpenPlacement: Equatable, RawRepresentable {
+    case rightPanel
     case newTab
+
+    static var rootRight: URLBrowserOpenPlacement {
+        .rightPanel
+    }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "rightPanel", "rootRight":
+            self = .rightPanel
+        case "newTab":
+            self = .newTab
+        default:
+            return nil
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .rightPanel:
+            return "rightPanel"
+        case .newTab:
+            return "newTab"
+        }
+    }
 
     var webPanelPlacement: WebPanelPlacement {
         switch self {
-        case .rootRight:
-            return .rootRight
+        case .rightPanel:
+            return .rightPanel
         case .newTab:
             return .newTab
         }
@@ -23,17 +47,98 @@ enum URLBrowserOpenPlacement: String, Equatable {
 
 struct URLRoutingPreferences: Equatable {
     var destination: URLOpenDestination = .toasttyBrowser
-    var browserPlacement: URLBrowserOpenPlacement = .newTab
-    var alternateBrowserPlacement: URLBrowserOpenPlacement = .rootRight
+    var browserPlacement: URLBrowserOpenPlacement = .rightPanel
+    var alternateBrowserPlacement: URLBrowserOpenPlacement = .newTab
 
     func resolvedBrowserPlacement(alternateOpen: Bool) -> URLBrowserOpenPlacement {
         alternateOpen ? alternateBrowserPlacement : browserPlacement
     }
 }
 
+enum LocalDocumentOpenPlacement: Equatable, RawRepresentable {
+    case rightPanel
+    case newTab
+
+    static var rootRight: LocalDocumentOpenPlacement {
+        .rightPanel
+    }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "rightPanel", "rootRight":
+            self = .rightPanel
+        case "newTab":
+            self = .newTab
+        default:
+            return nil
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .rightPanel:
+            return "rightPanel"
+        case .newTab:
+            return "newTab"
+        }
+    }
+
+    var webPanelPlacement: WebPanelPlacement {
+        switch self {
+        case .rightPanel:
+            return .rightPanel
+        case .newTab:
+            return .newTab
+        }
+    }
+}
+
+struct LocalDocumentRoutingPreferences: Equatable {
+    var openingPlacement: LocalDocumentOpenPlacement = .rightPanel
+    var alternateOpeningPlacement: LocalDocumentOpenPlacement = .newTab
+
+    func resolvedPlacement(alternateOpen: Bool) -> LocalDocumentOpenPlacement {
+        alternateOpen ? alternateOpeningPlacement : openingPlacement
+    }
+}
+
 enum AppURLRoute: Equatable {
     case external
+    case localDocument(LocalDocumentPanelCreateRequest)
     case toasttyBrowser(placement: URLBrowserOpenPlacement)
+
+    var opensRightPanelInToastty: Bool {
+        switch self {
+        case .external:
+            return false
+        case .localDocument(let request):
+            return request.resolvedPlacement == .rightPanel
+        case .toasttyBrowser(let placement):
+            return placement == .rightPanel
+        }
+    }
+}
+
+enum AppURLRouterOpenResult: Equatable {
+    case openedInToastty(AppURLRoute)
+    case openedExternally(URL)
+    case failed
+
+    var didOpen: Bool {
+        switch self {
+        case .openedInToastty, .openedExternally:
+            return true
+        case .failed:
+            return false
+        }
+    }
+
+    var openedRightPanelInToastty: Bool {
+        guard case .openedInToastty(let route) = self else {
+            return false
+        }
+        return route.opensRightPanelInToastty
+    }
 }
 
 enum AppURLRouter {
@@ -63,8 +168,22 @@ enum AppURLRouter {
     static func route(
         for url: URL,
         preferences: URLRoutingPreferences,
+        localDocumentPreferences: LocalDocumentRoutingPreferences = LocalDocumentRoutingPreferences(),
         useAlternatePlacement: Bool = false
     ) -> AppURLRoute {
+        if let localDocumentTarget = LocalFileLinkResolver.resolvedLocalDocumentTarget(for: url) {
+            let placement = localDocumentPreferences
+                .resolvedPlacement(alternateOpen: useAlternatePlacement)
+                .webPanelPlacement
+            return .localDocument(
+                LocalDocumentPanelCreateRequest(
+                    filePath: localDocumentTarget.path,
+                    lineNumber: localDocumentTarget.lineNumber,
+                    placementOverride: placement
+                )
+            )
+        }
+
         guard preferences.destination == .toasttyBrowser,
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
@@ -72,6 +191,52 @@ enum AppURLRouter {
         }
 
         return .toasttyBrowser(placement: preferences.resolvedBrowserPlacement(alternateOpen: useAlternatePlacement))
+    }
+
+    @MainActor
+    static func openResult(
+        _ url: URL,
+        preferredWindowID: UUID?,
+        appStore: AppStore,
+        useAlternatePlacement: Bool = false,
+        preferences: URLRoutingPreferences? = nil,
+        requestLocalDocumentReveal: ((UUID, Int) -> Bool)? = nil,
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> AppURLRouterOpenResult {
+        let resolvedPreferences = preferences ?? appStore.urlRoutingPreferences
+        let resolvedRoute = route(
+            for: url,
+            preferences: resolvedPreferences,
+            localDocumentPreferences: appStore.localDocumentRoutingPreferences,
+            useAlternatePlacement: useAlternatePlacement
+        )
+        switch resolvedRoute {
+        case .external:
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget) ? .openedExternally(externalTarget) : .failed
+        case .localDocument(let request):
+            if let outcome = appStore.createLocalDocumentPanelFromCommandOutcome(
+                preferredWindowID: preferredWindowID,
+                request: request
+            ) {
+                if let lineNumber = request.lineNumber {
+                    _ = requestLocalDocumentReveal?(outcome.panelID, lineNumber)
+                }
+                return .openedInToastty(resolvedRoute)
+            }
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget) ? .openedExternally(externalTarget) : .failed
+        case .toasttyBrowser(let placement):
+            if appStore.openURLInBrowser(
+                preferredWindowID: preferredWindowID,
+                url: url,
+                placement: placement
+            ) {
+                return .openedInToastty(resolvedRoute)
+            }
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget) ? .openedExternally(externalTarget) : .failed
+        }
     }
 
     @discardableResult
@@ -82,21 +247,17 @@ enum AppURLRouter {
         appStore: AppStore,
         useAlternatePlacement: Bool = false,
         preferences: URLRoutingPreferences? = nil,
+        requestLocalDocumentReveal: ((UUID, Int) -> Bool)? = nil,
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) -> Bool {
-        let resolvedPreferences = preferences ?? appStore.urlRoutingPreferences
-        switch route(for: url, preferences: resolvedPreferences, useAlternatePlacement: useAlternatePlacement) {
-        case .external:
-            return openExternally(externalOpenTarget(for: url))
-        case .toasttyBrowser(let placement):
-            if appStore.openURLInBrowser(
-                preferredWindowID: preferredWindowID,
-                url: url,
-                placement: placement
-            ) {
-                return true
-            }
-            return openExternally(externalOpenTarget(for: url))
-        }
+        openResult(
+            url,
+            preferredWindowID: preferredWindowID,
+            appStore: appStore,
+            useAlternatePlacement: useAlternatePlacement,
+            preferences: preferences,
+            requestLocalDocumentReveal: requestLocalDocumentReveal,
+            openExternally: openExternally
+        ).didOpen
     }
 }

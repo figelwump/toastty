@@ -25,6 +25,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         windowID: UUID,
         workspaceID: UUID,
         usesSessionStatusNotifications: Bool = false,
+        displayTitleOverride: String? = nil,
         cwd: String?,
         repoRoot: String?,
         at now: Date
@@ -49,6 +50,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             windowID: windowID,
             workspaceID: workspaceID,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
+            displayTitleOverride: displayTitleOverride,
             repoRoot: repoRoot,
             cwd: cwd,
             startedAt: now,
@@ -97,6 +99,26 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         sessionsByID[sessionID] = record
     }
 
+    public mutating func setLaterFlag(sessionID: String, isFlagged: Bool) {
+        guard var record = sessionsByID[sessionID], record.isActive else { return }
+        // Watched processes already act as their own "remind me later" signal via the
+        // sidebar bell, so flagging them would be redundant. Silently no-op instead
+        // of mutating state; the sidebar also hides the menu affordance for them.
+        guard record.agent != .processWatch else { return }
+        guard record.isFlaggedForLater != isFlagged else { return }
+        record.isFlaggedForLater = isFlagged
+        sessionsByID[sessionID] = record
+    }
+
+    public mutating func toggleLaterFlag(sessionID: String) {
+        guard let record = sessionsByID[sessionID], record.isActive else { return }
+        setLaterFlag(sessionID: sessionID, isFlagged: record.isFlaggedForLater == false)
+    }
+
+    public func isLaterFlagged(sessionID: String) -> Bool {
+        activeSession(sessionID: sessionID)?.isFlaggedForLater == true
+    }
+
     public mutating func updatePanelLocation(
         panelID: UUID,
         windowID: UUID,
@@ -123,6 +145,14 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         if activeSessionIDByPanelID[record.panelID] == sessionID {
             activeSessionIDByPanelID.removeValue(forKey: record.panelID)
         }
+    }
+
+    public mutating func removeSession(sessionID: String) {
+        guard let record = sessionsByID.removeValue(forKey: sessionID) else { return }
+        if activeSessionIDByPanelID[record.panelID] == sessionID {
+            activeSessionIDByPanelID.removeValue(forKey: record.panelID)
+        }
+        sessionOrder.removeAll { $0 == sessionID }
     }
 
     public mutating func stopSessionForPanel(panelID: UUID, at now: Date) {
@@ -208,6 +238,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             panelID: record.panelID,
             agent: record.agent,
             status: status,
+            displayTitleOverride: record.displayTitleOverride,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
             isActive: record.isActive

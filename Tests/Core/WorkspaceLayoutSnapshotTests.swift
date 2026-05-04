@@ -94,6 +94,69 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func makeAppStateRestoresTabScopedRightAuxPanel() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let mainPanelID = UUID()
+        let rightAuxTabID = UUID()
+        let rightAuxPanelID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Docs",
+            layoutTree: .slot(slotID: UUID(), panelID: mainPanelID),
+            panels: [
+                mainPanelID: .terminal(TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/tmp/docs")),
+            ],
+            focusedPanelID: mainPanelID,
+            rightAuxPanel: RightAuxPanelState(
+                isVisible: true,
+                width: 512,
+                hasCustomWidth: true,
+                activeTabID: rightAuxTabID,
+                tabIDs: [rightAuxTabID],
+                tabsByID: [
+                    rightAuxTabID: RightAuxPanelTabState(
+                        id: rightAuxTabID,
+                        identity: .localDocument(path: "/tmp/docs/README.md"),
+                        panelID: rightAuxPanelID,
+                        panelState: .web(
+                            WebPanelState(
+                                definition: .localDocument,
+                                title: "README.md",
+                                localDocument: LocalDocumentState(filePath: "/tmp/docs/README.md")
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 20, y: 30, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        let restoredRightPanel = restoredWorkspace.rightAuxPanel
+
+        #expect(restoredRightPanel.isVisible)
+        #expect(restoredRightPanel.width == 512)
+        #expect(restoredRightPanel.hasCustomWidth)
+        #expect(restoredRightPanel.activePanelID == rightAuxPanelID)
+        #expect(restoredRightPanel.panelState(for: rightAuxPanelID) != nil)
+        #expect(restoredWorkspace.allPanelsByID[rightAuxPanelID] == restoredRightPanel.panelState(for: rightAuxPanelID))
+        try StateValidator.validate(restoredState)
+    }
+
+    @Test
     func makeAppStateRegeneratesTerminalTitlesPerWorkspace() throws {
         let windowID = UUID()
         let workspaceOneID = UUID()
@@ -223,6 +286,41 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(webState.initialURL == "https://example.com/docs")
         #expect(webState.currentURL == "https://example.com/docs/latest")
         #expect(webState.restorableURL == "https://example.com/docs/latest")
+    }
+
+    @Test
+    func makeAppStatePreservesBackgroundWorkspaceVisitState() throws {
+        let windowID = UUID()
+        let selectedWorkspace = WorkspaceState.bootstrap(title: "One")
+        let backgroundWorkspace = WorkspaceState.bootstrap(
+            title: "Two",
+            hasBeenVisited: false
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [selectedWorkspace.id, backgroundWorkspace.id],
+                    selectedWorkspaceID: selectedWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                selectedWorkspace.id: selectedWorkspace,
+                backgroundWorkspace.id: backgroundWorkspace,
+            ],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        #expect(snapshot.workspacesByID[selectedWorkspace.id]?.hasBeenVisited == true)
+        #expect(snapshot.workspacesByID[backgroundWorkspace.id]?.hasBeenVisited == false)
+
+        let restoredState = snapshot.makeAppState()
+        #expect(restoredState.workspacesByID[selectedWorkspace.id]?.hasBeenVisited == true)
+        #expect(restoredState.workspacesByID[backgroundWorkspace.id]?.hasBeenVisited == false)
+        try StateValidator.validate(restoredState)
     }
 
     @Test

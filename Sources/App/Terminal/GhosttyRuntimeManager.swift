@@ -1,6 +1,7 @@
 #if TOASTTY_HAS_GHOSTTY_KIT
 import AppKit
 import CoreState
+import CoreVideo
 import Darwin
 import Foundation
 import GhosttyKit
@@ -82,7 +83,7 @@ private final class WeakTerminalHostViewBox {
 private enum GhosttyDirectHostViewAction: Sendable {
     case mouseShape(surfaceHandle: UInt, shape: ghostty_action_mouse_shape_e)
     case mouseVisibility(surfaceHandle: UInt, visibility: ghostty_action_mouse_visibility_e)
-    case mouseOverLink(surfaceHandle: UInt, url: String?)
+    case mouseOverLink(surfaceHandle: UInt, url: String?, rawByteLength: Int)
     case scrollbar(surfaceHandle: UInt, totalRows: Int, offsetRows: Int, visibleRows: Int)
 
     var logIntentName: String {
@@ -293,9 +294,11 @@ private func makeGhosttyDirectHostViewAction(
             return nil
         }
         let hoverLink = action.action.mouse_over_link
+        let rawByteLength = Int(hoverLink.len)
         return .mouseOverLink(
             surfaceHandle: UInt(bitPattern: surface),
-            url: ghosttyString(pointer: hoverLink.url, length: Int(hoverLink.len))
+            url: ghosttyString(pointer: hoverLink.url, length: rawByteLength),
+            rawByteLength: rawByteLength
         )
     case GHOSTTY_ACTION_SCROLLBAR:
         guard target.tag == GHOSTTY_TARGET_SURFACE,
@@ -844,6 +847,7 @@ private enum GhosttyConfigSource: String {
     case envPath = "env_path"
     case userPath = "user_path"
     case defaultFiles = "default_files"
+    case currentEffective = "current_effective"
 }
 
 @MainActor
@@ -865,6 +869,8 @@ final class GhosttyRuntimeManager {
     private var config: ghostty_config_t?
     private(set) var configuredTerminalFontPoints: Double?
     private var isTickScheduled = false
+    private var displayLinkVsyncFallbackAttempted = false
+    private var displayLinkVsyncFallbackActive = false
     private var surfaceHandleByHostViewHandle: [UInt: UInt] = [:]
     private var hostViewBySurfaceHandle: [UInt: WeakTerminalHostViewBox] = [:]
 
@@ -915,7 +921,20 @@ final class GhosttyRuntimeManager {
         inheritFrom sourceSurface: ghostty_surface_t? = nil,
         launchConfiguration: TerminalSurfaceLaunchConfiguration = .empty
     ) -> SurfaceCreationResult? {
-        guard let app else { return nil }
+        guard let app else {
+            ToasttyLog.warning(
+                "Ghostty surface creation requested before app initialization",
+                category: .ghostty,
+                metadata: Self.surfaceCreationDiagnostics(
+                    hostView: hostView,
+                    fontPoints: fontPoints,
+                    sourceSurface: sourceSurface,
+                    launchConfiguration: launchConfiguration,
+                    resolvedWorkingDirectory: Self.normalizedWorkingDirectoryValue(workingDirectory) ?? "nil"
+                )
+            )
+            return nil
+        }
 
         var surfaceConfig: ghostty_surface_config_s
         var inheritedWorkingDirectory: String?
@@ -967,27 +986,349 @@ final class GhosttyRuntimeManager {
             resolvedWorkingDirectory = NSHomeDirectory()
         }
 
-        let surface = Self.withGhosttyEnvironmentVariables(launchConfiguration.environmentVariables) { envVarsPointer, envVarCount in
-            resolvedWorkingDirectory.withCString { cwdPointer in
-                surfaceConfig.working_directory = cwdPointer
-                surfaceConfig.env_vars = envVarsPointer
-                surfaceConfig.env_var_count = envVarCount
-                return Self.withOptionalCString(launchConfiguration.normalizedInitialInput) { inputPointer in
-                    surfaceConfig.initial_input = inputPointer
-                    return ghostty_surface_new(app, &surfaceConfig)
-                }
-            }
-        }
+        let surface = Self.createGhosttySurface(
+            app: app,
+            surfaceConfig: &surfaceConfig,
+            resolvedWorkingDirectory: resolvedWorkingDirectory,
+            launchConfiguration: launchConfiguration
+        )
         if let surface {
             registerSurfaceAssociation(surface, forHostView: hostView)
             scheduleImmediateTick()
+            ToasttyLog.debug(
+                "Ghostty runtime created surface",
+                category: .ghostty,
+                metadata: Self.surfaceCreationDiagnostics(
+                    hostView: hostView,
+                    fontPoints: fontPoints,
+                    sourceSurface: sourceSurface,
+                    launchConfiguration: launchConfiguration,
+                    resolvedWorkingDirectory: resolvedWorkingDirectory,
+                    extra: ["surface_handle": String(UInt(bitPattern: surface))]
+                )
+            )
             return SurfaceCreationResult(
                 surface: surface,
                 workingDirectory: resolvedWorkingDirectory
             )
         }
+
+        let failureMetadata = Self.surfaceCreationDiagnostics(
+            hostView: hostView,
+            fontPoints: fontPoints,
+            sourceSurface: sourceSurface,
+            launchConfiguration: launchConfiguration,
+            resolvedWorkingDirectory: resolvedWorkingDirectory
+        )
+        if activateDisplayLinkVsyncFallbackIfNeeded(
+            app: app,
+            failureMetadata: failureMetadata
+        ) {
+            let retrySurface = Self.createGhosttySurface(
+                app: app,
+                surfaceConfig: &surfaceConfig,
+                resolvedWorkingDirectory: resolvedWorkingDirectory,
+                launchConfiguration: launchConfiguration
+            )
+            if let retrySurface {
+                registerSurfaceAssociation(retrySurface, forHostView: hostView)
+                scheduleImmediateTick()
+                ToasttyLog.info(
+                    "Ghostty runtime created surface after display-link vsync fallback",
+                    category: .ghostty,
+                    metadata: Self.surfaceCreationDiagnostics(
+                        hostView: hostView,
+                        fontPoints: fontPoints,
+                        sourceSurface: sourceSurface,
+                        launchConfiguration: launchConfiguration,
+                        resolvedWorkingDirectory: resolvedWorkingDirectory,
+                        extra: [
+                            "surface_handle": String(UInt(bitPattern: retrySurface)),
+                            "retry_reason": "display_link_vsync_fallback",
+                        ]
+                    )
+                )
+                return SurfaceCreationResult(
+                    surface: retrySurface,
+                    workingDirectory: resolvedWorkingDirectory
+                )
+            }
+
+            scheduleImmediateTick()
+            ToasttyLog.warning(
+                "Ghostty runtime surface factory returned nil after display-link vsync fallback",
+                category: .ghostty,
+                metadata: failureMetadata.merging(
+                    ["retry_reason": "display_link_vsync_fallback"],
+                    uniquingKeysWith: { _, new in new }
+                )
+            )
+            return nil
+        }
+
         scheduleImmediateTick()
+        ToasttyLog.warning(
+            "Ghostty runtime surface factory returned nil",
+            category: .ghostty,
+            metadata: failureMetadata
+        )
         return nil
+    }
+
+    private static func createGhosttySurface(
+        app: ghostty_app_t,
+        surfaceConfig: inout ghostty_surface_config_s,
+        resolvedWorkingDirectory: String,
+        launchConfiguration: TerminalSurfaceLaunchConfiguration
+    ) -> ghostty_surface_t? {
+        withGhosttyEnvironmentVariables(launchConfiguration.environmentVariables) { envVarsPointer, envVarCount in
+            resolvedWorkingDirectory.withCString { cwdPointer in
+                surfaceConfig.working_directory = cwdPointer
+                surfaceConfig.env_vars = envVarsPointer
+                surfaceConfig.env_var_count = envVarCount
+                return withOptionalCString(launchConfiguration.normalizedInitialInput) { inputPointer in
+                    surfaceConfig.initial_input = inputPointer
+                    return ghostty_surface_new(app, &surfaceConfig)
+                }
+            }
+        }
+    }
+
+    private func activateDisplayLinkVsyncFallbackIfNeeded(
+        app: ghostty_app_t,
+        failureMetadata: [String: String]
+    ) -> Bool {
+        guard displayLinkVsyncFallbackActive == false,
+              displayLinkVsyncFallbackAttempted == false else {
+            return false
+        }
+
+        guard let currentConfig = config else {
+            ToasttyLog.warning(
+                "Skipped Ghostty display-link vsync fallback because config is unavailable",
+                category: .ghostty,
+                metadata: failureMetadata
+            )
+            return false
+        }
+
+        guard Self.windowVsyncEnabled(in: currentConfig) != false else {
+            ToasttyLog.info(
+                "Skipped Ghostty display-link vsync fallback because window-vsync is already disabled",
+                category: .ghostty,
+                metadata: failureMetadata
+            )
+            return false
+        }
+
+        let displayLinkProbe = Self.probeActiveDisplayLinkCreation()
+        guard displayLinkProbe.matchesVsyncFallbackFailure else {
+            ToasttyLog.warning(
+                "Skipped Ghostty display-link vsync fallback because CoreVideo did not report the expected failure",
+                category: .ghostty,
+                metadata: failureMetadata.merging(displayLinkProbe.metadata) { _, new in new }
+            )
+            return false
+        }
+        displayLinkVsyncFallbackAttempted = true
+
+        guard let fallbackConfig = ghostty_config_clone(currentConfig) else {
+            ToasttyLog.error(
+                "Ghostty config clone failed during display-link vsync fallback",
+                category: .ghostty,
+                metadata: failureMetadata.merging(displayLinkProbe.metadata) { _, new in new }
+            )
+            return false
+        }
+
+        guard let overlayPath = Self.loadWindowVsyncFallbackOverlay(into: fallbackConfig) else {
+            ghostty_config_free(fallbackConfig)
+            ToasttyLog.error(
+                "Failed to apply Ghostty display-link vsync fallback overlay",
+                category: .ghostty,
+                metadata: failureMetadata.merging(displayLinkProbe.metadata) { _, new in new }
+            )
+            return false
+        }
+
+        let configSource = GhosttyConfigSource.currentEffective
+        Self.logGhosttyConfigDiagnostics(fallbackConfig, source: configSource)
+        configuredTerminalFontPoints = Self.resolveConfiguredTerminalFontPoints(fallbackConfig)
+        Self.applyHostStyle(fallbackConfig)
+        Self.withDebugLoginShellOverrideIfNeeded {
+            ghostty_config_finalize(fallbackConfig)
+        }
+
+        ghostty_app_update_config(app, fallbackConfig)
+        ghostty_config_free(currentConfig)
+        config = fallbackConfig
+        displayLinkVsyncFallbackActive = true
+        scheduleImmediateTick()
+
+        ToasttyLog.warning(
+            "Activated Ghostty display-link vsync fallback",
+            category: .ghostty,
+            metadata: failureMetadata
+                .merging(displayLinkProbe.metadata) { _, new in new }
+                .merging([
+                    "config_source": configSource.rawValue,
+                    "overlay_path": overlayPath,
+                    "window_vsync": "false",
+                ]) { _, new in new }
+        )
+        return true
+    }
+
+    private struct DisplayLinkCreationProbe {
+        let status: CVReturn
+        let createdLink: Bool
+
+        var matchesVsyncFallbackFailure: Bool {
+            status == kCVReturnInvalidArgument && createdLink == false
+        }
+
+        var metadata: [String: String] {
+            [
+                "cv_display_link_created": createdLink ? "true" : "false",
+                "cv_return": String(status),
+                "cv_return_name": GhosttyRuntimeManager.cvReturnName(status),
+            ]
+        }
+    }
+
+    private static func probeActiveDisplayLinkCreation() -> DisplayLinkCreationProbe {
+        var displayLink: CVDisplayLink?
+        let status = CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
+        return DisplayLinkCreationProbe(
+            status: status,
+            createdLink: displayLink != nil
+        )
+    }
+
+    private static func windowVsyncEnabled(in config: ghostty_config_t) -> Bool? {
+        var enabled = true
+        let key = "window-vsync"
+        guard ghostty_config_get(
+            config,
+            &enabled,
+            key,
+            UInt(key.lengthOfBytes(using: .utf8))
+        ) else {
+            ToasttyLog.warning(
+                "Ghostty config missing window-vsync value",
+                category: .ghostty,
+                metadata: ["key": key]
+            )
+            return nil
+        }
+        return enabled
+    }
+
+    private static func loadWindowVsyncFallbackOverlay(into config: ghostty_config_t) -> String? {
+        let overlayURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "toastty-ghostty-vsync-fallback-\(UUID().uuidString).conf",
+                isDirectory: false
+            )
+        do {
+            try Data("window-vsync = false\n".utf8).write(to: overlayURL, options: [.atomic])
+        } catch {
+            ToasttyLog.error(
+                "Failed to write Ghostty display-link vsync fallback overlay",
+                category: .ghostty,
+                metadata: [
+                    "path": overlayURL.path,
+                    "error": String(describing: error),
+                ]
+            )
+            return nil
+        }
+
+        defer {
+            try? FileManager.default.removeItem(at: overlayURL)
+        }
+
+        overlayURL.path.withCString { pathPointer in
+            ghostty_config_load_file(config, pathPointer)
+        }
+
+        guard windowVsyncEnabled(in: config) == false else {
+            ToasttyLog.error(
+                "Ghostty display-link vsync fallback overlay did not disable window-vsync",
+                category: .ghostty,
+                metadata: ["path": overlayURL.path]
+            )
+            return nil
+        }
+        return overlayURL.path
+    }
+
+    nonisolated private static func cvReturnName(_ status: CVReturn) -> String {
+        switch status {
+        case kCVReturnSuccess:
+            return "success"
+        case kCVReturnError:
+            return "error"
+        case kCVReturnInvalidArgument:
+            return "invalid_argument"
+        case kCVReturnAllocationFailed:
+            return "allocation_failed"
+        case kCVReturnUnsupported:
+            return "unsupported"
+        case kCVReturnInvalidDisplay:
+            return "invalid_display"
+        case kCVReturnDisplayLinkAlreadyRunning:
+            return "display_link_already_running"
+        case kCVReturnDisplayLinkNotRunning:
+            return "display_link_not_running"
+        case kCVReturnDisplayLinkCallbacksNotSet:
+            return "display_link_callbacks_not_set"
+        default:
+            return "unknown"
+        }
+    }
+
+    private static func surfaceCreationDiagnostics(
+        hostView: NSView,
+        fontPoints: Double,
+        sourceSurface: ghostty_surface_t?,
+        launchConfiguration: TerminalSurfaceLaunchConfiguration,
+        resolvedWorkingDirectory: String,
+        extra: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata = [
+            "host_view_id": String(describing: Unmanaged.passUnretained(hostView).toOpaque()),
+            "host_has_superview": hostView.superview == nil ? "false" : "true",
+            "host_superview_id": hostView.superview.map {
+                String(describing: Unmanaged.passUnretained($0).toOpaque())
+            } ?? "nil",
+            "host_has_window": hostView.window == nil ? "false" : "true",
+            "host_window_id": hostView.window.map {
+                String(describing: Unmanaged.passUnretained($0).toOpaque())
+            } ?? "nil",
+            "host_window_key": hostView.window?.isKeyWindow == true ? "true" : "false",
+            "host_window_visible": hostView.window?.isVisible == true ? "true" : "false",
+            "host_hidden": hostView.isHidden ? "true" : "false",
+            "host_hidden_ancestor": hostView.ghosttyLogHasHiddenAncestor ? "true" : "false",
+            "host_width": String(format: "%.1f", hostView.bounds.width),
+            "host_height": String(format: "%.1f", hostView.bounds.height),
+            "host_backing_scale": String(
+                format: "%.3f",
+                hostView.window?.screen?.backingScaleFactor
+                    ?? hostView.window?.backingScaleFactor
+                    ?? NSScreen.main?.backingScaleFactor
+                    ?? 1
+            ),
+            "font_points": String(format: "%.1f", fontPoints),
+            "inherited_source_surface": sourceSurface == nil ? "false" : "true",
+            "launch_environment_count": String(launchConfiguration.environmentVariables.count),
+            "launch_initial_input_present": launchConfiguration.normalizedInitialInput == nil ? "false" : "true",
+            "resolved_working_directory_present": resolvedWorkingDirectory.isEmpty ? "false" : "true",
+        ]
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        return metadata
     }
 
     func unregisterSurfaceAssociation(forHostView hostView: NSView, surface: ghostty_surface_t?) {
@@ -1074,11 +1415,21 @@ final class GhosttyRuntimeManager {
             }
             hostView.setGhosttyMouseVisibility(visibility)
             return true
-        case .mouseOverLink(let surfaceHandle, let url):
+        case .mouseOverLink(let surfaceHandle, let url, let rawByteLength):
             guard let hostView = hostView(forSurfaceHandle: surfaceHandle) else {
                 return false
             }
-            hostView.setGhosttyMouseOverLink(url)
+            ToasttyLog.debug(
+                "Received Ghostty mouse-over-link payload",
+                category: .ghostty,
+                metadata: [
+                    "surface_handle": String(surfaceHandle),
+                    "raw_byte_length": String(rawByteLength),
+                    "decoded_utf8": url == nil ? "false" : "true",
+                    "raw_url": url ?? "nil",
+                ]
+            )
+            hostView.setGhosttyMouseOverLink(url, rawByteLength: rawByteLength)
             return true
         case .scrollbar(let surfaceHandle, let totalRows, let offsetRows, let visibleRows):
             guard let hostView = hostView(forSurfaceHandle: surfaceHandle) else {
@@ -1162,6 +1513,8 @@ final class GhosttyRuntimeManager {
             ghostty_config_free(previousConfig)
         }
         config = newConfig
+        displayLinkVsyncFallbackAttempted = false
+        displayLinkVsyncFallbackActive = false
         scheduleImmediateTick()
 
         ToasttyLog.info(
@@ -1718,6 +2071,19 @@ final class GhosttyRuntimeManager {
 
     fileprivate func routeCloseSurfaceRequest(surfaceHandle: UInt?, confirmed: Bool) -> Bool {
         actionHandler?.handleGhosttyCloseSurfaceRequest(surfaceHandle: surfaceHandle, confirmed: confirmed) ?? false
+    }
+}
+
+private extension NSView {
+    var ghosttyLogHasHiddenAncestor: Bool {
+        var ancestor = superview
+        while let current = ancestor {
+            if current.isHidden {
+                return true
+            }
+            ancestor = current.superview
+        }
+        return false
     }
 }
 #endif

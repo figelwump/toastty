@@ -41,6 +41,18 @@ final class TextInputResponderPolicyTests: XCTestCase {
         XCTAssertFalse(toasttyResponderUsesReservedClosePanelShortcut(textView))
     }
 
+    func testLocalDocumentSearchTextFieldDoesNotReserveClosePanelShortcut() {
+        XCTAssertFalse(toasttyResponderUsesReservedClosePanelShortcut(LocalDocumentSearchTextField()))
+    }
+
+    func testLocalDocumentSearchFieldEditorDoesNotReserveClosePanelShortcut() {
+        let textField = LocalDocumentSearchTextField()
+        let textView = NSTextView(frame: .init(x: 0, y: 0, width: 120, height: 80))
+        textView.delegate = textField
+
+        XCTAssertFalse(toasttyResponderUsesReservedClosePanelShortcut(textView))
+    }
+
     func testNilResponderDoesNotReserveTextInputCommands() {
         XCTAssertFalse(toasttyResponderUsesReservedTextInput(nil))
     }

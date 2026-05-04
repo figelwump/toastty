@@ -38,6 +38,8 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
 
     public static let claude = Self(rawValue: "claude")!
     public static let codex = Self(rawValue: "codex")!
+    public static let pi = Self(rawValue: "pi")!
+    public static let processWatch = Self(rawValue: "process-watch")!
 
     public var displayName: String {
         switch self {
@@ -45,6 +47,10 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
             return "Claude Code"
         case .codex:
             return "Codex"
+        case .pi:
+            return "Pi"
+        case .processWatch:
+            return "Process Watch"
         default:
             return rawValue
                 .split(separator: "-")
@@ -82,7 +88,11 @@ public enum ManagedAgentCommandResolver {
     }
 
     public static func shimCommandNames(for catalog: AgentCatalog) -> Set<String> {
-        var commandNames: Set<String> = [AgentKind.codex.rawValue, AgentKind.claude.rawValue]
+        var commandNames: Set<String> = [
+            AgentKind.codex.rawValue,
+            AgentKind.claude.rawValue,
+            AgentKind.pi.rawValue,
+        ]
 
         for profile in catalog.profiles {
             guard let agent = AgentKind(rawValue: profile.id),
@@ -119,7 +129,7 @@ public enum ManagedAgentCommandResolver {
 
 private extension ManagedAgentCommandResolver {
     static func isBuiltIn(_ agent: AgentKind) -> Bool {
-        agent == .codex || agent == .claude
+        agent == .codex || agent == .claude || agent == .pi
     }
 
     static func launchCommandBasenames(for agent: AgentKind) -> Set<String> {
@@ -128,6 +138,8 @@ private extension ManagedAgentCommandResolver {
             return ["codex", "cdx"]
         case .claude:
             return ["claude", "cc"]
+        case .pi:
+            return ["pi"]
         default:
             return [agent.rawValue]
         }
@@ -139,6 +151,8 @@ private extension ManagedAgentCommandResolver {
             return .codex
         case AgentKind.claude.rawValue:
             return .claude
+        case AgentKind.pi.rawValue:
+            return .pi
         default:
             return nil
         }
@@ -185,6 +199,8 @@ private extension ManagedAgentCommandResolver {
             return .codex
         case "claude":
             return .claude
+        case "pi":
+            return .pi
         default:
             return nil
         }

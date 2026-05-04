@@ -55,6 +55,90 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testRightPanelBrowserActionPreservesMainLayoutFocusAndFocusesRightPanel() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let initialWorkspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            let initialFocusedPanelID = initialWorkspace.focusedPanelID
+            let initialLayoutTree = initialWorkspace.layoutTree
+
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.browser",
+                    "args": [
+                        "placement": "rightPanel",
+                        "url": "https://example.com/docs",
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            XCTAssertEqual(workspace.layoutTree, initialLayoutTree)
+            XCTAssertEqual(workspace.focusedPanelID, initialFocusedPanelID)
+            let focusedRightPanelID = try XCTUnwrap(workspace.rightAuxPanel.focusedPanelID)
+            XCTAssertEqual(focusedRightPanelID, workspace.rightAuxPanel.activePanelID)
+            XCTAssertTrue(workspace.rightAuxPanel.isVisible)
+            XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
+            XCTAssertEqual(workspace.panels.count, 1)
+
+            let snapshotResponse = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(snapshotResponse.ok)
+            XCTAssertEqual(snapshotResponse.result["layoutPanelCount"] as? Int, 1)
+            XCTAssertEqual(snapshotResponse.result["panelCount"] as? Int, 2)
+
+            let rightPanel = try XCTUnwrap(snapshotResponse.result["rightPanel"] as? [String: Any])
+            XCTAssertEqual(rightPanel["isVisible"] as? Bool, true)
+            XCTAssertEqual(rightPanel["hasCustomWidth"] as? Bool, false)
+            XCTAssertEqual(rightPanel["tabCount"] as? Int, 1)
+            XCTAssertEqual((rightPanel["panelIDs"] as? [String])?.count, 1)
+            XCTAssertEqual((rightPanel["tabIDs"] as? [String])?.count, 1)
+            XCTAssertEqual(rightPanel["focusedPanelID"] as? String, focusedRightPanelID.uuidString)
+        }
+    }
+
+    func testWorkspaceCreateCanCreateBackgroundWorkspaceAndReturnCreatedWorkspaceID() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "app_control.run_action",
+                payload: [
+                    "id": "workspace.create",
+                    "args": [
+                        "windowID": fixture.windowID.uuidString,
+                        "title": "Background",
+                        "activate": false,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, fixture.windowID.uuidString)
+            let workspaceIDString = try XCTUnwrap(response.result["workspaceID"] as? String)
+            let createdWorkspaceID = try XCTUnwrap(UUID(uuidString: workspaceIDString))
+            XCTAssertNotEqual(createdWorkspaceID, fixture.workspaceID)
+
+            let state = await MainActor.run { harness.store.state }
+            let window = try XCTUnwrap(state.window(id: fixture.windowID))
+            XCTAssertEqual(window.selectedWorkspaceID, fixture.workspaceID)
+            XCTAssertEqual(window.workspaceIDs.last, createdWorkspaceID)
+            XCTAssertFalse(try XCTUnwrap(state.workspacesByID[createdWorkspaceID]).hasBeenVisited)
+        }
+    }
+
     func testWorkspaceTabActionsCreateSelectAndCloseTabsByIndex() async throws {
         let fixture = makeSingleWindowFixture()
 
@@ -201,6 +285,217 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertEqual(workspace.tabIDs.count, 1)
             XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
             XCTAssertEqual(workspace.tabIDs.map(\.uuidString), [initialTabIDs[0]])
+        }
+    }
+
+    func testWorkspaceTabMoveReordersTabIDsAndKeepsSelectedTabID() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            for _ in 0 ..< 2 {
+                let createResponse = try sendRequest(
+                    command: "automation.perform_action",
+                    payload: [
+                        "action": "workspace.tab.new",
+                        "args": [:],
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(createResponse.ok)
+            }
+
+            let selectResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.select",
+                    "args": [
+                        "index": 2,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectResponse.ok)
+
+            let initialSnapshot = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(initialSnapshot.ok)
+            let initialTabIDs = try XCTUnwrap(initialSnapshot.result["tabIDs"] as? [String])
+            XCTAssertEqual(initialSnapshot.result["selectedTabID"] as? String, initialTabIDs[1])
+
+            let moveResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.move",
+                    "args": [
+                        "index": 2,
+                        "toIndex": 3,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(moveResponse.ok)
+
+            let snapshot = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(snapshot.ok)
+            XCTAssertEqual(snapshot.result["tabIDs"] as? [String], [initialTabIDs[0], initialTabIDs[2], initialTabIDs[1]])
+            XCTAssertEqual(snapshot.result["selectedTabID"] as? String, initialTabIDs[1])
+            XCTAssertEqual(snapshot.result["selectedTabIndex"] as? Int, 3)
+        }
+    }
+
+    func testWorkspaceTabMoveRejectsInvalidIndices() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.new",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let zeroIndexResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.move",
+                    "args": [
+                        "index": 0,
+                        "toIndex": 1,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertFalse(zeroIndexResponse.ok)
+            XCTAssertEqual(zeroIndexResponse.errorMessage, "index must be greater than zero")
+
+            let outOfBoundsResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.move",
+                    "args": [
+                        "index": 1,
+                        "toIndex": 3,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertFalse(outOfBoundsResponse.ok)
+            XCTAssertEqual(outOfBoundsResponse.errorMessage, "toIndex does not exist")
+        }
+    }
+
+    func testWorkspaceMoveReordersWindowWorkspaceIDsAndKeepsSelectedWorkspaceID() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let firstCreateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.create",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(firstCreateResponse.ok)
+
+            let secondCreateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.create",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(secondCreateResponse.ok)
+
+            let selectResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.select",
+                    "args": [
+                        "index": 2,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectResponse.ok)
+
+            let stateBeforeMove = await MainActor.run { harness.store.state }
+            let windowBeforeMove = try XCTUnwrap(stateBeforeMove.window(id: fixture.windowID))
+            let originalWorkspaceIDs = windowBeforeMove.workspaceIDs
+            XCTAssertEqual(windowBeforeMove.selectedWorkspaceID, originalWorkspaceIDs[1])
+
+            let moveResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.move",
+                    "args": [
+                        "index": 2,
+                        "toIndex": 1,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(moveResponse.ok)
+
+            let stateAfterMove = await MainActor.run { harness.store.state }
+            let windowAfterMove = try XCTUnwrap(stateAfterMove.window(id: fixture.windowID))
+            XCTAssertEqual(windowAfterMove.workspaceIDs, [originalWorkspaceIDs[1], originalWorkspaceIDs[0], originalWorkspaceIDs[2]])
+            XCTAssertEqual(windowAfterMove.selectedWorkspaceID, originalWorkspaceIDs[1])
+        }
+    }
+
+    func testWorkspaceMoveRejectsInvalidIndices() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.create",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let zeroIndexResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.move",
+                    "args": [
+                        "index": 0,
+                        "toIndex": 1,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertFalse(zeroIndexResponse.ok)
+            XCTAssertEqual(zeroIndexResponse.errorMessage, "index must be greater than zero")
+
+            let outOfBoundsResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.move",
+                    "args": [
+                        "index": 1,
+                        "toIndex": 3,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertFalse(outOfBoundsResponse.ok)
+            XCTAssertEqual(outOfBoundsResponse.errorMessage, "toIndex does not exist")
         }
     }
 
@@ -412,6 +707,247 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             let finalSnapshot = try XCTUnwrap(snapshotResponse)
             XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "alias.md")
             XCTAssertEqual(finalSnapshot.result["bootstrapFormat"] as? String, "markdown")
+        }
+    }
+
+    func testJsonPanelAutomationCreatesSelectedTabAndExposesBootstrapState() async throws {
+        let fixture = makeSingleWindowFixture()
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-json-automation-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let jsonURL = tempDirectory.appendingPathComponent("package.json", isDirectory: false)
+        let jsonContent = """
+        {
+          "name": "toastty",
+          "private": true,
+          "version": "0.1.0"
+        }
+        """
+        try jsonContent.write(to: jsonURL, atomically: true, encoding: .utf8)
+        let expectedHash = SHA256.hash(data: Data(jsonContent.utf8)).map { String(format: "%02x", $0) }.joined()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.localDocument",
+                    "args": [
+                        "placement": "newTab",
+                        "filePath": jsonURL.path,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            let panelID = try XCTUnwrap(workspace.focusedPanelID)
+
+            var snapshotResponse: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.local_document_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                snapshotResponse = response
+                if response.result["bootstrapContentSHA256"] as? String == expectedHash {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            let finalSnapshot = try XCTUnwrap(snapshotResponse)
+            XCTAssertEqual(finalSnapshot.result["stateFilePath"] as? String, jsonURL.path)
+            XCTAssertEqual(finalSnapshot.result["stateFormat"] as? String, "json")
+            XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "package.json")
+            XCTAssertEqual(finalSnapshot.result["bootstrapFormat"] as? String, "json")
+            XCTAssertEqual(finalSnapshot.result["bootstrapShouldHighlight"] as? Bool, true)
+            XCTAssertEqual(finalSnapshot.result["bootstrapContentSHA256"] as? String, expectedHash)
+        }
+    }
+
+    func testLocalDocumentSearchActionsExposeSearchState() async throws {
+        let fixture = makeSingleWindowFixture()
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-local-document-search-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let markdownURL = tempDirectory.appendingPathComponent("search.md", isDirectory: false)
+        let markdownContent = """
+        # Search Smoke
+
+        Toastty finds toastty in this document.
+        """
+        try markdownContent.write(to: markdownURL, atomically: true, encoding: .utf8)
+        let expectedHash = SHA256.hash(data: Data(markdownContent.utf8)).map { String(format: "%02x", $0) }.joined()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.local-document",
+                    "args": [
+                        "placement": "newTab",
+                        "filePath": markdownURL.path,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            let panelID = try XCTUnwrap(workspace.focusedPanelID)
+
+            var snapshotResponse: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.local_document_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                snapshotResponse = response
+                if response.result["bootstrapContentSHA256"] as? String == expectedHash {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            XCTAssertEqual(snapshotResponse?.result["searchIsPresented"] as? Bool, false)
+            XCTAssertTrue(snapshotResponse?.result["searchQuery"] is NSNull)
+            XCTAssertTrue(snapshotResponse?.result["searchLastMatchFound"] is NSNull)
+            XCTAssertEqual(snapshotResponse?.result["searchFieldFocused"] as? Bool, false)
+
+            let startResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.start",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(startResponse.ok)
+
+            var startedSnapshot: AutomationSocketTestResponse?
+            for _ in 0 ..< 20 {
+                let response = try sendRequest(
+                    command: "automation.local_document_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                startedSnapshot = response
+                if response.result["searchIsPresented"] as? Bool == true {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            XCTAssertEqual(startedSnapshot?.result["searchIsPresented"] as? Bool, true)
+            XCTAssertEqual(startedSnapshot?.result["searchQuery"] as? String, "")
+            XCTAssertEqual(startedSnapshot?.result["searchFieldFocused"] as? Bool, false)
+
+            let updateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.update-query",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                        "query": "toastty",
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(updateResponse.ok)
+
+            var searchedSnapshot: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.local_document_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                searchedSnapshot = response
+                if response.result["searchQuery"] as? String == "toastty",
+                   response.result["searchLastMatchFound"] as? Bool != nil {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            XCTAssertEqual(searchedSnapshot?.result["searchIsPresented"] as? Bool, true)
+            XCTAssertEqual(searchedSnapshot?.result["searchQuery"] as? String, "toastty")
+            XCTAssertNotNil(searchedSnapshot?.result["searchLastMatchFound"] as? Bool)
+
+            let nextResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.next",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(nextResponse.ok)
+
+            let previousResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.previous",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(previousResponse.ok)
+
+            let hideResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.hide",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(hideResponse.ok)
+
+            let hiddenSnapshot = try sendRequest(
+                command: "automation.local_document_panel_state",
+                payload: [
+                    "panelID": panelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(hiddenSnapshot.ok)
+            XCTAssertEqual(hiddenSnapshot.result["searchIsPresented"] as? Bool, false)
+            XCTAssertTrue(hiddenSnapshot.result["searchQuery"] is NSNull)
+            XCTAssertTrue(hiddenSnapshot.result["searchLastMatchFound"] is NSNull)
         }
     }
 
@@ -1022,7 +1558,30 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             )
 
             XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, fixture.windowID.uuidString)
+            XCTAssertEqual(response.result["workspaceID"] as? String, fixture.workspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, panelID.uuidString)
             XCTAssertEqual(response.result["profileID"] as? String, "smoke-profile")
+        }
+    }
+
+    func testTerminalStateIncludesWindowIDWhenResolvedByWorkspaceID() async throws {
+        let fixture = makeSingleWindowFixture()
+        let expectedPanelID = try XCTUnwrap(fixture.state.workspacesByID[fixture.workspaceID]?.focusedPanelID)
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.terminal_state",
+                payload: [
+                    "workspaceID": fixture.workspaceID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, fixture.windowID.uuidString)
+            XCTAssertEqual(response.result["workspaceID"] as? String, fixture.workspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, expectedPanelID.uuidString)
         }
     }
 
@@ -1072,10 +1631,67 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             )
 
             XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, windowID.uuidString)
             XCTAssertEqual(response.result["workspaceID"] as? String, workspaceID.uuidString)
             XCTAssertEqual(response.result["panelID"] as? String, panelID.uuidString)
             XCTAssertEqual(response.result["title"] as? String, "Background Agent")
             XCTAssertEqual(response.result["profileID"] as? String, "background-profile")
+        }
+    }
+
+    func testTerminalStateReturnsOwningWindowForPanelInAnotherWindow() async throws {
+        let firstFixture = makeSingleWindowFixture()
+        var secondTab = WorkspaceTabState.bootstrap(terminalTitle: "Second Window Terminal")
+        guard let secondPanelID = secondTab.focusedPanelID else {
+            XCTFail("expected second window fixture to include a focused terminal")
+            return
+        }
+
+        let secondWorkspaceID = UUID()
+        let secondWindowID = UUID()
+        let secondWorkspace = WorkspaceState(
+            id: secondWorkspaceID,
+            title: "Second",
+            selectedTabID: secondTab.id,
+            tabIDs: [secondTab.id],
+            tabsByID: [secondTab.id: secondTab]
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstFixture.windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstFixture.workspaceID],
+                    selectedWorkspaceID: firstFixture.workspaceID
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 820, y: 0, width: 800, height: 600),
+                    workspaceIDs: [secondWorkspaceID],
+                    selectedWorkspaceID: secondWorkspaceID
+                ),
+            ],
+            workspacesByID: [
+                firstFixture.workspaceID: try XCTUnwrap(firstFixture.state.workspacesByID[firstFixture.workspaceID]),
+                secondWorkspaceID: secondWorkspace,
+            ],
+            selectedWindowID: firstFixture.windowID
+        )
+
+        try await withAutomationHarness(state: state) { harness in
+            let response = try sendRequest(
+                command: "automation.terminal_state",
+                payload: [
+                    "panelID": secondPanelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, secondWindowID.uuidString)
+            XCTAssertEqual(response.result["workspaceID"] as? String, secondWorkspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, secondPanelID.uuidString)
+            XCTAssertEqual(response.result["title"] as? String, "Second Window Terminal")
         }
     }
 

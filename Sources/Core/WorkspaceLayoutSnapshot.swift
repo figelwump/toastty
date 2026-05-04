@@ -137,6 +137,7 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
 public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var id: UUID
     public var title: String
+    public var hasBeenVisited: Bool
     public var selectedTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
@@ -144,12 +145,14 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public init(
         id: UUID,
         title: String,
+        hasBeenVisited: Bool = true,
         selectedTabID: UUID?,
         tabIDs: [UUID],
         tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
     ) {
         self.id = id
         self.title = title
+        self.hasBeenVisited = hasBeenVisited
         self.selectedTabID = selectedTabID
         self.tabIDs = tabIDs
         self.tabsByID = tabsByID
@@ -158,6 +161,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     init(workspace: WorkspaceState) {
         id = workspace.id
         title = workspace.title
+        hasBeenVisited = workspace.hasBeenVisited
         selectedTabID = workspace.resolvedSelectedTabID
         tabIDs = workspace.tabIDs
         tabsByID = workspace.tabsByID.reduce(into: [:]) { partialResult, entry in
@@ -205,6 +209,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         return WorkspaceState(
             id: id,
             title: title,
+            hasBeenVisited: hasBeenVisited,
             selectedTabID: selectedTabID,
             tabIDs: tabIDs,
             tabsByID: tabsByID.reduce(into: [UUID: WorkspaceTabState]()) { partialResult, entry in
@@ -219,6 +224,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
     private enum CodingKeys: String, CodingKey {
         case id
         case title
+        case hasBeenVisited
         case selectedTabID
         case tabIDs
         case tabsByID
@@ -231,6 +237,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
+        hasBeenVisited = try container.decodeIfPresent(Bool.self, forKey: .hasBeenVisited) ?? true
 
         let decodedSelectedTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTabID)
         let decodedTabIDs = try container.decodeIfPresent([UUID].self, forKey: .tabIDs)
@@ -257,6 +264,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
+        try container.encode(hasBeenVisited, forKey: .hasBeenVisited)
         try container.encodeIfPresent(selectedTabID, forKey: .selectedTabID)
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
@@ -282,19 +290,22 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
     public var layoutTree: LayoutNode
     public var panels: [UUID: WorkspaceLayoutPanelSnapshot]
     public var focusedPanelID: UUID?
+    public var rightAuxPanel: RightAuxPanelState
 
     public init(
         id: UUID,
         customTitle: String? = nil,
         layoutTree: LayoutNode,
         panels: [UUID: WorkspaceLayoutPanelSnapshot],
-        focusedPanelID: UUID?
+        focusedPanelID: UUID?,
+        rightAuxPanel: RightAuxPanelState = RightAuxPanelState()
     ) {
         self.id = id
         self.customTitle = customTitle
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
+        self.rightAuxPanel = rightAuxPanel
     }
 
     init(tab: WorkspaceTabState) {
@@ -305,6 +316,7 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
             partialResult[entry.key] = WorkspaceLayoutPanelSnapshot(panelState: entry.value)
         }
         focusedPanelID = tab.focusedPanelID
+        rightAuxPanel = tab.rightAuxPanel
     }
 
     func makeWorkspaceTabState() -> WorkspaceTabState {
@@ -317,8 +329,38 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
             focusedPanelID: focusedPanelID,
             focusedPanelModeActive: false,
             unreadPanelIDs: [],
-            recentlyClosedPanels: []
+            recentlyClosedPanels: [],
+            rightAuxPanel: rightAuxPanel
         )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case customTitle
+        case layoutTree
+        case panels
+        case focusedPanelID
+        case rightAuxPanel
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        customTitle = try container.decodeIfPresent(String.self, forKey: .customTitle)
+        layoutTree = try container.decode(LayoutNode.self, forKey: .layoutTree)
+        panels = try container.decode([UUID: WorkspaceLayoutPanelSnapshot].self, forKey: .panels)
+        focusedPanelID = try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
+        rightAuxPanel = try container.decodeIfPresent(RightAuxPanelState.self, forKey: .rightAuxPanel) ?? RightAuxPanelState()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(customTitle, forKey: .customTitle)
+        try container.encode(layoutTree, forKey: .layoutTree)
+        try container.encode(panels, forKey: .panels)
+        try container.encodeIfPresent(focusedPanelID, forKey: .focusedPanelID)
+        try container.encode(rightAuxPanel, forKey: .rightAuxPanel)
     }
 
     private func makePanelsWithRestoredTerminalTitles() -> [UUID: PanelState] {

@@ -8,6 +8,8 @@ public enum StateInvariantViolation: Error, Equatable, Sendable {
     case workspaceWithoutTab(workspaceID: UUID)
     case missingTab(workspaceID: UUID, tabID: UUID)
     case selectedTabMissing(workspaceID: UUID, tabID: UUID)
+    case missingRightAuxPanelTab(workspaceID: UUID, mainTabID: UUID, tabID: UUID)
+    case activeRightAuxPanelTabMissing(workspaceID: UUID, mainTabID: UUID, tabID: UUID)
     case splitRatioOutOfBounds(workspaceID: UUID, nodeID: UUID, ratio: Double)
     case emptySlotLeaf(workspaceID: UUID, slotID: UUID)
     case missingPanel(workspaceID: UUID, panelID: UUID)
@@ -19,6 +21,7 @@ public enum StateInvariantViolation: Error, Equatable, Sendable {
     case selectedPanelMissing(workspaceID: UUID, panelID: UUID)
     case focusModeRootMissing(workspaceID: UUID, nodeID: UUID)
     case focusModeRootDoesNotContainFocusedPanel(workspaceID: UUID, nodeID: UUID, panelID: UUID)
+    case focusedRightAuxPanelMissing(workspaceID: UUID, mainTabID: UUID, panelID: UUID)
     case duplicateNodeID(workspaceID: UUID, nodeID: UUID)
 }
 
@@ -97,7 +100,9 @@ public enum StateValidator {
                     }
                 }
 
-                for unreadPanelID in tab.unreadPanelIDs where tab.panels[unreadPanelID] == nil {
+                for unreadPanelID in tab.unreadPanelIDs
+                    where tab.panels[unreadPanelID] == nil &&
+                    tab.rightAuxPanel.panelState(for: unreadPanelID) == nil {
                     throw StateInvariantViolation.unreadPanelMissing(workspaceID: workspace.id, panelID: unreadPanelID)
                 }
 
@@ -137,6 +142,42 @@ public enum StateValidator {
                             panelID: focusedPanelID
                         )
                     }
+                }
+
+                for rightAuxTabID in tab.rightAuxPanel.tabIDs {
+                    guard let rightAuxTab = tab.rightAuxPanel.tabsByID[rightAuxTabID] else {
+                        throw StateInvariantViolation.missingRightAuxPanelTab(
+                            workspaceID: workspace.id,
+                            mainTabID: tab.id,
+                            tabID: rightAuxTabID
+                        )
+                    }
+                    panelLayoutCounts[rightAuxTab.panelID, default: 0] += 1
+                    if panelLayoutCounts[rightAuxTab.panelID, default: 0] > 1 {
+                        throw StateInvariantViolation.panelReferencedMultipleTimes(
+                            workspaceID: workspace.id,
+                            panelID: rightAuxTab.panelID
+                        )
+                    }
+                }
+
+                if let activeTabID = tab.rightAuxPanel.activeTabID,
+                   tab.rightAuxPanel.tabsByID[activeTabID] == nil ||
+                   tab.rightAuxPanel.tabIDs.contains(activeTabID) == false {
+                    throw StateInvariantViolation.activeRightAuxPanelTabMissing(
+                        workspaceID: workspace.id,
+                        mainTabID: tab.id,
+                        tabID: activeTabID
+                    )
+                }
+
+                if let focusedPanelID = tab.rightAuxPanel.focusedPanelID,
+                   tab.rightAuxPanel.panelState(for: focusedPanelID) == nil {
+                    throw StateInvariantViolation.focusedRightAuxPanelMissing(
+                        workspaceID: workspace.id,
+                        mainTabID: tab.id,
+                        panelID: focusedPanelID
+                    )
                 }
             }
         }

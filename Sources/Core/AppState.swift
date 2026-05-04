@@ -63,6 +63,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.selectedWindowID = selectedWindowID
         self.configuredTerminalFontPoints = configuredTerminalFontPoints.map(Self.clampedTerminalFontPoints)
         self.defaultTerminalProfileID = Self.normalizedTerminalProfileID(defaultTerminalProfileID)
+        normalizeVisitedWorkspacesForVisibleSelections()
     }
 
     public static func clampedTerminalFontPoints(_ points: Double) -> Double {
@@ -119,6 +120,19 @@ public struct AppState: Codable, Equatable, Sendable {
             return Self.defaultMarkdownTextScale
         }
         return effectiveMarkdownTextScale(for: window)
+    }
+
+    private mutating func normalizeVisitedWorkspacesForVisibleSelections() {
+        for window in windows {
+            guard let workspaceID = selectedWorkspaceID(in: window.id),
+                  var workspace = workspacesByID[workspaceID],
+                  workspace.hasBeenVisited == false else {
+                continue
+            }
+
+            workspace.hasBeenVisited = true
+            workspacesByID[workspaceID] = workspace
+        }
     }
 
     public static func bootstrap(defaultTerminalProfileID: String? = nil) -> AppState {
@@ -193,8 +207,7 @@ public struct AppState: Codable, Equatable, Sendable {
         for window in windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = workspacesByID[workspaceID],
-                      workspace.panelState(for: panelID) != nil,
-                      workspace.slotID(containingPanelID: panelID) != nil else {
+                      workspace.panelState(for: panelID) != nil else {
                     continue
                 }
 
@@ -297,6 +310,7 @@ public struct AppState: Codable, Equatable, Sendable {
         workspaceID: UUID,
         tabID: UUID,
         focusedPanelID: UUID?,
+        includeCurrentWorkspaceWrap: Bool = true,
         matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
     ) -> PanelNavigationTarget? {
         guard let currentWindow = window(id: fromWindowID),
@@ -349,6 +363,10 @@ public struct AppState: Codable, Equatable, Sendable {
 
         // Keep the current workspace non-wrapping on the first pass so sibling
         // workspaces and windows are considered before we loop back locally.
+        guard includeCurrentWorkspaceWrap else {
+            return nil
+        }
+
         if let target = nextMatchingPanel(
             in: currentWorkspace,
             windowID: fromWindowID,

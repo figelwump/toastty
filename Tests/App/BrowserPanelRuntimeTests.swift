@@ -118,6 +118,24 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         )
     }
 
+    func testFileLoadForFileURLUsesParentDirectoryReadAccess() {
+        let fileURL = URL(fileURLWithPath: "/tmp/toastty browser/page.html")
+
+        XCTAssertEqual(
+            BrowserPanelRuntime.fileLoad(for: fileURL),
+            BrowserPanelFileLoad(
+                fileURL: fileURL.standardizedFileURL,
+                readAccessURL: fileURL.standardizedFileURL.deletingLastPathComponent()
+            )
+        )
+    }
+
+    func testFileLoadForNonFileURLReturnsNil() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/page.html"))
+
+        XCTAssertNil(BrowserPanelRuntime.fileLoad(for: url))
+    }
+
     func testLoadUserEnteredURLPublishesPendingDisplayedURLImmediately() {
         let runtime = BrowserPanelRuntime(
             panelID: UUID(),

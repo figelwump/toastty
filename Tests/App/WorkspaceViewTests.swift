@@ -61,6 +61,31 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceAgentTopBarModel.addAgentsTitle, "Get Started…")
     }
 
+    func testWorkspaceAgentTopBarModelHidesAllButtonsWhenDisabled() {
+        let catalog = AgentCatalog(
+            profiles: [
+                AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"])
+            ],
+            showsTopBarButtons: false
+        )
+
+        let model = WorkspaceAgentTopBarModel(
+            catalog: catalog,
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: catalog)
+        )
+
+        XCTAssertFalse(model.showsTopBarButtons)
+        XCTAssertTrue(model.actions.isEmpty)
+        XCTAssertFalse(model.showsAddAgentsButton)
+
+        let emptyHiddenCatalog = AgentCatalog(profiles: [], showsTopBarButtons: false)
+        let emptyHiddenModel = WorkspaceAgentTopBarModel(
+            catalog: emptyHiddenCatalog,
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog)
+        )
+        XCTAssertFalse(emptyHiddenModel.showsAddAgentsButton)
+    }
+
     func testWorkspaceTabTrailingAccessoryUsesCloseButtonWhenHovered() {
         XCTAssertEqual(
             WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: true, showsCloseAffordance: true),
@@ -115,10 +140,257 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testMountedContentOpacityKeepsVisibleContentOpaque() {
+        XCTAssertEqual(WorkspaceView.mountedContentOpacity(isVisible: true), 1)
+    }
+
+    func testMountedContentOpacityKeepsHiddenContentNonZeroButEffectivelyInvisible() {
+        let opacity = WorkspaceView.mountedContentOpacity(isVisible: false)
+        XCTAssertGreaterThan(opacity, 0)
+        XCTAssertLessThanOrEqual(opacity, 0.01)
+    }
+
+    func testScratchpadBindingStatusShowsUnboundWithoutSessionLink() {
+        XCTAssertEqual(
+            PanelCardView.scratchpadBindingStatus(for: nil, sessionRegistry: SessionRegistry()),
+            .unbound
+        )
+    }
+
+    func testScratchpadBindingStatusShowsUnboundForStaleSessionLink() {
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "stale-session",
+            agent: .claude,
+            sourcePanelID: UUID(),
+            sourceWorkspaceID: UUID(),
+            displayTitle: "Claude Code",
+            startedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        XCTAssertEqual(
+            PanelCardView.scratchpadBindingStatus(for: sessionLink, sessionRegistry: SessionRegistry()),
+            .unbound
+        )
+    }
+
+    func testScratchpadBindingStatusUsesActiveSessionTitle() {
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "live-session",
+            agent: .claude,
+            sourcePanelID: panelID,
+            sourceWorkspaceID: workspaceID,
+            displayTitle: "Old Title",
+            startedAt: Date(timeIntervalSince1970: 100)
+        )
+        var sessionRegistry = SessionRegistry()
+        sessionRegistry.startSession(
+            sessionID: "live-session",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            displayTitleOverride: "Claude Code",
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(
+            PanelCardView.scratchpadBindingStatus(
+                for: sessionLink,
+                sessionRegistry: sessionRegistry
+            ),
+            ScratchpadBindingStatus(label: "Bound to Claude Code", liveSessionID: "live-session")
+        )
+    }
+
+    func testEffectivePrimaryFocusedPanelIDClearsWhenVisibleRightPanelIsFocused() {
+        let mainPanelID = UUID()
+        let rightPanelID = UUID()
+
+        XCTAssertEqual(
+            WorkspaceView.effectivePrimaryFocusedPanelID(
+                focusedPanelID: mainPanelID,
+                rightAuxPanelFocusedPanelID: nil,
+                rightAuxPanelVisible: true
+            ),
+            mainPanelID
+        )
+        XCTAssertNil(
+            WorkspaceView.effectivePrimaryFocusedPanelID(
+                focusedPanelID: mainPanelID,
+                rightAuxPanelFocusedPanelID: rightPanelID,
+                rightAuxPanelVisible: true
+            )
+        )
+        XCTAssertEqual(
+            WorkspaceView.effectivePrimaryFocusedPanelID(
+                focusedPanelID: mainPanelID,
+                rightAuxPanelFocusedPanelID: rightPanelID,
+                rightAuxPanelVisible: false
+            ),
+            mainPanelID
+        )
+    }
+
     func testWorkspaceTabManagementAffordancesStayEnabledForVisibleTabs() {
         XCTAssertFalse(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 0))
         XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 1))
         XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 2))
+    }
+
+    @MainActor
+    func testEffectiveRightAuxPanelWidthUsesDynamicDefaultUntilCustomized() {
+        XCTAssertEqual(
+            WorkspaceView.effectiveRightAuxPanelWidth(
+                for: RightAuxPanelState(width: 360, hasCustomWidth: false),
+                availableWidth: 1_200
+            ),
+            480
+        )
+        XCTAssertEqual(
+            WorkspaceView.effectiveRightAuxPanelWidth(
+                for: RightAuxPanelState(width: 360, hasCustomWidth: true),
+                availableWidth: 1_200
+            ),
+            360
+        )
+    }
+
+    @MainActor
+    func testRenderedRightAuxPanelWidthUsesOwningTabVisibility() {
+        XCTAssertEqual(
+            WorkspaceView.renderedRightAuxPanelWidth(
+                for: RightAuxPanelState(isVisible: true, width: 520, hasCustomWidth: true),
+                availableWidth: 1_200,
+                focusedPanelModeActive: false
+            ),
+            520
+        )
+        XCTAssertEqual(
+            WorkspaceView.renderedRightAuxPanelWidth(
+                for: RightAuxPanelState(isVisible: false, width: 520, hasCustomWidth: true),
+                availableWidth: 1_200,
+                focusedPanelModeActive: false
+            ),
+            0
+        )
+        XCTAssertEqual(
+            WorkspaceView.renderedRightAuxPanelWidth(
+                for: RightAuxPanelState(isVisible: true, width: 520, hasCustomWidth: true),
+                availableWidth: 1_200,
+                focusedPanelModeActive: true
+            ),
+            0
+        )
+    }
+
+    func testPrimaryContentWidthSubtractsOnlyTheOwningTabRightPanelWidth() {
+        XCTAssertEqual(
+            WorkspaceView.primaryContentWidth(
+                availableWidth: 1_200,
+                rightAuxPanelRenderedWidth: 360
+            ),
+            840
+        )
+        XCTAssertEqual(
+            WorkspaceView.primaryContentWidth(
+                availableWidth: 320,
+                rightAuxPanelRenderedWidth: 480
+            ),
+            0
+        )
+    }
+
+    func testRightAuxPanelVisibilityAnimationOnlyRunsForSelectedTabSurface() {
+        XCTAssertTrue(
+            WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: false
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
+                isWorkspaceSelected: false,
+                isWorkspaceTabSelected: true
+            )
+        )
+    }
+
+    func testRightAuxPanelResizeHandleOnlyAppearsForVisibleSelectedTabSurface() {
+        XCTAssertTrue(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: false,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: false,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: false,
+                focusedPanelModeActive: false,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: true,
+                renderedWidth: 320
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelResizeHandleVisible(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false,
+                renderedWidth: 0
+            )
+        )
+    }
+
+    func testRightAuxPanelResizeHandleStraddlesPrimaryPanelBoundary() {
+        let frame = WorkspaceView.rightAuxPanelResizeHandleFrame(
+            primaryContentWidth: 840,
+            height: 600
+        )
+
+        XCTAssertEqual(WorkspaceView.rightAuxPanelResizeHandleHitWidth, 10)
+        XCTAssertEqual(frame, CGRect(x: 835, y: 0, width: 10, height: 600))
+        XCTAssertEqual(frame.midX, 840)
     }
 
     func testSingleTabWorkspaceStillInstallsTabContextMenu() {
@@ -217,6 +489,141 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceView.resolvedWorkspaceTabWidth(availableWidth: 140, tabCount: 5),
             ToastyTheme.workspaceTabMinimumWidth
+        )
+    }
+
+    func testResolvedWorkspaceTabStripWidthUsesIdealWidthWhenThereIsRoom() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabStripWidth(
+                availableWidth: 900,
+                tabCount: 1,
+                trailingAccessoryWidth: 20,
+                trailingAccessorySpacing: 10
+            ),
+            ToastyTheme.workspaceTabWidth + 30
+        )
+    }
+
+    func testResolvedWorkspaceTabStripWidthUsesAvailableWidthWhenCompressed() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabStripWidth(
+                availableWidth: 180,
+                tabCount: 1,
+                trailingAccessoryWidth: 20,
+                trailingAccessorySpacing: 10
+            ),
+            180
+        )
+    }
+
+    func testResolvedWorkspaceTabStripWidthStopsAtMinimumWidth() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabStripWidth(
+                availableWidth: 40,
+                tabCount: 1,
+                trailingAccessoryWidth: 20,
+                trailingAccessorySpacing: 10
+            ),
+            ToastyTheme.workspaceTabMinimumWidth + 30
+        )
+    }
+
+    func testWorkspaceTabReorderTargetIndexHandlesBeforeFirstBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: -12
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceTabReorderTargetIndexHandlesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 360
+        )
+
+        XCTAssertEqual(targetIndex, 2)
+    }
+
+    func testWorkspaceTabReorderTargetIndexTreatsSelfDropAsNoOpIndex() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+                third: CGRect(x: 200, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 150
+        )
+
+        XCTAssertEqual(targetIndex, 1)
+    }
+
+    func testWorkspaceTabReorderTargetIndexReturnsNilWhenFramesAreMissing() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = WorkspaceView.workspaceTabReorderTargetIndex(
+            orderedTabIDs: [first, second, third],
+            measuredFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 100, height: 28),
+                second: CGRect(x: 100, y: 0, width: 100, height: 28),
+            ],
+            draggedTabID: second,
+            pointerX: 210
+        )
+
+        XCTAssertNil(targetIndex)
+    }
+
+    func testWorkspaceTabDragActivationUsesHorizontalThreshold() {
+        XCTAssertFalse(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: 3.9, height: 30))
+        )
+        XCTAssertTrue(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: 4, height: 0))
+        )
+        XCTAssertTrue(
+            WorkspaceView.workspaceTabDragActivationExceeded(translation: CGSize(width: -4, height: 0))
+        )
+    }
+
+    func testWorkspaceTabTapToleranceUsesTotalPointerDistance() {
+        XCTAssertTrue(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 2, height: 2))
+        )
+        XCTAssertFalse(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 0, height: 4))
+        )
+        XCTAssertFalse(
+            WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 3, height: 3))
         )
     }
 
@@ -751,6 +1158,95 @@ final class WorkspaceViewTests: XCTestCase {
         harness.window.orderOut(nil)
     }
 
+    @MainActor
+    func testBlankRightPanelBrowserCreationConsumesPendingLocationFocusRequestWhenBrowserBecomesVisible() throws {
+        let harness = try makeWorkspaceHarness()
+
+        XCTAssertTrue(
+            harness.store.createBrowserPanelFromCommand(
+                preferredWindowID: harness.windowID,
+                request: BrowserPanelCreateRequest(placementOverride: .rightPanel)
+            )
+        )
+
+        let workspace = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
+        let browserPanelID = try XCTUnwrap(workspace.rightAuxPanel.activePanelID)
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.store.pendingBrowserLocationFocusRequest)
+        XCTAssertNotNil(
+            harness.webPanelRuntimeRegistry
+                .browserRuntime(for: browserPanelID)
+                .locationFieldFocusRequestID
+        )
+
+        harness.window.orderOut(nil)
+    }
+
+    @MainActor
+    func testLocalDocumentHeaderSearchAppearsWhenRuntimeStartsSearch() throws {
+        let documentURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("md")
+        try """
+        # Search Harness
+
+        Toastty local document header search validation.
+        """.write(to: documentURL, atomically: true, encoding: .utf8)
+
+        let harness = try makeWorkspaceHarness(
+            panelState: .web(
+                WebPanelState(
+                    definition: .localDocument,
+                    title: documentURL.lastPathComponent,
+                    filePath: documentURL.path
+                )
+            )
+        )
+        defer {
+            harness.window.orderOut(nil)
+            try? FileManager.default.removeItem(at: documentURL)
+        }
+
+        let runtime = harness.webPanelRuntimeRegistry.localDocumentRuntime(for: harness.panelID)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(findDescendantView(in: harness.hostingView, ofType: LocalDocumentSearchTextField.self))
+
+        runtime.startSearch()
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNotNil(findDescendantView(in: harness.hostingView, ofType: LocalDocumentSearchTextField.self))
+    }
+
+    @MainActor
+    func testWorkspaceTabStripUsesNonWindowDraggableContainer() throws {
+        let harness = try makeWorkspaceHarness()
+        defer { harness.window.orderOut(nil) }
+
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let tabStripContainer = try XCTUnwrap(
+            findDescendantView(in: harness.hostingView, ofType: NonWindowDraggableContainerView.self)
+        )
+        let tabStripHost = try XCTUnwrap(
+            findDescendantView(in: tabStripContainer, ofType: NonWindowDraggableHostingView.self)
+        )
+
+        XCTAssertFalse(tabStripContainer.mouseDownCanMoveWindow)
+
+        XCTAssertFalse(tabStripHost.mouseDownCanMoveWindow)
+        XCTAssertGreaterThan(tabStripContainer.frame.width, 0)
+        XCTAssertEqual(
+            tabStripContainer.frame.width,
+            ToastyTheme.workspaceTabWidth + 30,
+            accuracy: 1
+        )
+        XCTAssertEqual(tabStripContainer.frame.height, ToastyTheme.workspaceTabHeight, accuracy: 0.5)
+    }
+
     private func assertColor(
         _ actual: Color,
         equals expected: Color,
@@ -787,10 +1283,18 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    private func makeWorkspaceHarness() throws -> WorkspaceHarness {
-        let state = AppState.bootstrap()
+    private func makeWorkspaceHarness(panelState overridePanelState: PanelState? = nil) throws -> WorkspaceHarness {
+        var state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
         let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        if let overridePanelState {
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            let panelID = UUID()
+            workspace.layoutTree = .slot(slotID: UUID(), panelID: panelID)
+            workspace.panels = [panelID: overridePanelState]
+            workspace.focusedPanelID = panelID
+            state.workspacesByID[workspaceID] = workspace
+        }
         let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
         let panelID = try XCTUnwrap(workspace.focusedPanelID)
         let store = AppStore(state: state, persistTerminalFontPreference: false)
@@ -838,6 +1342,7 @@ final class WorkspaceViewTests: XCTestCase {
             agentLaunchService: agentLaunchService,
             showAgentGetStartedFlow: {},
             toggleCommandPalette: { _ in },
+            presentCommandPalette: { _, _ in },
             terminalRuntimeContext: TerminalWindowRuntimeContext(
                 windowID: windowID,
                 runtimeRegistry: registry
@@ -946,5 +1451,20 @@ final class WorkspaceViewTests: XCTestCase {
         }
 
         return differenceCount
+    }
+
+    @MainActor
+    private func findDescendantView<T: NSView>(in root: NSView, ofType viewType: T.Type) -> T? {
+        if let matchingView = root as? T {
+            return matchingView
+        }
+
+        for subview in root.subviews {
+            if let matchingView = findDescendantView(in: subview, ofType: viewType) {
+                return matchingView
+            }
+        }
+
+        return nil
     }
 }

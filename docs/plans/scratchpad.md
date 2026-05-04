@@ -1,223 +1,450 @@
 # toastty scratchpad
 
-Date: 2026-04-02
+Date: 2026-04-24
 
-This document is scratchpad-specific product guidance. Shared panel/runtime architecture lives in `docs/plans/web-panels.md`.
+This document is the v1 implementation plan for Scratchpad. Shared panel/runtime
+architecture lives in `docs/plans/web-panels.md`.
 
 ## summary
 
-1. Scratchpad is a `web` panel definition, not its own renderer-level panel kind.
-2. Scratchpad exists to support agent-human collaboration around visual or structured intermediate work.
-3. The primary scratchpad mode is session-linked: one scratchpad instance is associated with one agent session or source terminal context.
-4. Scratchpad should default to opening beside its source terminal/session when that context exists.
-5. Scratchpad should be safe by default:
-   - no outbound network
-   - no generic JS eval surface
-   - feedback routing handled by the app
-6. Scratchpad should support both agent-authored and user-authored updates.
+1. Scratchpad is a typed built-in `web` panel definition, not a new renderer-level
+   panel kind and not a generic extension/plugin system.
+2. V1 is agent initiated and session linked: an agent writes content for its
+   current managed session, and Toastty creates or updates one scratchpad for
+   that session.
+3. V1 uses whole-document replacement through `panel.scratchpad.set-content`.
+   Patch, append, streaming, comments, and user-to-agent feedback are deferred.
+4. Agent-authored JavaScript is allowed, but only inside a sandboxed generated
+   content surface with no direct native bridge access.
+5. Scratchpad content persists outside workspace layout snapshots. The layout
+   snapshot stores a small typed reference and session-link metadata.
+6. Auto-created scratchpads use existing `rightPanel` placement in v1 and restore
+   focus to the source terminal after creation.
 
 ## purpose
 
 Scratchpad is for work that does not fit well in terminal text alone:
 
+- architecture diagrams
+- UI mockups
 - visual plans
-- HTML/CSS mockups
-- structured review surfaces
-- canvases that an agent can populate and a user can comment on
-- temporary collaborative artifacts that stay close to the terminal session that produced them
+- structured comparison surfaces
+- temporary visual artifacts that should stay near the agent session that
+  produced them
 
-Scratchpad is not a general browser and is not primarily a file viewer.
+Scratchpad is not a general browser, not a file viewer, and not a replacement
+for normal terminal prose or code snippets.
 
-## primary mode: session-linked scratchpad
+## current baseline
 
-The main scratchpad experience should be tied to a session or source terminal context.
+The current codebase already has the substrate this feature should build on:
 
-Expected behavior:
+- `PanelKind` has `terminal` and `web`.
+- `PanelState` has `.terminal` and `.web`.
+- `WebPanelDefinition` already includes `scratchpad`.
+- `WebPanelDefinition.scratchpad.capabilityProfile` is `localOnly`.
+- `WebPanelRuntimeRegistry` already vends typed browser and local-document
+  runtimes by panel ID.
+- `WorkspaceView` already switches web panel rendering by definition and shows a
+  placeholder for unwired definitions.
+- Agents launched by Toastty receive `TOASTTY_SESSION_ID`,
+  `TOASTTY_PANEL_ID`, `TOASTTY_SOCKET_PATH`, and `TOASTTY_CLI_PATH`.
+- The app-control CLI already sends request/response JSON envelopes over the
+  local Toastty socket.
 
-- user or agent invokes `Show Scratchpad For Current Session`
-- Toastty resolves the current source terminal/session
-- if a scratchpad keyed to that session already exists, Toastty focuses it
-- otherwise Toastty creates a new scratchpad beside the source terminal
+This means Scratchpad should be another concrete built-in web panel. Do not
+introduce manifest-style panel extensibility, third-party panel loading, or
+stringly typed payloads for v1.
 
-Suggested keying:
+## v1 scope
 
-- `instanceKey = session:<session-id>` when session-linked
-- if there is no session ID but a source terminal exists, a fallback source-panel key may be acceptable in development, but session ID is preferred
+Build:
 
-This model makes scratchpad feel like a companion workspace for an active agent, not an orphaned document.
+- typed `ScratchpadState` under `WebPanelState`
+- `ScratchpadPanelRuntime`
+- `ScratchpadPanelView`
+- `ScratchpadPanelHostView`
+- bundled `WebPanels/ScratchpadApp/`
+- app-control actions `panel.scratchpad.set-content`,
+  `panel.scratchpad.rebind`, and `panel.scratchpad.export`
+- session-linked create-or-update behavior
+- manual blank Scratchpad tabs in the right panel
+- bind, rebind, unbind, export, and open-in-browser panel affordances
+- sandboxed generated HTML/CSS/JS rendering
+- persisted scratchpad document storage outside layout snapshots
+- unread/updated indication when an unfocused scratchpad changes
 
-## secondary mode: standalone scratchpad
+Still out of scope for v1:
 
-Scratchpad should also support an empty standalone mode for cases where there is no live session link.
-
-Examples:
-
-- user wants a temporary whiteboard-like area
-- agent creates a scratchpad before session telemetry is available
-- user wants to sketch or collect notes without tying them to one agent run
-
-In standalone mode:
-
-- default placement should be `newTab`
-- `instanceKey` can be `nil`
-- the UI should make it clear that the panel is not currently linked to a live session
+- workspace-shared scratchpads
+- user comments or annotations
+- scratchpad-to-agent feedback queues
+- terminal injection
+- MCP server support
+- append, patch, or DOM-fragment update APIs
+- true `splitBesideSource` placement
+- background tab placement
+- freeform native drawing tools
 
 ## user experience
 
-### entry points
+### primary path: agent initiated
 
-Common actions:
+The main experience is that an agent asks Toastty to render visual content while
+responding in the terminal.
+
+Expected behavior when an agent calls `panel.scratchpad.set-content` with the
+current `TOASTTY_SESSION_ID`:
+
+- Toastty resolves the active session.
+- Toastty resolves the session's source terminal panel and workspace.
+- If a scratchpad is already linked to that session, Toastty updates it in
+  place.
+- If no scratchpad is linked to that session, Toastty creates one in the same
+  workspace using `rightPanel` placement.
+- Auto-create does not leave focus in the scratchpad. If creation focuses the
+  new panel internally, Toastty restores focus to the source terminal.
+- If the scratchpad is not focused when updated, Toastty marks it updated using
+  the same quiet unread/updated visual language used for panels that need
+  attention.
+- The agent should mention the scratchpad only after the app-control action
+  succeeds. This is agent guidance, not app policy.
+
+The agent should reuse the same session-linked scratchpad rather than creating a
+new one per turn.
+
+### backup entry point
+
+V1 includes two user-facing entry points:
 
 - `Show Scratchpad For Current Session`
-- `New Scratchpad Tab`
+- `New Scratchpad`
 
-Possible later actions:
+Expose these actions from the Workspace menu and the command palette. The right
+panel add menu also offers `New Scratchpad`.
 
-- `Relink Scratchpad To Current Session`
-- `Detach Scratchpad From Session`
+Behavior:
 
-### placement
+- if a scratchpad is open for the current session, focus it
+- if a scratchpad for the current session is recently closed and can be reopened,
+  reopen/focus it
+- otherwise create an empty scratchpad linked to the current session and focus it
 
-Placement should follow the shared precedence rules from `web-panels.md`, with scratchpad-specific defaults:
+Unlike agent auto-create, explicit user invocation may focus the scratchpad.
 
-- if launched for a source session or source panel, default to `splitBesideSource`
-- otherwise default to `newTab`
+`New Scratchpad` creates an unbound right-panel Scratchpad immediately. The
+panel can later be rebound to a live managed session from the panel affordances.
 
-### panel chrome
+## placement
 
-Scratchpad-specific controls may include:
+Use existing placement primitives in v1.
 
-- linked-session indicator
-- relink/detach control
-- clear/reset action
-- edit/view mode if that distinction proves useful
+Default v1 behavior:
 
-Do not assume all scratchpad interaction happens through native panel chrome. The primary interaction surface should live inside the scratchpad content itself.
+- agent-created scratchpad: `rightPanel`, then restore focus to the source
+  terminal
+- user `Show Scratchpad For Current Session`: focus existing/reopened scratchpad
+  or create with `rightPanel`
 
-## collaboration model
+If the source session or source terminal panel cannot be resolved for an
+agent-initiated `set-content`, fail the command with a clear error. Do not
+silently create an orphan scratchpad in v1.
 
-Scratchpad should support three collaboration patterns.
+Do not take over another panel's content. Do not silently decline to create the
+scratchpad after a successful command. True source-aware placement such as
+`splitBesideSource` can be reconsidered after the v1 workflow is proven.
 
-### 1. agent writes, user reads
+## agent command contract
 
-The agent pushes HTML or structured content into the scratchpad. The user reviews it.
+Agents interact with Scratchpad through the existing app-control channel:
 
-Examples:
+```text
+agent process
+  -> Toastty CLI
+  -> local Toastty socket
+  -> AppControlExecutor
+  -> Scratchpad document store/runtime
+  -> Scratchpad web app
+```
 
-- plan mockup
-- generated diagram
-- structured review sheet
+V1 action:
 
-### 2. agent writes, user responds
+```text
+panel.scratchpad.set-content
+```
 
-The user comments, annotates, or otherwise responds inside the scratchpad. Toastty routes that feedback back to the linked session when possible.
+Inputs:
 
-Examples:
+- `sessionID`: required for the v1 agent path
+- `filePath` or stdin content: required content source
+- `title`: optional display title
+- `expectedRevision`: optional guard against overwriting newer scratchpad
+  content
 
-- comment on a plan
-- mark up a visual draft
-- approve/reject a proposed direction
+Behavior:
 
-### 3. user edits, agent observes later
+- resolve the active session by `sessionID`
+- create or locate the session-linked scratchpad
+- read content from `filePath` or stdin
+- enforce payload limits before committing
+- serialize mutations per scratchpad document
+- if `expectedRevision` is provided and stale, reject the write with a conflict
+- assign the next revision in Toastty, not in the agent
+- persist the document snapshot
+- push the new revision to the running web view if loaded
 
-The user changes the scratchpad state, then the agent reads the updated state or a snapshot on a later turn.
+Response:
 
-Examples:
+- `windowID`
+- `workspaceID`
+- `panelID`
+- `documentID`
+- `revision`
+- `created`
 
-- tweak a layout
-- add notes to a draft
-- sketch a structure for the agent to continue from
+Agents should prefer `filePath` for non-trivial HTML so shell quoting does not
+become part of the protocol.
+
+Do not add `stream-start`, `stream-chunk`, or `stream-finish` in v1. Agents do
+not naturally stream tool calls. If a live-feeling sequence is useful, agents
+can make repeated `set-content` calls with successive complete snapshots.
+
+## agent guidance
+
+Agent guidance should be supplied through a skill or prompt convention.
+
+Use Scratchpad for:
+
+- architecture diagrams
+- UI mockups
+- spatial workflows
+- visual plans
+- comparisons where layout improves comprehension
+
+Do not use Scratchpad for:
+
+- ordinary prose explanations
+- bullet lists
+- command output
+- code snippets
+- content that is better opened as a local document
+
+Agents should update the current session's scratchpad in place unless the user
+explicitly asks for a separate artifact or the topic clearly changes.
 
 ## state model
 
-Scratchpad-specific meaning should live on top of shared `WebPanelState`.
+Scratchpad-specific persisted layout state should be small and typed.
 
-Suggested `creationArguments` and persisted state patterns:
+Suggested shape:
 
-- no required `creationArguments` for standalone mode
-- optional `creationArguments["mode"] = "session"` for explicit session-linked launch
-- optional `creationArguments["template"]` later if scratchpad supports starter templates
+```swift
+public struct ScratchpadState: Codable, Equatable, Sendable {
+    public var documentID: UUID
+    public var sessionLink: ScratchpadSessionLink?
+    public var revision: Int
+}
 
-Scratchpad content should be stored as scratchpad-owned state, not inferred from panel title or launch context.
+public struct ScratchpadSessionLink: Codable, Equatable, Sendable {
+    public var sessionID: String
+    public var agent: AgentKind
+    public var sourcePanelID: UUID
+    public var sourceWorkspaceID: UUID
+    public var repoRoot: String?
+    public var cwd: String?
+    public var displayTitle: String?
+    public var startedAt: Date?
+}
+```
 
-Useful scratchpad state concepts:
+`WebPanelState.title` remains the panel title used by layout and chrome.
+Scratchpad should not introduce a second independently editable title source in
+the runtime. If the agent passes a title, update the panel title through the same
+app-owned metadata path used by other web panels.
 
-- current document/content payload
-- annotation/comment data
-- viewport state if needed
-- tool mode if scratchpad grows richer editing affordances
+The session link is a live-session reference, not durable provenance. A
+scratchpad should present itself as bound only while the runtime
+`SessionRegistry` still contains the referenced active session; after app
+restart or session stop, stale links are cleared from both restored panel state
+and the document store.
 
-`launchContext` should be used for routing and provenance, not as the durable content store.
+## document storage
 
-## persistence
+Do not store large HTML content directly in the workspace layout snapshot.
 
-Initial persistence direction:
+Store Scratchpad documents in a scratchpad-owned store under Toastty's
+runtime/config paths. The store should be keyed by `documentID` and persist:
 
-- session-linked scratchpad should persist across app restart
-- the link to the source session should persist even if the session is no longer running
-- the content should still be viewable after the source session ends
+- document ID
+- current revision
+- title/display metadata
+- content type
+- HTML/CSS/JS payload or packaged document payload
+- creation and update timestamps
+- optional session-link snapshot
 
-When a linked session is no longer active:
+If a layout restores a scratchpad whose `documentID` is missing from the
+document store, show a recoverable missing-document state inside the panel rather
+than crashing or silently removing the panel.
 
-- scratchpad becomes a historical artifact with stale-link UI
-- new feedback should either:
-  - relaunch/resume an agent using stored context, or
-  - be stored until the user explicitly sends it
+Retention can stay simple in v1:
 
-Do not make scratchpad purely ephemeral by default. The work is often exactly the kind of artifact a user will want to revisit.
+- one linked scratchpad per session
+- session end does not delete the scratchpad
+- explicit panel close follows normal recently closed panel behavior
+- no archive/library UI
+
+Add cleanup and retention policy only when Scratchpad usage creates real
+accumulation pressure.
 
 ## security model
 
-Scratchpad is the highest-risk built-in web panel because it is explicitly designed for generated content and user interaction.
+Scratchpad allows agent-authored JavaScript in v1. Treat it as higher risk than
+local-document rendering.
 
-V1 security requirements:
+V1 requirements:
 
 - no outbound network by default
 - no unrestricted remote asset loading
-- no generic `eval_js` bridge
-- no direct extension-owned control over agent routing
-- typed feedback events only
+- no direct native bridge access from generated content
+- no generic host command dispatch
+- no generic native `eval_js` bridge for agents
+- no filesystem access from generated content
+- nonpersistent web data store
+- explicit payload size limit before content is committed or injected
 
-If local development bridging is needed, it should be a separate explicit mode with loopback-only restrictions and should not be the default stable behavior.
+The Scratchpad web app should have two layers:
 
-## bridge needs
+1. a trusted bundled shell loaded by Toastty
+2. an isolated generated-content surface for agent HTML/CSS/JS
 
-Scratchpad likely needs more than a simple viewer but should still stay within a minimal typed bridge.
+The trusted shell owns the native bridge. Generated content must not have direct
+access to `window.webkit.messageHandlers` or any Toastty app-control surface.
 
-Reasonable scratchpad bridge capabilities:
+Sanitization and sandboxing are not interchangeable:
 
-- bootstrap initial scratchpad payload
-- update title
-- persist/load structured state
-- submit feedback/annotation events
-- request a host-generated snapshot or export later, if needed
+- if agent JavaScript is allowed, sanitizing away scripts defeats the product
+  goal
+- generated JavaScript should run only in the isolated content surface
+- the isolated content surface should communicate with the trusted shell only
+  through a narrow, typed, allowlisted channel if needed
 
-Deferred until proven necessary:
+The exact isolation mechanism should be chosen during implementation, but the
+boundary is non-negotiable: generated content cannot call native APIs directly.
 
-- arbitrary host command dispatch
-- generic script execution
-- unrestricted filesystem access
+## bridge model
 
-## unresolved product questions
+Use a typed bridge modeled after the local-document bridge, but keep it
+scratchpad-specific.
 
-- What is the first concrete scratchpad use case worth shipping?
-- Does scratchpad need freeform drawing in v1, or is HTML/CSS/structured interaction enough?
-- Should comments/annotations be embedded into the scratchpad document model or stored as separate app-owned metadata?
-- How should undo/redo work if both user edits and agent updates are possible?
-- When a linked session is closed, should the scratchpad remain linked to the historical session, or should the user be prompted to relink it?
-- Should one terminal session ever have multiple scratchpads, or should keyed reuse stay strict for the session-linked mode?
+Host-to-shell capabilities:
+
+- bootstrap current document revision
+- replace rendered content with a committed revision
+- update theme
+- update title/display metadata if needed
+- report missing-document or load-error states
+
+Shell-to-host events in v1:
+
+- bridge ready
+- render ready
+- JavaScript diagnostic events from the trusted shell
+- generated-content load/render diagnostics if safely available
+
+Do not add shell-to-agent feedback in v1. Scratchpad comments, annotations,
+approval buttons, or "send to agent" actions require a separate product pass
+covering delivery semantics. Markdown review/commenting may be the better first
+consumer for that feedback architecture.
+
+## persistence and lifecycle
+
+Scratchpad panels and document content should persist across app restart.
+
+When the linked agent session ends:
+
+- the scratchpad remains open if its panel is open
+- the document remains viewable
+- stale session links are cleared from restored panel state and document metadata
+  once the runtime no longer has the linked active session
+- future writes require a currently active session
+- the user can rebind an open Scratchpad to another active managed session in
+  the same workspace tab, or unbind it from the current session
+
+When the user closes a scratchpad panel:
+
+- the closed panel enters normal recently closed panel history
+- reopening should restore the same `documentID` when possible
+
+When a session-linked scratchpad already exists:
+
+- `panel.scratchpad.set-content` updates it in place, even if the user moved it
+  elsewhere in the workspace/window
+- lookup is by session link/document binding, not by layout position
+
+## validation plan
+
+Reducer/app-state tests:
+
+- `WebPanelDefinition.scratchpad` remains local-only
+- `WebPanelState` encodes/decodes `ScratchpadState`
+- creating a scratchpad stores typed scratchpad state
+- updating existing session-linked scratchpad reuses the panel
+- agent auto-create uses `rightPanel`
+- agent auto-create restores focus to the source terminal
+- stale `expectedRevision` rejects the write
+- missing session fails with a clear error
+
+Runtime tests:
+
+- bundled Scratchpad app asset lookup
+- bootstrap current document into web view
+- push committed revision into an already loaded web view
+- restore from persisted document store
+- missing document renders a recoverable placeholder
+- generated content cannot call native bridge handlers directly
+- non-file/network navigation is blocked
+- oversized payload is rejected before injection
+
+App-control tests:
+
+- `panel.scratchpad.set-content` accepts `filePath`
+- `panel.scratchpad.set-content` accepts stdin or equivalent socket payload
+- response includes `windowID`, `workspaceID`, `panelID`, `documentID`,
+  `revision`, and `created`
+- repeated calls for the same session update in place
+- concurrent calls serialize per scratchpad document
+- `panel.scratchpad.rebind` requires a live managed session in the same
+  workspace tab
+- `panel.scratchpad.export` writes the current Scratchpad HTML to a local file
+
+Smoke validation:
+
+- launch a managed agent session
+- call the CLI to set scratchpad content from a file
+- verify a Scratchpad panel appears with focus still in the terminal
+- call the CLI again and verify the existing panel updates
+- restart the app/runtime and verify the scratchpad document restores
 
 ## sequencing
 
-Scratchpad should not be the first web panel shipped.
+Recommended implementation order:
 
-Recommended order:
+1. add typed `ScratchpadState` and layout snapshot compatibility tests
+2. add scratchpad document store with payload limits and missing-document state
+3. add `ScratchpadPanelRuntime` and bundled `ScratchpadApp`
+4. wire `WorkspaceView` and `WebPanelRuntimeRegistry`
+5. add `panel.scratchpad.set-content` app-control action
+6. add session-linked create-or-update behavior and focus restoration
+7. add unread/updated indicator behavior
+8. add manual right-panel Scratchpad creation, rebind/unbind, and export flows
+9. add agent skill/prompt guidance for when to use Scratchpad
 
-1. prove the shared web-panel host/runtime with browser
-2. refactor file-backed markdown into a broader `localDocument` built-in panel
-   that is ready for upcoming editing work
-3. prove creation arguments, launch context, and feedback routing with
-   local-document review/edit flows if they arrive before scratchpad
-4. build scratchpad once the collaboration and bridge model are already working
+After v1 is proven, revisit:
 
-That sequencing keeps scratchpad focused on the genuinely unique product problems instead of forcing it to carry all substrate risk too early.
+- true `splitBesideSource`
+- append or patch APIs
+- comments and feedback routing
+- Markdown-to-agent review feedback
+- MCP wrapper over the existing app-control socket
+- broader installed web-panel extensibility

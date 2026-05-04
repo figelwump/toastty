@@ -9,11 +9,13 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+N` | New window |
 | `Cmd+T` | New tab |
 | `Cmd+B` | Show or hide the sidebar |
+| `Cmd+Shift+B` | Show or hide the right panel; showing it focuses the active right-panel tab when one exists |
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |
 | `Option+Shift+E` | Rename tab |
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+W` | Close focused panel |
+| `Cmd+Shift+M` | Watch the running foreground command in the focused terminal |
 
 `Cmd+W` and `File > Close` both use Toastty's panel-close behavior. Dirty local-document drafts ask before discard, panels with a local-document save in progress refuse destructive close, and the native red close button still asks for confirmation before closing the full window.
 
@@ -25,16 +27,18 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 |---|---|
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
-| `Cmd+Ctrl+B` | New browser in the current tab layout |
+| `Cmd+Ctrl+B` | New browser in the right panel |
 | `Cmd+Ctrl+Shift+B` | New browser tab |
-| `Cmd+[` | Focus previous pane |
-| `Cmd+]` | Focus next pane |
+| `Cmd+Ctrl+S` | New Scratchpad in the right panel |
+| `Cmd+[` | Focus previous pane, including the active right-panel tab when visible |
+| `Cmd+]` | Focus next pane, including the active right-panel tab when visible |
 | `Cmd+Opt+Left Arrow` | Focus pane to the left |
-| `Cmd+Opt+Right Arrow` | Focus pane to the right |
+| `Cmd+Opt+Right Arrow` | Focus pane to the right, or the active right-panel tab from the right edge |
 | `Cmd+Opt+Up Arrow` | Focus pane above |
 | `Cmd+Opt+Down Arrow` | Focus pane below |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
-| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors, then working panels |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors; active panels then rotate without repeats in this order: working panels ahead of the current focus, later-flagged active panels, then wrapped working panels |
+| `Cmd+Shift+L` | Flag or clear the later flag on the focused managed session |
 | `Cmd+Ctrl+Left Arrow` | Resize split left |
 | `Cmd+Ctrl+Right Arrow` | Resize split right |
 | `Cmd+Ctrl+Up Arrow` | Resize split up |
@@ -49,9 +53,13 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+1`–`Cmd+9` | Switch tab |
 | `Cmd+Shift+[` | Previous tab |
 | `Cmd+Shift+]` | Next tab |
+| `Cmd+Ctrl+[` | Previous right-panel tab |
+| `Cmd+Ctrl+]` | Next right-panel tab |
 | `Option+Shift+[` | Previous tab (wrapping, terminal-proof) |
 | `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
+
+Dragging workspace rows in the sidebar or tabs in the top tab strip changes this order; the numeric workspace and tab shortcuts follow the current visual order.
 
 ## Command palette
 
@@ -63,7 +71,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 
 | Shortcut | Action |
 |---|---|
-| `Cmd+F` | Find in active terminal scrollback |
+| `Cmd+F` | Find in the focused terminal scrollback or local document |
 | `Cmd+G` | Find next match |
 | `Cmd+Shift+G` | Find previous match |
 
@@ -94,7 +102,15 @@ These shortcuts are available when the focused panel is a browser panel:
 
 ## Local documents
 
-These shortcuts are available when the focused panel is a local document in edit mode. Local documents currently support Markdown, YAML, and TOML files.
+These shortcuts are available when the focused panel is a local document. Supported local documents currently include Markdown, YAML/TOML/JSON/config/dotenv files, CSV/TSV/XML, shell scripts, and common source files such as Swift, JavaScript/TypeScript, Python, Go, and Rust. Read mode also exposes `Open in Default App` in the panel header for backed local documents.
+
+Preview mode:
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+E` | Enter edit mode for the current local document |
+
+Edit mode:
 
 | Shortcut | Action |
 |---|---|

@@ -76,6 +76,11 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .error), .hidden)
     }
 
+    func testLaterFlagActionTitleUsesLaterCopy() {
+        XCTAssertEqual(SidebarView.laterFlagActionTitle(isFlaggedForLater: false), "Flag for Later")
+        XCTAssertEqual(SidebarView.laterFlagActionTitle(isFlaggedForLater: true), "Clear Later Flag")
+    }
+
     func testUnreadSessionTypographyUsesEmphasizedWeights() {
         XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: false), .medium)
         XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: true), .heavy)
@@ -170,6 +175,17 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
     }
 
+    func testWorkspaceNewBadgeUsesConfiguredSidebarFontSize() throws {
+        let styledBitmap = try renderedBitmap(
+            for: Text(SidebarView.workspaceNewBadgeLabel).font(ToastyTheme.fontWorkspaceNewBadge)
+        )
+        let expectedBitmap = try renderedBitmap(
+            for: Text(SidebarView.workspaceNewBadgeLabel).font(Font.system(size: 10, weight: .medium, design: .default))
+        )
+
+        XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
+    }
+
     func testWorkspaceTitleUsesConfiguredSidebarFontSize() throws {
         let styledBitmap = try renderedBitmap(
             for: Text("Workspace 1").font(ToastyTheme.fontWorkspaceName)
@@ -192,6 +208,94 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
     }
 
+    func testUnvisitedWorkspaceTitleUsesEmphasizedWeight() {
+        XCTAssertEqual(
+            SidebarView.workspaceTitleFontWeight(isSelected: false, hasBeenVisited: false),
+            .semibold
+        )
+        XCTAssertEqual(
+            SidebarView.workspaceTitleFontWeight(isSelected: false, hasBeenVisited: true),
+            .medium
+        )
+    }
+
+    func testNewWorkspaceBadgeShowsOnlyForInactiveUnvisitedWorkspaces() {
+        XCTAssertTrue(
+            SidebarView.showsNewWorkspaceBadge(isSelected: false, hasBeenVisited: false)
+        )
+        XCTAssertFalse(
+            SidebarView.showsNewWorkspaceBadge(isSelected: true, hasBeenVisited: false)
+        )
+        XCTAssertFalse(
+            SidebarView.showsNewWorkspaceBadge(isSelected: false, hasBeenVisited: true)
+        )
+    }
+
+    func testUnvisitedWorkspaceTitleRendersDistinctWeightFromVisitedTitle() throws {
+        let unvisitedBitmap = try renderedBitmap(
+            for: SidebarView.styledWorkspaceTitleText(
+                "Workspace 2",
+                isSelected: false,
+                hasBeenVisited: false
+            )
+        )
+        let visitedBitmap = try renderedBitmap(
+            for: SidebarView.styledWorkspaceTitleText(
+                "Workspace 2",
+                isSelected: false,
+                hasBeenVisited: true
+            )
+        )
+
+        XCTAssertGreaterThan(try differingPixelCount(between: unvisitedBitmap, and: visitedBitmap), 0)
+    }
+
+    func testInactiveUnvisitedWorkspaceRowRendersNewBadgeLabel() throws {
+        let selectedWorkspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let backgroundWorkspace = WorkspaceState.bootstrap(
+            title: "Workspace 2",
+            hasBeenVisited: false
+        )
+        let sidebarState = makeSidebarAppState(
+            selectedWorkspace: selectedWorkspace,
+            additionalWorkspaces: [backgroundWorkspace]
+        )
+        let hostingView = try makeSidebarHostingView(
+            state: sidebarState.state,
+            windowID: sidebarState.windowID
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        let workspaceRowValues = textValues.filter { $0.hasPrefix("Workspace 2") }
+        XCTAssertTrue(
+            workspaceRowValues.contains(where: { $0.contains(SidebarView.workspaceNewBadgeLabel) }),
+            "Expected inactive unvisited workspace row to expose the New badge label: \(textValues)"
+        )
+    }
+
+    func testVisitedInactiveWorkspaceRowDoesNotRenderNewBadgeLabel() throws {
+        let selectedWorkspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let backgroundWorkspace = WorkspaceState.bootstrap(
+            title: "Workspace 2",
+            hasBeenVisited: true
+        )
+        let sidebarState = makeSidebarAppState(
+            selectedWorkspace: selectedWorkspace,
+            additionalWorkspaces: [backgroundWorkspace]
+        )
+        let hostingView = try makeSidebarHostingView(
+            state: sidebarState.state,
+            windowID: sidebarState.windowID
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        let workspaceRowValues = textValues.filter { $0.hasPrefix("Workspace 2") }
+        XCTAssertFalse(
+            workspaceRowValues.contains(where: { $0.contains(SidebarView.workspaceNewBadgeLabel) }),
+            "Did not expect a New badge for visited workspace rows: \(textValues)"
+        )
+    }
+
     func testWorkspaceRenameFontsMatchSidebarTitleFonts() {
         XCTAssertEqual(
             ToastyTheme.sidebarWorkspaceNameNSFont(isSelected: true),
@@ -200,6 +304,181 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(
             ToastyTheme.sidebarWorkspaceNameNSFont(isSelected: false),
             NSFont.systemFont(ofSize: 13, weight: .medium)
+        )
+    }
+
+    func testWorkspaceReorderTargetIndexHandlesBeforeFirstBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: -8
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceReorderTargetIndexHandlesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 150
+        )
+
+        XCTAssertEqual(targetIndex, 2)
+    }
+
+    func testWorkspaceReorderTargetIndexTreatsSelfDropAsNoOpIndex() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+                third: CGRect(x: 0, y: 84, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 60
+        )
+
+        XCTAssertEqual(targetIndex, 1)
+    }
+
+    func testWorkspaceReorderTargetIndexReturnsNilWhenRowFramesAreMissing() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            pointerY: 120
+        )
+
+        XCTAssertNil(targetIndex)
+    }
+
+    func testWorkspaceReorderTargetIndexUsesFullWorkspaceRowHeight() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let targetIndex = SidebarView.workspaceReorderTargetIndex(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 0, y: 0, width: 260, height: 42),
+                second: CGRect(x: 0, y: 42, width: 260, height: 118),
+                third: CGRect(x: 0, y: 160, width: 260, height: 42),
+            ],
+            draggedWorkspaceID: first,
+            pointerY: 90
+        )
+
+        XCTAssertEqual(targetIndex, 0)
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesRowHorizontalBounds() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 42),
+                third: CGRect(x: 8, y: 84, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            targetIndex: 0
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 0, width: 244, height: 2))
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesAfterLastBoundary() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 42),
+                third: CGRect(x: 8, y: 84, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: second,
+            targetIndex: 2
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 126, width: 244, height: 2))
+    }
+
+    func testWorkspaceInsertionIndicatorFrameUsesTallRowBottom() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+
+        let indicatorFrame = SidebarView.workspaceInsertionIndicatorFrame(
+            orderedWorkspaceIDs: [first, second, third],
+            measuredRowFramesByID: [
+                first: CGRect(x: 8, y: 0, width: 244, height: 42),
+                second: CGRect(x: 8, y: 42, width: 244, height: 118),
+                third: CGRect(x: 8, y: 160, width: 244, height: 42),
+            ],
+            draggedWorkspaceID: first,
+            targetIndex: 1
+        )
+
+        XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 160, width: 244, height: 2))
+    }
+
+    func testWorkspaceDragActivationUsesVerticalThreshold() {
+        XCTAssertFalse(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 30, height: 3.9))
+        )
+        XCTAssertTrue(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 0, height: 4))
+        )
+        XCTAssertTrue(
+            SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 0, height: -4))
+        )
+    }
+
+    func testWorkspaceTapToleranceUsesTotalPointerDistance() {
+        XCTAssertTrue(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 2, height: 2))
+        )
+        XCTAssertFalse(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 4, height: 0))
+        )
+        XCTAssertFalse(
+            SidebarView.pointerMovementWithinTapTolerance(translation: CGSize(width: 3, height: 3))
         )
     }
 
@@ -350,6 +629,19 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("error"))
     }
 
+    func testProcessWatchRowUsesDisplayTitleOverride() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "watcher-row",
+            agent: .processWatch,
+            sessionStatus: SessionStatus(kind: .working, summary: "Working", detail: "Running"),
+            displayTitleOverride: "bundle exec rspec"
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains(where: { $0.contains("bundle exec rspec") }))
+        XCTAssertFalse(textValues.contains("Process Watch"))
+    }
+
     func testSidebarUnreadBackgroundUsesReadyGreenTint() throws {
         let unreadColor = try XCTUnwrap(
             NSColor(ToastyTheme.sidebarSessionUnreadBackground).usingColorSpace(.deviceRGB)
@@ -486,12 +778,14 @@ final class SidebarViewTests: XCTestCase {
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        var rowFramesByID: [UUID: CGRect] = [:]
         let sidebarView = SidebarView(
             windowID: windowID,
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
-            terminalRuntimeContext: runtimeContext
+            terminalRuntimeContext: runtimeContext,
+            workspaceRowFrameObserver: { rowFramesByID = $0 }
         )
         let hostingView = NSHostingView(
             rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth, height: 220)
@@ -507,24 +801,29 @@ final class SidebarViewTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         pumpMainRunLoop()
         hostingView.layoutSubtreeIfNeeded()
+        pumpMainRunLoop()
 
-        let secondWorkspaceButton = try XCTUnwrap(
-            workspaceRowButtons(in: hostingView).dropFirst().first
+        let secondWorkspaceFrame = try XCTUnwrap(rowFramesByID[workspaces[1].id])
+        let secondWorkspacePointerView = try XCTUnwrap(
+            pointerInteractionView(in: hostingView, workspaceID: workspaces[1].id)
         )
-        let clickPointInButton = NSPoint(
-            x: secondWorkspaceButton.bounds.midX,
-            y: secondWorkspaceButton.bounds.maxY - 6
+        secondWorkspacePointerView.usesEventTrackingLoop = false
+        let clickPointInHeader = NSPoint(
+            x: secondWorkspacePointerView.bounds.midX,
+            y: 6
         )
-        let clickPointInHost = secondWorkspaceButton.convert(clickPointInButton, to: hostingView)
-        let clickPointInWindow = secondWorkspaceButton.convert(clickPointInButton, to: nil)
 
-        XCTAssertGreaterThan(secondWorkspaceButton.frame.height, 30)
-        XCTAssertTrue(hostingView.bounds.contains(clickPointInHost))
+        XCTAssertGreaterThan(secondWorkspaceFrame.height, 30)
+        XCTAssertTrue(secondWorkspacePointerView.bounds.contains(clickPointInHeader))
 
-        try click(window: window, at: clickPointInWindow)
+        try click(view: secondWorkspacePointerView, at: clickPointInHeader)
         pumpMainRunLoop(duration: 0.2)
 
-        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), workspaces[1].id)
+        XCTAssertEqual(
+            store.selectedWorkspaceID(in: windowID),
+            workspaces[1].id,
+            "Expected click at \(clickPointInHeader) to select frame \(secondWorkspaceFrame)"
+        )
     }
 
     func testPendingSidebarFlashRequestPulsesAndClearsSelectedSessionRow() throws {
@@ -646,19 +945,32 @@ final class SidebarViewTests: XCTestCase {
 
     private func makeSidebarHostingView(
         sessionID: String,
+        agent: AgentKind = .codex,
         sessionStatus: SessionStatus,
+        displayTitleOverride: String? = nil,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> NSView {
         try makeSidebarHarness(
             sessionID: sessionID,
+            agent: agent,
             sessionStatus: sessionStatus,
+            displayTitleOverride: displayTitleOverride,
             sessionPanelPlacement: sessionPanelPlacement
         ).hostingView
     }
 
+    private func makeSidebarHostingView(
+        state: AppState,
+        windowID: UUID
+    ) throws -> NSView {
+        try makeSidebarHarness(state: state, windowID: windowID).hostingView
+    }
+
     private func makeSidebarHarness(
         sessionID: String,
+        agent: AgentKind = .codex,
         sessionStatus: SessionStatus,
+        displayTitleOverride: String? = nil,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
@@ -675,10 +987,11 @@ final class SidebarViewTests: XCTestCase {
         }
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
-            agent: .codex,
+            agent: agent,
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            displayTitleOverride: displayTitleOverride,
             cwd: "/repo/sidebar",
             repoRoot: "/repo",
             at: Date(timeIntervalSince1970: 1_700_000_000)
@@ -714,6 +1027,49 @@ final class SidebarViewTests: XCTestCase {
             store: store,
             hostingView: hostingView,
             window: window
+        )
+    }
+
+    private func makeSidebarHarness(
+        state: AppState,
+        windowID: UUID
+    ) throws -> SidebarHarness {
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let hostWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        hostWindow.contentView = hostingView
+        hostWindow.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+
+        let stateWindow = try XCTUnwrap(state.windows.first(where: { $0.id == windowID }))
+        let selectedWorkspaceID = try XCTUnwrap(stateWindow.selectedWorkspaceID)
+        let selectedWorkspace = try XCTUnwrap(state.workspacesByID[selectedWorkspaceID])
+        let selectedPanelID = try XCTUnwrap(selectedWorkspace.focusedPanelID)
+
+        return SidebarHarness(
+            windowID: windowID,
+            workspaceID: selectedWorkspaceID,
+            panelID: selectedPanelID,
+            store: store,
+            hostingView: hostingView,
+            window: hostWindow
         )
     }
 
@@ -804,6 +1160,27 @@ final class SidebarViewTests: XCTestCase {
         }
     }
 
+    private func makeSidebarAppState(
+        selectedWorkspace: WorkspaceState,
+        additionalWorkspaces: [WorkspaceState]
+    ) -> (state: AppState, windowID: UUID) {
+        let windowID = UUID()
+        let workspaces = [selectedWorkspace] + additionalWorkspaces
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: selectedWorkspace.id
+                )
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        return (state, windowID)
+    }
+
     private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {
         view.layoutSubtreeIfNeeded()
         let bounds = view.bounds
@@ -866,16 +1243,17 @@ final class SidebarViewTests: XCTestCase {
     }
 
     private func click(
-        window: NSWindow,
+        view: PointerInteractionView,
         at location: NSPoint,
         clickCount: Int = 1
     ) throws {
+        let windowLocation = view.convert(location, to: nil)
         guard let mouseDown = NSEvent.mouseEvent(
             with: .leftMouseDown,
-            location: location,
+            location: windowLocation,
             modifierFlags: [],
             timestamp: 0,
-            windowNumber: window.windowNumber,
+            windowNumber: view.window?.windowNumber ?? 0,
             context: nil,
             eventNumber: 0,
             clickCount: clickCount,
@@ -885,10 +1263,10 @@ final class SidebarViewTests: XCTestCase {
         }
         guard let mouseUp = NSEvent.mouseEvent(
             with: .leftMouseUp,
-            location: location,
+            location: windowLocation,
             modifierFlags: [],
             timestamp: 0.05,
-            windowNumber: window.windowNumber,
+            windowNumber: view.window?.windowNumber ?? 0,
             context: nil,
             eventNumber: 1,
             clickCount: clickCount,
@@ -897,13 +1275,32 @@ final class SidebarViewTests: XCTestCase {
             throw NSError(domain: "SidebarViewTests", code: 2, userInfo: nil)
         }
 
-        window.sendEvent(mouseDown)
-        window.sendEvent(mouseUp)
+        view.mouseDown(with: mouseDown)
+        view.mouseUp(with: mouseUp)
+    }
+
+    private func pointerInteractionView(in rootView: NSView, workspaceID: UUID) -> PointerInteractionView? {
+        if let pointerView = rootView as? PointerInteractionView,
+           pointerView.logMetadata["workspaceID"] == workspaceID.uuidString {
+            return pointerView
+        }
+
+        for subview in rootView.subviews {
+            if let matchingView = pointerInteractionView(in: subview, workspaceID: workspaceID) {
+                return matchingView
+            }
+        }
+
+        return nil
     }
 
     private func renderedTextValues(in rootView: NSView) -> [String] {
         let subviewValues = recursiveSubviewTextValues(in: rootView)
-        let accessibilityValues = recursiveAccessibilityTextValues(in: rootView)
+        let accessibilityRoot = (NSAccessibility.unignoredDescendant(of: rootView) as? AnyObject) ?? rootView
+        let accessibilityValues = recursiveAccessibilityTextValues(
+            in: accessibilityRoot,
+            visitedObjects: []
+        )
         return Array(Set(subviewValues + accessibilityValues)).sorted()
     }
 
@@ -923,7 +1320,17 @@ final class SidebarViewTests: XCTestCase {
         return values
     }
 
-    private func recursiveAccessibilityTextValues(in object: AnyObject) -> [String] {
+    private func recursiveAccessibilityTextValues(
+        in object: AnyObject,
+        visitedObjects: Set<ObjectIdentifier>
+    ) -> [String] {
+        let identifier = ObjectIdentifier(object)
+        guard visitedObjects.contains(identifier) == false else {
+            return []
+        }
+
+        var visitedObjects = visitedObjects
+        visitedObjects.insert(identifier)
         var values: [String] = []
 
         for selectorName in ["accessibilityLabel", "accessibilityValue"] {
@@ -941,60 +1348,32 @@ final class SidebarViewTests: XCTestCase {
             }
         }
 
-        let childrenSelector = NSSelectorFromString("accessibilityChildren")
-        if object.responds(to: childrenSelector),
-           let children = object.perform(childrenSelector)?.takeUnretainedValue() as? [AnyObject] {
-            for child in children {
-                values.append(contentsOf: recursiveAccessibilityTextValues(in: child))
+        var children: [AnyObject] = []
+
+        for selectorName in ["accessibilityChildrenInNavigationOrder", "accessibilityChildren"] {
+            let selector = NSSelectorFromString(selectorName)
+            guard object.responds(to: selector),
+                  let result = object.perform(selector)?.takeUnretainedValue() else {
+                continue
             }
+
+            if let typedChildren = result as? [AnyObject], typedChildren.isEmpty == false {
+                children = typedChildren
+                break
+            }
+        }
+
+        let unignoredChildren = NSAccessibility.unignoredChildren(from: children).compactMap { $0 as? AnyObject }
+        for child in unignoredChildren {
+            values.append(
+                contentsOf: recursiveAccessibilityTextValues(
+                    in: child,
+                    visitedObjects: visitedObjects
+                )
+            )
         }
 
         return values
-    }
-
-    private func findSubview<ViewType: NSView>(
-        ofType type: ViewType.Type,
-        in rootView: NSView
-    ) -> ViewType? {
-        if let typedView = rootView as? ViewType {
-            return typedView
-        }
-
-        for subview in rootView.subviews {
-            if let match = findSubview(ofType: type, in: subview) {
-                return match
-            }
-        }
-
-        return nil
-    }
-
-    private func findSubviews(
-        namedClass className: String,
-        in rootView: NSView
-    ) -> [NSView] {
-        var matches: [NSView] = []
-        if String(describing: type(of: rootView)) == className {
-            matches.append(rootView)
-        }
-
-        for subview in rootView.subviews {
-            matches.append(contentsOf: findSubviews(namedClass: className, in: subview))
-        }
-
-        return matches
-    }
-
-    private func workspaceRowButtons(in rootView: NSView) -> [NSView] {
-        let workspaceButtons = findSubviews(namedClass: "KeyViewProxy", in: rootView)
-            .filter { $0.frame.width >= 200 && $0.frame.height >= 30 }
-        let rowLayoutIsFlipped = workspaceButtons.first?.superview?.isFlipped ?? true
-        return workspaceButtons.sorted { lhs, rhs in
-            if rowLayoutIsFlipped {
-                return lhs.frame.minY < rhs.frame.minY
-            }
-            return lhs.frame.minY > rhs.frame.minY
-        }
     }
 
 }

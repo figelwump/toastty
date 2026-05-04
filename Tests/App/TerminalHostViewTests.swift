@@ -962,6 +962,162 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertFalse(usedAlternatePlacement)
     }
 
+    func testCommandClickRefreshesHoveredLinkAtClickTimeWhenHoverStateIsEmpty() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseRecorder = GhosttyMousePositionRecorder()
+        let mousePositionCallCount = SendableIntBox(0)
+        var openedURL: URL?
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, x, y, mods in
+                mousePositionCallCount.increment()
+                mouseRecorder.record(x: x, y: y, mods: mods)
+                guard x >= 0, y >= 0, mods.rawValue == GHOSTTY_MODS_SUPER.rawValue else {
+                    return
+                }
+                hostView.setGhosttyMouseOverLink("https://example.com/docs")
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x124B))
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.openCommandClickLink = { url, _ in
+            openedURL = url
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                location: NSPoint(x: 20, y: 30),
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                location: NSPoint(x: 20, y: 30),
+                modifierFlags: [.command]
+            )
+        )
+
+        let lastMouseEvent = try XCTUnwrap(mouseRecorder.lastEvent)
+        XCTAssertGreaterThanOrEqual(mousePositionCallCount.value, 2)
+        XCTAssertEqual(lastMouseEvent.x, 20, accuracy: 0.001)
+        XCTAssertEqual(lastMouseEvent.y, 70, accuracy: 0.001)
+        XCTAssertEqual(lastMouseEvent.modsRawValue, GHOSTTY_MODS_SUPER.rawValue)
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+    }
+
+    func testCommandShiftClickRefreshesHoveredLinkAtClickTimeWhenHoverStateIsEmpty() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseRecorder = GhosttyMousePositionRecorder()
+        let mousePositionCallCount = SendableIntBox(0)
+        var openedURL: URL?
+        var usedAlternatePlacement = false
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, x, y, mods in
+                mousePositionCallCount.increment()
+                mouseRecorder.record(x: x, y: y, mods: mods)
+                guard x >= 0, y >= 0, mods.rawValue == GHOSTTY_MODS_SUPER.rawValue else {
+                    return
+                }
+                hostView.setGhosttyMouseOverLink("https://example.com/docs")
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x124C))
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.openCommandClickLink = { url, useAlternatePlacement in
+            openedURL = url
+            usedAlternatePlacement = useAlternatePlacement
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                location: NSPoint(x: 24, y: 36),
+                modifierFlags: [.command, .shift]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                location: NSPoint(x: 24, y: 36),
+                modifierFlags: [.command, .shift]
+            )
+        )
+
+        let lastMouseEvent = try XCTUnwrap(mouseRecorder.lastEvent)
+        XCTAssertGreaterThanOrEqual(mousePositionCallCount.value, 2)
+        XCTAssertEqual(lastMouseEvent.x, 24, accuracy: 0.001)
+        XCTAssertEqual(lastMouseEvent.y, 64, accuracy: 0.001)
+        XCTAssertEqual(lastMouseEvent.modsRawValue, GHOSTTY_MODS_SUPER.rawValue)
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+        XCTAssertTrue(usedAlternatePlacement)
+    }
+
+    func testCommandClickDoesNotRefreshHoveredLinkAtClickTimeWhenHoverStateIsPopulated() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mousePositionCallCount = SendableIntBox(0)
+        var openedURL: URL?
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in
+                mousePositionCallCount.increment()
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x124D))
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { url, _ in
+            openedURL = url
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                location: NSPoint(x: 20, y: 30),
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                location: NSPoint(x: 20, y: 30),
+                modifierFlags: [.command]
+            )
+        )
+
+        XCTAssertEqual(mousePositionCallCount.value, 0)
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+    }
+
     func testCommandShiftClickHoveredLinkUsesAlternatePlacement() throws {
         let hostView = TerminalHostView()
         let window = TestWindow()

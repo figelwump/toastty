@@ -1,5 +1,6 @@
 import AppKit
 #if TOASTTY_HAS_GHOSTTY_KIT
+import CoreState
 import GhosttyKit
 
 /// Owns AppKit cursor presentation for a live terminal surface while keeping
@@ -131,11 +132,14 @@ final class TerminalSurfaceScrollView: NSScrollView {
     ) {
         guard let style else {
             documentCursor = nil
+            logDocumentCursorApplication(style: nil, visible: visible, appliedCursor: nil)
             return
         }
 
         ghosttyCursorVisible = visible
-        documentCursor = style.nsCursor
+        let appliedCursor = style.nsCursor
+        documentCursor = appliedCursor
+        logDocumentCursorApplication(style: style, visible: visible, appliedCursor: appliedCursor)
         // Match Ghostty's native macOS host behavior for mouse-hide-while-typing.
         NSCursor.setHiddenUntilMouseMoves(!visible)
     }
@@ -253,6 +257,70 @@ final class TerminalSurfaceScrollView: NSScrollView {
             // bounded to these low-frequency lifecycle hooks.
             self?.reassertOverlayScrollerStyle(asyncPasses: asyncPasses - 1)
         }
+    }
+
+    private func logDocumentCursorApplication(
+        style: TerminalHostView.GhosttyMouseCursorStyle?,
+        visible: Bool,
+        appliedCursor: NSCursor?
+    ) {
+        guard let window else { return }
+
+        let windowMouseLocation = window.mouseLocationOutsideOfEventStream
+        let localMouseLocation = convert(windowMouseLocation, from: nil)
+        let insideBounds = bounds.contains(localMouseLocation)
+        let edgeThreshold: CGFloat = 18
+        let nearHorizontalEdge = localMouseLocation.x <= edgeThreshold ||
+            bounds.width - localMouseLocation.x <= edgeThreshold
+        let nearVerticalEdge = localMouseLocation.y <= edgeThreshold ||
+            bounds.height - localMouseLocation.y <= edgeThreshold
+        let nearExpandedBounds = bounds.insetBy(dx: -edgeThreshold, dy: -edgeThreshold).contains(localMouseLocation)
+        guard nearExpandedBounds && (insideBounds == false || nearHorizontalEdge || nearVerticalEdge) else {
+            return
+        }
+
+        var metadata: [String: String] = [
+            "style": style.map { String(describing: $0) } ?? "nil",
+            "visible": "\(visible)",
+            "appliedCursor": appliedCursor.map(Self.cursorDescription) ?? "nil",
+            "frame": DraggableInteractionLog.rectDescription(frame),
+            "bounds": DraggableInteractionLog.rectDescription(bounds),
+            "windowNumber": "\(window.windowNumber)",
+            "windowCursorRectsEnabled": "\(window.areCursorRectsEnabled)",
+            "windowMouseLocation": DraggableInteractionLog.pointDescription(windowMouseLocation),
+            "localMouseLocation": DraggableInteractionLog.pointDescription(localMouseLocation),
+            "localMouseInsideBounds": "\(insideBounds)",
+            "localMouseNearHorizontalEdge": "\(nearHorizontalEdge)",
+            "localMouseNearVerticalEdge": "\(nearVerticalEdge)",
+        ]
+        if let appliedCursor {
+            metadata["currentCursorMatchesApplied"] = "\(NSCursor.current === appliedCursor)"
+        }
+
+        ToasttyLog.info(
+            "terminal document cursor applied near pointer",
+            category: .input,
+            metadata: metadata
+        )
+    }
+
+    private static func cursorDescription(_ cursor: NSCursor) -> String {
+        if cursor === NSCursor.arrow {
+            return "arrow"
+        }
+        if cursor === NSCursor.iBeam {
+            return "iBeam"
+        }
+        if cursor === NSCursor.pointingHand {
+            return "pointingHand"
+        }
+        if cursor === NSCursor.resizeLeftRight {
+            return "resizeLeftRight"
+        }
+        if cursor === NSCursor.resizeUpDown {
+            return "resizeUpDown"
+        }
+        return String(describing: cursor)
     }
 
     private func synchronizeScrollMetrics() {

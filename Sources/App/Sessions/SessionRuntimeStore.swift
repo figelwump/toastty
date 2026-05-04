@@ -56,6 +56,7 @@ final class SessionRuntimeStore: ObservableObject {
         windowID: UUID,
         workspaceID: UUID,
         usesSessionStatusNotifications: Bool = false,
+        displayTitleOverride: String? = nil,
         cwd: String?,
         repoRoot: String?,
         at now: Date
@@ -69,6 +70,7 @@ final class SessionRuntimeStore: ObservableObject {
             windowID: windowID,
             workspaceID: workspaceID,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
+            displayTitleOverride: displayTitleOverride,
             cwd: cwd,
             repoRoot: repoRoot,
             at: now
@@ -82,10 +84,41 @@ final class SessionRuntimeStore: ObservableObject {
                 panelID: panelID,
                 windowID: windowID,
                 workspaceID: workspaceID,
-                usesSessionStatusNotifications: usesSessionStatusNotifications
+                usesSessionStatusNotifications: usesSessionStatusNotifications,
+                displayTitleOverride: displayTitleOverride
             )
         )
         publish(nextRegistry)
+    }
+
+    func startProcessWatch(
+        sessionID: String = UUID().uuidString,
+        panelID: UUID,
+        windowID: UUID,
+        workspaceID: UUID,
+        displayTitleOverride: String,
+        cwd: String?,
+        repoRoot: String?,
+        at now: Date
+    ) {
+        store?.recordSessionStatusSidebarExpansionEligibility()
+        startSession(
+            sessionID: sessionID,
+            agent: .processWatch,
+            panelID: panelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            usesSessionStatusNotifications: true,
+            displayTitleOverride: displayTitleOverride,
+            cwd: cwd,
+            repoRoot: repoRoot,
+            at: now
+        )
+        updateStatus(
+            sessionID: sessionID,
+            status: Self.processWatchWorkingStatus,
+            at: now
+        )
     }
 
     func updateFiles(
@@ -124,6 +157,12 @@ final class SessionRuntimeStore: ObservableObject {
         )
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
+        clearLaterFlagForMeaningfulSessionAdvanceIfNeeded(
+            previousRecord: previousRecord,
+            sessionID: sessionID,
+            nextStatus: storedStatus,
+            registry: &nextRegistry
+        )
         if let currentRecord = nextRegistry.sessionsByID[sessionID] {
             ToasttyLog.debug(
                 "Updated managed session status",
@@ -159,7 +198,11 @@ final class SessionRuntimeStore: ObservableObject {
         }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         var nextRegistry = sessionRegistry
-        nextRegistry.stopSession(sessionID: sessionID, at: now)
+        if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
+            nextRegistry.removeSession(sessionID: sessionID)
+        } else {
+            nextRegistry.stopSession(sessionID: sessionID, at: now)
+        }
         publish(nextRegistry)
     }
 
@@ -173,7 +216,12 @@ final class SessionRuntimeStore: ObservableObject {
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
         }
         var nextRegistry = sessionRegistry
-        nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
+        if let record = sessionRegistry.activeSession(for: panelID),
+           record.agent == .processWatch {
+            nextRegistry.removeSession(sessionID: record.sessionID)
+        } else {
+            nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
+        }
         publish(nextRegistry)
     }
 
@@ -185,6 +233,31 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry.panelStatus(for: panelID)
     }
 
+    func isLaterFlagged(sessionID: String) -> Bool {
+        sessionRegistry.isLaterFlagged(sessionID: sessionID)
+    }
+
+    func setLaterFlag(sessionID: String, isFlagged: Bool) {
+        var nextRegistry = sessionRegistry
+        nextRegistry.setLaterFlag(sessionID: sessionID, isFlagged: isFlagged)
+        publish(nextRegistry)
+    }
+
+    func toggleLaterFlag(sessionID: String) {
+        var nextRegistry = sessionRegistry
+        nextRegistry.toggleLaterFlag(sessionID: sessionID)
+        publish(nextRegistry)
+    }
+
+    @discardableResult
+    func toggleLaterFlagForPanel(panelID: UUID) -> Bool {
+        guard let sessionID = sessionRegistry.activeSession(for: panelID)?.sessionID else {
+            return false
+        }
+        toggleLaterFlag(sessionID: sessionID)
+        return true
+    }
+
     func activePanelIDs(matching kinds: Set<SessionStatusKind>) -> Set<UUID> {
         Set(
             sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
@@ -192,6 +265,19 @@ final class SessionRuntimeStore: ObservableObject {
                       record.isActive,
                       let status = record.status,
                       kinds.contains(status.kind) else {
+                    return nil
+                }
+                return panelID
+            }
+        )
+    }
+
+    func activeLaterPanelIDs() -> Set<UUID> {
+        Set(
+            sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
+                guard let record = sessionRegistry.sessionsByID[sessionID],
+                      record.isActive,
+                      record.isFlaggedForLater else {
                     return nil
                 }
                 return panelID
@@ -225,7 +311,11 @@ final class SessionRuntimeStore: ObservableObject {
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
             guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
                 logSessionStop(record, reason: .panelRemovedFromAppState, at: now)
-                nextRegistry.stopSession(sessionID: record.sessionID, at: now)
+                if record.agent == .processWatch {
+                    nextRegistry.removeSession(sessionID: record.sessionID)
+                } else {
+                    nextRegistry.stopSession(sessionID: record.sessionID, at: now)
+                }
                 continue
             }
             if record.windowID != location.windowID || record.workspaceID != location.workspaceID {
@@ -378,9 +468,10 @@ final class SessionRuntimeStore: ObservableObject {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
-        usesSessionStatusNotifications: Bool
+        usesSessionStatusNotifications: Bool,
+        displayTitleOverride: String?
     ) -> [String: String] {
-        [
+        var metadata = [
             "session_id": sessionID,
             "agent": agent.rawValue,
             "panel_id": panelID.uuidString,
@@ -388,6 +479,28 @@ final class SessionRuntimeStore: ObservableObject {
             "workspace_id": workspaceID.uuidString,
             "uses_status_notifications": usesSessionStatusNotifications ? "true" : "false",
         ]
+        if let displayTitleOverride = truncatedLogMetadataValue(displayTitleOverride, limit: 80) {
+            metadata["display_title_override"] = displayTitleOverride
+        }
+        return metadata
+    }
+
+    private func clearLaterFlagForMeaningfulSessionAdvanceIfNeeded(
+        previousRecord: SessionRecord?,
+        sessionID: String,
+        nextStatus: SessionStatus,
+        registry: inout SessionRegistry
+    ) {
+        guard previousRecord?.isFlaggedForLater == true else {
+            return
+        }
+        guard shouldClearLaterFlag(
+            previousKind: previousRecord?.status?.kind,
+            nextKind: nextStatus.kind
+        ) else {
+            return
+        }
+        registry.setLaterFlag(sessionID: sessionID, isFlagged: false)
     }
 
     private func handleActionableStatusTransitionIfNeeded(
@@ -423,7 +536,7 @@ final class SessionRuntimeStore: ObservableObject {
 
         let notificationContext = desktopNotificationContext(for: currentRecord, state: store.state)
         let title = notificationTitle(for: currentRecord, status: status)
-        let body = notificationBody(for: status)
+        let body = notificationBody(for: currentRecord, status: status)
         let workspaceID = currentRecord.workspaceID
         let panelID = currentRecord.panelID
         Task {
@@ -450,13 +563,23 @@ final class SessionRuntimeStore: ObservableObject {
         ),
         let record = sessionRegistry.activeSession(for: readContext.panelID),
         record.workspaceID == readContext.workspaceID,
-        record.status?.kind == .ready else {
+        let status = record.status else {
+            return
+        }
+
+        if record.agent == .processWatch,
+           status.kind == .ready || status.kind == .error {
+            stopSession(sessionID: record.sessionID, at: now)
+            return
+        }
+
+        guard status.kind == .ready else {
             return
         }
 
         updateStatus(
             sessionID: record.sessionID,
-            status: collapsedReadyStatus(from: record.status ?? Self.readyCollapsedIdleStatus),
+            status: collapsedReadyStatus(from: status),
             at: now
         )
     }
@@ -565,6 +688,19 @@ final class SessionRuntimeStore: ObservableObject {
         kind == .needsApproval || kind == .ready || kind == .error
     }
 
+    private func shouldClearLaterFlag(
+        previousKind: SessionStatusKind?,
+        nextKind: SessionStatusKind
+    ) -> Bool {
+        if previousKind != .working && nextKind == .working {
+            return true
+        }
+        if previousKind != nextKind && isActionableStatusKind(nextKind) {
+            return true
+        }
+        return false
+    }
+
     private func panelIsUnread(panelID: UUID, in workspace: WorkspaceState?) -> Bool {
         guard let workspace,
               let tabID = workspace.tabID(containingPanelID: panelID) else {
@@ -593,7 +729,26 @@ final class SessionRuntimeStore: ObservableObject {
         detail: "Ready for prompt"
     )
 
+    private static let processWatchWorkingStatus = SessionStatus(
+        kind: .working,
+        summary: "Working",
+        detail: "Running"
+    )
+
     private func notificationTitle(for record: SessionRecord, status: SessionStatus) -> String {
+        if record.agent == .processWatch {
+            switch status.kind {
+            case .ready:
+                return "Command finished"
+            case .error:
+                return "Command failed"
+            case .needsApproval:
+                return "Command needs approval"
+            case .idle, .working:
+                return record.displayTitleOverride ?? record.agent.displayName
+            }
+        }
+
         switch status.kind {
         case .needsApproval:
             return "\(record.agent.displayName) needs approval"
@@ -606,7 +761,16 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
-    private func notificationBody(for status: SessionStatus) -> String {
+    private func notificationBody(for record: SessionRecord, status: SessionStatus) -> String {
+        if record.agent == .processWatch,
+           let displayTitle = normalizedNonEmpty(record.displayTitleOverride) {
+            if status.kind == .error,
+               let detail = normalizedNonEmpty(status.detail) {
+                return "\(displayTitle) (\(detail))"
+            }
+            return displayTitle
+        }
+
         if let detail = normalizedNonEmpty(status.detail) {
             return detail
         }
@@ -614,6 +778,22 @@ final class SessionRuntimeStore: ObservableObject {
             return summary
         }
         return status.summary
+    }
+
+    private func processWatchCompletionStatus(exitCode: Int?) -> SessionStatus {
+        if let exitCode, exitCode != 0 {
+            return SessionStatus(
+                kind: .error,
+                summary: "Error",
+                detail: "Exit \(exitCode)"
+            )
+        }
+
+        return SessionStatus(
+            kind: .ready,
+            summary: "Ready",
+            detail: "Completed"
+        )
     }
 
     private func desktopNotificationContext(
@@ -760,6 +940,32 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         return true
     }
 
+    func handleCommandFinished(panelID: UUID, exitCode: Int?, at now: Date) -> Bool {
+        guard let record = sessionRegistry.activeSession(for: panelID) else {
+            return false
+        }
+
+        guard record.agent == .processWatch else {
+            stopSessionForPanel(
+                panelID: panelID,
+                reason: .ghosttyCommandFinished(exitCode: exitCode),
+                at: now
+            )
+            return true
+        }
+
+        guard record.status?.kind == .working else {
+            return true
+        }
+
+        updateStatus(
+            sessionID: record.sessionID,
+            status: processWatchCompletionStatus(exitCode: exitCode),
+            at: now
+        )
+        return true
+    }
+
     func stopSessionForPanelIfOlderThan(
         panelID: UUID,
         minimumRuntime: TimeInterval,
@@ -769,6 +975,23 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         guard let record = sessionRegistry.activeSession(for: panelID),
               now.timeIntervalSince(record.startedAt) >= minimumRuntime else {
             return false
+        }
+
+        if record.agent == .processWatch,
+           let status = record.status {
+            if status.kind == .ready || status.kind == .error {
+                return false
+            }
+
+            if reason == .idleAtPrompt,
+               status.kind == .working {
+                updateStatus(
+                    sessionID: record.sessionID,
+                    status: processWatchCompletionStatus(exitCode: nil),
+                    at: now
+                )
+                return true
+            }
         }
 
         stopSessionForPanel(panelID: panelID, reason: reason, at: now)

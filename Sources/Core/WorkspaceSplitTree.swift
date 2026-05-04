@@ -241,6 +241,17 @@ public struct WorkspaceSplitTree: Equatable, Sendable {
         }
         return WorkspaceSplitTree(root: subtree)
     }
+
+    public func slotTouchesRightEdge(slotID: UUID) -> Bool {
+        let placements = root.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 1, height: 1),
+            dividerThickness: 0
+        ).slots
+        guard let placement = placements.first(where: { $0.slotID == slotID }) else {
+            return false
+        }
+        return placement.frame.maxX >= 1 - 0.0001
+    }
 }
 
 private extension WorkspaceSplitTree {

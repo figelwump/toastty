@@ -25,6 +25,13 @@ struct FaviconLinkReference: Equatable, Sendable {
     var rel: String
 }
 
+struct BrowserPanelFileLoad: Equatable, Sendable {
+    var fileURL: URL
+    // Parent-directory access lets relative sibling and descendant assets load
+    // without widening access past the clicked document's containing folder.
+    var readAccessURL: URL
+}
+
 @MainActor
 private final class BrowserPopupCaptureController: NSObject, WKNavigationDelegate {
     private static let timeoutNanoseconds: UInt64 = 5_000_000_000
@@ -154,6 +161,8 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
+        webView.cursorDiagnosticPanelID = panelID
+        webView.cursorDiagnosticPanelKind = WebPanelDefinition.browser.rawValue
         self.webView = webView
         super.init()
         webView.interactionDidRequestFocus = { [panelID] in
@@ -473,7 +482,26 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             return
         }
         clearFavicon()
+        if let fileLoad = Self.fileLoad(for: url) {
+            webView.loadFileURL(
+                fileLoad.fileURL,
+                allowingReadAccessTo: fileLoad.readAccessURL
+            )
+            return
+        }
         webView.load(URLRequest(url: url))
+    }
+
+    static func fileLoad(for url: URL) -> BrowserPanelFileLoad? {
+        guard url.isFileURL else {
+            return nil
+        }
+
+        let fileURL = url.standardizedFileURL
+        return BrowserPanelFileLoad(
+            fileURL: fileURL,
+            readAccessURL: fileURL.deletingLastPathComponent()
+        )
     }
 
     private func applyPageZoom(_ zoom: Double) {

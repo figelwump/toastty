@@ -1,35 +1,129 @@
 @testable import ToasttyApp
 import CoreState
-import UniformTypeIdentifiers
+import Foundation
 import XCTest
 
 @MainActor
 final class LocalDocumentOpenPanelTests: XCTestCase {
-    func testSupportedFilenameExtensionsResolveToContentTypes() {
-        for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
-            XCTAssertNotNil(
-                UTType(filenameExtension: fileExtension),
-                "expected \(fileExtension) to resolve to a UTType"
+    func testAllowsSelectionForEverySupportedFileExtension() throws {
+        try withTemporaryDirectory { temporaryDirectoryURL in
+            for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
+                let fileURL = temporaryDirectoryURL.appendingPathComponent(
+                    "sample.\(fileExtension)",
+                    isDirectory: false
+                )
+                try sampleContent(for: fileExtension).write(
+                    to: fileURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+
+                XCTAssertTrue(
+                    LocalDocumentOpenPanel.allowsSelection(at: fileURL),
+                    "expected picker to allow \(fileExtension)"
+                )
+            }
+        }
+    }
+
+    func testAllowsSelectionIsCaseInsensitiveForSupportedExtensions() throws {
+        try withTemporaryDirectory { temporaryDirectoryURL in
+            let supportedFiles = [
+                ("README.MD", "# Toastty\n"),
+                ("notes.TXT", "plain text\n"),
+                ("config.YAML", "key: value\n"),
+                ("Toastty.TOML", "key = \"value\"\n"),
+                ("App.TS", "export const toastty = true\n"),
+            ]
+
+            for (fileName, content) in supportedFiles {
+                let fileURL = temporaryDirectoryURL.appendingPathComponent(fileName, isDirectory: false)
+                try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+                XCTAssertTrue(
+                    LocalDocumentOpenPanel.allowsSelection(at: fileURL),
+                    "expected picker to allow \(fileName)"
+                )
+            }
+        }
+    }
+
+    func testAllowsSelectionForSupportedExactFileNames() throws {
+        try withTemporaryDirectory { temporaryDirectoryURL in
+            let fileURL = temporaryDirectoryURL.appendingPathComponent(".gitignore", isDirectory: false)
+            try "*.xcuserstate\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+            XCTAssertTrue(
+                LocalDocumentOpenPanel.allowsSelection(at: fileURL),
+                "expected picker to allow .gitignore"
             )
         }
     }
 
-    func testAllowedContentTypesMatchSharedSupportedExtensions() {
-        let expectedTypeIdentifiers = Set(
-            LocalDocumentClassifier.supportedFilenameExtensions.compactMap {
-                UTType(filenameExtension: $0)?.identifier
-            }
-        )
-        let actualTypeIdentifiers = Set(
-            LocalDocumentOpenPanel.allowedContentTypes().map(\.identifier)
-        )
+    func testAllowsSelectionForDotenvFiles() throws {
+        try withTemporaryDirectory { temporaryDirectoryURL in
+            let supportedFiles = [
+                ".env": "API_HOST=http://localhost\n",
+                ".env.local": "API_HOST=http://localhost\n",
+            ]
 
-        XCTAssertFalse(expectedTypeIdentifiers.isEmpty)
-        XCTAssertEqual(actualTypeIdentifiers, expectedTypeIdentifiers)
+            for (fileName, content) in supportedFiles {
+                let fileURL = temporaryDirectoryURL.appendingPathComponent(fileName, isDirectory: false)
+                try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+                XCTAssertTrue(
+                    LocalDocumentOpenPanel.allowsSelection(at: fileURL),
+                    "expected picker to allow \(fileName)"
+                )
+            }
+
+            let unsupportedFileURL = temporaryDirectoryURL.appendingPathComponent(".envrc", isDirectory: false)
+            try "use flake\n".write(to: unsupportedFileURL, atomically: true, encoding: .utf8)
+
+            XCTAssertFalse(
+                LocalDocumentOpenPanel.allowsSelection(at: unsupportedFileURL),
+                "expected picker to reject .envrc"
+            )
+        }
     }
 
-    func testAllowedContentTypesAcceptFilesystemReportedTypesForSupportedFiles() throws {
-        let allowedContentTypes = Set(LocalDocumentOpenPanel.allowedContentTypes())
+    func testAllowsSelectionKeepsDirectoriesEnabledForNavigation() throws {
+        try withTemporaryDirectory { temporaryDirectoryURL in
+            let nestedDirectoryURL = temporaryDirectoryURL.appendingPathComponent(
+                "Nested Docs",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: nestedDirectoryURL,
+                withIntermediateDirectories: true
+            )
+
+            XCTAssertTrue(LocalDocumentOpenPanel.allowsSelection(at: nestedDirectoryURL))
+        }
+    }
+
+    func testAllowsSelectionRejectsUnsupportedFiles() throws {
+        try withTemporaryDirectory { temporaryDirectoryURL in
+            let unsupportedFiles = [
+                ("LICENSE", "no extension\n"),
+                ("archive.zip", "zip placeholder\n"),
+            ]
+
+            for (fileName, content) in unsupportedFiles {
+                let fileURL = temporaryDirectoryURL.appendingPathComponent(fileName, isDirectory: false)
+                try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+                XCTAssertFalse(
+                    LocalDocumentOpenPanel.allowsSelection(at: fileURL),
+                    "expected picker to reject \(fileName)"
+                )
+            }
+        }
+    }
+
+    private func withTemporaryDirectory(
+        _ body: (URL) throws -> Void
+    ) throws {
         let temporaryDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(
@@ -40,26 +134,7 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
             try? FileManager.default.removeItem(at: temporaryDirectoryURL)
         }
 
-        for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
-            let fileURL = temporaryDirectoryURL.appendingPathComponent(
-                "sample.\(fileExtension)",
-                isDirectory: false
-            )
-            try sampleContent(for: fileExtension).write(
-                to: fileURL,
-                atomically: true,
-                encoding: .utf8
-            )
-
-            let contentType = try XCTUnwrap(
-                try fileURL.resourceValues(forKeys: [.contentTypeKey]).contentType,
-                "expected filesystem content type for \(fileExtension)"
-            )
-            XCTAssertTrue(
-                allowedContentTypes.contains(contentType),
-                "expected picker types to accept filesystem content type \(contentType.identifier) for \(fileExtension)"
-            )
-        }
+        try body(temporaryDirectoryURL)
     }
 
     private func sampleContent(for fileExtension: String) -> String {
@@ -68,6 +143,34 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
             return "key: value\n"
         case "toml":
             return "key = \"value\"\n"
+        case "json", "jsonc":
+            return "{\n  \"key\": \"value\"\n}\n"
+        case "jsonl":
+            return "{\"event\":\"open\"}\n{\"event\":\"save\"}\n"
+        case "ini", "conf", "cfg", "properties":
+            return "key=value\n"
+        case "csv":
+            return "name,value\nToastty,1\n"
+        case "tsv":
+            return "name\tvalue\nToastty\t1\n"
+        case "xml":
+            return "<root><item>Toastty</item></root>\n"
+        case "sh", "bash", "zsh":
+            return "#!/usr/bin/env bash\necho toastty\n"
+        case "swift":
+            return "struct Toastty {}\n"
+        case "txt":
+            return "plain text\n"
+        case "js", "mjs", "cjs", "jsx":
+            return "export const toastty = true;\n"
+        case "ts", "mts", "cts", "tsx":
+            return "export const toastty: boolean = true;\n"
+        case "py":
+            return "print('toastty')\n"
+        case "go":
+            return "package main\n"
+        case "rs":
+            return "fn main() {}\n"
         default:
             return "# Sample\n"
         }

@@ -89,13 +89,13 @@ final class FocusedPanelCommandController {
         guard let workspace = resolvedWorkspace(preferredWorkspaceID: workspaceID) else {
             return false
         }
-        return workspace.focusedPanelID != nil
+        return focusedPanelID(in: workspace) != nil
     }
 
     @discardableResult
     func closeFocusedPanel(in workspaceID: UUID? = nil) -> CloseResult {
         guard let workspace = resolvedWorkspace(preferredWorkspaceID: workspaceID),
-              let focusedPanelID = workspace.focusedPanelID else {
+              let focusedPanelID = focusedPanelID(in: workspace) else {
             return .notHandled
         }
         return closePanel(panelID: focusedPanelID, preferredWorkspaceID: workspace.id)
@@ -195,16 +195,14 @@ final class FocusedPanelCommandController {
 
         if let preferredWorkspaceID,
            let workspace = store.state.workspacesByID[preferredWorkspaceID],
-           workspace.panelState(for: panelID) != nil,
-           workspace.slotID(containingPanelID: panelID) != nil {
+           workspace.panelState(for: panelID) != nil {
             return workspace
         }
 
         for window in store.state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = store.state.workspacesByID[workspaceID],
-                      workspace.panelState(for: panelID) != nil,
-                      workspace.slotID(containingPanelID: panelID) != nil else {
+                      workspace.panelState(for: panelID) != nil else {
                     continue
                 }
                 return workspace
@@ -212,6 +210,10 @@ final class FocusedPanelCommandController {
         }
 
         return nil
+    }
+
+    private func focusedPanelID(in workspace: WorkspaceState) -> UUID? {
+        workspace.rightAuxPanel.focusedPanelID ?? workspace.focusedPanelID
     }
 
     private func confirmRunningTerminalClose(_ assessment: TerminalCloseConfirmationAssessment) -> Bool {
@@ -236,7 +238,7 @@ final class FocusedPanelCommandController {
 
     private func confirmDiscardLocalDocumentDraft(displayName: String) -> Bool {
         let confirmationAlert = NSAlert()
-        confirmationAlert.messageText = "Discard markdown draft?"
+        confirmationAlert.messageText = "Discard document draft?"
         confirmationAlert.informativeText = "\"\(displayName)\" has unsaved changes. Closing the panel will discard them."
         confirmationAlert.alertStyle = .warning
         confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
@@ -251,7 +253,7 @@ final class FocusedPanelCommandController {
 
     private func presentLocalDocumentSaveInProgressAlert(displayName: String) {
         let confirmationAlert = NSAlert()
-        confirmationAlert.messageText = "Markdown save in progress"
+        confirmationAlert.messageText = "Document save in progress"
         confirmationAlert.informativeText =
             "\"\(displayName)\" is still saving. Wait for the save to finish before closing this panel."
         confirmationAlert.alertStyle = .warning

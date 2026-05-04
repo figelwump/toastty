@@ -126,6 +126,12 @@ Toastty resolves Ghostty config in this order:
 
 Recursive includes are loaded through Ghostty's normal recursive config loading.
 
+If Ghostty surface creation fails because CoreVideo cannot create an active
+display link, Toastty retries once with an effective config overlay that disables
+Ghostty `window-vsync`. This recovery path does not rewrite the user's Ghostty
+config; it is logged under Toastty's Ghostty log category with display-link
+diagnostics.
+
 On macOS, when Ghostty's `copy-on-select` behavior is enabled by its config or
 platform defaults, Toastty routes the Ghostty selection clipboard through a
 Toastty-private pasteboard instead of the shared system clipboard. That preserves
@@ -161,7 +167,7 @@ Toastty reads these additional keys from Ghostty config:
 - When runtime isolation is enabled for an isolated dev/test run, Toastty uses the active runtime home's `config`, `terminal-profiles.toml`, and isolated defaults suite instead of the shared user locations
 - New windows inherit the source window's current effective terminal font size
 - `Reset Text Size` on a focused terminal clears that window's terminal font override and returns it to the configured baseline
-- Focused local-document panels use the same shortcut family but keep a separate window-local local-document text-size override across Markdown preview/edit and YAML/TOML code views
+- Focused local-document panels use the same shortcut family but keep a separate window-local local-document text-size override across supported local-document code views
 - Focused browser panels use the same shortcut family for per-panel page zoom, and those browser zoom changes do not affect terminal sizing
 
 ## Action parity

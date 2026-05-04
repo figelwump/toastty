@@ -195,6 +195,24 @@ final class WorkspaceTabCommandController {
         )
     }
 
+    func canSelectAdjacentRightPanelTab() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID)
+    }
+
+    @discardableResult
+    func selectAdjacentRightPanelTab(_ direction: PanelTabNavigationDirection) -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.selectAdjacentRightAuxPanelTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
+        )
+    }
+
     func canFocusNextUnreadOrActivePanel() -> Bool {
         guard let preferredWindowID = currentKeyWindowID() else {
             return false
@@ -299,9 +317,12 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         static let renameWorkspace = ToasttyBuiltInCommand.renameWorkspace.title
         static let closeWorkspace = ToasttyBuiltInCommand.closeWorkspace.title
         static let closePanel = ToasttyBuiltInCommand.closePanel.title
+        static let watchRunningCommand = ToasttyBuiltInCommand.watchRunningCommand.title
         static let renameTab = ToasttyBuiltInCommand.renameTab.title
         static let selectPreviousTab = ToasttyBuiltInCommand.selectPreviousTab.title
         static let selectNextTab = ToasttyBuiltInCommand.selectNextTab.title
+        static let selectPreviousRightPanelTab = ToasttyBuiltInCommand.selectPreviousRightPanelTab.title
+        static let selectNextRightPanelTab = ToasttyBuiltInCommand.selectNextRightPanelTab.title
         static let jumpToNextUnreadOrActive = ToasttyBuiltInCommand.jumpToNextActive.title
     }
 
@@ -310,19 +331,22 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     private let renameWorkspaceCommandController: RenameWorkspaceCommandController
     private let closeWorkspaceCommandController: CloseWorkspaceCommandController
     private let workspaceTabCommandController: WorkspaceTabCommandController
+    private let processWatchCommandController: ProcessWatchCommandController
 
     init(
         windowCommandController: WindowCommandController,
         createWorkspaceCommandController: CreateWorkspaceCommandController,
         renameWorkspaceCommandController: RenameWorkspaceCommandController,
         closeWorkspaceCommandController: CloseWorkspaceCommandController,
-        workspaceTabCommandController: WorkspaceTabCommandController
+        workspaceTabCommandController: WorkspaceTabCommandController,
+        processWatchCommandController: ProcessWatchCommandController
     ) {
         self.windowCommandController = windowCommandController
         self.createWorkspaceCommandController = createWorkspaceCommandController
         self.renameWorkspaceCommandController = renameWorkspaceCommandController
         self.closeWorkspaceCommandController = closeWorkspaceCommandController
         self.workspaceTabCommandController = workspaceTabCommandController
+        self.processWatchCommandController = processWatchCommandController
     }
 
     func installIfNeeded() {
@@ -352,6 +376,11 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
             in: workspaceMenu
         )
         configureItem(
+            titled: ItemTitle.watchRunningCommand,
+            action: #selector(watchRunningCommand(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
             titled: ItemTitle.renameTab,
             action: #selector(renameSelectedTab(_:)),
             in: workspaceMenu
@@ -364,6 +393,16 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         configureItem(
             titled: ItemTitle.selectNextTab,
             action: #selector(selectNextTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.selectPreviousRightPanelTab,
+            action: #selector(selectPreviousRightPanelTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.selectNextRightPanelTab,
+            action: #selector(selectNextRightPanelTab(_:)),
             in: workspaceMenu
         )
         configureItem(
@@ -400,6 +439,11 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     @objc
+    func watchRunningCommand(_: Any?) {
+        _ = processWatchCommandController.watchFocusedProcess()
+    }
+
+    @objc
     func renameSelectedTab(_: Any?) {
         _ = workspaceTabCommandController.renameSelectedTab()
     }
@@ -412,6 +456,16 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     @objc
     func selectNextTab(_: Any?) {
         _ = workspaceTabCommandController.selectAdjacentTab(.next)
+    }
+
+    @objc
+    func selectPreviousRightPanelTab(_: Any?) {
+        _ = workspaceTabCommandController.selectAdjacentRightPanelTab(.previous)
+    }
+
+    @objc
+    func selectNextRightPanelTab(_: Any?) {
+        _ = workspaceTabCommandController.selectAdjacentRightPanelTab(.next)
     }
 
     @objc
@@ -433,12 +487,19 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         case #selector(closePanel(_:)):
             return windowCommandController.canCloseWindow()
 
+        case #selector(watchRunningCommand(_:)):
+            return processWatchCommandController.canWatchFocusedProcess()
+
         case #selector(renameSelectedTab(_:)):
             return workspaceTabCommandController.canRenameSelectedTab()
 
         case #selector(selectPreviousTab(_:)),
             #selector(selectNextTab(_:)):
             return workspaceTabCommandController.canSelectAdjacentTab()
+
+        case #selector(selectPreviousRightPanelTab(_:)),
+            #selector(selectNextRightPanelTab(_:)):
+            return workspaceTabCommandController.canSelectAdjacentRightPanelTab()
 
         case #selector(focusNextUnreadOrActivePanel(_:)):
             return workspaceTabCommandController.canFocusNextUnreadOrActivePanel()

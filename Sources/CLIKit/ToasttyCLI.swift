@@ -14,6 +14,8 @@ struct CLIInvocation: Equatable {
 
 enum CLICommand: Equatable {
     case agentPrepareManagedLaunch(ManagedAgentLaunchRequest)
+    case appControlList(kind: AppControlCommandKind)
+    case appControlRun(kind: AppControlCommandKind, id: String, args: [String: AutomationJSONValue])
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
@@ -21,9 +23,29 @@ enum CLICommand: Equatable {
     case sessionIngestAgentEvent(sessionID: String, panelID: UUID?, source: AgentEventSource)
     case sessionStop(sessionID: String, panelID: UUID?, reason: String?)
 
+    func makeRequestEnvelope(requestID: String = UUID().uuidString) -> AutomationRequestEnvelope? {
+        switch self {
+        case .agentPrepareManagedLaunch, .notify, .sessionStart, .sessionStatus, .sessionUpdateFiles, .sessionIngestAgentEvent, .sessionStop:
+            return nil
+        case .appControlList(let kind):
+            let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
+            return AutomationRequestEnvelope(requestID: requestID, command: command)
+        case .appControlRun(let kind, let id, let args):
+            let command = kind == .action ? "app_control.run_action" : "app_control.run_query"
+            return AutomationRequestEnvelope(
+                requestID: requestID,
+                command: command,
+                payload: [
+                    "id": .string(id),
+                    "args": .object(args),
+                ]
+            )
+        }
+    }
+
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentPrepareManagedLaunch:
+        case .agentPrepareManagedLaunch, .appControlList, .appControlRun:
             preconditionFailure("managed launch preparation is handled as a request")
 
         case .notify(let title, let body, let workspaceID, let panelID):
@@ -118,6 +140,13 @@ enum CLICommand: Equatable {
         case .agentPrepareManagedLaunch(let request):
             let resolvedSessionID = response.result?.string("sessionID") ?? request.panelID.uuidString
             return resolvedSessionID
+        case .appControlList:
+            return "listed app control commands"
+        case .appControlRun(let kind, let id, _):
+            if kind == .action {
+                return "ran \(id)"
+            }
+            return "queried \(id)"
         case .notify:
             return "notification emitted"
         case .sessionStart(let sessionID, _, _, _, _):
@@ -169,12 +198,24 @@ public enum ToasttyCLI {
 
             default:
                 let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
-                let response = try client.send(invocation.command.makeEventEnvelope())
+                let response: AutomationResponseEnvelope
+                if let request = invocation.command.makeRequestEnvelope() {
+                    response = try client.send(request)
+                } else {
+                    response = try client.send(invocation.command.makeEventEnvelope())
+                }
 
                 if invocation.options.jsonOutput {
                     try writeStdout(jsonString(for: response))
+                } else if case .appControlList = invocation.command {
+                    try writeStdout(renderCatalogListing(response: response))
                 } else if response.ok {
-                    try writeStdout(invocation.command.successMessage(using: response))
+                    switch invocation.command {
+                    case .appControlRun(let kind, _, _):
+                        try writeStdout(renderAppControlRunResult(response: response, kind: kind, fallback: invocation.command.successMessage(using: response)))
+                    default:
+                        try writeStdout(invocation.command.successMessage(using: response))
+                    }
                 } else if let error = response.error {
                     throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
                 } else {
@@ -206,6 +247,24 @@ public enum ToasttyCLI {
         }
 
         switch command {
+        case "action":
+            return CLIInvocation(
+                options: options,
+                command: try parseAppControlCommand(
+                    Array(remainingArguments.dropFirst()),
+                    kind: .action
+                )
+            )
+
+        case "query":
+            return CLIInvocation(
+                options: options,
+                command: try parseAppControlCommand(
+                    Array(remainingArguments.dropFirst()),
+                    kind: .query
+                )
+            )
+
         case "agent":
             return CLIInvocation(
                 options: options,
@@ -231,12 +290,16 @@ public enum ToasttyCLI {
 
     static let usage = """
     Usage:
+      toastty [--json] [--socket-path <path>] action list
+      toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
       toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
+      toastty [--json] [--socket-path <path>] query list
+      toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
-      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-notify [--session <id>] [--panel <id>]
+      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-notify|pi-extension [--session <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
@@ -289,6 +352,62 @@ public enum ToasttyCLI {
             workspaceID: workspaceID,
             panelID: panelID
         )
+    }
+
+    private static func parseAppControlCommand(
+        _ arguments: [String],
+        kind: AppControlCommandKind
+    ) throws -> CLICommand {
+        guard let subcommand = arguments.first else {
+            throw ToasttyCLIError.usage("\(kind.rawValue) requires a subcommand\n\n\(usage)")
+        }
+
+        let remainingArguments = Array(arguments.dropFirst())
+        switch subcommand {
+        case "list":
+            let parsed = try parseCommandArguments(remainingArguments, valueOptions: [])
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("\(kind.rawValue) list does not accept positional arguments\n\n\(usage)")
+            }
+            return .appControlList(kind: kind)
+
+        case "run":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--window", "--workspace", "--panel", "--stdin"]
+            )
+            guard let id = parsed.positionals.first, id.isEmpty == false else {
+                throw ToasttyCLIError.usage("\(kind.rawValue) run requires <id>\n\n\(usage)")
+            }
+
+            var args: [String: AutomationJSONValue] = [:]
+            if let windowID = parsed.singleValue("--window") {
+                args["windowID"] = .string(windowID)
+            }
+            if let workspaceID = parsed.singleValue("--workspace") {
+                args["workspaceID"] = .string(workspaceID)
+            }
+            if let panelID = parsed.singleValue("--panel") {
+                args["panelID"] = .string(panelID)
+            }
+
+            for argument in parsed.positionals.dropFirst() {
+                let assignment = try parseKeyValueAssignment(argument)
+                recordAppControlValue(.string(assignment.value), for: assignment.key, in: &args)
+            }
+            if let stdinKey = parsed.singleValue("--stdin") {
+                let stdinData = FileHandle.standardInput.readDataToEndOfFile()
+                guard let stdinValue = String(data: stdinData, encoding: .utf8) else {
+                    throw ToasttyCLIError.usage("stdin must be valid UTF-8\n\n\(usage)")
+                }
+                recordAppControlValue(.string(stdinValue), for: stdinKey, in: &args)
+            }
+
+            return .appControlRun(kind: kind, id: id, args: args)
+
+        default:
+            throw ToasttyCLIError.usage("unknown \(kind.rawValue) subcommand: \(subcommand)\n\n\(usage)")
+        }
     }
 
     private static func parseAgentCommand(
@@ -499,7 +618,7 @@ public enum ToasttyCLI {
 
             let sourceValue = try requireValue("--source", in: parsed)
             guard let source = AgentEventSource(rawValue: sourceValue) else {
-                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-notify")
+                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-notify, pi-extension")
             }
 
             return .sessionIngestAgentEvent(
@@ -575,6 +694,33 @@ public enum ToasttyCLI {
         }
 
         return parsed
+    }
+
+    private static func parseKeyValueAssignment(_ value: String) throws -> (key: String, value: String) {
+        guard let separatorIndex = value.firstIndex(of: "=") else {
+            throw ToasttyCLIError.usage("expected key=value argument, got: \(value)\n\n\(usage)")
+        }
+        let key = String(value[..<separatorIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard key.isEmpty == false else {
+            throw ToasttyCLIError.usage("argument key must not be empty: \(value)\n\n\(usage)")
+        }
+        let assignmentValue = String(value[value.index(after: separatorIndex)...])
+        return (key, assignmentValue)
+    }
+
+    private static func recordAppControlValue(
+        _ value: AutomationJSONValue,
+        for key: String,
+        in args: inout [String: AutomationJSONValue]
+    ) {
+        switch args[key] {
+        case nil:
+            args[key] = value
+        case .array(let existing):
+            args[key] = .array(existing + [value])
+        case .some(let existing):
+            args[key] = .array([existing, value])
+        }
     }
 
     private static func requireValue(_ flag: String, in parsed: ParsedCommandArguments) throws -> String {
@@ -708,6 +854,57 @@ public enum ToasttyCLI {
         FileHandle.standardOutput.write((string.applyingNewline()).data(using: .utf8) ?? Data())
     }
 
+    private static func renderCatalogListing(response: AutomationResponseEnvelope) throws -> String {
+        guard response.ok else {
+            if let error = response.error {
+                throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+            }
+            throw ToasttyCLIError.runtime("request failed")
+        }
+        let listing: AppControlCatalogListing = try decodeAutomationResult(response)
+        return listing.commands
+            .map { descriptor in
+                "\(descriptor.id)\t\(descriptor.summary)"
+            }
+            .joined(separator: "\n")
+    }
+
+    private static func renderAppControlRunResult(
+        response: AutomationResponseEnvelope,
+        kind: AppControlCommandKind,
+        fallback: String
+    ) throws -> String {
+        guard response.ok else {
+            if let error = response.error {
+                throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+            }
+            throw ToasttyCLIError.runtime("request failed")
+        }
+
+        guard let result = response.result, result.isEmpty == false else {
+            return fallback
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(result)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw ToasttyCLIError.runtime("failed to encode response")
+        }
+        if kind == .query || result.keys.contains(where: { $0 != "stateVersion" }) {
+            return string
+        }
+        return fallback
+    }
+
+    private static func decodeAutomationResult<T: Decodable>(_ response: AutomationResponseEnvelope) throws -> T {
+        guard let result = response.result else {
+            throw ToasttyCLIError.runtime("missing response result")
+        }
+        let data = try JSONEncoder().encode(result)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
     private static func runSessionIngestAgentEvent(
         options: CLIOptions,
         source: AgentEventSource,
@@ -800,6 +997,13 @@ public enum ToasttyCLI {
 
         case .codexNotify:
             return "type=\(normalizedEventField(object["type"]) ?? "unknown")"
+
+        case .piExtension:
+            var components = ["event=\(normalizedEventField(object["event"]) ?? "unknown")"]
+            if let toolName = normalizedEventField(object["toolName"]) {
+                components.append("tool_name=\(toolName)")
+            }
+            return components.joined(separator: " ")
         }
     }
 

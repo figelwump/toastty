@@ -28,19 +28,30 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case openLocalFile
     case openLocalFileInTab
     case openLocalFileInSplit
+    case newScratchpad
+    case showScratchpadForCurrentSession
     case toggleSidebar
+    case toggleRightPanel
     case toggleFocusedPanelMode
+    case watchRunningCommand
     case closePanel
     case renameWorkspace
     case closeWorkspace
     case renameTab
     case selectPreviousTab
     case selectNextTab
+    case selectPreviousRightPanelTab
+    case selectNextRightPanelTab
     case jumpToNextActive
+    case manageConfig
+    case manageTerminalProfiles
+    case manageAgents
     case reloadConfiguration
 
     private static let showSidebarTitle = "Show Sidebar"
     private static let hideSidebarTitle = "Hide Sidebar"
+    private static let showRightPanelTitle = "Show Right Panel"
+    private static let hideRightPanelTitle = "Hide Right Panel"
     private static let focusPanelTitle = "Focus Panel"
     private static let restoreLayoutTitle = "Restore Layout"
 
@@ -95,10 +106,18 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "local-document.open-tab"
         case .openLocalFileInSplit:
             return "local-document.open-split"
+        case .newScratchpad:
+            return "scratchpad.create"
+        case .showScratchpadForCurrentSession:
+            return "scratchpad.show-current-session"
         case .toggleSidebar:
             return "window.toggle-sidebar"
+        case .toggleRightPanel:
+            return "window.toggle-right-panel"
         case .toggleFocusedPanelMode:
             return "panel.focus-mode.toggle"
+        case .watchRunningCommand:
+            return "panel.process-watch.create"
         case .closePanel:
             return "panel.close"
         case .renameWorkspace:
@@ -111,8 +130,18 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "workspace.tab.select-previous"
         case .selectNextTab:
             return "workspace.tab.select-next"
+        case .selectPreviousRightPanelTab:
+            return "right-panel.tab.select-previous"
+        case .selectNextRightPanelTab:
+            return "right-panel.tab.select-next"
         case .jumpToNextActive:
             return "panel.focus-next-unread-or-active"
+        case .manageConfig:
+            return "app.config.manage"
+        case .manageTerminalProfiles:
+            return "terminal.profiles.manage"
+        case .manageAgents:
+            return "agent.profiles.manage"
         case .reloadConfiguration:
             return "app.reload-configuration"
         }
@@ -168,10 +197,18 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Open Local File in Tab"
         case .openLocalFileInSplit:
             return "Open Local File in Split"
+        case .newScratchpad:
+            return "New Scratchpad"
+        case .showScratchpadForCurrentSession:
+            return "Show Scratchpad For Current Session"
         case .toggleSidebar:
             return Self.showSidebarTitle
+        case .toggleRightPanel:
+            return Self.showRightPanelTitle
         case .toggleFocusedPanelMode:
             return Self.focusPanelTitle
+        case .watchRunningCommand:
+            return "Watch Running Command"
         case .closePanel:
             return "Close Panel"
         case .renameWorkspace:
@@ -184,8 +221,18 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Select Previous Tab"
         case .selectNextTab:
             return "Select Next Tab"
+        case .selectPreviousRightPanelTab:
+            return "Select Previous Right Panel Tab"
+        case .selectNextRightPanelTab:
+            return "Select Next Right Panel Tab"
         case .jumpToNextActive:
             return "Jump to Next Active"
+        case .manageConfig:
+            return "Manage Config"
+        case .manageTerminalProfiles:
+            return "Manage Terminal Profiles"
+        case .manageAgents:
+            return "Manage Agents"
         case .reloadConfiguration:
             return "Reload Configuration"
         }
@@ -241,10 +288,18 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .openLocalFileInSplit:
             return nil
+        case .newScratchpad:
+            return ToasttyKeyboardShortcuts.newScratchpad
+        case .showScratchpadForCurrentSession:
+            return nil
         case .toggleSidebar:
             return ToasttyKeyboardShortcuts.toggleSidebar
+        case .toggleRightPanel:
+            return ToasttyKeyboardShortcuts.toggleRightPanel
         case .toggleFocusedPanelMode:
             return ToasttyKeyboardShortcuts.toggleFocusedPanel
+        case .watchRunningCommand:
+            return ToasttyKeyboardShortcuts.watchRunningCommand
         case .closePanel:
             return ToasttyKeyboardShortcuts.closePanel
         case .renameWorkspace:
@@ -257,8 +312,18 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ToasttyKeyboardShortcuts.selectPreviousTab
         case .selectNextTab:
             return ToasttyKeyboardShortcuts.selectNextTab
+        case .selectPreviousRightPanelTab:
+            return ToasttyKeyboardShortcuts.selectPreviousRightPanelTab
+        case .selectNextRightPanelTab:
+            return ToasttyKeyboardShortcuts.selectNextRightPanelTab
         case .jumpToNextActive:
             return ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel
+        case .manageConfig:
+            return nil
+        case .manageTerminalProfiles:
+            return nil
+        case .manageAgents:
+            return nil
         case .reloadConfiguration:
             return nil
         }
@@ -316,15 +381,23 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .newBrowserSplit:
             return ["browser", "split", "new", "create", "web"]
         case .openLocalFile:
-            return ["open", "local", "file", "document", "markdown", "yaml", "toml"]
+            return ["open", "local", "file", "document", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
         case .openLocalFileInTab:
-            return ["open", "local", "file", "document", "tab", "markdown", "yaml", "toml"]
+            return ["open", "local", "file", "document", "tab", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
         case .openLocalFileInSplit:
-            return ["open", "local", "file", "document", "split", "markdown", "yaml", "toml"]
+            return ["open", "local", "file", "document", "split", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
+        case .newScratchpad:
+            return ["scratchpad", "new", "create", "visual", "canvas", "diagram", "wireframe"]
+        case .showScratchpadForCurrentSession:
+            return ["scratchpad", "show", "current", "session", "agent", "visual"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
+        case .toggleRightPanel:
+            return ["right", "panel", "sidebar", "toggle", "show", "hide"]
         case .toggleFocusedPanelMode:
             return ["focus", "panel", "layout", "restore"]
+        case .watchRunningCommand:
+            return ["watch", "running", "command", "process", "monitor", "foreground", "terminal", "panel"]
         case .closePanel:
             return ["close", "panel", "remove"]
         case .renameWorkspace:
@@ -337,8 +410,18 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["tab", "previous", "left", "back"]
         case .selectNextTab:
             return ["tab", "next", "right", "forward"]
+        case .selectPreviousRightPanelTab:
+            return ["right", "panel", "tab", "previous", "left", "back"]
+        case .selectNextRightPanelTab:
+            return ["right", "panel", "tab", "next", "right", "forward"]
         case .jumpToNextActive:
             return ["jump", "next", "active", "unread", "attention", "panel"]
+        case .manageConfig:
+            return ["manage", "open", "configuration", "config", "settings", "preferences", "toastty", "toml"]
+        case .manageTerminalProfiles:
+            return ["manage", "open", "terminal", "profiles", "config", "toml"]
+        case .manageAgents:
+            return ["manage", "open", "agents", "agent", "profiles", "config", "toml"]
         case .reloadConfiguration:
             return ["reload", "configuration", "config", "preferences"]
         }
@@ -346,6 +429,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
 
     static func toggleSidebarTitle(sidebarVisible: Bool) -> String {
         sidebarVisible ? hideSidebarTitle : showSidebarTitle
+    }
+
+    static func toggleRightPanelTitle(rightPanelVisible: Bool) -> String {
+        rightPanelVisible ? hideRightPanelTitle : showRightPanelTitle
     }
 
     static func toggleFocusedPanelModeTitle(focusedPanelModeActive: Bool) -> String {

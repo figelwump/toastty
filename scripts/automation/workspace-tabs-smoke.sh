@@ -13,6 +13,8 @@ ARTIFACTS_DIR="${ARTIFACTS_DIR:-$DEV_RUN_ROOT/artifacts}"
 TOASTTY_RUNTIME_HOME="${TOASTTY_RUNTIME_HOME:-$DEV_RUN_ROOT/runtime-home}"
 SOCKET_TOKEN="$(printf '%s' "$RUN_ID" | cksum | awk '{printf "%08x", $1}')"
 SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/tt-tabs-${SOCKET_TOKEN}.sock}"
+SOCKET_REQUEST_TIMEOUT="${TOASTTY_WORKSPACE_TABS_SOCKET_TIMEOUT:-2}"
+SCREENSHOT_REQUEST_TIMEOUT="${TOASTTY_WORKSPACE_TABS_SCREENSHOT_TIMEOUT:-10}"
 ARCH="${ARCH:-$(uname -m)}"
 if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   ARCH="arm64"
@@ -169,6 +171,7 @@ restore_previous_front_app
 send_request() {
   local command="$1"
   local payload="$2"
+  local timeout="${3:-$SOCKET_REQUEST_TIMEOUT}"
   local request_id
   request_id="$(uuidgen)"
 
@@ -176,7 +179,7 @@ send_request() {
   request="{\"protocolVersion\":\"1.0\",\"kind\":\"request\",\"requestID\":\"${request_id}\",\"command\":\"${command}\",\"payload\":${payload}}"
 
   local response
-  response="$(printf '%s\n' "$request" | nc -U -w 2 "$SOCKET_PATH")"
+  response="$(printf '%s\n' "$request" | nc -U -w "$timeout" "$SOCKET_PATH")"
   if [[ -z "$response" ]]; then
     echo "error: no response for command ${command}" >&2
     exit 1
@@ -198,6 +201,12 @@ extract_int_field() {
   local json="$1"
   local field="$2"
   echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | select(type == "number") | floor'
+}
+
+extract_string_array_field() {
+  local json="$1"
+  local field="$2"
+  echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | arrays | .[] | select(type == "string")'
 }
 
 assert_tab_snapshot() {
@@ -240,7 +249,10 @@ capture_screenshot() {
   local step="$1"
   local fixture_name="${2:-$FIXTURE}"
   local response
-  response="$(send_request "automation.capture_screenshot" "{\"step\":\"${step}\",\"fixture\":\"${fixture_name}\"}")"
+  response="$(send_request \
+    "automation.capture_screenshot" \
+    "{\"step\":\"${step}\",\"fixture\":\"${fixture_name}\"}" \
+    "$SCREENSHOT_REQUEST_TIMEOUT")"
   local path
   path="$(extract_string_field "$response" "path")"
   if [[ -z "$path" || ! -f "$path" ]]; then
@@ -300,6 +312,54 @@ assert_tab_snapshot 1 1
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
 assert_tab_snapshot 1 1
 
+for _ in $(seq 1 3); do
+  perform_action "workspace.tab.new"
+done
+perform_action "workspace.tab.select" '{"index":2}'
+
+TAB_REORDER_BEFORE_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+TAB_REORDER_IDS=()
+while IFS= read -r tab_id; do
+  [[ -n "$tab_id" ]] || continue
+  TAB_REORDER_IDS+=("$tab_id")
+done < <(extract_string_array_field "$TAB_REORDER_BEFORE_RESPONSE" "tabIDs")
+if [[ "${#TAB_REORDER_IDS[@]}" -ne 4 ]]; then
+  echo "error: expected 4 tabs before tab reorder assertion" >&2
+  echo "snapshot response: $TAB_REORDER_BEFORE_RESPONSE" >&2
+  exit 1
+fi
+TAB_REORDER_SELECTED_ID="$(extract_string_field "$TAB_REORDER_BEFORE_RESPONSE" "selectedTabID")"
+
+perform_action "workspace.tab.move" '{"index":2,"toIndex":4}'
+
+TAB_REORDER_AFTER_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+TAB_REORDER_AFTER_IDS=()
+while IFS= read -r tab_id; do
+  [[ -n "$tab_id" ]] || continue
+  TAB_REORDER_AFTER_IDS+=("$tab_id")
+done < <(extract_string_array_field "$TAB_REORDER_AFTER_RESPONSE" "tabIDs")
+if [[ "${TAB_REORDER_AFTER_IDS[*]}" != "${TAB_REORDER_IDS[0]} ${TAB_REORDER_IDS[2]} ${TAB_REORDER_IDS[3]} ${TAB_REORDER_IDS[1]}" ]]; then
+  echo "error: tab reorder produced unexpected tab order" >&2
+  echo "before snapshot: $TAB_REORDER_BEFORE_RESPONSE" >&2
+  echo "after snapshot: $TAB_REORDER_AFTER_RESPONSE" >&2
+  exit 1
+fi
+if [[ "$(extract_string_field "$TAB_REORDER_AFTER_RESPONSE" "selectedTabID")" != "$TAB_REORDER_SELECTED_ID" ]]; then
+  echo "error: selected tab ID changed after tab reorder" >&2
+  echo "before snapshot: $TAB_REORDER_BEFORE_RESPONSE" >&2
+  echo "after snapshot: $TAB_REORDER_AFTER_RESPONSE" >&2
+  exit 1
+fi
+if [[ "$(extract_int_field "$TAB_REORDER_AFTER_RESPONSE" "selectedTabIndex")" != "4" ]]; then
+  echo "error: expected selected tab index 4 after moving selected tab to the end" >&2
+  echo "after snapshot: $TAB_REORDER_AFTER_RESPONSE" >&2
+  exit 1
+fi
+REORDERED_TABS_SCREENSHOT_PATH="$(capture_screenshot "workspace-tabs-reordered")"
+
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+assert_tab_snapshot 1 1
+
 for _ in $(seq 1 8); do
   perform_action "workspace.tab.new"
 done
@@ -320,6 +380,50 @@ assert_tab_snapshot 10 10
 perform_action "workspace.tab.close" '{"index":10}'
 assert_tab_snapshot 9 ""
 
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+for _ in $(seq 1 2); do
+  perform_action "workspace.create"
+done
+WORKSPACE_REORDER_BEFORE_STATE_PATH="$(capture_state)"
+WORKSPACE_REORDER_IDS=()
+while IFS= read -r workspace_id; do
+  [[ -n "$workspace_id" ]] || continue
+  WORKSPACE_REORDER_IDS+=("$workspace_id")
+done < <(jq -r '.windows[0].workspaceIDs[]' "$WORKSPACE_REORDER_BEFORE_STATE_PATH")
+if [[ "${#WORKSPACE_REORDER_IDS[@]}" -ne 3 ]]; then
+  echo "error: expected 3 workspaces before sidebar reorder assertion" >&2
+  echo "state dump: $WORKSPACE_REORDER_BEFORE_STATE_PATH" >&2
+  exit 1
+fi
+
+perform_action "workspace.select" '{"index":2}'
+WORKSPACE_REORDER_SELECTED_STATE_PATH="$(capture_state)"
+if [[ "$(jq -r '.windows[0].selectedWorkspaceID' "$WORKSPACE_REORDER_SELECTED_STATE_PATH")" != "${WORKSPACE_REORDER_IDS[1]}" ]]; then
+  echo "error: expected workspace 2 to be selected before sidebar reorder" >&2
+  echo "state dump: $WORKSPACE_REORDER_SELECTED_STATE_PATH" >&2
+  exit 1
+fi
+
+perform_action "workspace.move" '{"index":2,"toIndex":1}'
+WORKSPACE_REORDER_AFTER_STATE_PATH="$(capture_state)"
+WORKSPACE_REORDER_AFTER_IDS=()
+while IFS= read -r workspace_id; do
+  [[ -n "$workspace_id" ]] || continue
+  WORKSPACE_REORDER_AFTER_IDS+=("$workspace_id")
+done < <(jq -r '.windows[0].workspaceIDs[]' "$WORKSPACE_REORDER_AFTER_STATE_PATH")
+if [[ "${WORKSPACE_REORDER_AFTER_IDS[*]}" != "${WORKSPACE_REORDER_IDS[1]} ${WORKSPACE_REORDER_IDS[0]} ${WORKSPACE_REORDER_IDS[2]}" ]]; then
+  echo "error: workspace reorder produced unexpected workspace order" >&2
+  echo "before state: $WORKSPACE_REORDER_BEFORE_STATE_PATH" >&2
+  echo "after state: $WORKSPACE_REORDER_AFTER_STATE_PATH" >&2
+  exit 1
+fi
+if [[ "$(jq -r '.windows[0].selectedWorkspaceID' "$WORKSPACE_REORDER_AFTER_STATE_PATH")" != "${WORKSPACE_REORDER_IDS[1]}" ]]; then
+  echo "error: selected workspace ID changed after sidebar reorder" >&2
+  echo "after state: $WORKSPACE_REORDER_AFTER_STATE_PATH" >&2
+  exit 1
+fi
+SIDEBAR_REORDER_SCREENSHOT_PATH="$(capture_screenshot "sidebar-workspaces-reordered")"
+
 swift "$ROOT_DIR/scripts/automation/assert-workspace-tabs.swift" \
   "$SINGLE_TAB_SCREENSHOT_PATH" \
   "$TWO_TABS_SCREENSHOT_PATH" \
@@ -333,6 +437,8 @@ echo "single-tab screenshot: $SINGLE_TAB_SCREENSHOT_PATH"
 echo "unread screenshot: $UNREAD_SCREENSHOT_PATH"
 echo "two-tab screenshot: $TWO_TABS_SCREENSHOT_PATH"
 echo "two-tab hidden-sidebar screenshot: $TWO_TABS_HIDDEN_SIDEBAR_SCREENSHOT_PATH"
+echo "reordered tabs screenshot: $REORDERED_TABS_SCREENSHOT_PATH"
 echo "nine-tab screenshot: $NINE_TABS_SCREENSHOT_PATH"
 echo "ten-tab screenshot: $TEN_TABS_SCREENSHOT_PATH"
+echo "sidebar reordered screenshot: $SIDEBAR_REORDER_SCREENSHOT_PATH"
 echo "app log: $LOG_FILE"

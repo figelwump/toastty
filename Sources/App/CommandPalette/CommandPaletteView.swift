@@ -18,12 +18,13 @@ struct CommandPaletteView: View {
 
                 PaletteSearchField(
                     text: $viewModel.query,
-                    placeholder: "Type a command...",
+                    placeholder: viewModel.placeholder,
                     focusRequestID: viewModel.focusRequestID,
                     accessibilityID: "command-palette.search",
                     onMoveUp: { viewModel.moveSelection(delta: -1) },
                     onMoveDown: { viewModel.moveSelection(delta: 1) },
                     onSubmit: viewModel.submitSelection,
+                    onAlternateSubmit: viewModel.submitAlternateSelection,
                     onCancel: viewModel.dismiss
                 )
             }
@@ -53,18 +54,28 @@ struct CommandPaletteView: View {
         .shadow(color: Color.black.opacity(0.5), radius: 28, y: 12)
     }
 
+    private var submitHintLabel: String {
+        switch viewModel.mode {
+        case .commands:
+            return "Execute"
+        case .fileOpen:
+            return "Open"
+        }
+    }
+
     private var resultsSection: some View {
         VStack(spacing: 0) {
             Group {
                 if viewModel.results.isEmpty {
                     VStack(spacing: 10) {
-                        Text("No matching commands")
+                        Text(viewModel.emptyState.title)
                             .font(ToastyTheme.fontBody)
                             .foregroundStyle(ToastyTheme.inactiveText)
 
-                        Text("Try a broader query.")
+                        Text(viewModel.emptyState.message)
                             .font(ToastyTheme.fontSubtext)
                             .foregroundStyle(ToastyTheme.subtleText)
+                            .multilineTextAlignment(.center)
                     }
                     .padding(.top, 28)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -72,11 +83,12 @@ struct CommandPaletteView: View {
                     GeometryReader { geometry in
                         ScrollViewReader { proxy in
                             ScrollView(.vertical, showsIndicators: false) {
-                                VStack(spacing: 0) {
+                                LazyVStack(spacing: 0) {
                                     ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
                                         CommandPaletteResultRow(
                                             title: result.title,
-                                            shortcut: result.command.shortcut?.symbolLabel,
+                                            subtitle: result.subtitle,
+                                            shortcut: result.shortcutSymbolLabel,
                                             isSelected: index == viewModel.selectedIndex
                                         )
                                         .id(result.id)
@@ -102,8 +114,12 @@ struct CommandPaletteView: View {
                                 .padding(.top, 8)
                             }
                             .coordinateSpace(name: CommandPaletteResultsScrollSpace.name)
-                            .onChange(of: viewModel.selectedIndex) { _, _ in
-                                scrollSelectionIfNeeded(using: proxy, viewportHeight: geometry.size.height)
+                            .onChange(of: viewModel.selectedIndex) { oldValue, newValue in
+                                scrollSelectionIfNeeded(
+                                    using: proxy,
+                                    viewportHeight: geometry.size.height,
+                                    indexChange: (oldIndex: oldValue, newIndex: newValue)
+                                )
                             }
                             .onPreferenceChange(CommandPaletteResultFramePreferenceKey.self) { frames in
                                 resultFramesByID = frames
@@ -123,9 +139,23 @@ struct CommandPaletteView: View {
                 .overlay(Color.white.opacity(0.09))
 
             HStack(spacing: 16) {
+                switch viewModel.mode {
+                case .commands:
+                    CommandPaletteFooterHint(label: "Open local files", shortcut: "@")
+                case .fileOpen:
+                    Text(viewModel.footerText)
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.subtleText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
                 Spacer()
 
-                CommandPaletteFooterHint(label: "Execute", shortcut: "\u{21A9}")
+                CommandPaletteFooterHint(label: submitHintLabel, shortcut: "\u{21A9}")
+                if viewModel.mode == .fileOpen {
+                    CommandPaletteFooterHint(label: "Open in Tab", shortcut: "\u{21E7}\u{21A9}")
+                }
                 CommandPaletteFooterHint(label: "Cancel", shortcut: "Esc")
             }
             .padding(.horizontal, 16)
@@ -134,19 +164,33 @@ struct CommandPaletteView: View {
         }
     }
 
-    private func scrollSelectionIfNeeded(using proxy: ScrollViewProxy, viewportHeight: CGFloat) {
+    private func scrollSelectionIfNeeded(
+        using proxy: ScrollViewProxy,
+        viewportHeight: CGFloat,
+        indexChange: (oldIndex: Int, newIndex: Int)? = nil
+    ) {
         guard let selectedResultID = viewModel.selectedResult?.id else {
             return
         }
 
-        guard let scrollTarget = CommandPaletteScrollVisibility.scrollTarget(
-            for: resultFramesByID[selectedResultID],
-            viewportHeight: viewportHeight
-        ) else {
+        if let resultFrame = resultFramesByID[selectedResultID] {
+            guard let scrollTarget = CommandPaletteScrollVisibility.scrollTarget(
+                for: resultFrame,
+                viewportHeight: viewportHeight
+            ) else {
+                return
+            }
+            proxy.scrollTo(selectedResultID, anchor: scrollTarget.anchor)
             return
         }
 
-        proxy.scrollTo(selectedResultID, anchor: scrollTarget.anchor)
+        // LazyVStack has not materialized the selected row yet, so we have no
+        // frame to reason about. Force a scroll using the direction of the
+        // selection change so the selected row becomes visible and reports
+        // its frame on the next preference pass.
+        guard let indexChange else { return }
+        let anchor: UnitPoint = indexChange.newIndex >= indexChange.oldIndex ? .bottom : .top
+        proxy.scrollTo(selectedResultID, anchor: anchor)
     }
 }
 
@@ -228,6 +272,7 @@ private struct CommandPaletteFooterHint: View {
 
 private struct CommandPaletteResultRow: View {
     let title: String
+    let subtitle: String?
     let shortcut: String?
     let isSelected: Bool
 
@@ -238,10 +283,20 @@ private struct CommandPaletteResultRow: View {
                 .frame(width: 3, height: 22)
                 .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
 
-            Text(title)
-                .font(ToastyTheme.fontBody)
-                .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: subtitle == nil ? 0 : 3) {
+                Text(title)
+                    .font(ToastyTheme.fontBody)
+                    .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+
+                if let subtitle {
+                    Text(subtitle)
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.subtleText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if let shortcut {
                 Text(shortcut)

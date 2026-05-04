@@ -1,6 +1,7 @@
 import AppKit
 @testable import ToasttyApp
 import CoreState
+import WebKit
 import XCTest
 
 @MainActor
@@ -9,6 +10,48 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let configuration = LocalDocumentPanelRuntime.makeWebViewConfiguration(for: .localOnly)
 
         XCTAssertFalse(configuration.websiteDataStore.isPersistent)
+    }
+
+    func testWebViewConfigurationInjectsArrowKeyNavigationScript() throws {
+        let configuration = LocalDocumentPanelRuntime.makeWebViewConfiguration(for: .localOnly)
+        let script = try XCTUnwrap(configuration.userContentController.userScripts.first)
+
+        XCTAssertEqual(script.injectionTime, .atDocumentEnd)
+        XCTAssertTrue(script.isForMainFrameOnly)
+        XCTAssertTrue(script.source.contains("__toasttyLocalDocumentKeyboardNavigationInstalled"))
+        XCTAssertTrue(script.source.contains(".local-document-code-scroll"))
+        XCTAssertTrue(script.source.contains("ArrowDown"))
+        XCTAssertTrue(script.source.contains("ArrowRight"))
+    }
+
+    func testFocusWebViewReturnsFalseWithoutHostedWindow() {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+
+        XCTAssertFalse(runtime.focusWebView())
+    }
+
+    func testFocusWebViewMakesHostedWebViewFirstResponder() throws {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let window = LocalDocumentRuntimeFocusTestWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let attachment = PanelHostAttachmentToken.next()
+
+        window.contentView?.addSubview(container)
+        runtime.attachHost(to: container, attachment: attachment)
+
+        XCTAssertTrue(runtime.focusWebView())
+
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        XCTAssertTrue(window.makeFirstResponderCalled)
+        XCTAssertTrue(window.firstResponder === webView)
     }
 
     func testApplySkipsDuplicateReloadWhenWebStateIsUnchanged() async throws {
@@ -144,6 +187,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -172,6 +216,43 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.contentRevision, 1)
     }
 
+    func testEnterEditFromCommandRequiresPreviewState() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Draft",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertTrue(runtime.canEnterEditFromCommand())
+        XCTAssertTrue(runtime.enterEditFromCommand())
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertFalse(runtime.canEnterEditFromCommand())
+        XCTAssertFalse(runtime.enterEditFromCommand())
+    }
+
     func testDraftUpdateTracksEditingBufferWithoutAdvancingRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 
@@ -181,6 +262,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -220,6 +302,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -248,6 +331,464 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(bootstrap.isDirty)
         XCTAssertEqual(bootstrap.content, "# Original")
         XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+    }
+
+    func testRequestRevealQueuesPendingLineBeforeBootstrapIsReady() {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            }
+        )
+
+        runtime.requestReveal(lineNumber: 12)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+    }
+
+    func testRequestRevealSkipsEditingMode() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Draft",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+
+        runtime.requestReveal(lineNumber: 7)
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+    }
+
+    func testPendingRevealSurvivesReloadWhilePanelAppIsUnavailable() async throws {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: webState.title,
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let originalState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+        let refreshedState = WebPanelState(
+            definition: .localDocument,
+            title: "README copy.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: originalState)
+        try await waitUntil { runtime.automationState().currentBootstrap?.displayName == "README.md" }
+        runtime.requestReveal(lineNumber: 5)
+
+        runtime.apply(webState: refreshedState)
+        try await waitUntil { runtime.automationState().currentBootstrap?.displayName == "README copy.md" }
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 5)
+    }
+
+    func testRequestRevealBeforeApplyKeepsPanelUnloadedUntilStateArrives() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(responses: [.delivered, .delivered])
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.requestReveal(lineNumber: 12)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertNil(runtime.automationState().currentAssetPath)
+        XCTAssertEqual(evaluator.scripts.count, 0)
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertEqual(runtime.automationState().currentAssetPath, entryURL.path)
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertEqual(evaluator.scripts.count, 0)
+
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 2)
+        XCTAssertTrue(evaluator.scripts[0].contains("bridge.receiveBootstrap("))
+        XCTAssertTrue(evaluator.scripts[1].contains("bridge.revealLine(12);"))
+    }
+
+    func testRequestRevealAfterApplyKeepsPanelUnloadedUntilBootstrapArrives() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let loaderExpectation = expectation(description: "Document loader starts")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(responses: [.delivered, .delivered])
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+        let loader = ControlledDocumentLoader()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                loaderExpectation.fulfill()
+                return await loader.load(webState)
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        runtime.requestReveal(lineNumber: 12)
+        await fulfillment(of: [loaderExpectation], timeout: 1)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertNil(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertNil(runtime.automationState().currentAssetPath)
+        XCTAssertEqual(evaluator.scripts.count, 0)
+
+        await loader.resume(
+            with: LocalDocumentPanelDocumentSnapshot(
+                filePath: webState.filePath,
+                displayName: webState.title,
+                content: "# Docs",
+                diskRevision: nil
+            )
+        )
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertEqual(runtime.automationState().currentAssetPath, entryURL.path)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 0)
+
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 2)
+        XCTAssertTrue(evaluator.scripts[0].contains("bridge.receiveBootstrap("))
+        XCTAssertTrue(evaluator.scripts[1].contains("bridge.revealLine(12);"))
+    }
+
+    func testTextScaleBridgeUnavailableStagesBootstrapRetryWithUpdatedScale() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(
+            responses: [.bridgeUnavailable, .delivered]
+        )
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.applyTextScale(1.25)
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        let textScale = try XCTUnwrap(runtime.automationState().currentBootstrap?.textScale)
+        XCTAssertEqual(textScale, 1.25, accuracy: 0.0001)
+        XCTAssertEqual(evaluator.scripts.count, 2)
+        XCTAssertTrue(evaluator.scripts[0].contains("bridge.setTextScale(1.2500);"))
+        XCTAssertTrue(evaluator.scripts[1].contains("\"textScale\":1.25"))
+    }
+
+    func testDidFinishRetriesBootstrapUntilPageBridgeIsAvailable() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(responses: [.bridgeUnavailable, .delivered])
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.simulateBridgeReadyForTesting()
+        XCTAssertTrue(runtime.automationState().hasPendingBootstrapScript)
+
+        runtime.webView(WKWebView(), didFinish: nil)
+
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 2)
+        XCTAssertTrue(evaluator.scripts.allSatisfy { $0.contains("bridge.receiveBootstrap(") })
+    }
+
+    func testDidFinishRetriesPendingRevealAfterBridgeBecomesAvailable() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let entryURL = try makePanelEntryURL()
+        defer { try? FileManager.default.removeItem(at: entryURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let evaluator = BridgeScriptEvaluatorSpy(
+            responses: [.bridgeUnavailable, .delivered, .delivered]
+        )
+        defer { evaluator.assertNoRemainingResponses(file: #filePath, line: #line) }
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: entryURL,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            bridgeScriptEvaluator: { script, completion in
+                evaluator.evaluate(script, completion: completion)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.requestReveal(lineNumber: 12)
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+        XCTAssertEqual(evaluator.scripts.count, 1)
+        XCTAssertTrue(evaluator.scripts[0].contains("bridge.revealLine(12);"))
+
+        runtime.simulateBridgeReadyForTesting()
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+        XCTAssertFalse(runtime.automationState().hasPendingBootstrapScript)
+        XCTAssertEqual(evaluator.scripts.count, 3)
+        XCTAssertTrue(evaluator.scripts[1].contains("bridge.receiveBootstrap("))
+        XCTAssertTrue(evaluator.scripts[2].contains("bridge.revealLine(12);"))
+    }
+
+    func testBridgeDiagnosticsLogJavaScriptFailuresAndRenderEvents() {
+        let logSpy = DiagnosticLogSpy()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            diagnosticLogger: logSpy.record
+        )
+
+        runtime.simulateBridgeMessageForTesting([
+            "type": "consoleMessage",
+            "level": "info",
+            "message": "[main] createRoot render starting"
+        ])
+        runtime.simulateBridgeMessageForTesting([
+            "type": "consoleMessage",
+            "level": "warn",
+            "message": "Markdown highlighting failed"
+        ])
+        runtime.simulateBridgeMessageForTesting([
+            "type": "javascriptError",
+            "message": "ReferenceError: missingRoot is not defined",
+            "source": "LocalDocumentPanelApp.js",
+            "line": 88,
+            "column": 14,
+            "stack": "ReferenceError: missingRoot is not defined\n    at render"
+        ])
+        runtime.simulateBridgeMessageForTesting([
+            "type": "unhandledRejection",
+            "reason": "Render promise failed",
+            "stack": "Error: Render promise failed"
+        ])
+        runtime.simulateBridgeMessageForTesting([
+            "type": "renderReady",
+            "displayName": "agents.toml",
+            "contentRevision": 3,
+            "isEditing": false
+        ])
+
+        XCTAssertEqual(
+            logSpy.entries.map(\.message),
+            [
+                "Local document JavaScript console info",
+                "Local document JavaScript console warning",
+                "Local document JavaScript error",
+                "Local document JavaScript unhandled rejection",
+                "Local document render ready",
+            ]
+        )
+        XCTAssertEqual(logSpy.entries[0].level, .info)
+        XCTAssertEqual(logSpy.entries[0].metadata["console_level"], "info")
+        XCTAssertEqual(logSpy.entries[0].metadata["console_message"], "[main] createRoot render starting")
+        XCTAssertEqual(logSpy.entries[1].level, .warning)
+        XCTAssertEqual(logSpy.entries[1].metadata["console_level"], "warn")
+        XCTAssertEqual(logSpy.entries[1].metadata["console_message"], "Markdown highlighting failed")
+        XCTAssertEqual(logSpy.entries[2].level, .error)
+        XCTAssertEqual(logSpy.entries[2].metadata["javascript_source"], "LocalDocumentPanelApp.js")
+        XCTAssertEqual(logSpy.entries[2].metadata["javascript_line"], "88")
+        XCTAssertEqual(logSpy.entries[2].metadata["javascript_column"], "14")
+        XCTAssertEqual(logSpy.entries[3].level, .error)
+        XCTAssertEqual(logSpy.entries[3].metadata["javascript_reason"], "Render promise failed")
+        XCTAssertEqual(logSpy.entries[4].level, .debug)
+        XCTAssertEqual(logSpy.entries[4].metadata["render_display_name"], "agents.toml")
+        XCTAssertEqual(logSpy.entries[4].metadata["render_content_revision"], "3")
+        XCTAssertEqual(logSpy.entries[4].metadata["render_is_editing"], "false")
+    }
+
+    func testNavigationFailuresAndProcessTerminationEmitDiagnostics() {
+        let logSpy = DiagnosticLogSpy()
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            diagnosticLogger: logSpy.record
+        )
+        let webView = WKWebView()
+        webView.loadHTMLString("<!doctype html><title>Local Document</title>", baseURL: nil)
+
+        runtime.webView(webView, didFail: nil, withError: NSError(domain: NSURLErrorDomain, code: -1100))
+        runtime.webView(
+            webView,
+            didFailProvisionalNavigation: nil,
+            withError: NSError(domain: NSURLErrorDomain, code: -1003)
+        )
+        runtime.webViewWebContentProcessDidTerminate(webView)
+
+        XCTAssertEqual(
+            logSpy.entries.map(\.message),
+            [
+                "Local document web view navigation failed",
+                "Local document web view provisional navigation failed",
+                "Local document web content process terminated",
+            ]
+        )
+        XCTAssertTrue(logSpy.entries.allSatisfy { $0.level == .warning })
+        XCTAssertTrue(logSpy.entries[0].metadata["error"]?.isEmpty == false)
+        XCTAssertTrue(logSpy.entries[1].metadata["error"]?.isEmpty == false)
     }
 
     func testCancelEditModeRestoresPreviewAndAdvancesRevision() async throws {
@@ -376,6 +917,340 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(runtime.canCancelEditFromCommand())
     }
 
+    func testStartAndEndSearchPreserveActiveEditSession() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
+
+        XCTAssertNil(runtime.automationState().searchState)
+        XCTAssertFalse(runtime.automationState().isSearchFieldFocused)
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(
+            runtime.searchState(),
+            LocalDocumentSearchState(
+                isPresented: true,
+                query: "",
+                lastMatchFound: nil,
+                focusRequestID: try XCTUnwrap(runtime.searchState()?.focusRequestID)
+            )
+        )
+        XCTAssertEqual(runtime.automationState().searchState, runtime.searchState())
+        runtime.setSearchFieldFocused(true)
+        XCTAssertTrue(runtime.automationState().isSearchFieldFocused)
+        XCTAssertTrue(runtime.endSearch())
+        XCTAssertNil(runtime.searchState())
+        XCTAssertNil(runtime.automationState().searchState)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertTrue(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "## Changed")
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+    }
+
+    func testSearchQueryUpdatesIgnoreStaleFindCompletions() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertTrue(runtime.startSearch())
+
+        runtime.updateSearchQuery("toast")
+        runtime.updateSearchQuery("toastty")
+
+        XCTAssertEqual(searchSpy.queries, ["toast", "toastty"])
+
+        searchSpy.completeCall(at: 0, matchFound: false)
+        XCTAssertNil(runtime.searchState()?.lastMatchFound)
+
+        searchSpy.completeCall(at: 1, matchFound: true)
+        XCTAssertEqual(runtime.searchState()?.query, "toastty")
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, true)
+    }
+
+    func testSearchExecutionResultAcceptsNSNumberMatchFoundValues() {
+        XCTAssertEqual(
+            LocalDocumentPanelRuntime.searchExecutionResult(
+                from: ["matchFound": NSNumber(value: true)]
+            ),
+            true
+        )
+        XCTAssertEqual(
+            LocalDocumentPanelRuntime.searchExecutionResult(
+                from: ["matchFound": NSNumber(value: false)]
+            ),
+            false
+        )
+        XCTAssertEqual(
+            LocalDocumentPanelRuntime.searchExecutionResult(from: NSNumber(value: true)),
+            true
+        )
+    }
+
+    func testStartSearchResetsWebSearchSessionOnlyForNewSessions() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let resetSpy = SearchSessionResetterSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchSessionResetter: resetSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 1)
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 1)
+
+        XCTAssertTrue(runtime.endSearch())
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(resetSpy.callCount, 2)
+    }
+
+    func testFindNextAndPreviousRequireActiveNonEmptyQuery() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertFalse(runtime.findNext())
+        XCTAssertFalse(runtime.findPrevious())
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertFalse(runtime.findNext())
+        XCTAssertFalse(runtime.findPrevious())
+
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        XCTAssertTrue(runtime.findNext())
+        XCTAssertTrue(runtime.findPrevious())
+        XCTAssertEqual(searchSpy.queries, ["toast", "toast"])
+        XCTAssertEqual(searchSpy.backwardsFlags, [false, true])
+    }
+
+    func testEndSearchClearsActiveSearchHighlights() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        XCTAssertTrue(runtime.endSearch())
+
+        XCTAssertEqual(searchSpy.commands, [.clear])
+    }
+
+    func testDraftUpdatesRecomputeActiveSearchStateWithoutInteractiveRefresh() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Toastty refreshed", baseContentRevision: baseRevision)
+
+        XCTAssertEqual(searchSpy.commands, [])
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, true)
+    }
+
+    func testDraftUpdatesIgnoreStaleInteractiveSearchCompletion() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("toast")
+
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## No match here", baseContentRevision: baseRevision)
+
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, false)
+
+        searchSpy.completeCall(at: 0, matchFound: true)
+
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, false)
+    }
+
     func testSaveFailureKeepsEditingDraftAndSurfacesError() async throws {
         let missingDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -418,6 +1293,97 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.contentRevision, baseRevision)
         XCTAssertEqual(bootstrap.content, "# Failed save\n")
         XCTAssertNotNil(bootstrap.saveErrorMessage)
+    }
+
+    func testOpenInDefaultAppUsesCurrentBackingFileURL() async throws {
+        let filePath = "/tmp/toastty/App.swift"
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let openExpectation = expectation(description: "External open request arrives")
+        let capturedURL = LockedBox<URL?>(nil)
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    format: .code,
+                    content: "struct App {}\n",
+                    diskRevision: LocalDocumentPanelDiskRevision(
+                        fileNumber: 1,
+                        modificationDate: Date(),
+                        size: 13
+                    )
+                )
+            },
+            externalFileOpener: { url in
+                Task {
+                    await capturedURL.set(url)
+                    openExpectation.fulfill()
+                }
+                return true
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "App.swift",
+            localDocument: LocalDocumentState(
+                filePath: filePath,
+                format: .code
+            )
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.openInDefaultApp()
+        await fulfillment(of: [openExpectation], timeout: 1)
+
+        let openedURL = await capturedURL.snapshot()
+        XCTAssertEqual(openedURL, URL(filePath: filePath))
+    }
+
+    func testOpenInDefaultAppIgnoresPanelsWithoutBackingFile() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let openExpectation = expectation(description: "No external open request should arrive")
+        openExpectation.isInverted = true
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Notes",
+                    diskRevision: nil
+                )
+            },
+            externalFileOpener: { _ in
+                openExpectation.fulfill()
+                return true
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "Untitled",
+            localDocument: LocalDocumentState(filePath: nil, format: .markdown)
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.openInDefaultApp()
+        await fulfillment(of: [openExpectation], timeout: 0.1)
     }
 
     func testExternalModificationWhileDirtyPreservesDraftAndRaisesConflict() async throws {
@@ -727,11 +1693,14 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(bootstrap.contractVersion, 4)
+        XCTAssertEqual(bootstrap.contractVersion, 7)
         XCTAssertEqual(bootstrap.displayName, "README.md")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.format, .markdown)
+        XCTAssertNil(bootstrap.syntaxLanguage)
+        XCTAssertEqual(bootstrap.formatLabel, "Markdown")
         XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content, "# Hello Toastty\n\nA local markdown panel.")
         XCTAssertEqual(bootstrap.contentRevision, 1)
         XCTAssertFalse(bootstrap.isEditing)
@@ -741,6 +1710,178 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertNil(bootstrap.saveErrorMessage)
         XCTAssertEqual(bootstrap.theme, .dark)
         XCTAssertEqual(bootstrap.textScale, AppState.defaultMarkdownTextScale)
+    }
+
+    func testBootstrapReadsJSONFileContents() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("package.json")
+        let content = """
+        {
+          "name": "toastty",
+          "private": true
+        }
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "package.json",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .json
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "package.json")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .json)
+        XCTAssertEqual(bootstrap.syntaxLanguage, .json)
+        XCTAssertEqual(bootstrap.formatLabel, "JSON")
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
+    func testBootstrapReadsSwiftFileContentsAsCodeDocument() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("App.swift")
+        let content = """
+        struct ToasttyApp {
+            let panelCount = 1
+        }
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "App.swift",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .code
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "App.swift")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .code)
+        XCTAssertEqual(bootstrap.syntaxLanguage, .swift)
+        XCTAssertEqual(bootstrap.formatLabel, "Swift")
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
+    func testBootstrapReadsTextFileContentsAsPlainTextDocument() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("notes.txt")
+        let content = """
+        Toastty plain text
+        still opens locally.
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "notes.txt",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .code
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "notes.txt")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .code)
+        XCTAssertNil(bootstrap.syntaxLanguage)
+        XCTAssertEqual(bootstrap.formatLabel, "Plain Text")
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .plainText)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
+    func testBootstrapReadsJSONLinesFileContents() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("events.jsonl")
+        let content = """
+        {"event":"toastty","kind":"launch"}
+        {"event":"toastty","kind":"focus"}
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "events.jsonl",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .jsonl
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "events.jsonl")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .jsonl)
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
+    func testBootstrapReadsShellFileContents() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("bootstrap.sh")
+        let content = """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        echo "toastty"
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "bootstrap.sh",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .shell
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "bootstrap.sh")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .shell)
+        XCTAssertEqual(bootstrap.syntaxLanguage, .bash)
+        XCTAssertEqual(bootstrap.formatLabel, "Shell Script")
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
+        XCTAssertEqual(bootstrap.content, content)
     }
 
     func testBootstrapFallsBackToErrorDocumentWhenFileIsMissing() async {
@@ -759,8 +1900,14 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.displayName, "missing.md")
         XCTAssertEqual(bootstrap.filePath, filePath)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .unavailable)
         XCTAssertTrue(bootstrap.content.contains("Toastty could not load this document."))
         XCTAssertTrue(bootstrap.content.contains(filePath))
+        XCTAssertTrue(bootstrap.content.contains("Path:\n\(filePath)"))
+        XCTAssertTrue(bootstrap.content.contains("\n\nReason:\n"))
+        XCTAssertFalse(bootstrap.content.contains("**Path**"))
+        XCTAssertFalse(bootstrap.content.contains("# "))
     }
 
     func testBootstrapForMissingYamlFallsBackToPlainTextCodeDocument() async {
@@ -779,6 +1926,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.format, .yaml)
         XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .unavailable)
         XCTAssertTrue(bootstrap.content.hasPrefix("Toastty could not load this document."))
         XCTAssertTrue(bootstrap.content.contains("Path:\n\(filePath)"))
         XCTAssertTrue(bootstrap.content.contains("\n\nReason:\n"))
@@ -809,7 +1957,96 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.format, .toml)
         XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .disabledForLargeFile)
         XCTAssertEqual(bootstrap.content, largeContent)
+    }
+
+    func testBootstrapDisablesHighlightingForLargeMarkdownFiles() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        let largeContent = String(repeating: "# Toastty markdown-as-code\n", count: 40_500)
+        try largeContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "README.md",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .markdown
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .markdown)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .disabledForLargeFile)
+        XCTAssertEqual(bootstrap.content, largeContent)
+    }
+
+    func testBootstrapDisablesHighlightingForLargeJSONLinesFiles() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("events.jsonl")
+        let largeContent = String(repeating: "{\"event\":\"toastty\"}\n", count: 40_500)
+        try largeContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "events.jsonl",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .jsonl
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .jsonl)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .disabledForLargeFile)
+        XCTAssertEqual(bootstrap.content, largeContent)
+    }
+
+    func testBootstrapLeavesJSONCHighlightingDisabled() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("settings.jsonc")
+        let content = """
+        {
+          // toastty
+          "mode": "jsonc"
+        }
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "settings.jsonc",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .json
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .json)
+        XCTAssertNil(bootstrap.syntaxLanguage)
+        XCTAssertEqual(bootstrap.formatLabel, "JSONC")
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .unsupportedFormat)
+        XCTAssertEqual(bootstrap.content, content)
     }
 
     func testBootstrapKeepsHighlightingAtExactCodeThreshold() async throws {
@@ -818,23 +2055,24 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
 
-        let fileURL = tempDirectoryURL.appendingPathComponent("boundary.yaml")
+        let fileURL = tempDirectoryURL.appendingPathComponent("boundary.xml")
         let thresholdContent = String(repeating: "a", count: 524_288)
         try thresholdContent.write(to: fileURL, atomically: true, encoding: .utf8)
 
         let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
             for: WebPanelState(
                 definition: .localDocument,
-                title: "boundary.yaml",
+                title: "boundary.xml",
                 localDocument: LocalDocumentState(
                     filePath: fileURL.path,
-                    format: .yaml
+                    format: .xml
                 )
             )
         )
 
-        XCTAssertEqual(bootstrap.format, .yaml)
+        XCTAssertEqual(bootstrap.format, .xml)
         XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content.utf8.count, 524_288)
     }
 
@@ -855,11 +2093,15 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         let script = try XCTUnwrap(LocalDocumentPanelRuntime.bootstrapJavaScript(for: bootstrap))
 
-        XCTAssertTrue(script.contains("window.ToasttyLocalDocumentPanel?.receiveBootstrap("))
-        XCTAssertTrue(script.contains("\"contractVersion\":4"))
+        XCTAssertTrue(script.contains("const bridge = window.ToasttyLocalDocumentPanel;"))
+        XCTAssertTrue(script.contains("if (!bridge) {"))
+        XCTAssertTrue(script.contains("bridge.receiveBootstrap("))
+        XCTAssertTrue(script.contains("\"contractVersion\":7"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
         XCTAssertTrue(script.contains("\"format\":\"markdown\""))
+        XCTAssertTrue(script.contains("\"formatLabel\":\"Markdown\""))
         XCTAssertTrue(script.contains("\"shouldHighlight\":true"))
+        XCTAssertTrue(script.contains("\"highlightState\":\"enabled\""))
         XCTAssertTrue(script.contains("\"content\":\"# Docs\""))
         XCTAssertTrue(script.contains("\"contentRevision\":7"))
         XCTAssertTrue(script.contains("\"isEditing\":true"))
@@ -868,6 +2110,20 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(script.contains("\"saveErrorMessage\":\"Could not save\""))
         XCTAssertTrue(script.contains("\"theme\":\"dark\""))
         XCTAssertTrue(script.contains("\"textScale\":1.3"))
+    }
+
+    func testRevealLineJavaScriptChecksBridgeAvailability() {
+        let script = LocalDocumentPanelRuntime.revealLineJavaScript(for: 42)
+
+        XCTAssertTrue(script.contains("const bridge = window.ToasttyLocalDocumentPanel;"))
+        XCTAssertTrue(script.contains("if (!bridge) {"))
+        XCTAssertTrue(script.contains("bridge.revealLine(42);"))
+    }
+
+    func testBridgeCommandWasDeliveredAcceptsNSNumberBooleans() {
+        XCTAssertTrue(LocalDocumentPanelRuntime.bridgeCommandWasDelivered(NSNumber(value: true)))
+        XCTAssertFalse(LocalDocumentPanelRuntime.bridgeCommandWasDelivered(NSNumber(value: false)))
+        XCTAssertFalse(LocalDocumentPanelRuntime.bridgeCommandWasDelivered(nil))
     }
 
     func testThemeResolvesFromEffectiveAppearance() {
@@ -1261,6 +2517,65 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class LocalDocumentSearchExecutorSpy {
+    private struct Call {
+        let command: LocalDocumentSearchCommand
+        let completion: (Bool?) -> Void
+    }
+
+    private var calls: [Call] = []
+
+    func record(
+        _ webView: FocusAwareWKWebView,
+        command: LocalDocumentSearchCommand,
+        completion: @escaping (Bool?) -> Void
+    ) {
+        _ = webView
+        calls.append(
+            Call(
+                command: command,
+                completion: completion
+            )
+        )
+    }
+
+    var queries: [String] {
+        calls.compactMap(\.command.query)
+    }
+
+    var backwardsFlags: [Bool] {
+        calls.map { call in
+            if case .findPrevious = call.command {
+                return true
+            }
+            return false
+        }
+    }
+
+    var commands: [LocalDocumentSearchCommand] {
+        calls.map(\.command)
+    }
+
+    func completeCall(at index: Int, matchFound: Bool) {
+        calls[index].completion(matchFound)
+    }
+
+    func removeAllCalls() {
+        calls.removeAll()
+    }
+}
+
+@MainActor
+private final class SearchSessionResetterSpy {
+    private(set) var callCount = 0
+
+    func record(_ webView: FocusAwareWKWebView) {
+        _ = webView
+        callCount += 1
+    }
+}
+
 private actor BootstrapRecorder {
     private var callCount = 0
 
@@ -1270,6 +2585,82 @@ private actor BootstrapRecorder {
 
     func snapshot() -> Int {
         callCount
+    }
+}
+
+@MainActor
+private func makePanelEntryURL() throws -> URL {
+    let tempDirectoryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let panelDirectoryURL = tempDirectoryURL.appendingPathComponent("local-document-panel", isDirectory: true)
+    let entryURL = panelDirectoryURL.appendingPathComponent("index.html")
+
+    try FileManager.default.createDirectory(at: panelDirectoryURL, withIntermediateDirectories: true)
+    try Data("<!doctype html>".utf8).write(to: entryURL)
+
+    return entryURL
+}
+
+@MainActor
+private final class BridgeScriptEvaluatorSpy {
+    enum Response {
+        case delivered
+        case bridgeUnavailable
+
+        var result: Any? {
+            switch self {
+            case .delivered:
+                NSNumber(value: true)
+            case .bridgeUnavailable:
+                NSNumber(value: false)
+            }
+        }
+    }
+
+    private var responses: [Response]
+    private(set) var scripts: [String] = []
+
+    init(responses: [Response]) {
+        self.responses = responses
+    }
+
+    func evaluate(
+        _ script: String,
+        completion: @escaping @MainActor @Sendable (Any?, Error?) -> Void
+    ) {
+        scripts.append(script)
+        let response = responses.isEmpty ? .delivered : responses.removeFirst()
+        completion(response.result, nil)
+    }
+
+    func assertNoRemainingResponses(file: StaticString, line: UInt) {
+        XCTAssertTrue(
+            responses.isEmpty,
+            "Unused bridge responses remained: \(responses.count)",
+            file: file,
+            line: line
+        )
+    }
+}
+
+@MainActor
+private final class DiagnosticLogSpy {
+    struct Entry: Equatable {
+        let level: ToasttyLogLevel
+        let message: String
+        let metadata: [String: String]
+    }
+
+    private(set) var entries: [Entry] = []
+
+    func record(_ level: ToasttyLogLevel, _ message: String, _ metadata: [String: String]) {
+        entries.append(
+            Entry(
+                level: level,
+                message: message,
+                metadata: metadata
+            )
+        )
     }
 }
 
@@ -1308,6 +2699,46 @@ private actor ControlledDocumentSaver {
     func resume() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+private actor ControlledDocumentLoader {
+    private var continuation: CheckedContinuation<LocalDocumentPanelDocumentSnapshot, Never>?
+
+    func load(_: WebPanelState) async -> LocalDocumentPanelDocumentSnapshot {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func resume(with document: LocalDocumentPanelDocumentSnapshot) {
+        continuation?.resume(returning: document)
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class LocalDocumentRuntimeFocusTestWindow: NSWindow {
+    private(set) var makeFirstResponderCalled = false
+    private var storedFirstResponder: NSResponder?
+
+    override var firstResponder: NSResponder? {
+        storedFirstResponder
+    }
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+    }
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        makeFirstResponderCalled = true
+        storedFirstResponder = responder
+        return true
     }
 }
 

@@ -5,6 +5,7 @@ import Foundation
 protocol CommandPaletteActionHandling: AnyObject {
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection?
     func workspaceSwitchOptions(originWindowID: UUID) -> [PaletteWorkspaceSwitchOption]
+    func fileSearchScope(originWindowID: UUID) -> PaletteFileSearchScope?
     func canCreateWindow(originWindowID: UUID) -> Bool
     func createWindow(originWindowID: UUID) -> Bool
     func canCreateWorkspace(originWindowID: UUID) -> Bool
@@ -23,12 +24,21 @@ protocol CommandPaletteActionHandling: AnyObject {
     func createBrowser(placement: WebPanelPlacement, originWindowID: UUID) -> Bool
     func canOpenLocalDocument(originWindowID: UUID) -> Bool
     func openLocalDocument(placement: WebPanelPlacement, originWindowID: UUID) -> Bool
+    func canCreateScratchpad(originWindowID: UUID) -> Bool
+    func createScratchpad(originWindowID: UUID) -> Bool
+    func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool
+    func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool
     func canToggleSidebar(originWindowID: UUID) -> Bool
     func toggleSidebar(originWindowID: UUID) -> Bool
     func sidebarTitle(originWindowID: UUID) -> String
+    func canToggleRightPanel(originWindowID: UUID) -> Bool
+    func toggleRightPanel(originWindowID: UUID) -> Bool
+    func rightPanelTitle(originWindowID: UUID) -> String
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool
     func toggleFocusedPanelMode(originWindowID: UUID) -> Bool
     func toggleFocusedPanelModeTitle(originWindowID: UUID) -> String
+    func canWatchRunningCommand(originWindowID: UUID) -> Bool
+    func watchRunningCommand(originWindowID: UUID) -> Bool
     func canClosePanel(originWindowID: UUID) -> Bool
     func closePanel(originWindowID: UUID) -> Bool
     func canRenameWorkspace(originWindowID: UUID) -> Bool
@@ -39,32 +49,53 @@ protocol CommandPaletteActionHandling: AnyObject {
     func renameTab(originWindowID: UUID) -> Bool
     func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool
     func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool
+    func canSelectAdjacentRightPanelTab(direction: PanelTabNavigationDirection, originWindowID: UUID) -> Bool
+    func selectAdjacentRightPanelTab(direction: PanelTabNavigationDirection, originWindowID: UUID) -> Bool
     func canJumpToNextActive(originWindowID: UUID) -> Bool
     func jumpToNextActive(originWindowID: UUID) -> Bool
     func canLaunchAgent(profileID: String, originWindowID: UUID) -> Bool
     func launchAgent(profileID: String, originWindowID: UUID) -> Bool
     func canSplitWithTerminalProfile(originWindowID: UUID) -> Bool
     func splitWithTerminalProfile(profileID: String, direction: SlotSplitDirection, originWindowID: UUID) -> Bool
+    func canManageConfig(originWindowID: UUID) -> Bool
+    func manageConfig(originWindowID: UUID) -> Bool
+    func canManageTerminalProfiles(originWindowID: UUID) -> Bool
+    func manageTerminalProfiles(originWindowID: UUID) -> Bool
+    func canManageAgents(originWindowID: UUID) -> Bool
+    func manageAgents(originWindowID: UUID) -> Bool
     func canReloadConfiguration() -> Bool
     func reloadConfiguration() -> Bool
+    func openFileResult(
+        _ destination: PaletteFileOpenDestination,
+        placement: PaletteFileOpenPlacement,
+        originWindowID: UUID
+    ) -> Bool
     func execute(_ invocation: PaletteCommandInvocation, originWindowID: UUID) -> Bool
 }
 
 @MainActor
 final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private weak var store: AppStore?
+    private let fileManager: FileManager
     private let splitLayoutCommandController: SplitLayoutCommandController
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
+    private let processWatchCommandController: ProcessWatchCommandController
     private let agentLaunchService: AgentLaunchService
     private let terminalProfilesMenuController: TerminalProfilesMenuController
     private let supportsConfigurationReload: @MainActor () -> Bool
     private let reloadConfigurationAction: @MainActor () -> Void
     private let openLocalDocumentAction: @MainActor (UUID?, WebPanelPlacement) -> Bool
+    private let createScratchpadAction: @MainActor (UUID?) -> Bool
+    private let showScratchpadForCurrentSessionAction: @MainActor (UUID?) -> Bool
+    private let openManageConfigAction: @MainActor (UUID) -> Bool
+    private let openTerminalProfilesConfigurationAction: @MainActor (UUID) -> Bool
+    private let openAgentProfilesConfigurationAction: @MainActor (UUID) -> Bool
 
     init(
         store: AppStore,
+        fileManager: FileManager = .default,
         splitLayoutCommandController: SplitLayoutCommandController,
         focusedPanelCommandController: FocusedPanelCommandController,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
@@ -73,18 +104,35 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         terminalProfilesMenuController: TerminalProfilesMenuController,
         supportsConfigurationReload: @escaping @MainActor () -> Bool,
         reloadConfigurationAction: @escaping @MainActor () -> Void,
-        openLocalDocumentAction: @escaping @MainActor (UUID?, WebPanelPlacement) -> Bool
+        openLocalDocumentAction: @escaping @MainActor (UUID?, WebPanelPlacement) -> Bool,
+        createScratchpadAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
+        showScratchpadForCurrentSessionAction: @escaping @MainActor (UUID?) -> Bool = { _ in false },
+        openManageConfigAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        openTerminalProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        openAgentProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        processWatchCommandController: ProcessWatchCommandController? = nil
     ) {
         self.store = store
+        self.fileManager = fileManager
         self.splitLayoutCommandController = splitLayoutCommandController
         self.focusedPanelCommandController = focusedPanelCommandController
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
+        self.processWatchCommandController = processWatchCommandController ?? ProcessWatchCommandController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
         self.agentLaunchService = agentLaunchService
         self.terminalProfilesMenuController = terminalProfilesMenuController
         self.supportsConfigurationReload = supportsConfigurationReload
         self.reloadConfigurationAction = reloadConfigurationAction
         self.openLocalDocumentAction = openLocalDocumentAction
+        self.createScratchpadAction = createScratchpadAction
+        self.showScratchpadForCurrentSessionAction = showScratchpadForCurrentSessionAction
+        self.openManageConfigAction = openManageConfigAction
+        self.openTerminalProfilesConfigurationAction = openTerminalProfilesConfigurationAction
+        self.openAgentProfilesConfigurationAction = openAgentProfilesConfigurationAction
     }
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -109,6 +157,26 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
                 shortcut: shortcut
             )
         }
+    }
+
+    func fileSearchScope(originWindowID: UUID) -> PaletteFileSearchScope? {
+        guard let workspace = store?.commandSelection(preferredWindowID: originWindowID)?.workspace else {
+            return nil
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           let scope = paletteFileSearchScope(for: focusedPanelID, in: workspace) {
+            return scope
+        }
+
+        for panelID in workspace.terminalPanelIDsInDisplayOrder {
+            guard let scope = paletteFileSearchScope(for: panelID, in: workspace) else {
+                continue
+            }
+            return scope
+        }
+
+        return nil
     }
 
     func canCreateWindow(originWindowID: UUID) -> Bool {
@@ -198,6 +266,35 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         openLocalDocumentAction(originWindowID, placement)
     }
 
+    func canCreateScratchpad(originWindowID: UUID) -> Bool {
+        store?.commandSelection(preferredWindowID: originWindowID) != nil
+    }
+
+    func createScratchpad(originWindowID: UUID) -> Bool {
+        guard canCreateScratchpad(originWindowID: originWindowID) else {
+            return false
+        }
+        return createScratchpadAction(originWindowID)
+    }
+
+    func canShowScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
+        guard let selection = store?.commandSelection(preferredWindowID: originWindowID),
+              let focusedPanelID = selection.workspace.focusedPanelID,
+              selection.workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil,
+              case .terminal = selection.workspace.panelState(for: focusedPanelID) else {
+            return false
+        }
+
+        return sessionRuntimeStore.sessionRegistry.activeSession(for: focusedPanelID) != nil
+    }
+
+    func showScratchpadForCurrentSession(originWindowID: UUID) -> Bool {
+        guard canShowScratchpadForCurrentSession(originWindowID: originWindowID) else {
+            return false
+        }
+        return showScratchpadForCurrentSessionAction(originWindowID)
+    }
+
     func canToggleSidebar(originWindowID: UUID) -> Bool {
         store?.window(id: originWindowID) != nil
     }
@@ -216,6 +313,26 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return ToasttyBuiltInCommand.toggleSidebarTitle(sidebarVisible: window.sidebarVisible)
     }
 
+    func canToggleRightPanel(originWindowID: UUID) -> Bool {
+        store?.commandSelection(preferredWindowID: originWindowID) != nil
+    }
+
+    func toggleRightPanel(originWindowID: UUID) -> Bool {
+        guard let store,
+              let workspaceID = store.commandSelection(preferredWindowID: originWindowID)?.workspace.id else {
+            return false
+        }
+        return store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
+    }
+
+    func rightPanelTitle(originWindowID: UUID) -> String {
+        let isVisible = store?.commandSelection(preferredWindowID: originWindowID)?
+            .workspace
+            .rightAuxPanel
+            .isVisible == true
+        return ToasttyBuiltInCommand.toggleRightPanelTitle(rightPanelVisible: isVisible)
+    }
+
     func canToggleFocusedPanelMode(originWindowID: UUID) -> Bool {
         store?.commandSelection(preferredWindowID: originWindowID) != nil
     }
@@ -232,6 +349,14 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return ToasttyBuiltInCommand.toggleFocusedPanelModeTitle(
             focusedPanelModeActive: focusedPanelModeActive
         )
+    }
+
+    func canWatchRunningCommand(originWindowID: UUID) -> Bool {
+        processWatchCommandController.canWatchFocusedProcess(preferredWindowID: originWindowID)
+    }
+
+    func watchRunningCommand(originWindowID: UUID) -> Bool {
+        processWatchCommandController.watchFocusedProcess(preferredWindowID: originWindowID)
     }
 
     func canClosePanel(originWindowID: UUID) -> Bool {
@@ -294,6 +419,24 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         ) ?? false
     }
 
+    func canSelectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        _ = direction
+        return store?.canSelectAdjacentRightAuxPanelTab(preferredWindowID: originWindowID) ?? false
+    }
+
+    func selectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        originWindowID: UUID
+    ) -> Bool {
+        store?.selectAdjacentRightAuxPanelTab(
+            preferredWindowID: originWindowID,
+            direction: direction
+        ) ?? false
+    }
+
     func canJumpToNextActive(originWindowID: UUID) -> Bool {
         store?.canFocusNextUnreadOrActivePanelFromCommand(
             preferredWindowID: originWindowID,
@@ -341,6 +484,39 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         )
     }
 
+    func canManageConfig(originWindowID: UUID) -> Bool {
+        canOpenManagedConfiguration(originWindowID: originWindowID)
+    }
+
+    func manageConfig(originWindowID: UUID) -> Bool {
+        guard canManageConfig(originWindowID: originWindowID) else {
+            return false
+        }
+        return openManageConfigAction(originWindowID)
+    }
+
+    func canManageTerminalProfiles(originWindowID: UUID) -> Bool {
+        canOpenManagedConfiguration(originWindowID: originWindowID)
+    }
+
+    func manageTerminalProfiles(originWindowID: UUID) -> Bool {
+        guard canManageTerminalProfiles(originWindowID: originWindowID) else {
+            return false
+        }
+        return openTerminalProfilesConfigurationAction(originWindowID)
+    }
+
+    func canManageAgents(originWindowID: UUID) -> Bool {
+        canOpenManagedConfiguration(originWindowID: originWindowID)
+    }
+
+    func manageAgents(originWindowID: UUID) -> Bool {
+        guard canManageAgents(originWindowID: originWindowID) else {
+            return false
+        }
+        return openAgentProfilesConfigurationAction(originWindowID)
+    }
+
     func canReloadConfiguration() -> Bool {
         supportsConfigurationReload()
     }
@@ -351,6 +527,33 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         }
         reloadConfigurationAction()
         return true
+    }
+
+    func openFileResult(
+        _ destination: PaletteFileOpenDestination,
+        placement: PaletteFileOpenPlacement,
+        originWindowID: UUID
+    ) -> Bool {
+        switch destination {
+        case .localDocument(let filePath):
+            let placementOverride = localDocumentFilePlacementOverride(for: placement)
+            return store?.createLocalDocumentPanelFromCommand(
+                preferredWindowID: originWindowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: filePath,
+                    placementOverride: placementOverride
+                )
+            ) ?? false
+        case .browser(let fileURLString):
+            let placementOverride = paletteBrowserFilePlacementOverride(for: placement)
+            return store?.createBrowserPanelFromCommand(
+                preferredWindowID: originWindowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: fileURLString,
+                    placementOverride: placementOverride
+                )
+            ) ?? false
+        }
     }
 
     func execute(_ invocation: PaletteCommandInvocation, originWindowID: UUID) -> Bool {
@@ -409,21 +612,32 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         case .newTab:
             return createWorkspaceTab(originWindowID: originWindowID)
         case .newBrowser:
-            return createBrowser(placement: .rootRight, originWindowID: originWindowID)
+            return createBrowser(placement: .rightPanel, originWindowID: originWindowID)
         case .newBrowserTab:
             return createBrowser(placement: .newTab, originWindowID: originWindowID)
         case .newBrowserSplit:
             return createBrowser(placement: .splitRight, originWindowID: originWindowID)
         case .openLocalFile:
-            return openLocalDocument(placement: .rootRight, originWindowID: originWindowID)
+            return openLocalDocument(
+                placement: store?.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement ?? .rightPanel,
+                originWindowID: originWindowID
+            )
         case .openLocalFileInTab:
             return openLocalDocument(placement: .newTab, originWindowID: originWindowID)
         case .openLocalFileInSplit:
             return openLocalDocument(placement: .splitRight, originWindowID: originWindowID)
+        case .newScratchpad:
+            return createScratchpad(originWindowID: originWindowID)
+        case .showScratchpadForCurrentSession:
+            return showScratchpadForCurrentSession(originWindowID: originWindowID)
         case .toggleSidebar:
             return toggleSidebar(originWindowID: originWindowID)
+        case .toggleRightPanel:
+            return toggleRightPanel(originWindowID: originWindowID)
         case .toggleFocusedPanelMode:
             return toggleFocusedPanelMode(originWindowID: originWindowID)
+        case .watchRunningCommand:
+            return watchRunningCommand(originWindowID: originWindowID)
         case .closePanel:
             return closePanel(originWindowID: originWindowID)
         case .renameWorkspace:
@@ -436,8 +650,18 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return selectAdjacentTab(direction: .previous, originWindowID: originWindowID)
         case .selectNextTab:
             return selectAdjacentTab(direction: .next, originWindowID: originWindowID)
+        case .selectPreviousRightPanelTab:
+            return selectAdjacentRightPanelTab(direction: .previous, originWindowID: originWindowID)
+        case .selectNextRightPanelTab:
+            return selectAdjacentRightPanelTab(direction: .next, originWindowID: originWindowID)
         case .jumpToNextActive:
             return jumpToNextActive(originWindowID: originWindowID)
+        case .manageConfig:
+            return manageConfig(originWindowID: originWindowID)
+        case .manageTerminalProfiles:
+            return manageTerminalProfiles(originWindowID: originWindowID)
+        case .manageAgents:
+            return manageAgents(originWindowID: originWindowID)
         case .reloadConfiguration:
             return reloadConfiguration()
         }
@@ -457,5 +681,65 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             preferringUnreadSessionPanelIn: sessionRuntimeStore
         )
         return true
+    }
+
+    private func canOpenManagedConfiguration(originWindowID: UUID) -> Bool {
+        store?.commandSelection(preferredWindowID: originWindowID) != nil
+    }
+
+    private func localDocumentFilePlacementOverride(
+        for placement: PaletteFileOpenPlacement
+    ) -> WebPanelPlacement? {
+        switch placement {
+        case .default:
+            return store?.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement
+        case .alternate:
+            return store?.localDocumentRoutingPreferences.alternateOpeningPlacement.webPanelPlacement ?? .newTab
+        }
+    }
+
+    private func paletteBrowserFilePlacementOverride(
+        for placement: PaletteFileOpenPlacement
+    ) -> WebPanelPlacement? {
+        switch placement {
+        case .default:
+            return nil
+        case .alternate:
+            return .newTab
+        }
+    }
+
+    private func paletteFileSearchScope(
+        for panelID: UUID,
+        in workspace: WorkspaceState
+    ) -> PaletteFileSearchScope? {
+        guard case .terminal(let terminalState)? = workspace.panels[panelID],
+              let scopePath = resolvedScopePath(from: terminalState.workingDirectorySeed) else {
+            return nil
+        }
+
+        let repoRoot = RepositoryRootLocator.inferRepoRoot(from: scopePath)
+        return PaletteFileSearchScope(
+            rootPath: repoRoot ?? scopePath,
+            kind: repoRoot == nil ? .workingDirectory : .repositoryRoot
+        )
+    }
+
+    private func resolvedScopePath(from candidatePath: String?) -> String? {
+        guard let candidatePath else {
+            return nil
+        }
+
+        let normalizedPath = URL(fileURLWithPath: candidatePath, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        var isDirectory = ObjCBool(false)
+        guard fileManager.fileExists(atPath: normalizedPath, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+
+        return normalizedPath
     }
 }

@@ -59,6 +59,29 @@ enum KeyboardShortcutsReferenceLocator {
 
 typealias ManagedLocalDocumentOpener = @MainActor (URL, LocalDocumentFormat) -> Bool
 
+enum AppKitDefaultPreferences {
+    static let initialToolTipDelayKey = "NSInitialToolTipDelay"
+    static let initialToolTipDelayMilliseconds = 250
+    static let applePersistenceIgnoreStateKey = "ApplePersistenceIgnoreState"
+    static let quitAlwaysKeepsWindowsKey = "NSQuitAlwaysKeepsWindows"
+
+    static func apply(to defaults: UserDefaults, standardDefaults: UserDefaults = .standard) {
+        registerToolTipTiming(in: defaults)
+        if defaults !== standardDefaults {
+            registerToolTipTiming(in: standardDefaults)
+        }
+
+        defaults.set(true, forKey: applePersistenceIgnoreStateKey)
+        defaults.set(false, forKey: quitAlwaysKeepsWindowsKey)
+    }
+
+    static func registerToolTipTiming(in defaults: UserDefaults) {
+        defaults.register(defaults: [
+            initialToolTipDelayKey: initialToolTipDelayMilliseconds,
+        ])
+    }
+}
+
 @MainActor
 private func openManagedLocalDocumentInToastty(
     store: AppStore,
@@ -75,7 +98,7 @@ private func openManagedLocalDocumentInToastty(
         preferredWindowID: preferredWindowID,
         request: LocalDocumentPanelCreateRequest(
             filePath: normalizedFilePath,
-            placementOverride: .newTab,
+            placementOverride: store.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement,
             formatOverride: format
         )
     )
@@ -481,7 +504,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     ) -> Bool {
         let confirmationAlert = NSAlert()
         if assessment?.allowsDestructiveConfirmation == false {
-            confirmationAlert.messageText = "Markdown save in progress"
+            confirmationAlert.messageText = "Document save in progress"
         } else {
             confirmationAlert.messageText = "Quit Toastty?"
         }
@@ -597,6 +620,7 @@ final class DisplayShortcutInterceptor {
     private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let processWatchCommandController: ProcessWatchCommandController
     private let isCommandPalettePresented: @MainActor () -> Bool
     private let toggleCommandPalette: @MainActor (UUID?) -> Bool
     nonisolated(unsafe) private var eventMonitor: Any?
@@ -606,18 +630,27 @@ final class DisplayShortcutInterceptor {
         case closePanel
         case createBrowser
         case createBrowserTab
+        case createScratchpad
         case createWorkspaceTab
         case increaseTextSize
         case decreaseTextSize
         case resetTextSize
         case split(SlotSplitDirection)
+        case watchRunningCommand
+        case startLocalDocumentSearch
+        case findNextLocalDocumentSearch
+        case findPreviousLocalDocumentSearch
+        case enterLocalDocumentEdit
         case cancelLocalDocumentEdit
         case saveLocalDocument
         case focusNextUnreadOrActivePanel
+        case toggleLaterFlag
+        case toggleRightPanel
         case toggleFocusedPanelMode
         case renameSelectedTab
         case selectWorkspaceTab(Int)
         case selectAdjacentTab(TabNavigationDirection)
+        case selectAdjacentRightPanelTab(PanelTabNavigationDirection)
         case switchWorkspace(Int)
         case focusPanel(Int)
         case focusSplit(SlotFocusDirection)
@@ -635,6 +668,7 @@ final class DisplayShortcutInterceptor {
         webPanelRuntimeRegistry: WebPanelRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
+        processWatchCommandController: ProcessWatchCommandController? = nil,
         isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
         toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         installEventMonitor: Bool = true
@@ -644,6 +678,11 @@ final class DisplayShortcutInterceptor {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.processWatchCommandController = processWatchCommandController ?? ProcessWatchCommandController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
         self.isCommandPalettePresented = isCommandPalettePresented
         self.toggleCommandPalette = toggleCommandPalette
         if installEventMonitor {
@@ -690,6 +729,11 @@ final class DisplayShortcutInterceptor {
             return .selectAdjacentTab(direction)
         }
 
+        if let direction = Self.rightPanelTabNavigationDirection(for: event),
+           appOwnedWindowID != nil {
+            return .selectAdjacentRightPanelTab(direction)
+        }
+
         if Self.isNewTabShortcut(event),
            appOwnedWindowID != nil {
             return .createWorkspaceTab
@@ -705,6 +749,16 @@ final class DisplayShortcutInterceptor {
             return .createBrowserTab
         }
 
+        if Self.isNewScratchpadShortcut(event),
+           appOwnedWindowID != nil {
+            return .createScratchpad
+        }
+
+        if Self.isToggleRightPanelShortcut(event),
+           appOwnedWindowID != nil {
+            return .toggleRightPanel
+        }
+
         if let textSizeShortcutAction = textSizeShortcutAction(
             for: event,
             appOwnedWindowID: appOwnedWindowID
@@ -717,9 +771,34 @@ final class DisplayShortcutInterceptor {
             return .split(direction)
         }
 
+        if Self.isWatchRunningCommandShortcut(event),
+           appOwnedWindowID != nil {
+            return .watchRunningCommand
+        }
+
         if Self.isClosePanelShortcut(event),
            appOwnedWindowID != nil {
             return .closePanel
+        }
+
+        if Self.isFindShortcut(event),
+           appOwnedFocusedLocalDocumentSelection(preferredWindowID: appOwnedWindowID) != nil {
+            return .startLocalDocumentSearch
+        }
+
+        if Self.isFindNextShortcut(event),
+           isFocusedLocalDocumentSearchActive(preferredWindowID: appOwnedWindowID) {
+            return .findNextLocalDocumentSearch
+        }
+
+        if Self.isFindPreviousShortcut(event),
+           isFocusedLocalDocumentSearchActive(preferredWindowID: appOwnedWindowID) {
+            return .findPreviousLocalDocumentSearch
+        }
+
+        if Self.isEnterEditShortcut(event),
+           canEnterFocusedLocalDocumentEdit(preferredWindowID: appOwnedWindowID) {
+            return .enterLocalDocumentEdit
         }
 
         if Self.isCancelEditShortcut(event),
@@ -735,6 +814,11 @@ final class DisplayShortcutInterceptor {
         if Self.isFocusNextUnreadOrActiveShortcut(event),
            appOwnedWindowID != nil {
             return .focusNextUnreadOrActivePanel
+        }
+
+        if Self.isToggleLaterFlagShortcut(event),
+           appOwnedWindowID != nil {
+            return .toggleLaterFlag
         }
 
         if Self.isToggleFocusedPanelShortcut(event),
@@ -800,11 +884,13 @@ final class DisplayShortcutInterceptor {
         case .commandPalette:
             toggleCommandPalette(appOwnedWindowID)
         case .closePanel:
-            closeFocusedPanel()
+            closeFocusedPanel(preferredWindowID: appOwnedWindowID)
         case .createBrowser:
-            createBrowser(preferredWindowID: appOwnedWindowID, placement: .rootRight)
+            createBrowser(preferredWindowID: appOwnedWindowID, placement: .rightPanel)
         case .createBrowserTab:
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
+        case .createScratchpad:
+            createScratchpad(preferredWindowID: appOwnedWindowID)
         case .createWorkspaceTab:
             createWorkspaceTab()
         case .increaseTextSize:
@@ -815,12 +901,26 @@ final class DisplayShortcutInterceptor {
             adjustTextSize(direction: .reset, preferredWindowID: appOwnedWindowID)
         case .split(let direction):
             split(direction: direction, preferredWindowID: appOwnedWindowID)
+        case .watchRunningCommand:
+            watchRunningCommand()
+        case .startLocalDocumentSearch:
+            handleStartLocalDocumentSearchShortcut(preferredWindowID: appOwnedWindowID)
+        case .findNextLocalDocumentSearch:
+            handleFindNextLocalDocumentSearchShortcut(preferredWindowID: appOwnedWindowID)
+        case .findPreviousLocalDocumentSearch:
+            handleFindPreviousLocalDocumentSearchShortcut(preferredWindowID: appOwnedWindowID)
+        case .enterLocalDocumentEdit:
+            handleEnterLocalDocumentEditShortcut(preferredWindowID: appOwnedWindowID)
         case .cancelLocalDocumentEdit:
             handleCancelLocalDocumentEditShortcut(preferredWindowID: appOwnedWindowID)
         case .saveLocalDocument:
             handleSaveLocalDocumentShortcut(preferredWindowID: appOwnedWindowID)
         case .focusNextUnreadOrActivePanel:
-            focusNextUnreadOrActivePanel()
+            focusNextUnreadOrActivePanel(preferredWindowID: appOwnedWindowID)
+        case .toggleLaterFlag:
+            toggleLaterFlag(preferredWindowID: appOwnedWindowID)
+        case .toggleRightPanel:
+            toggleRightPanel(preferredWindowID: appOwnedWindowID)
         case .toggleFocusedPanelMode:
             toggleFocusedPanelMode()
         case .renameSelectedTab:
@@ -829,6 +929,8 @@ final class DisplayShortcutInterceptor {
             selectWorkspaceTab(shortcutNumber: shortcutNumber)
         case .selectAdjacentTab(let direction):
             selectAdjacentTab(direction: direction)
+        case .selectAdjacentRightPanelTab(let direction):
+            selectAdjacentRightPanelTab(direction: direction, preferredWindowID: appOwnedWindowID)
         case .switchWorkspace(let shortcutNumber):
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
@@ -888,6 +990,26 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command, .control, .shift]
+    }
+
+    static func isNewScratchpadShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "s" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .control]
+    }
+
+    static func isToggleRightPanelShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "b" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
     }
 
     static func isSaveShortcut(_ event: NSEvent) -> Bool {
@@ -1013,6 +1135,22 @@ final class DisplayShortcutInterceptor {
         }
     }
 
+    /// Detects Cmd+Ctrl+[ (previous right-panel tab) and Cmd+Ctrl+] (next right-panel tab).
+    static func rightPanelTabNavigationDirection(for event: NSEvent) -> PanelTabNavigationDirection? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command, .control] else { return nil }
+
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_LeftBracket):
+            return .previous
+        case Int(kVK_ANSI_RightBracket):
+            return .next
+        default:
+            return nil
+        }
+    }
+
     static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown,
               event.isARepeat == false,
@@ -1023,10 +1161,70 @@ final class DisplayShortcutInterceptor {
         return modifiers == [.command]
     }
 
+    static func isFindShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "f" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func isFindNextShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "g" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func isFindPreviousShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "g" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
+    static func isEnterEditShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              Int(event.keyCode) == Int(kVK_ANSI_E) else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
     static func isFocusNextUnreadOrActiveShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown,
               event.isARepeat == false,
               event.charactersIgnoringModifiers?.lowercased() == "a" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
+    static func isWatchRunningCommandShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "m" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
+    static func isToggleLaterFlagShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "l" else {
             return false
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -1162,9 +1360,9 @@ final class DisplayShortcutInterceptor {
         return currentToasttyAppOwnedWindowID(in: store)
     }
 
-    private func closeFocusedPanel() -> Bool {
+    private func closeFocusedPanel(preferredWindowID: UUID? = nil) -> Bool {
         guard let store else { return false }
-        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
         let preferredWorkspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id
         guard focusedPanelCommandController.closeFocusedPanel(in: preferredWorkspaceID).consumesShortcut else {
             // Cmd+W is app-owned for normal workspace windows. If there is no
@@ -1179,6 +1377,14 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func toggleRightPanel(preferredWindowID: UUID?) -> Bool {
+        guard let store,
+              let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+        return store.send(.toggleRightAuxPanel(workspaceID: workspaceID))
     }
 
     private func textSizeShortcutAction(
@@ -1217,6 +1423,19 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
+    private func watchRunningCommand() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard store.commandSelection(preferredWindowID: preferredWindowID) != nil else {
+            return false
+        }
+
+        _ = processWatchCommandController.watchFocusedProcess(preferredWindowID: preferredWindowID)
+        // Keep the shortcut app-owned for resolved Toastty workspace windows so
+        // embedded terminals do not reinterpret it as raw input.
+        return true
+    }
+
     private func createBrowser(preferredWindowID: UUID?, placement: WebPanelPlacement) -> Bool {
         guard let store else { return false }
         guard let preferredWindowID else { return false }
@@ -1226,6 +1445,25 @@ final class DisplayShortcutInterceptor {
                 placementOverride: placement
             )
         )
+    }
+
+    private func createScratchpad(preferredWindowID: UUID?) -> Bool {
+        guard let store,
+              let preferredWindowID,
+              let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        do {
+            _ = try store.createBlankScratchpadPanel(
+                workspaceID: workspaceID,
+                documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+            )
+            return true
+        } catch {
+            NSLog("Blank Scratchpad creation failed: \(error.localizedDescription)")
+            return false
+        }
     }
 
     private func adjustTextSize(
@@ -1260,9 +1498,9 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
-    private func focusNextUnreadOrActivePanel() -> Bool {
+    private func focusNextUnreadOrActivePanel(preferredWindowID: UUID? = nil) -> Bool {
         guard let store else { return false }
-        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
         guard store.commandSelection(preferredWindowID: preferredWindowID) != nil else {
             return false
         }
@@ -1274,6 +1512,20 @@ final class DisplayShortcutInterceptor {
         // Cmd+Shift+A is app-owned for normal workspace windows. If there is no
         // next unread or active target, swallow the shortcut rather than
         // passing it to the embedded terminal or default responder.
+        return true
+    }
+
+    private func toggleLaterFlag(preferredWindowID: UUID? = nil) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
+        guard let focusedPanelID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.focusedPanelID else {
+            return false
+        }
+
+        _ = sessionRuntimeStore.toggleLaterFlagForPanel(panelID: focusedPanelID)
+        // Cmd+Shift+L is app-owned for normal workspace windows. If the
+        // focused panel does not currently host a managed session, keep the
+        // shortcut as a no-op rather than forwarding raw input.
         return true
     }
 
@@ -1326,6 +1578,21 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.selectAdjacentWorkspaceTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
+        )
+    }
+
+    private func selectAdjacentRightPanelTab(
+        direction: PanelTabNavigationDirection,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
+        guard store.canSelectAdjacentRightAuxPanelTab(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return store.selectAdjacentRightAuxPanelTab(
             preferredWindowID: preferredWindowID,
             direction: direction
         )
@@ -1421,6 +1688,51 @@ final class DisplayShortcutInterceptor {
         return webPanelRuntimeRegistry.saveLocalDocumentPanel(panelID: selection.panelID)
     }
 
+    private func startFocusedLocalDocumentSearch(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.startSearchLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func findNextFocusedLocalDocumentSearch(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.findNextLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func findPreviousFocusedLocalDocumentSearch(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.findPreviousLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func canEnterFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.canEnterEditingLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func isFocusedLocalDocumentSearchActive(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        guard let searchState = webPanelRuntimeRegistry.localDocumentSearchState(panelID: selection.panelID) else {
+            return false
+        }
+        return searchState.isPresented && searchState.query.isEmpty == false
+    }
+
+    private func enterFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.enterEditingLocalDocumentPanel(panelID: selection.panelID)
+    }
+
     private func canCancelFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
         guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
             return false
@@ -1444,6 +1756,22 @@ final class DisplayShortcutInterceptor {
         // default responder handle Escape normally.
         _ = cancelFocusedLocalDocumentEdit(preferredWindowID: preferredWindowID)
         return true
+    }
+
+    private func handleEnterLocalDocumentEditShortcut(preferredWindowID: UUID?) -> Bool {
+        enterFocusedLocalDocumentEdit(preferredWindowID: preferredWindowID)
+    }
+
+    private func handleStartLocalDocumentSearchShortcut(preferredWindowID: UUID?) -> Bool {
+        startFocusedLocalDocumentSearch(preferredWindowID: preferredWindowID)
+    }
+
+    private func handleFindNextLocalDocumentSearchShortcut(preferredWindowID: UUID?) -> Bool {
+        findNextFocusedLocalDocumentSearch(preferredWindowID: preferredWindowID)
+    }
+
+    private func handleFindPreviousLocalDocumentSearchShortcut(preferredWindowID: UUID?) -> Bool {
+        findPreviousFocusedLocalDocumentSearch(preferredWindowID: preferredWindowID)
     }
 
     private func handleSaveLocalDocumentShortcut(preferredWindowID: UUID?) -> Bool {
@@ -1543,9 +1871,11 @@ struct ToasttyApp: App {
     private let runtimePaths: ToasttyRuntimePaths
     private let agentLaunchSocketPath: String
     private let agentLaunchCLIExecutablePath: String?
+    private let agentLaunchShimExecutablePath: String?
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
+    private let scratchpadSessionLinkCleanupCoordinator: ScratchpadSessionLinkCleanupCoordinator
     private let agentLaunchService: AgentLaunchService
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
@@ -1556,6 +1886,7 @@ struct ToasttyApp: App {
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let processWatchCommandController: ProcessWatchCommandController
     private let commandPaletteController: CommandPaletteController
     private let displayShortcutInterceptor: DisplayShortcutInterceptor
 
@@ -1632,13 +1963,35 @@ struct ToasttyApp: App {
         Self.logProfileShortcutWarnings(initialProfileShortcutRegistry.warningMessages)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
-        let cliExecutablePath = AgentLaunchService.defaultCLIExecutablePath()
+        let resolvedManagedHelperPaths: ManagedAgentHelperPaths
+        do {
+            resolvedManagedHelperPaths = try ManagedAgentHelperInstaller(
+                runtimePaths: runtimePaths
+            ).resolvePaths()
+        } catch {
+            resolvedManagedHelperPaths = ManagedAgentHelperPaths(
+                cliExecutablePath: AgentLaunchService.defaultCLIExecutablePath(),
+                agentShimExecutablePath: ToasttyBundledExecutableLocator.defaultAgentShimExecutablePath()
+            )
+            ToasttyLog.warning(
+                "Failed to stage managed agent helpers",
+                category: .bootstrap,
+                metadata: [
+                    "runtime_home": runtimePaths.runtimeHomeURL?.path ?? "none",
+                    "runtime_home_enabled": runtimePaths.isRuntimeHomeEnabled ? "true" : "false",
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
+        let cliExecutablePath = resolvedManagedHelperPaths.cliExecutablePath
+        let agentShimExecutablePath = resolvedManagedHelperPaths.agentShimExecutablePath
         let shimDirectoryPath: String?
         do {
             shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: initialToasttyConfig.enableAgentCommandShims,
                 runtimePaths: runtimePaths,
-                agentProfiles: agentCatalogStore.catalog
+                agentProfiles: agentCatalogStore.catalog,
+                helperExecutablePath: agentShimExecutablePath
             )
         } catch {
             shimDirectoryPath = nil
@@ -1648,6 +2001,7 @@ struct ToasttyApp: App {
                 metadata: [
                     "directory": runtimePaths.agentShimDirectoryURL.path,
                     "enabled": initialToasttyConfig.enableAgentCommandShims ? "true" : "false",
+                    "helper_path": agentShimExecutablePath ?? "none",
                     "error": error.localizedDescription,
                 ]
             )
@@ -1673,6 +2027,12 @@ struct ToasttyApp: App {
         )
         terminalRuntimeRegistry.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
+        terminalRuntimeRegistry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
+        let scratchpadSessionLinkCleanupCoordinator = ScratchpadSessionLinkCleanupCoordinator(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+        )
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry
@@ -1690,6 +2050,7 @@ struct ToasttyApp: App {
         }
         Self.writeToasttyConfigReference()
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
+        self.scratchpadSessionLinkCleanupCoordinator = scratchpadSessionLinkCleanupCoordinator
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
@@ -1710,15 +2071,9 @@ struct ToasttyApp: App {
                 )
             },
             openProfilesConfigurationAction: { [store] in
-                ToasttyMenuActions.openTerminalProfilesConfiguration(
-                    openManagedLocalDocument: { fileURL, format in
-                        openManagedLocalDocumentInToastty(
-                            store: store,
-                            fileURL: fileURL,
-                            format: format,
-                            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
-                        )
-                    }
+                Self.openTerminalProfilesConfiguration(
+                    store: store,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
                 )
             }
         )
@@ -1727,7 +2082,17 @@ struct ToasttyApp: App {
             terminalCommandRouter: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogStore,
+            cliExecutablePathProvider: { cliExecutablePath },
             socketPathProvider: { socketPath }
+        )
+        let preferredWorkspaceCommandWindowID: () -> UUID? = {
+            currentToasttyWorkspaceCommandWindowID(in: store)
+        }
+        let processWatchCommandController = ProcessWatchCommandController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
         let commandPaletteActionHandler = CommandPaletteActionHandler(
             store: store,
@@ -1746,6 +2111,7 @@ struct ToasttyApp: App {
                     runtimePaths: runtimePaths,
                     agentLaunchSocketPath: socketPath,
                     agentLaunchCLIExecutablePath: cliExecutablePath,
+                    agentLaunchShimExecutablePath: agentShimExecutablePath,
                     terminalRuntimeRegistry: terminalRuntimeRegistry
                 )
             },
@@ -1755,7 +2121,31 @@ struct ToasttyApp: App {
                     preferredWindowID: preferredWindowID,
                     placement: placement
                 )
-            }
+            },
+            createScratchpadAction: { preferredWindowID in
+                Self.createBlankScratchpad(
+                    store: store,
+                    preferredWindowID: preferredWindowID,
+                    documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+                )
+            },
+            showScratchpadForCurrentSessionAction: { preferredWindowID in
+                store.showScratchpadForCurrentSession(
+                    preferredWindowID: preferredWindowID,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+                )
+            },
+            openManageConfigAction: { [store] originWindowID in
+                Self.openManageConfig(store: store, preferredWindowID: originWindowID)
+            },
+            openTerminalProfilesConfigurationAction: { [store] originWindowID in
+                Self.openTerminalProfilesConfiguration(store: store, preferredWindowID: originWindowID)
+            },
+            openAgentProfilesConfigurationAction: { [store] originWindowID in
+                Self.openAgentProfilesConfiguration(store: store, preferredWindowID: originWindowID)
+            },
+            processWatchCommandController: processWatchCommandController
         )
         let commandPaletteUsageTracker = CommandPaletteUsageTracker(runtimePaths: runtimePaths)
         let commandPaletteController = CommandPaletteController(
@@ -1775,9 +2165,6 @@ struct ToasttyApp: App {
             usageTracker: commandPaletteUsageTracker
         )
         self.commandPaletteController = commandPaletteController
-        let preferredWorkspaceCommandWindowID: () -> UUID? = {
-            currentToasttyWorkspaceCommandWindowID(in: store)
-        }
         let createWorkspaceCommandController = CreateWorkspaceCommandController(
             store: store,
             preferredWindowIDProvider: preferredWorkspaceCommandWindowID
@@ -1795,6 +2182,7 @@ struct ToasttyApp: App {
             sessionRuntimeStore: sessionRuntimeStore,
             preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
+        self.processWatchCommandController = processWatchCommandController
         let workspaceClosePanelCommandController = WindowCommandController(
             store: store,
             focusedPanelCommandController: focusedPanelCommandController,
@@ -1820,14 +2208,18 @@ struct ToasttyApp: App {
             createWorkspaceCommandController: createWorkspaceCommandController,
             renameWorkspaceCommandController: renameWorkspaceCommandController,
             closeWorkspaceCommandController: closeWorkspaceCommandController,
-            workspaceTabCommandController: workspaceTabCommandController
+            workspaceTabCommandController: workspaceTabCommandController,
+            processWatchCommandController: processWatchCommandController
         )
         helpMenuBridge = HelpMenuBridge { [weak store] url in
             guard let store else { return }
             _ = AppURLRouter.open(
                 url,
                 preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store),
-                appStore: store
+                appStore: store,
+                requestLocalDocumentReveal: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
+                    webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                }
             )
         }
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
@@ -1837,6 +2229,7 @@ struct ToasttyApp: App {
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
+            processWatchCommandController: processWatchCommandController,
             isCommandPalettePresented: { [weak commandPaletteController] in
                 commandPaletteController?.isPresented ?? false
             },
@@ -1859,6 +2252,7 @@ struct ToasttyApp: App {
         self.runtimePaths = runtimePaths
         agentLaunchSocketPath = socketPath
         agentLaunchCLIExecutablePath = cliExecutablePath
+        agentLaunchShimExecutablePath = agentShimExecutablePath
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
@@ -1901,7 +2295,19 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
-                agentLaunchService: agentLaunchService
+                agentLaunchService: agentLaunchService,
+                reloadConfigurationAction: {
+                    Self.reloadConfiguration(
+                        store: store,
+                        agentCatalogStore: agentCatalogStore,
+                        terminalProfileStore: terminalProfileStore,
+                        runtimePaths: runtimePaths,
+                        agentLaunchSocketPath: socketPath,
+                        agentLaunchCLIExecutablePath: cliExecutablePath,
+                        agentLaunchShimExecutablePath: agentShimExecutablePath,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry
+                    )
+                }
             )
             automationStartupError = nil
         } catch {
@@ -1946,11 +2352,13 @@ struct ToasttyApp: App {
     private static func synchronizeManagedAgentCommandShims(
         enabled: Bool,
         runtimePaths: ToasttyRuntimePaths,
-        agentProfiles: AgentCatalog
+        agentProfiles: AgentCatalog,
+        helperExecutablePath: String?
     ) throws -> String? {
         try AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
-            managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles)
+            managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles),
+            helperExecutablePathProvider: { helperExecutablePath }
         )
             .syncInstallation(enabled: enabled)?
             .directoryURL
@@ -2067,6 +2475,9 @@ struct ToasttyApp: App {
                 toggleCommandPalette: { [weak commandPaletteController] originWindowID in
                     _ = commandPaletteController?.toggle(originWindowID: originWindowID)
                 },
+                presentCommandPalette: { [weak commandPaletteController] originWindowID, initialQuery in
+                    _ = commandPaletteController?.present(originWindowID: originWindowID, initialQuery: initialQuery)
+                },
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
@@ -2088,6 +2499,7 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
+                processWatchCommandController: processWatchCommandController,
                 agentLaunchService: agentLaunchService,
                 terminalProfilesMenuController: terminalProfilesMenuController,
                 canCheckForUpdates: sparkleUpdaterBridge.canCheckForUpdates,
@@ -2100,7 +2512,7 @@ struct ToasttyApp: App {
                 openLocalDocumentFile: { preferredWindowID in
                     self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
-                        placement: WebPanelPlacement.rootRight
+                        placement: store.localDocumentRoutingPreferences.openingPlacement.webPanelPlacement
                     )
                 },
                 openLocalDocumentFileInTab: { preferredWindowID in
@@ -2132,6 +2544,7 @@ struct ToasttyApp: App {
             runtimePaths: runtimePaths,
             agentLaunchSocketPath: agentLaunchSocketPath,
             agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
+            agentLaunchShimExecutablePath: agentLaunchShimExecutablePath,
             terminalRuntimeRegistry: terminalRuntimeRegistry
         )
     }
@@ -2144,6 +2557,7 @@ struct ToasttyApp: App {
         runtimePaths: ToasttyRuntimePaths,
         agentLaunchSocketPath: String,
         agentLaunchCLIExecutablePath: String?,
+        agentLaunchShimExecutablePath: String?,
         terminalRuntimeRegistry: TerminalRuntimeRegistry
     ) {
         var failureMessages: [String] = []
@@ -2165,11 +2579,13 @@ struct ToasttyApp: App {
 
         let toasttyConfig = ToasttyConfigStore.load()
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
+        store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
                 runtimePaths: runtimePaths,
-                agentProfiles: agentCatalogStore.catalog
+                agentProfiles: agentCatalogStore.catalog,
+                helperExecutablePath: agentLaunchShimExecutablePath
             )
             Self.configureBaseLaunchEnvironmentProvider(
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -2255,9 +2671,30 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openAgentProfilesConfiguration() {
-        switch openAgentProfilesConfigurationResult() {
+        Self.openAgentProfilesConfiguration(
+            store: store,
+            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    private static func openAgentProfilesConfiguration(
+        store: AppStore,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        switch ToasttyMenuActions.openAgentProfilesConfigurationResult(
+            openManagedLocalDocument: { fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: preferredWindowID
+                )
+            }
+        ) {
         case .success:
-            return
+            return true
         case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Agent Profiles"
@@ -2265,6 +2702,7 @@ struct ToasttyApp: App {
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
+            return false
         }
     }
 
@@ -2290,7 +2728,10 @@ struct ToasttyApp: App {
                 AppURLRouter.open(
                     url,
                     preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store),
-                    appStore: store
+                    appStore: store,
+                    requestLocalDocumentReveal: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
+                        webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                    }
                 )
             }
         )
@@ -2298,18 +2739,30 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openManageConfig() {
+        Self.openManageConfig(
+            store: store,
+            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    private static func openManageConfig(
+        store: AppStore,
+        preferredWindowID: UUID?
+    ) -> Bool {
         switch ToasttyMenuActions.openToasttyConfigResult(
-            openManagedLocalDocument: { [store] fileURL, format in
+            openManagedLocalDocument: { fileURL, format in
                 openManagedLocalDocumentInToastty(
                     store: store,
                     fileURL: fileURL,
                     format: format,
-                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                    preferredWindowID: preferredWindowID
                 )
             }
         ) {
         case .success:
-            return
+            return true
         case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Config"
@@ -2317,6 +2770,36 @@ struct ToasttyApp: App {
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
+            return false
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private static func openTerminalProfilesConfiguration(
+        store: AppStore,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        switch ToasttyMenuActions.openTerminalProfilesConfigurationResult(
+            openManagedLocalDocument: { fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: preferredWindowID
+                )
+            }
+        ) {
+        case .success:
+            return true
+        case .failure(let error):
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Terminal Profiles"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return false
         }
     }
 
@@ -2361,8 +2844,12 @@ struct ToasttyApp: App {
         preferredWindowID: UUID?,
         placement: WebPanelPlacement
     ) -> Bool {
+        let preferredDirectoryURL = store.preferredLocalDocumentOpenDirectoryURL(
+            preferredWindowID: preferredWindowID
+        )
         guard let fileURL = LocalDocumentOpenPanel.chooseFile(
-            title: localDocumentOpenTitle(for: placement)
+            title: localDocumentOpenTitle(for: placement),
+            directoryURL: preferredDirectoryURL
         ) else {
             return false
         }
@@ -2387,9 +2874,32 @@ struct ToasttyApp: App {
         return false
     }
 
+    @MainActor
+    @discardableResult
+    private static func createBlankScratchpad(
+        store: AppStore,
+        preferredWindowID: UUID?,
+        documentStore: ScratchpadDocumentStore
+    ) -> Bool {
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        do {
+            _ = try store.createBlankScratchpadPanel(
+                workspaceID: workspaceID,
+                documentStore: documentStore
+            )
+            return true
+        } catch {
+            NSLog("Blank Scratchpad creation failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     private static func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
         switch placement {
-        case .rootRight:
+        case .rightPanel:
             return "Open Local File"
         case .newTab:
             return "Open Local File in Tab"
@@ -2406,6 +2916,7 @@ struct ToasttyApp: App {
         legacyTerminalFontSizePoints: Double?
     ) {
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
+        store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
         applyConfiguredDefaultTerminalProfile(
             to: store,
             terminalProfileCatalog: terminalProfileCatalog,
@@ -2524,9 +3035,7 @@ struct ToasttyApp: App {
 
         // Toastty persists window/workspace state explicitly, so AppKit's
         // saved-state restoration only adds stale SwiftUI scene identifiers.
-        let defaults = ToasttyAppDefaults.current
-        defaults.set(true, forKey: "ApplePersistenceIgnoreState")
-        defaults.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+        AppKitDefaultPreferences.apply(to: ToasttyAppDefaults.current)
     }
 
     private static func prepareRuntimeEnvironment(processInfo: ProcessInfo) {

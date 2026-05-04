@@ -25,6 +25,29 @@ struct ToasttyKeyboardShortcut: Equatable {
     func menuTitle(_ title: String) -> String {
         "\(title)\t\(symbolLabel)"
     }
+
+    static func displaySymbol(forMenuKeyEquivalent keyEquivalent: String) -> String {
+        guard let character = keyEquivalent.first else {
+            return ""
+        }
+        return displaySymbol(for: character)
+    }
+
+    fileprivate static func displaySymbol(for character: Character) -> String {
+        let scalarValue = String(character).unicodeScalars.first?.value
+        switch scalarValue {
+        case 0xF702: return "\u{2190}"
+        case 0xF703: return "\u{2192}"
+        case 0xF700: return "\u{2191}"
+        case 0xF701: return "\u{2193}"
+        case 0x001B: return "\u{238B}"
+        case 0x000D: return "\u{21A9}"
+        case 0x0009: return "\u{21E5}"
+        case 0x0020: return "\u{2423}"
+        case 0x0008, 0x007F: return "\u{232B}"
+        default: return String(character).uppercased()
+        }
+    }
 }
 
 private extension KeyEquivalent {
@@ -32,18 +55,7 @@ private extension KeyEquivalent {
     // most UI fonts can't render (shows up as a missing-glyph box or "?").
     // Map them (and other common special keys) to display glyphs.
     var displaySymbol: String {
-        switch character {
-        case KeyEquivalent.leftArrow.character: return "\u{2190}"
-        case KeyEquivalent.rightArrow.character: return "\u{2192}"
-        case KeyEquivalent.upArrow.character: return "\u{2191}"
-        case KeyEquivalent.downArrow.character: return "\u{2193}"
-        case KeyEquivalent.escape.character: return "\u{238B}"
-        case KeyEquivalent.return.character: return "\u{21A9}"
-        case KeyEquivalent.tab.character: return "\u{21E5}"
-        case KeyEquivalent.space.character: return "\u{2423}"
-        case KeyEquivalent.delete.character: return "\u{232B}"
-        default: return String(character).uppercased()
-        }
+        ToasttyKeyboardShortcut.displaySymbol(for: character)
     }
 }
 
@@ -87,6 +99,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command]
     )
 
+    static let toggleRightPanel = ToasttyKeyboardShortcut(
+        "b",
+        modifiers: [.command, .shift]
+    )
+
     static let newWorkspace = ToasttyKeyboardShortcut(
         "n",
         modifiers: [.command, .shift]
@@ -112,6 +129,16 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let selectPreviousRightPanelTab = ToasttyKeyboardShortcut(
+        "[",
+        modifiers: [.command, .control]
+    )
+
+    static let selectNextRightPanelTab = ToasttyKeyboardShortcut(
+        "]",
+        modifiers: [.command, .control]
+    )
+
     static let closeWorkspace = ToasttyKeyboardShortcut(
         "w",
         modifiers: [.command, .shift]
@@ -124,6 +151,11 @@ enum ToasttyKeyboardShortcuts {
 
     static let toggleFocusedPanel = ToasttyKeyboardShortcut(
         "f",
+        modifiers: [.command, .shift]
+    )
+
+    static let watchRunningCommand = ToasttyKeyboardShortcut(
+        "m",
         modifiers: [.command, .shift]
     )
 
@@ -157,6 +189,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .control, .shift]
     )
 
+    static let newScratchpad = ToasttyKeyboardShortcut(
+        "s",
+        modifiers: [.command, .control]
+    )
+
     static let browserReload = ToasttyKeyboardShortcut(
         "r",
         modifiers: [.command]
@@ -179,6 +216,11 @@ enum ToasttyKeyboardShortcuts {
 
     static let focusNextUnreadOrActivePanel = ToasttyKeyboardShortcut(
         "a",
+        modifiers: [.command, .shift]
+    )
+
+    static let toggleLaterFlag = ToasttyKeyboardShortcut(
+        "l",
         modifiers: [.command, .shift]
     )
 
