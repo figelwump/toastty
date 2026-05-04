@@ -153,12 +153,13 @@ struct BoundaryInteractionOverlay: NSViewRepresentable {
 final class BoundaryInteractionOverlayView: NSView {
     private static let trackingEventMask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
     private nonisolated static let windowMovementSuppressionReason = "boundary-interaction"
-    private static let cursorWatchInterval: TimeInterval = 0.05
+    private static let cursorOwnershipInterval: TimeInterval = 1.0 / 120.0
 
     var usesEventTrackingLoop = true
     var currentLocalMouseLocationProvider: (() -> CGPoint?)?
     var backingScaleFactorProvider: (() -> CGFloat?)?
     #if DEBUG
+    var currentCursorProvider: () -> NSCursor = { NSCursor.current }
     var cursorSetter: (NSCursor) -> Void = { $0.set() }
     #endif
     private(set) var boundaryTrackingAreaRebuildCount = 0
@@ -166,11 +167,18 @@ final class BoundaryInteractionOverlayView: NSView {
     var hasPendingCursorReassertion: Bool {
         pendingCursorReassertionDescriptorID != nil
     }
+    var hasScheduledCursorOwnershipCheck: Bool {
+        isCursorOwnershipCheckScheduled
+    }
 
     #if DEBUG
     func performCursorReassertionForTesting(descriptorID: String) {
         pendingCursorReassertionDescriptorID = descriptorID
         performPendingCursorReassertion()
+    }
+
+    func performCursorOwnershipCheckForTesting() {
+        performCursorOwnershipCheck()
     }
     #endif
 
@@ -190,10 +198,11 @@ final class BoundaryInteractionOverlayView: NSView {
     private var isTrackingBoundarySequence = false
     private var pendingCursorReassertionDescriptorID: String?
     private var isCursorReassertionScheduled = false
-    private var cursorWatchDescriptorID: String?
-    private var isCursorWatchScheduled = false
-    private var cursorWatchSampleCount = 0
-    private var lastCursorWatchSnapshot: BoundaryCursorWatchSnapshot?
+    private var cursorOwnershipDescriptorID: String?
+    private var isCursorOwnershipCheckScheduled = false
+    private var cursorOwnershipSampleCount = 0
+    private var lastCursorOwnershipSnapshot: BoundaryCursorOwnershipSnapshot?
+    private(set) var cursorOwnershipReassertionCount = 0
 
     override var isFlipped: Bool { true }
 
@@ -240,7 +249,7 @@ final class BoundaryInteractionOverlayView: NSView {
         orderedDescriptors = []
         descriptorsByID = [:]
         interactionSpecs = []
-        stopCursorWatch()
+        stopCursorOwnership()
         onAccessibilityUpdateAfterInvalidation()
     }
 
@@ -452,10 +461,10 @@ final class BoundaryInteractionOverlayView: NSView {
                     setCursor(cursor)
                 }
                 scheduleCursorReassertion(for: descriptor)
-                startCursorWatch(for: descriptor)
+                startCursorOwnership(for: descriptor)
             } else {
                 cancelCursorReassertion()
-                stopCursorWatch()
+                stopCursorOwnership()
             }
             return
         }
@@ -476,10 +485,10 @@ final class BoundaryInteractionOverlayView: NSView {
                 setCursor(cursor)
             }
             scheduleCursorReassertion(for: descriptor)
-            startCursorWatch(for: descriptor)
+            startCursorOwnership(for: descriptor)
         } else {
             cancelCursorReassertion()
-            stopCursorWatch()
+            stopCursorOwnership()
         }
         deliverCallback(immediately: deliversCallbacksImmediately) {
             previous?.onHoverChanged(false)
@@ -527,43 +536,40 @@ final class BoundaryInteractionOverlayView: NSView {
         setCursor(cursor)
     }
 
-    private func startCursorWatch(for descriptor: BoundaryInteractionDescriptor) {
-        guard CursorDiagnostics.enabled,
-              descriptor.cursor != nil else {
-            stopCursorWatch()
+    private func startCursorOwnership(for descriptor: BoundaryInteractionDescriptor) {
+        guard descriptor.cursor != nil else {
+            stopCursorOwnership()
             return
         }
 
-        if cursorWatchDescriptorID != descriptor.id {
-            cursorWatchSampleCount = 0
-            lastCursorWatchSnapshot = nil
+        if cursorOwnershipDescriptorID != descriptor.id {
+            cursorOwnershipSampleCount = 0
+            lastCursorOwnershipSnapshot = nil
         }
-        cursorWatchDescriptorID = descriptor.id
-        scheduleCursorWatchSample()
+        cursorOwnershipDescriptorID = descriptor.id
+        scheduleCursorOwnershipCheck()
     }
 
-    private func stopCursorWatch() {
-        cursorWatchDescriptorID = nil
-        lastCursorWatchSnapshot = nil
+    private func stopCursorOwnership() {
+        cursorOwnershipDescriptorID = nil
+        lastCursorOwnershipSnapshot = nil
     }
 
-    private func scheduleCursorWatchSample() {
-        guard CursorDiagnostics.enabled,
-              cursorWatchDescriptorID != nil,
-              isCursorWatchScheduled == false else {
+    private func scheduleCursorOwnershipCheck() {
+        guard cursorOwnershipDescriptorID != nil,
+              isCursorOwnershipCheckScheduled == false else {
             return
         }
 
-        isCursorWatchScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cursorWatchInterval) { [weak self] in
-            self?.performCursorWatchSample()
+        isCursorOwnershipCheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cursorOwnershipInterval) { [weak self] in
+            self?.performCursorOwnershipCheck()
         }
     }
 
-    private func performCursorWatchSample() {
-        isCursorWatchScheduled = false
-        guard CursorDiagnostics.enabled,
-              let descriptorID = cursorWatchDescriptorID else {
+    private func performCursorOwnershipCheck() {
+        isCursorOwnershipCheckScheduled = false
+        guard let descriptorID = cursorOwnershipDescriptorID else {
             return
         }
 
@@ -572,19 +578,46 @@ final class BoundaryInteractionOverlayView: NSView {
               let descriptor = descriptor(at: location),
               descriptor.id == descriptorID,
               let targetCursor = descriptor.cursor else {
-            stopCursorWatch()
+            stopCursorOwnership()
             return
         }
 
-        cursorWatchSampleCount += 1
-        let currentCursor = NSCursor.current
+        cursorOwnershipSampleCount += 1
+        let currentCursor = currentCursorForOwnership()
+        let currentCursorMatchesTarget = currentCursor === targetCursor
+        if currentCursorMatchesTarget == false {
+            cursorOwnershipReassertionCount += 1
+            setCursor(targetCursor)
+        }
+
+        logCursorOwnershipSampleIfNeeded(
+            descriptor: descriptor,
+            targetCursor: targetCursor,
+            currentCursor: currentCursor,
+            currentCursorMatchesTarget: currentCursorMatchesTarget,
+            location: location
+        )
+
+        scheduleCursorOwnershipCheck()
+    }
+
+    private func logCursorOwnershipSampleIfNeeded(
+        descriptor: BoundaryInteractionDescriptor,
+        targetCursor: NSCursor,
+        currentCursor: NSCursor,
+        currentCursorMatchesTarget: Bool,
+        location: CGPoint
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
         let windowMouseLocation = window?.mouseLocationOutsideOfEventStream
         var metadata: [String: String] = [
             "descriptorID": descriptor.id,
             "descriptorCursor": CursorDiagnostics.cursorDescription(targetCursor),
             "currentCursor": CursorDiagnostics.cursorDescription(currentCursor),
-            "currentCursorMatchesDescriptor": "\(currentCursor === targetCursor)",
-            "sampleCount": "\(cursorWatchSampleCount)",
+            "currentCursorMatchesDescriptor": "\(currentCursorMatchesTarget)",
+            "reassertedCursor": "\(currentCursorMatchesTarget == false)",
+            "sampleCount": "\(cursorOwnershipSampleCount)",
             "localMouseLocation": Self.pointDescription(location),
             "bounds": Self.rectDescription(bounds),
             "descriptorHitFrame": Self.rectDescription(descriptor.hitFrame),
@@ -607,22 +640,20 @@ final class BoundaryInteractionOverlayView: NSView {
             metadata["descriptor.\(key)"] = value
         }
 
-        let snapshot = BoundaryCursorWatchSnapshot(
+        let snapshot = BoundaryCursorOwnershipSnapshot(
             descriptorID: descriptor.id,
             currentCursorID: ObjectIdentifier(currentCursor),
-            currentCursorMatchesDescriptor: currentCursor === targetCursor,
+            currentCursorMatchesDescriptor: currentCursorMatchesTarget,
             windowHitViewHierarchy: metadata["windowHitViewHierarchy"] ?? "nil"
         )
-        if snapshot != lastCursorWatchSnapshot || snapshot.currentCursorMatchesDescriptor == false {
+        if snapshot != lastCursorOwnershipSnapshot || snapshot.currentCursorMatchesDescriptor == false {
             ToasttyLog.info(
-                "boundary cursor watch sample",
+                "boundary cursor ownership sample",
                 category: .input,
                 metadata: metadata
             )
-            lastCursorWatchSnapshot = snapshot
+            lastCursorOwnershipSnapshot = snapshot
         }
-
-        scheduleCursorWatchSample()
     }
 
     private func setCursor(_ cursor: NSCursor) {
@@ -630,6 +661,14 @@ final class BoundaryInteractionOverlayView: NSView {
         cursorSetter(cursor)
         #else
         cursor.set()
+        #endif
+    }
+
+    private func currentCursorForOwnership() -> NSCursor {
+        #if DEBUG
+        currentCursorProvider()
+        #else
+        NSCursor.current
         #endif
     }
 
@@ -1114,7 +1153,7 @@ private struct BoundaryInteractionSpec: Equatable {
     let accessibilityIdentifier: String?
 }
 
-private struct BoundaryCursorWatchSnapshot: Equatable {
+private struct BoundaryCursorOwnershipSnapshot: Equatable {
     let descriptorID: String
     let currentCursorID: ObjectIdentifier
     let currentCursorMatchesDescriptor: Bool
