@@ -26,7 +26,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 ### Agents
 
-- **Run agents your usual way** — type `claude`, `codex`, or `pi` in any pane and Toastty picks up live status automatically; or launch from the `Agent` menu, top bar, command palette, or keyboard shortcut
+- **Run agents your usual way** — run CLIs from the command line and Toastty picks up live status automatically for supported agents; or launch from the `Agent` menu, top bar, command palette, or keyboard shortcut
 - **Live sidebar status** — working, needs-approval, ready, or error state for Claude, Codex, and Pi sessions
 - **Unread badges and notifications** — sidebar badges and macOS notifications when an agent needs you
 - **Jump to the next session that needs you** — `Cmd+Shift+A` rotates through unreads, approval/error sessions, then active work
