@@ -17,9 +17,11 @@ CLI note:
 
 - The repo ships a `toastty` CLI wrapper for app control (`action` / `query`), notifications, and the `session` subcommands.
 - Toastty-managed Claude, Codex, and Pi launches primarily use
-  `session ingest-agent-event` to translate provider events into `session.status`
-  updates. `session ingest-agent-event` is handled locally inside the CLI; it is
-  not a socket event type.
+  `session ingest-agent-event` to translate provider events into session
+  events. Most provider events become `session.status` updates. Codex notify
+  completions become `session.codex_notify_completion` so Toastty can preserve
+  thread metadata and ignore child-thread completions. That ingest command is
+  handled locally inside the CLI; it is not a socket event type.
 - Manual wrappers should generally use:
   - `toastty action list` / `toastty query list` for discovery
   - `toastty action run` / `toastty query run` for live app control
@@ -918,6 +920,48 @@ Behavior:
 Result:
 
 - `eventType`
+- `stateVersion`
+
+### `session.codex_notify_completion`
+
+Internal event used by Toastty's built-in Codex notify hook. Manual wrappers
+should generally use `session.status` instead.
+
+Required:
+
+- top-level `sessionID`
+- payload `type`
+- payload `detail`
+
+Optional top-level fields:
+
+- `panelID?: UUID string`
+
+Accepted payload keys:
+
+- `type: String`
+- `detail: String`
+- `threadID?: String`
+- `turnID?: String`
+- `lastInputMessageFingerprint?: String`
+- `inputMessageCount?: Int`
+
+Behavior:
+
+- `sessionID` must identify an active session
+- `panelID` is optional; when present it must match the active session
+- For first-party Codex sessions that use Toastty status notifications, Toastty
+  matches threaded completions against the recorded root prompt so spawned
+  subagent completions do not clear the parent session's **Working** state
+- When a completion is accepted, Toastty maps it to **Ready** with `detail` as
+  the completion detail
+- Ignored completions do not increment `stateVersion`
+- Legacy unthreaded Codex completion payloads remain accepted for compatibility
+
+Result:
+
+- `eventType`
+- `status: "accepted" | "ignored"`
 - `stateVersion`
 
 ### `session.update_files`

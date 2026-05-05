@@ -224,9 +224,9 @@ CLI notes:
 - `--scope working-tree|head|ref` and `--ref <rev>` match the remote worktree export behavior from `scripts/remote/validate.sh`.
 - The wrapper builds Toastty remotely, launches it in an isolated runtime home, starts `/Applications/Codex.app/Contents/Resources/codex app-server` behind a PTY, tunnels that localhost port back over SSH, drives one JSON-RPC turn locally, then copies the artifact bundle back into `artifacts/remote-gui/<run-label>/`.
 - Result bundles include `result.json`, `client-summary.json`, `prompt.txt`, `remote/transcript.jsonl`, `remote/build.log`, `remote/app.log`, `remote/app-server.log`, `remote/app-server-session.log`, and `remote/launch.json`. `result.json` records the resolved Codex model, provider, service tier, and reasoning effort when the client reaches `thread/start`; setup failures before then record the configured model and reasoning effort.
-- `result.json` distinguishes `pass`, `agent_error`, `timeout`, and `setup_error`. Computer Use permission or app-discovery problems on the Mini currently land as `setup_error`.
-- The remote host must be awake, unlocked, logged into the GUI session, and have the Codex Computer Use plugin already installed with macOS permissions granted.
-- The first live spike proved the `app-server` transport works unattended on the Mini, but Toastty still needs explicit Computer Use approval in that Codex session. Approve `com.GiantThings.toastty` in Codex on the Mini; until that happens, the default `@Computer Use` prompt exits with `approval_denied`.
+- `result.json` distinguishes `pass`, `agent_error`, `timeout`, and `setup_error`. Computer Use permission, app-discovery, or Apple Event authorization problems currently land as `setup_error`.
+- The app-server client enables MCP elicitations and narrowly auto-accepts known Computer Use app-access or tool-call approval prompts. `client-summary.json` records `mcpElicitationsAccepted` and `mcpElicitationsDeclined`; a declined or failed Computer Use approval is still reported through the normal failure fields.
+- The remote host must be awake, unlocked, logged into the GUI session, and have the Codex Computer Use plugin installed with the required macOS permissions granted.
 
 ### `scripts/remote/test.sh`
 

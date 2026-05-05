@@ -107,6 +107,15 @@ During `WorkspaceTabState` decode:
   auxiliary panel IDs.
 - `selectedPanelIDs` is reset to `[]`.
 
+During `WindowState` decode and reducer-managed sidebar resizing:
+
+- `sidebarWidthPointsOverride` is optional and clamped to the supported sidebar
+  range.
+- Non-finite sidebar width values decode to `nil`.
+- Reducer-managed sidebar resizing stores `nil` when the requested width matches
+  the current default width, so default-equivalent widths are not persisted as
+  explicit overrides.
+
 During `AppState` initialization or decode:
 
 - workspaces selected in visible windows are normalized to `hasBeenVisited=true`.
