@@ -210,9 +210,8 @@ enum BrowserPanelScreenshotWriter {
     }
 }
 
-enum BrowserScreenshotAgentPromptBuilder {
-    static func prompt(fileURL: URL) -> String {
-        let filePath = fileURL.path(percentEncoded: false)
-        return "Please inspect this browser screenshot at \"\(filePath)\"."
+enum BrowserScreenshotAgentInsertionBuilder {
+    static func insertionText(fileURL: URL) -> String {
+        fileURL.path(percentEncoded: false)
     }
 }

@@ -121,7 +121,7 @@ Each horizontal workspace tab keeps its own right-panel tabs, active tab, width,
 
 `Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. After the `toastty-scratchpad` skill is installed for an agent, you can usually skip manual creation and ask the agent for a visual; the agent can create and bind its own Scratchpad on demand.
 
-Browser panel toolbar actions can open the current page in the default browser, copy or save the visible page screenshot, or send a temporary PNG path to an active Toastty-managed agent session in the same workspace tab.
+Browser panel header actions can open the current page in the default browser, copy or save the visible page screenshot, or insert a temporary PNG path into an active Toastty-managed agent session in the same workspace tab.
 
 Terminal command-click integrations use the right panel for common supporting files: supported local documents open as editable local-document tabs, and local HTML files open in the browser.
 

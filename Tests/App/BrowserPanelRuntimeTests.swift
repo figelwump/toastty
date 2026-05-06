@@ -156,12 +156,12 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         )
     }
 
-    func testScreenshotAgentPromptIncludesOnlyPath() throws {
+    func testScreenshotAgentInsertionIncludesOnlyPath() throws {
         let fileURL = URL(fileURLWithPath: "/tmp/toastty-browser-screenshots/page.png")
 
         XCTAssertEqual(
-            BrowserScreenshotAgentPromptBuilder.prompt(fileURL: fileURL),
-            "Please inspect this browser screenshot at \"/tmp/toastty-browser-screenshots/page.png\"."
+            BrowserScreenshotAgentInsertionBuilder.insertionText(fileURL: fileURL),
+            "/tmp/toastty-browser-screenshots/page.png"
         )
     }
 

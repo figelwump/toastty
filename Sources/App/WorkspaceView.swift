@@ -3299,11 +3299,9 @@ struct PanelCardView: View {
                 runtime: webPanelRuntimeRegistry.browserRuntime(for: panelID),
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
                 isActivePanel: isFocused,
-                screenshotSendCandidates: browserScreenshotSendCandidates,
                 activatePanel: {
                     _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
-                },
-                sendScreenshotToAgent: sendBrowserScreenshot(_:to:)
+                }
             )
             .frame(
                 maxWidth: .infinity,
@@ -3386,6 +3384,10 @@ struct PanelCardView: View {
 
     @ViewBuilder
     private var panelHeaderTrailingContent: some View {
+        if let browserHeaderAccessory {
+            browserHeaderAccessory
+        }
+
         if let scratchpadHeaderAccessory {
             scratchpadHeaderAccessory
         }
@@ -3428,6 +3430,24 @@ struct PanelCardView: View {
                 isCloseButtonHovered = false
             }
         }
+    }
+
+    private var browserHeaderAccessory: BrowserPanelHeaderAccessory? {
+        guard case .web(let webState) = panelState,
+              webState.definition == .browser else {
+            return nil
+        }
+
+        return BrowserPanelHeaderAccessory(
+            panelID: panelID,
+            webState: webState,
+            runtime: webPanelRuntimeRegistry.browserRuntime(for: panelID),
+            screenshotInsertCandidates: browserScreenshotSendCandidates,
+            activatePanel: {
+                _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+            },
+            insertScreenshotPathForAgent: insertBrowserScreenshotPath(_:to:)
+        )
     }
 
     private var scratchpadHeaderAccessory: ScratchpadHeaderAccessory? {
@@ -3510,14 +3530,14 @@ struct PanelCardView: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func sendBrowserScreenshot(
+    private func insertBrowserScreenshotPath(
         _ fileURL: URL,
         to candidate: BrowserScreenshotSendCandidate
     ) -> Bool {
-        let prompt = BrowserScreenshotAgentPromptBuilder.prompt(fileURL: fileURL)
+        let path = BrowserScreenshotAgentInsertionBuilder.insertionText(fileURL: fileURL)
         return terminalRuntimeRegistry.sendText(
-            prompt,
-            submit: true,
+            path,
+            submit: false,
             panelID: candidate.panelID
         )
     }
