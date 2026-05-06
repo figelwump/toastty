@@ -165,37 +165,17 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         )
     }
 
-    func testBrowserActionsMenuIncludesOpenAndScreenshotActions() {
-        let candidate = BrowserScreenshotSendCandidate(
-            sessionID: "codex",
-            agent: .codex,
-            panelID: UUID(),
-            label: "Codex - left split"
-        )
-
+    func testBrowserActionsMenuOnlyIncludesOpenInDefaultBrowser() {
         let menu = BrowserPanelActionsMenuBuilder.menu(
             canOpenCurrentURL: true,
-            screenshotInFlight: false,
-            screenshotInsertCandidates: [candidate],
             target: nil,
-            openCurrentURLAction: nil,
-            copyScreenshotAction: nil,
-            saveScreenshotAction: nil,
-            insertScreenshotPathAction: nil
+            openCurrentURLAction: nil
         )
 
         XCTAssertEqual(menu.items.map(\.title), [
             "Open in Default Browser",
-            "",
-            "Copy Screenshot",
-            "Save Screenshot As...",
-            "",
-            "Insert Path in Codex - left split",
         ])
         XCTAssertTrue(menu.items[0].isEnabled)
-        XCTAssertTrue(menu.items[2].isEnabled)
-        XCTAssertTrue(menu.items[3].isEnabled)
-        XCTAssertTrue(menu.items[5].isEnabled)
     }
 
     func testBrowserScreenshotCandidatesResolveMainLayoutBrowserOwnerTab() {

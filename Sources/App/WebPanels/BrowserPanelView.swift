@@ -214,22 +214,70 @@ struct BrowserPanelHeaderAccessory: View {
     @State private var screenshotInFlight = false
 
     var body: some View {
-        BrowserPanelActionsMenuButton(
-            canOpenCurrentURL: currentBrowserURL != nil,
-            screenshotInFlight: screenshotInFlight,
-            screenshotInsertCandidates: screenshotInsertCandidates,
-            openCurrentURL: {
-                activatePanel()
-                openCurrentURLInDefaultBrowser()
-            },
-            copyScreenshot: copyVisibleScreenshot,
-            saveScreenshot: saveVisibleScreenshotAs,
-            insertScreenshotPath: insertVisibleScreenshotPath(for:)
-        )
-        .frame(width: 18, height: 18)
-        .fixedSize()
+        HStack(spacing: 3) {
+            browserScreenshotMenu
+
+            BrowserPanelActionsMenuButton(
+                canOpenCurrentURL: currentBrowserURL != nil,
+                openCurrentURL: {
+                    activatePanel()
+                    openCurrentURLInDefaultBrowser()
+                }
+            )
+            .frame(width: 18, height: 18)
+            .fixedSize()
+            .help("Browser Actions")
+        }
+        .frame(minWidth: 0)
+    }
+
+    private var browserScreenshotMenu: some View {
+        Menu {
+            Button {
+                copyVisibleScreenshot()
+            } label: {
+                Label("Copy Screenshot", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                saveVisibleScreenshotAs()
+            } label: {
+                Label("Save Screenshot As...", systemImage: "square.and.arrow.down")
+            }
+
+            Divider()
+
+            Section("Insert Path in Agent") {
+                if screenshotInsertCandidates.isEmpty {
+                    Button("No active sessions in this tab") {}
+                        .disabled(true)
+                } else {
+                    ForEach(screenshotInsertCandidates) { candidate in
+                        Button {
+                            insertVisibleScreenshotPath(for: candidate)
+                        } label: {
+                            Label(candidate.label, systemImage: "paperclip")
+                        }
+                    }
+                }
+            }
+        } label: {
+            browserHeaderIcon(systemImage: "camera", isDisabled: screenshotInFlight)
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
         .disabled(screenshotInFlight)
-        .help(screenshotInFlight ? "Capturing Screenshot" : "Browser Actions")
+        .help(screenshotInFlight ? "Capturing Screenshot" : "Browser Screenshot")
+        .accessibilityLabel("Browser Screenshot")
+        .accessibilityIdentifier("panel.header.browser.screenshot.\(panelID.uuidString)")
+    }
+
+    private func browserHeaderIcon(systemImage: String, isDisabled: Bool) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(isDisabled ? ToastyTheme.inactiveText : ToastyTheme.primaryText)
+            .frame(width: 18, height: 18)
+            .contentShape(Rectangle())
     }
 
     private func openCurrentURLInDefaultBrowser() {
@@ -324,12 +372,7 @@ struct BrowserPanelHeaderAccessory: View {
 
 private struct BrowserPanelActionsMenuButton: NSViewRepresentable {
     let canOpenCurrentURL: Bool
-    let screenshotInFlight: Bool
-    let screenshotInsertCandidates: [BrowserScreenshotSendCandidate]
     let openCurrentURL: () -> Void
-    let copyScreenshot: () -> Void
-    let saveScreenshot: () -> Void
-    let insertScreenshotPath: (BrowserScreenshotSendCandidate) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -353,41 +396,25 @@ private struct BrowserPanelActionsMenuButton: NSViewRepresentable {
 
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.canOpenCurrentURL = canOpenCurrentURL
-        context.coordinator.screenshotInFlight = screenshotInFlight
-        context.coordinator.screenshotInsertCandidates = screenshotInsertCandidates
         context.coordinator.openCurrentURL = openCurrentURL
-        context.coordinator.copyScreenshot = copyScreenshot
-        context.coordinator.saveScreenshot = saveScreenshot
-        context.coordinator.insertScreenshotPath = insertScreenshotPath
 
         button.image = NSImage(
             systemSymbolName: "ellipsis",
             accessibilityDescription: "Browser Actions"
         )
         button.contentTintColor = .secondaryLabelColor
-        button.isEnabled = screenshotInFlight == false
     }
 
     @MainActor
     final class Coordinator: NSObject {
         var canOpenCurrentURL = false
-        var screenshotInFlight = false
-        var screenshotInsertCandidates: [BrowserScreenshotSendCandidate] = []
         var openCurrentURL: (() -> Void)?
-        var copyScreenshot: (() -> Void)?
-        var saveScreenshot: (() -> Void)?
-        var insertScreenshotPath: ((BrowserScreenshotSendCandidate) -> Void)?
 
         @objc func showMenu(_ sender: NSButton) {
             let menu = BrowserPanelActionsMenuBuilder.menu(
                 canOpenCurrentURL: canOpenCurrentURL,
-                screenshotInFlight: screenshotInFlight,
-                screenshotInsertCandidates: screenshotInsertCandidates,
                 target: self,
-                openCurrentURLAction: #selector(openCurrentURL(_:)),
-                copyScreenshotAction: #selector(copyScreenshot(_:)),
-                saveScreenshotAction: #selector(saveScreenshot(_:)),
-                insertScreenshotPathAction: #selector(insertScreenshotPath(_:))
+                openCurrentURLAction: #selector(openCurrentURL(_:))
             )
 
             menu.popUp(
@@ -400,42 +427,14 @@ private struct BrowserPanelActionsMenuButton: NSViewRepresentable {
         @objc private func openCurrentURL(_ sender: NSMenuItem) {
             openCurrentURL?()
         }
-
-        @objc private func copyScreenshot(_ sender: NSMenuItem) {
-            copyScreenshot?()
-        }
-
-        @objc private func saveScreenshot(_ sender: NSMenuItem) {
-            saveScreenshot?()
-        }
-
-        @objc private func insertScreenshotPath(_ sender: NSMenuItem) {
-            guard let payload = sender.representedObject as? BrowserScreenshotCandidateMenuPayload else {
-                return
-            }
-            insertScreenshotPath?(payload.candidate)
-        }
-    }
-}
-
-private final class BrowserScreenshotCandidateMenuPayload: NSObject {
-    let candidate: BrowserScreenshotSendCandidate
-
-    init(candidate: BrowserScreenshotSendCandidate) {
-        self.candidate = candidate
     }
 }
 
 enum BrowserPanelActionsMenuBuilder {
     static func menu(
         canOpenCurrentURL: Bool,
-        screenshotInFlight: Bool,
-        screenshotInsertCandidates: [BrowserScreenshotSendCandidate],
         target: AnyObject?,
-        openCurrentURLAction: Selector?,
-        copyScreenshotAction: Selector?,
-        saveScreenshotAction: Selector?,
-        insertScreenshotPathAction: Selector?
+        openCurrentURLAction: Selector?
     ) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(actionItem(
@@ -444,39 +443,6 @@ enum BrowserPanelActionsMenuBuilder {
             target: target,
             action: openCurrentURLAction
         ))
-        menu.addItem(.separator())
-        menu.addItem(actionItem(
-            title: "Copy Screenshot",
-            isEnabled: screenshotInFlight == false,
-            target: target,
-            action: copyScreenshotAction
-        ))
-        menu.addItem(actionItem(
-            title: "Save Screenshot As...",
-            isEnabled: screenshotInFlight == false,
-            target: target,
-            action: saveScreenshotAction
-        ))
-        menu.addItem(.separator())
-
-        if screenshotInsertCandidates.isEmpty {
-            let item = NSMenuItem(title: "No active sessions in this tab", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        } else {
-            for candidate in screenshotInsertCandidates {
-                let item = NSMenuItem(
-                    title: "Insert Path in \(candidate.label)",
-                    action: screenshotInFlight ? nil : insertScreenshotPathAction,
-                    keyEquivalent: ""
-                )
-                item.target = target
-                item.representedObject = BrowserScreenshotCandidateMenuPayload(candidate: candidate)
-                item.isEnabled = screenshotInFlight == false
-                menu.addItem(item)
-            }
-        }
-
         return menu
     }
 
