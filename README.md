@@ -44,7 +44,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 - **Per-tab Scratchpad, browser, and local-document tabs** — toggle with `Cmd+Shift+B`; each workspace tab keeps its own right-panel tabs
 - **Scratchpad** — rich agent-authored notes, plans, and review surfaces in session-linked tabs that persist locally
-- **Browser** — built-in browser for docs, dashboards, and previews
+- **Browser** — built-in browser for docs, dashboards, previews, external handoff, and quick screenshot sharing
 - **Local documents** — open Markdown, source files (Swift, JS/TS, Python, Go, Rust, …), configs (YAML, TOML, JSON, dotenv), and data files (CSV, TSV, XML) in editable code views with line numbers; local HTML opens in the browser
 
 ### Terminal and content
@@ -120,6 +120,8 @@ The right panel is a workspace-side tab strip for supporting material that shoul
 Each horizontal workspace tab keeps its own right-panel tabs, active tab, width, and visibility in the persisted layout. `Cmd+Shift+B` shows or hides the right panel; when showing it, Toastty focuses the active right-panel tab if one exists. `Cmd+Ctrl+[` and `Cmd+Ctrl+]` cycle through right-panel tabs, `Cmd+Ctrl+B` opens a new browser there, and `Cmd+Ctrl+S` creates a new Scratchpad.
 
 `Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. After the `toastty-scratchpad` skill is installed for an agent, you can usually skip manual creation and ask the agent for a visual; the agent can create and bind its own Scratchpad on demand.
+
+Browser panel toolbar actions can open the current page in the default browser, copy or save the visible page screenshot, or send a temporary PNG path to an active Toastty-managed agent session in the same workspace tab.
 
 Terminal command-click integrations use the right panel for common supporting files: supported local documents open as editable local-document tabs, and local HTML files open in the browser.
 

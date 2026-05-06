@@ -3299,9 +3299,11 @@ struct PanelCardView: View {
                 runtime: webPanelRuntimeRegistry.browserRuntime(for: panelID),
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
                 isActivePanel: isFocused,
+                screenshotSendCandidates: browserScreenshotSendCandidates,
                 activatePanel: {
                     _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
-                }
+                },
+                sendScreenshotToAgent: sendBrowserScreenshot(_:to:)
             )
             .frame(
                 maxWidth: .infinity,
@@ -3469,6 +3471,20 @@ struct PanelCardView: View {
         )
     }
 
+    private var browserScreenshotSendCandidates: [BrowserScreenshotSendCandidate] {
+        guard let workspace = store.state.workspacesByID[workspaceID],
+              case .web(let webState) = panelState,
+              webState.definition == .browser else {
+            return []
+        }
+
+        return BrowserScreenshotSendCandidateBuilder.candidates(
+            workspace: workspace,
+            browserPanelID: panelID,
+            sessionRegistry: sessionRuntimeStore.sessionRegistry
+        )
+    }
+
     static func scratchpadBindingStatus(
         for sessionLink: ScratchpadSessionLink?,
         sessionRegistry: SessionRegistry
@@ -3492,6 +3508,18 @@ struct PanelCardView: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func sendBrowserScreenshot(
+        _ fileURL: URL,
+        to candidate: BrowserScreenshotSendCandidate
+    ) -> Bool {
+        let prompt = BrowserScreenshotAgentPromptBuilder.prompt(fileURL: fileURL)
+        return terminalRuntimeRegistry.sendText(
+            prompt,
+            submit: true,
+            panelID: candidate.panelID
+        )
     }
 
     private func rebindScratchpad(to candidate: ScratchpadAgentBindCandidate) {

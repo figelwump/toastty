@@ -437,6 +437,34 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         return true
     }
 
+    func captureVisibleScreenshot() async throws -> NSImage {
+        guard webView.window != nil,
+              webView.isHidden == false else {
+            throw BrowserPanelScreenshotError.snapshotUnavailable
+        }
+        guard webView.bounds.width > 0,
+              webView.bounds.height > 0 else {
+            throw BrowserPanelScreenshotError.emptySnapshotBounds
+        }
+
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = webView.bounds
+
+        return try await withCheckedThrowingContinuation { continuation in
+            webView.takeSnapshot(with: configuration) { image, error in
+                if let image {
+                    continuation.resume(returning: image)
+                    return
+                }
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                continuation.resume(throwing: BrowserPanelScreenshotError.snapshotUnavailable)
+            }
+        }
+    }
+
     func automationState() -> BrowserPanelRuntimeAutomationState {
         BrowserPanelRuntimeAutomationState(
             lifecycleState: lifecycleState,

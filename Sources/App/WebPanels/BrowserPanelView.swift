@@ -1,5 +1,7 @@
+import AppKit
 import CoreState
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct BrowserPanelView: View {
     let panelID: UUID
@@ -7,10 +9,13 @@ struct BrowserPanelView: View {
     @ObservedObject var runtime: BrowserPanelRuntime
     let isEffectivelyVisible: Bool
     let isActivePanel: Bool
+    let screenshotSendCandidates: [BrowserScreenshotSendCandidate]
     let activatePanel: () -> Void
+    let sendScreenshotToAgent: (URL, BrowserScreenshotSendCandidate) -> Bool
 
     @State private var addressDraft = ""
     @State private var isEditingAddressField = false
+    @State private var screenshotInFlight = false
 
     private static let toolbarHeight: CGFloat = 34
 
@@ -106,6 +111,17 @@ struct BrowserPanelView: View {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
             }
+
+            browserToolbarButton(
+                systemImage: "arrow.up.forward.app",
+                helpText: "Open in Default Browser",
+                isDisabled: currentBrowserURL == nil
+            ) {
+                activatePanel()
+                openCurrentURLInDefaultBrowser()
+            }
+
+            browserScreenshotMenu
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -130,22 +146,67 @@ struct BrowserPanelView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(isDisabled ? ToastyTheme.inactiveText : ToastyTheme.primaryText)
-                .frame(width: 22, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(ToastyTheme.surfaceBackground.opacity(isDisabled ? 0.45 : 0.96))
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
-                }
+            browserToolbarIcon(systemImage: systemImage, isDisabled: isDisabled)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .help(helpText)
+    }
+
+    private func browserToolbarIcon(systemImage: String, isDisabled: Bool) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(isDisabled ? ToastyTheme.inactiveText : ToastyTheme.primaryText)
+            .frame(width: 22, height: 22)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(ToastyTheme.surfaceBackground.opacity(isDisabled ? 0.45 : 0.96))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+            }
+    }
+
+    private var browserScreenshotMenu: some View {
+        Menu {
+            Button {
+                copyVisibleScreenshot()
+            } label: {
+                Label("Copy Screenshot", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                saveVisibleScreenshotAs()
+            } label: {
+                Label("Save Screenshot As...", systemImage: "square.and.arrow.down")
+            }
+
+            Divider()
+
+            Section("Send to Agent") {
+                if screenshotSendCandidates.isEmpty {
+                    Button("No active sessions in this tab") {}
+                        .disabled(true)
+                } else {
+                    ForEach(screenshotSendCandidates) { candidate in
+                        Button {
+                            sendVisibleScreenshot(to: candidate)
+                        } label: {
+                            Label(candidate.label, systemImage: "paperplane")
+                        }
+                    }
+                }
+            }
+        } label: {
+            browserToolbarIcon(systemImage: "camera", isDisabled: screenshotInFlight)
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .disabled(screenshotInFlight)
+        .help(screenshotInFlight ? "Capturing Screenshot" : "Browser Screenshot")
+        .accessibilityLabel("Browser Screenshot")
+        .accessibilityIdentifier("browser.screenshot.\(panelID.uuidString)")
     }
 
     private func handleAddressEditingChanged(_ isEditing: Bool) {
@@ -188,8 +249,93 @@ struct BrowserPanelView: View {
         _ = runtime.focusWebView()
     }
 
+    private func openCurrentURLInDefaultBrowser() {
+        guard let currentBrowserURL else { return }
+        NSWorkspace.shared.open(currentBrowserURL)
+    }
+
+    private func copyVisibleScreenshot() {
+        performScreenshotAction { screenshot in
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setData(screenshot.pngData, forType: .png)
+        }
+    }
+
+    private func saveVisibleScreenshotAs() {
+        performScreenshotAction { screenshot in
+            let savePanel = NSSavePanel()
+            savePanel.title = "Save Browser Screenshot"
+            savePanel.nameFieldStringValue = screenshot.suggestedFileName
+            savePanel.allowedContentTypes = [.png]
+            savePanel.canCreateDirectories = true
+
+            guard savePanel.runModal() == .OK,
+                  let targetURL = savePanel.url else {
+                return
+            }
+            try screenshot.pngData.write(to: targetURL, options: [.atomic])
+        }
+    }
+
+    private func sendVisibleScreenshot(to candidate: BrowserScreenshotSendCandidate) {
+        performScreenshotAction { screenshot in
+            let fileURL = try BrowserPanelScreenshotWriter.writeQuickScreenshot(
+                pngData: screenshot.pngData
+            )
+            let sent = sendScreenshotToAgent(fileURL, candidate)
+            if sent == false {
+                try? FileManager.default.removeItem(at: fileURL)
+                NSLog(
+                    "Browser screenshot send failed: sessionID=%@ panelID=%@ path=%@",
+                    candidate.sessionID,
+                    candidate.panelID.uuidString,
+                    fileURL.path
+                )
+            }
+        }
+    }
+
+    private func performScreenshotAction(
+        _ operation: @escaping @MainActor (BrowserPanelScreenshot) throws -> Void
+    ) {
+        guard screenshotInFlight == false else { return }
+        activatePanel()
+        screenshotInFlight = true
+
+        Task { @MainActor in
+            defer {
+                screenshotInFlight = false
+            }
+            do {
+                let screenshot = try await captureVisibleScreenshot()
+                try operation(screenshot)
+            } catch {
+                NSLog("Browser screenshot action failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    private func captureVisibleScreenshot() async throws -> BrowserPanelScreenshot {
+        let image = try await runtime.captureVisibleScreenshot()
+        let pngData = try BrowserPanelScreenshotWriter.pngData(from: image)
+        return BrowserPanelScreenshot(
+            pngData: pngData,
+            suggestedFileName: BrowserPanelScreenshotWriter.suggestedFileName(
+                title: webState.title,
+                urlString: displayedAddressString
+            )
+        )
+    }
+
     private func syncAddressDraft() {
         addressDraft = displayedAddressString
+    }
+
+    private var currentBrowserURL: URL? {
+        let address = displayedAddressString
+        guard address.isEmpty == false else { return nil }
+        return URL(string: address)
     }
 
     private var displayedAddressString: String {
