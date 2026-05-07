@@ -40,7 +40,7 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
    - Do not compress an already-settled implementation plan into a lightweight summary just because it is being handed off.
    - If there is no durable plan file yet and no detailed plan exists in-thread, put a concise task-specific plan directly in `WORKTREE_HANDOFF.md`.
 7. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
-   - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` in a right-hand local-document split, and starts the new terminal command in the left terminal pane.
+   - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and starts the new terminal command in the left terminal pane.
    - Background-created workspaces stay marked as new in the sidebar until the user visits them once.
 
 ```bash
@@ -90,7 +90,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 - Before handing off, the new worktree itself should contain the generated Xcode artifacts such as `toastty.xcworkspace` / `*.xcodeproj` from `tuist generate`.
 - Remote wrappers that bootstrap or generate in disposable remote worktrees do not satisfy this handoff requirement for the local worktree.
 - The handoff file must exist before launching the new `cdx` session.
-- The default workspace layout is terminal on the left and the handoff markdown panel in a right split.
+- The default workspace layout is terminal on the left and the handoff markdown file in the right panel.
 - The default startup command should `cd` into the new worktree, export `TOASTTY_DEV_WORKTREE_ROOT`, and start `cdx` with a short prompt that points at `WORKTREE_HANDOFF.md`.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
@@ -105,7 +105,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 
 - After launch, confirm the helper returned the new `workspaceID` and terminal `panelID`.
 - Confirm the original workspace stayed visible while the new workspace was provisioned.
-- Confirm the handoff document opened in a right split of the new workspace.
+- Confirm the handoff document opened in the right panel of the new workspace.
 - Confirm the new local worktree has been bootstrapped successfully, including locally generated Xcode files such as `toastty.xcworkspace`.
 - When picking up a handoff in a worktree, if those generated files are missing locally, rerun `scripts/dev/bootstrap-worktree.sh` before continuing.
 - For validation or debugging, you can override the startup command:
