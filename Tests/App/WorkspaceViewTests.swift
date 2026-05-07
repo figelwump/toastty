@@ -1494,14 +1494,8 @@ final class WorkspaceViewTests: XCTestCase {
 
     @MainActor
     private func pumpMainRunLoop(duration: TimeInterval = 0) {
-        let expectation = expectation(description: "Flush SwiftUI update")
-        DispatchQueue.main.async {
-            expectation.fulfill()
-        }
-        wait(for: [expectation], timeout: 1)
-
-        guard duration > 0 else { return }
-        RunLoop.main.run(until: Date().addingTimeInterval(duration))
+        let pumpDuration = max(duration, 0.01)
+        RunLoop.main.run(until: Date().addingTimeInterval(pumpDuration))
     }
 
     @MainActor
