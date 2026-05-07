@@ -985,17 +985,78 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
     @discardableResult
     func activatePanelIfNeeded(_ panelID: UUID) -> Bool {
-        guard let store else { return false }
+        guard let store else {
+            logActivatePanelDiagnostic(
+                "activate-panel-failed",
+                panelID: panelID,
+                metadata: ["reason": "missing-store"]
+            )
+            return false
+        }
         let state = store.state
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
                 guard workspace.panelState(for: panelID) != nil else { continue }
-                guard workspace.slotID(containingPanelID: panelID) != nil else { continue }
-                return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                guard let slotID = workspace.slotID(containingPanelID: panelID) else {
+                    logActivatePanelDiagnostic(
+                        "activate-panel-failed",
+                        panelID: panelID,
+                        metadata: [
+                            "reason": "panel-without-slot",
+                            "windowID": window.id.uuidString,
+                            "workspaceID": workspaceID.uuidString,
+                            "selectedTabID": workspace.selectedTabID?.uuidString ?? "nil",
+                            "focusedPanelIDBefore": workspace.focusedPanelID?.uuidString ?? "nil",
+                        ]
+                    )
+                    continue
+                }
+                let focusedPanelIDBefore = workspace.focusedPanelID
+                let selectedTabIDBefore = workspace.selectedTabID
+                let didFocus = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                let updatedWorkspace = store.state.workspacesByID[workspaceID]
+                logActivatePanelDiagnostic(
+                    didFocus ? "activate-panel-focused" : "activate-panel-rejected",
+                    panelID: panelID,
+                    metadata: [
+                        "reason": "matched-panel",
+                        "windowID": window.id.uuidString,
+                        "workspaceID": workspaceID.uuidString,
+                        "slotID": slotID.uuidString,
+                        "selectedTabIDBefore": selectedTabIDBefore?.uuidString ?? "nil",
+                        "selectedTabIDAfter": updatedWorkspace?.selectedTabID?.uuidString ?? "nil",
+                        "focusedPanelIDBefore": focusedPanelIDBefore?.uuidString ?? "nil",
+                        "focusedPanelIDAfter": updatedWorkspace?.focusedPanelID?.uuidString ?? "nil",
+                        "storeSendResult": "\(didFocus)",
+                    ]
+                )
+                return didFocus
             }
         }
+        logActivatePanelDiagnostic(
+            "activate-panel-failed",
+            panelID: panelID,
+            metadata: ["reason": "panel-not-found"]
+        )
         return false
+    }
+
+    private func logActivatePanelDiagnostic(
+        _ phase: String,
+        panelID: UUID,
+        metadata: [String: String]
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
+        var metadata = metadata
+        metadata["phase"] = phase
+        metadata["panelID"] = panelID.uuidString
+        ToasttyLog.info(
+            "terminal panel activation diagnostic",
+            category: .input,
+            metadata: metadata
+        )
     }
 
     @discardableResult

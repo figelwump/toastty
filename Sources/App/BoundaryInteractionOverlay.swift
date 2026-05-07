@@ -828,19 +828,58 @@ final class BoundaryInteractionOverlayView: NSView {
     }
 
     private func handleLocalMouseDownMonitorEvent(_ event: NSEvent) -> NSEvent? {
-        guard event.window === window,
-              activeDescriptorID == nil,
-              isVisibleForBoundaryInteraction else {
+        guard event.window === window else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                reason: "window-mismatch"
+            )
+            return event
+        }
+        guard activeDescriptorID == nil else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                reason: "active-descriptor"
+            )
+            return event
+        }
+        guard isVisibleForBoundaryInteraction else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                reason: "overlay-not-visible"
+            )
             return event
         }
 
         let location = localLocation(for: event)
-        guard bounds.contains(location),
-              let descriptor = descriptor(at: location) else {
+        guard bounds.contains(location) else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                location: location,
+                reason: "outside-bounds"
+            )
+            return event
+        }
+        guard let descriptor = descriptor(at: location) else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                location: location,
+                reason: "no-descriptor"
+            )
             return event
         }
 
-        logLocalMouseDownMonitorHit(event: event, descriptor: descriptor, location: location)
+        logLocalMouseDownMonitorDecision(
+            "consume",
+            event: event,
+            descriptor: descriptor,
+            location: location,
+            reason: "boundary-hit"
+        )
         logBoundarySequenceDiagnostic(
             "mouse-down-hit",
             descriptor: descriptor,
@@ -873,10 +912,12 @@ final class BoundaryInteractionOverlayView: NSView {
         return true
     }
 
-    private func logLocalMouseDownMonitorHit(
+    private func logLocalMouseDownMonitorDecision(
+        _ decision: String,
         event: NSEvent,
-        descriptor: BoundaryInteractionDescriptor,
-        location: CGPoint
+        descriptor: BoundaryInteractionDescriptor? = nil,
+        location: CGPoint? = nil,
+        reason: String
     ) {
         guard CursorDiagnostics.enabled else { return }
 
@@ -889,10 +930,20 @@ final class BoundaryInteractionOverlayView: NSView {
             let contentLocation = contentView.convert(event.locationInWindow, from: nil)
             metadata["monitorHitViewIsOverlay"] = "\(contentView.hitTest(contentLocation) === self)"
         }
-        metadata["monitorLocalLocation"] = Self.pointDescription(location)
-        metadata["monitorDescriptorID"] = descriptor.id
+        metadata["monitorDecision"] = decision
+        metadata["monitorDecisionReason"] = reason
+        metadata["monitorWindowMatchesEvent"] = "\(event.window === window)"
+        metadata["monitorOverlayObjectID"] = "\(ObjectIdentifier(self))"
+        if let location {
+            metadata["monitorLocalLocation"] = Self.pointDescription(location)
+        }
+        if let descriptor {
+            metadata["monitorDescriptorID"] = descriptor.id
+        }
         logCursorDiagnostic(
-            "local-mouse-down-monitor-boundary-hit",
+            decision == "consume"
+                ? "local-mouse-down-monitor-boundary-hit"
+                : "local-mouse-down-monitor-pass-through",
             descriptor: descriptor,
             event: event,
             location: location,

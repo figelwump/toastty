@@ -746,23 +746,53 @@ final class TerminalHostView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        _ = activatePanelIfNeeded?()
-        focusHostViewIfNeeded()
+        let firstResponderBefore = window?.firstResponder
+        let activateResult = activatePanelIfNeeded?()
+        let focusResult = focusHostViewIfNeeded()
         if preparePendingCommandClickLinkOpen(with: event) {
+            logMouseFocusDiagnostic(
+                "mouse-down-command-click",
+                event: event,
+                firstResponderBefore: firstResponderBefore,
+                extraMetadata: [
+                    "activatePanelResult": Self.optionalBoolDescription(activateResult),
+                    "focusHostResult": "\(focusResult)",
+                    "preparedCommandClickLink": "true",
+                ]
+            )
             return
         }
-        guard forwardMouseButton(
+        let handled = forwardMouseButton(
             event,
             state: GHOSTTY_MOUSE_PRESS,
             button: GHOSTTY_MOUSE_LEFT
-        ) else {
+        )
+        logMouseFocusDiagnostic(
+            "mouse-down",
+            event: event,
+            firstResponderBefore: firstResponderBefore,
+            extraMetadata: [
+                "activatePanelResult": Self.optionalBoolDescription(activateResult),
+                "focusHostResult": "\(focusResult)",
+                "forwardedMouseButton": "\(handled)",
+                "preparedCommandClickLink": "false",
+            ]
+        )
+        guard handled else {
             super.mouseDown(with: event)
             return
         }
     }
 
     override func mouseUp(with event: NSEvent) {
+        let firstResponderBefore = window?.firstResponder
         if performPendingCommandClickLinkOpen(with: event) {
+            logMouseFocusDiagnostic(
+                "mouse-up-command-click",
+                event: event,
+                firstResponderBefore: firstResponderBefore,
+                extraMetadata: ["performedCommandClickLink": "true"]
+            )
             return
         }
         let handled = forwardMouseButton(
@@ -773,6 +803,16 @@ final class TerminalHostView: NSView {
         if let ghosttySurface {
             ghostty_surface_mouse_pressure(ghosttySurface, 0, 0)
         }
+        logMouseFocusDiagnostic(
+            "mouse-up",
+            event: event,
+            firstResponderBefore: firstResponderBefore,
+            extraMetadata: [
+                "forwardedMouseButton": "\(handled)",
+                "performedCommandClickLink": "false",
+                "resetMousePressure": ghosttySurface == nil ? "false" : "true",
+            ]
+        )
         guard handled else {
             super.mouseUp(with: event)
             return
@@ -1275,10 +1315,62 @@ final class TerminalHostView: NSView {
         handleLocalInterruptKey?(kind)
     }
 
-    private func focusHostViewIfNeeded() {
-        guard let window else { return }
-        guard window.firstResponder !== self else { return }
-        window.makeFirstResponder(self)
+    @discardableResult
+    private func focusHostViewIfNeeded() -> Bool {
+        guard let window else { return false }
+        guard window.firstResponder !== self else { return true }
+        return window.makeFirstResponder(self)
+    }
+
+    private func logMouseFocusDiagnostic(
+        _ phase: String,
+        event: NSEvent,
+        firstResponderBefore: NSResponder?,
+        extraMetadata: [String: String] = [:]
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
+        var metadata = extraMetadata
+        metadata["phase"] = phase
+        metadata["eventType"] = DraggableInteractionLog.eventTypeDescription(event.type)
+        metadata["eventWindowLocation"] = DraggableInteractionLog.pointDescription(event.locationInWindow)
+        metadata["eventLocalLocation"] = DraggableInteractionLog.pointDescription(convert(event.locationInWindow, from: nil))
+        metadata["buttonNumber"] = "\(event.buttonNumber)"
+        metadata["frame"] = DraggableInteractionLog.rectDescription(frame)
+        metadata["bounds"] = DraggableInteractionLog.rectDescription(bounds)
+        metadata["hasGhosttySurface"] = ghosttySurface == nil ? "false" : "true"
+        metadata["firstResponderBefore"] = Self.responderDescription(firstResponderBefore)
+        metadata["firstResponderAfter"] = Self.responderDescription(window?.firstResponder)
+        metadata["firstResponderAfterIsHost"] = "\(window?.firstResponder === self)"
+        if let window {
+            metadata["windowNumber"] = "\(window.windowNumber)"
+            metadata["windowIsKeyWindow"] = "\(window.isKeyWindow)"
+            metadata["windowCursorRectsEnabled"] = "\(window.areCursorRectsEnabled)"
+            metadata.merge(
+                CursorDiagnostics.hitTestMetadata(
+                    window: window,
+                    windowLocation: event.locationInWindow,
+                    referenceView: self
+                ),
+                uniquingKeysWith: { _, new in new }
+            )
+        }
+
+        ToasttyLog.info(
+            "terminal panel mouse focus diagnostic",
+            category: .input,
+            metadata: metadata
+        )
+    }
+
+    private static func responderDescription(_ responder: NSResponder?) -> String {
+        guard let responder else { return "nil" }
+        return "\(String(describing: type(of: responder)))#\(ObjectIdentifier(responder))"
+    }
+
+    private static func optionalBoolDescription(_ value: Bool?) -> String {
+        guard let value else { return "nil" }
+        return value ? "true" : "false"
     }
 
     func makeContextMenu(
