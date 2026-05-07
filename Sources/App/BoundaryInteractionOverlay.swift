@@ -2,6 +2,14 @@ import AppKit
 import CoreState
 import SwiftUI
 
+@MainActor
+private func hitTestPoint(for view: NSView, windowLocation: NSPoint) -> NSPoint {
+    if let superview = view.superview {
+        return superview.convert(windowLocation, from: nil)
+    }
+    return view.convert(windowLocation, from: nil)
+}
+
 enum CursorDiagnostics {
     static let environmentKey = "TOASTTY_BOUNDARY_CURSOR_DIAGNOSTICS"
     static let enabled = truthy(ProcessInfo.processInfo.environment[environmentKey])
@@ -35,8 +43,7 @@ enum CursorDiagnostics {
             return ["windowHitView": "nil"]
         }
 
-        let contentLocation = contentView.convert(windowLocation, from: nil)
-        let hitView = contentView.hitTest(contentLocation)
+        let hitView = contentView.hitTest(hitTestPoint(for: contentView, windowLocation: windowLocation))
         return [
             "windowHitView": viewDescription(hitView),
             "windowHitViewHierarchy": viewHierarchyDescription(hitView, stopAt: referenceView),
@@ -159,6 +166,10 @@ final class BoundaryInteractionOverlayView: NSView {
     var backingScaleFactorProvider: (() -> CGFloat?)?
     #if DEBUG
     var cursorSetter: (NSCursor) -> Void = { $0.set() }
+    var trackingEventProviderForTesting: ((NSWindow) -> NSEvent?)?
+    var localMouseDownMonitorInstallerForTesting:
+        ((NSEvent.EventTypeMask, @escaping (NSEvent) -> NSEvent?) -> Any)?
+    var localMouseDownMonitorRemoverForTesting: ((Any) -> Void)?
     #endif
     private(set) var boundaryTrackingAreaRebuildCount = 0
     private(set) var deferredCursorReassertionCount = 0
@@ -170,6 +181,11 @@ final class BoundaryInteractionOverlayView: NSView {
     func performCursorReassertionForTesting(descriptorID: String) {
         pendingCursorReassertionDescriptorID = descriptorID
         performPendingCursorReassertion()
+    }
+
+    @discardableResult
+    func handleLocalMouseDownMonitorEventForTesting(_ event: NSEvent) -> NSEvent? {
+        handleLocalMouseDownMonitorEvent(event)
     }
     #endif
 
@@ -189,6 +205,7 @@ final class BoundaryInteractionOverlayView: NSView {
     private var isTrackingBoundarySequence = false
     private var pendingCursorReassertionDescriptorID: String?
     private var isCursorReassertionScheduled = false
+    private var localMouseDownMonitor: Any?
 
     override var isFlipped: Bool { true }
 
@@ -248,10 +265,10 @@ final class BoundaryInteractionOverlayView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard isHidden == false,
-              alphaValue > 0.01,
-              bounds.contains(point),
-              descriptor(at: point) != nil else {
+        let localPoint = superview.map { convert(point, from: $0) } ?? point
+        guard isVisibleForBoundaryInteraction,
+              bounds.contains(localPoint),
+              descriptor(at: localPoint) != nil else {
             return nil
         }
 
@@ -334,10 +351,24 @@ final class BoundaryInteractionOverlayView: NSView {
     override func mouseDown(with event: NSEvent) {
         let location = localLocation(for: event)
         guard let descriptor = descriptor(at: location) else {
+            logBoundarySequenceDiagnostic(
+                "mouse-down-miss",
+                event: event,
+                location: location
+            )
+            if forwardMouseDownMissToUnderlyingHitView(event) {
+                return
+            }
             super.mouseDown(with: event)
             return
         }
 
+        logBoundarySequenceDiagnostic(
+            "mouse-down-hit",
+            descriptor: descriptor,
+            event: event,
+            location: location
+        )
         setHoveredDescriptor(descriptor)
         beginBoundarySequence(with: event, descriptor: descriptor)
         guard usesEventTrackingLoop else { return }
@@ -356,6 +387,7 @@ final class BoundaryInteractionOverlayView: NSView {
         super.viewDidMoveToWindow()
         if window == nil {
             logCursorDiagnostic("view-did-move-to-window-removed")
+            removeLocalMouseDownMonitor()
             setHoveredDescriptor(nil)
             if isTrackingBoundarySequence == false {
                 cancelBoundarySequence(
@@ -365,6 +397,7 @@ final class BoundaryInteractionOverlayView: NSView {
                 )
             }
         } else {
+            installLocalMouseDownMonitorIfNeeded()
             logCursorDiagnostic("view-did-move-to-window-attached")
             refreshBoundaryInteractionRegionsIfNeeded(force: true)
             reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: true)
@@ -390,6 +423,7 @@ final class BoundaryInteractionOverlayView: NSView {
                 WindowMovementSuppression.restore(ownerID: ownerID, reason: reason)
             }
         }
+        removeLocalMouseDownMonitor()
     }
 
     private func descriptor(at location: CGPoint) -> BoundaryInteractionDescriptor? {
@@ -539,6 +573,12 @@ final class BoundaryInteractionOverlayView: NSView {
             location: startLocation ?? .zero
         )
         suppressWindowMovementForCurrentSequence()
+        logBoundarySequenceDiagnostic(
+            "drag-begin",
+            descriptor: descriptor,
+            event: event,
+            value: lastInteractionValue
+        )
         if let lastInteractionValue {
             descriptor.onBegan(lastInteractionValue)
         }
@@ -547,15 +587,31 @@ final class BoundaryInteractionOverlayView: NSView {
     private func handleBoundaryDragged(with event: NSEvent) {
         guard let activeDescriptorID else { return }
         guard let descriptor = descriptorsByID[activeDescriptorID] else {
+            logBoundarySequenceDiagnostic(
+                "drag-descriptor-missing",
+                event: event,
+                extraMetadata: ["missingDescriptorID": activeDescriptorID]
+            )
             cancelBoundarySequence(reason: "descriptor-missing-during-drag", notifyEnded: true)
             return
         }
         guard let value = interactionValue(for: event) else {
+            logBoundarySequenceDiagnostic(
+                "drag-value-missing",
+                descriptor: descriptor,
+                event: event
+            )
             cancelBoundarySequence(reason: "drag-without-start", notifyEnded: true)
             return
         }
 
         lastInteractionValue = value
+        logBoundarySequenceDiagnostic(
+            "drag-change",
+            descriptor: descriptor,
+            event: event,
+            value: value
+        )
         descriptor.onChanged(value)
     }
 
@@ -564,10 +620,21 @@ final class BoundaryInteractionOverlayView: NSView {
         let descriptor = descriptorsByID[activeDescriptorID] ?? capturedDescriptor
         guard let value = interactionValue(for: event),
               let descriptor else {
+            logBoundarySequenceDiagnostic(
+                "drag-end-value-missing",
+                event: event,
+                extraMetadata: ["finishingDescriptorID": activeDescriptorID]
+            )
             cancelBoundarySequence(reason: "mouse-up-without-start", notifyEnded: true)
             return
         }
 
+        logBoundarySequenceDiagnostic(
+            "drag-end",
+            descriptor: descriptor,
+            event: event,
+            value: value
+        )
         clearBoundarySequenceState()
         restoreSequenceWindowMovementIfNeeded(reason: "mouse-up")
         descriptor.onEnded(value)
@@ -590,12 +657,7 @@ final class BoundaryInteractionOverlayView: NSView {
 
         while activeDescriptorID != nil {
             let timeout = Date(timeIntervalSinceNow: 60)
-            guard let nextEvent = trackingWindow.nextEvent(
-                matching: Self.trackingEventMask,
-                until: timeout,
-                inMode: .eventTracking,
-                dequeue: true
-            ) else {
+            guard let nextEvent = nextTrackingEvent(in: trackingWindow, until: timeout) else {
                 cancelBoundarySequence(
                     reason: "tracking-timeout",
                     notifyEnded: true,
@@ -618,8 +680,23 @@ final class BoundaryInteractionOverlayView: NSView {
         }
     }
 
+    private func nextTrackingEvent(in window: NSWindow, until timeout: Date) -> NSEvent? {
+        #if DEBUG
+        if let trackingEventProviderForTesting {
+            return trackingEventProviderForTesting(window)
+        }
+        #endif
+
+        return window.nextEvent(
+            matching: Self.trackingEventMask,
+            until: timeout,
+            inMode: .eventTracking,
+            dequeue: true
+        )
+    }
+
     private func cancelBoundarySequence(
-        reason _: String,
+        reason: String,
         notifyEnded: Bool,
         deliversCallbacksImmediately: Bool = true
     ) {
@@ -632,6 +709,16 @@ final class BoundaryInteractionOverlayView: NSView {
 
         let descriptor = capturedDescriptor
         let value = lastInteractionValue
+        logBoundarySequenceDiagnostic(
+            "drag-cancel",
+            descriptor: descriptor,
+            value: value,
+            extraMetadata: [
+                "cancelReason": reason,
+                "notifyEnded": "\(notifyEnded)",
+                "deliversCallbacksImmediately": "\(deliversCallbacksImmediately)",
+            ]
+        )
         clearBoundarySequenceState()
         restoreSequenceWindowMovementIfNeeded(reason: "cancel")
         if notifyEnded,
@@ -694,6 +781,152 @@ final class BoundaryInteractionOverlayView: NSView {
         return convert(window.mouseLocationOutsideOfEventStream, from: nil)
     }
 
+    private func forwardMouseDownMissToUnderlyingHitView(_ event: NSEvent) -> Bool {
+        guard let contentView = window?.contentView else { return false }
+
+        let windowContentCandidate = contentView.hitTest(
+            hitTestPoint(for: contentView, windowLocation: event.locationInWindow)
+        )
+        let superviewCandidate = superview.map { container -> NSView? in
+            container.hitTest(hitTestPoint(for: container, windowLocation: event.locationInWindow))
+        } ?? nil
+
+        logMouseDownMissForwardingCandidates(
+            event: event,
+            windowContentView: contentView,
+            windowContentCandidate: windowContentCandidate,
+            superviewCandidate: superviewCandidate
+        )
+
+        let forwardingCandidates: [(scope: String, view: NSView?)] = [
+            ("superview", superviewCandidate),
+            ("windowContentView", windowContentCandidate),
+        ]
+
+        for candidate in forwardingCandidates {
+            guard let hitView = candidate.view,
+                  hitView !== self,
+                  hitView.isDescendant(of: self) == false else {
+                continue
+            }
+
+            let forwardedLocalLocation = hitView.convert(event.locationInWindow, from: nil)
+            guard hitView.bounds.contains(forwardedLocalLocation) else {
+                logCursorDiagnostic(
+                    "mouse-down-miss-forward-rejected",
+                    event: event,
+                    location: localLocation(for: event),
+                    extraMetadata: [
+                        "rejectedForwardingScope": candidate.scope,
+                        "rejectedHitView": CursorDiagnostics.viewDescription(hitView),
+                        "rejectedHitViewHierarchy": CursorDiagnostics.viewHierarchyDescription(hitView, stopAt: self),
+                        "rejectedHitViewFrame": Self.rectDescription(hitView.frame),
+                        "rejectedHitViewBounds": Self.rectDescription(hitView.bounds),
+                        "rejectedLocalLocation": Self.pointDescription(forwardedLocalLocation),
+                        "rejectedLocalLocationInsideBounds": "false",
+                        "rejectedReason": "local-location-outside-bounds",
+                    ]
+                )
+                continue
+            }
+            logCursorDiagnostic(
+                "mouse-down-miss-forwarded",
+                event: event,
+                location: localLocation(for: event),
+                extraMetadata: [
+                    "forwardedForwardingScope": candidate.scope,
+                    "forwardedHitView": CursorDiagnostics.viewDescription(hitView),
+                    "forwardedHitViewHierarchy": CursorDiagnostics.viewHierarchyDescription(hitView, stopAt: self),
+                    "forwardedHitViewFrame": Self.rectDescription(hitView.frame),
+                    "forwardedHitViewBounds": Self.rectDescription(hitView.bounds),
+                    "forwardedLocalLocation": Self.pointDescription(forwardedLocalLocation),
+                    "forwardedLocalLocationInsideBounds": "\(hitView.bounds.contains(forwardedLocalLocation))",
+                ]
+            )
+            hitView.mouseDown(with: event)
+            return true
+        }
+
+        return false
+    }
+
+    private func logMouseDownMissForwardingCandidates(
+        event: NSEvent,
+        windowContentView: NSView,
+        windowContentCandidate: NSView?,
+        superviewCandidate: NSView?
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
+        var metadata: [String: String] = [
+            "currentForwardingScope": "windowContentView",
+            "proposedForwardingScope": "superview",
+            "windowContentLocation": Self.pointDescription(windowContentView.convert(event.locationInWindow, from: nil)),
+        ]
+        if let superview {
+            metadata["superviewLocation"] = Self.pointDescription(superview.convert(event.locationInWindow, from: nil))
+            metadata["superviewFrame"] = Self.rectDescription(superview.frame)
+            metadata["superviewBounds"] = Self.rectDescription(superview.bounds)
+        } else {
+            metadata["superviewLocation"] = "nil"
+            metadata["superviewFrame"] = "nil"
+            metadata["superviewBounds"] = "nil"
+        }
+        metadata.merge(
+            forwardingCandidateMetadata(
+                prefix: "windowContentCandidate",
+                candidate: windowContentCandidate,
+                event: event
+            ),
+            uniquingKeysWith: { _, new in new }
+        )
+        metadata.merge(
+            forwardingCandidateMetadata(
+                prefix: "superviewCandidate",
+                candidate: superviewCandidate,
+                event: event
+            ),
+            uniquingKeysWith: { _, new in new }
+        )
+
+        logCursorDiagnostic(
+            "mouse-down-miss-forwarding-candidates",
+            event: event,
+            location: localLocation(for: event),
+            extraMetadata: metadata
+        )
+    }
+
+    private func forwardingCandidateMetadata(
+        prefix: String,
+        candidate: NSView?,
+        event: NSEvent
+    ) -> [String: String] {
+        guard let candidate else {
+            return [
+                "\(prefix)HitView": "nil",
+                "\(prefix)WouldForwardCurrent": "false",
+                "\(prefix)WouldForwardWithBoundsGuard": "false",
+            ]
+        }
+
+        let localLocation = candidate.convert(event.locationInWindow, from: nil)
+        let isForwardable = candidate !== self && candidate.isDescendant(of: self) == false
+        let containsLocalLocation = candidate.bounds.contains(localLocation)
+        return [
+            "\(prefix)HitView": CursorDiagnostics.viewDescription(candidate),
+            "\(prefix)HitViewHierarchy": CursorDiagnostics.viewHierarchyDescription(candidate, stopAt: self),
+            "\(prefix)Frame": Self.rectDescription(candidate.frame),
+            "\(prefix)Bounds": Self.rectDescription(candidate.bounds),
+            "\(prefix)LocalLocation": Self.pointDescription(localLocation),
+            "\(prefix)ContainsLocalLocation": "\(containsLocalLocation)",
+            "\(prefix)IsOverlay": "\(candidate === self)",
+            "\(prefix)IsOverlayDescendant": "\(candidate.isDescendant(of: self))",
+            "\(prefix)WouldForwardCurrent": "\(isForwardable)",
+            "\(prefix)WouldForwardWithBoundsGuard": "\(isForwardable && containsLocalLocation)",
+        ]
+    }
+
     private func suppressWindowMovementForCurrentSequence() {
         guard isSequenceSuppressingWindowMovement == false else { return }
         guard window != nil else { return }
@@ -716,6 +949,165 @@ final class BoundaryInteractionOverlayView: NSView {
             removeTrackingArea(trackingArea)
         }
         boundaryTrackingAreas.removeAll()
+    }
+
+    private func installLocalMouseDownMonitorIfNeeded() {
+        guard localMouseDownMonitor == nil else {
+            return
+        }
+
+        let handler: (NSEvent) -> NSEvent? = { [weak self] event in
+            guard let self else { return event }
+            return self.handleLocalMouseDownMonitorEvent(event)
+        }
+        #if DEBUG
+        if let localMouseDownMonitorInstallerForTesting {
+            localMouseDownMonitor = localMouseDownMonitorInstallerForTesting(.leftMouseDown, handler)
+            return
+        }
+        #endif
+
+        localMouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: handler)
+    }
+
+    private func removeLocalMouseDownMonitor() {
+        guard let localMouseDownMonitor else { return }
+        #if DEBUG
+        if let localMouseDownMonitorRemoverForTesting {
+            localMouseDownMonitorRemoverForTesting(localMouseDownMonitor)
+            self.localMouseDownMonitor = nil
+            return
+        }
+        #endif
+
+        NSEvent.removeMonitor(localMouseDownMonitor)
+        self.localMouseDownMonitor = nil
+    }
+
+    private func handleLocalMouseDownMonitorEvent(_ event: NSEvent) -> NSEvent? {
+        guard event.window === window else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                reason: "window-mismatch"
+            )
+            return event
+        }
+        guard activeDescriptorID == nil else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                reason: "active-descriptor"
+            )
+            return event
+        }
+        guard isVisibleForBoundaryInteraction else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                reason: "overlay-not-visible"
+            )
+            return event
+        }
+
+        let location = localLocation(for: event)
+        guard bounds.contains(location) else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                location: location,
+                reason: "outside-bounds"
+            )
+            return event
+        }
+        guard let descriptor = descriptor(at: location) else {
+            logLocalMouseDownMonitorDecision(
+                "pass-through",
+                event: event,
+                location: location,
+                reason: "no-descriptor"
+            )
+            return event
+        }
+
+        logLocalMouseDownMonitorDecision(
+            "consume",
+            event: event,
+            descriptor: descriptor,
+            location: location,
+            reason: "boundary-hit"
+        )
+        logBoundarySequenceDiagnostic(
+            "mouse-down-hit",
+            descriptor: descriptor,
+            event: event,
+            location: location,
+            extraMetadata: ["source": "local-monitor"]
+        )
+        setHoveredDescriptor(descriptor)
+        beginBoundarySequence(with: event, descriptor: descriptor)
+        guard usesEventTrackingLoop else { return nil }
+        trackBoundarySequence(startingWith: event)
+        return nil
+    }
+
+    private var isVisibleForBoundaryInteraction: Bool {
+        guard isHidden == false,
+              alphaValue > 0.01 else {
+            return false
+        }
+
+        var ancestor = superview
+        while let view = ancestor {
+            guard view.isHidden == false,
+                  view.alphaValue > 0.01 else {
+                return false
+            }
+            ancestor = view.superview
+        }
+
+        return true
+    }
+
+    private func logLocalMouseDownMonitorDecision(
+        _ decision: String,
+        event: NSEvent,
+        descriptor: BoundaryInteractionDescriptor? = nil,
+        location: CGPoint? = nil,
+        reason: String
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
+        var metadata = CursorDiagnostics.hitTestMetadata(
+            window: window,
+            windowLocation: event.locationInWindow,
+            referenceView: self
+        )
+        if let contentView = window?.contentView {
+            let hitView = contentView.hitTest(
+                hitTestPoint(for: contentView, windowLocation: event.locationInWindow)
+            )
+            metadata["monitorHitViewIsOverlay"] = "\(hitView === self)"
+        }
+        metadata["monitorDecision"] = decision
+        metadata["monitorDecisionReason"] = reason
+        metadata["monitorWindowMatchesEvent"] = "\(event.window === window)"
+        metadata["monitorOverlayObjectID"] = "\(ObjectIdentifier(self))"
+        if let location {
+            metadata["monitorLocalLocation"] = Self.pointDescription(location)
+        }
+        if let descriptor {
+            metadata["monitorDescriptorID"] = descriptor.id
+        }
+        logCursorDiagnostic(
+            decision == "consume"
+                ? "local-mouse-down-monitor-boundary-hit"
+                : "local-mouse-down-monitor-pass-through",
+            descriptor: descriptor,
+            event: event,
+            location: location,
+            extraMetadata: metadata
+        )
     }
 
     private func refreshBoundaryInteractionRegionsIfNeeded(force: Bool = false) {
@@ -967,8 +1359,38 @@ final class BoundaryInteractionOverlayView: NSView {
         )
     }
 
+    private func logBoundarySequenceDiagnostic(
+        _ phase: String,
+        descriptor: BoundaryInteractionDescriptor? = nil,
+        event: NSEvent? = nil,
+        location: CGPoint? = nil,
+        value: BoundaryInteractionValue? = nil,
+        extraMetadata: [String: String] = [:]
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
+        var metadata = extraMetadata
+        if let value {
+            metadata["valueDescriptorID"] = value.descriptorID
+            metadata["valueStartLocation"] = Self.pointDescription(value.startLocation)
+            metadata["valueLocation"] = Self.pointDescription(value.location)
+            metadata["valueTranslation"] = Self.sizeDescription(value.translation)
+        }
+        logCursorDiagnostic(
+            phase,
+            descriptor: descriptor,
+            event: event,
+            location: location,
+            extraMetadata: metadata
+        )
+    }
+
     private static func pointDescription(_ point: CGPoint) -> String {
         String(format: "%.1f,%.1f", point.x, point.y)
+    }
+
+    private static func sizeDescription(_ size: CGSize) -> String {
+        String(format: "%.1fx%.1f", size.width, size.height)
     }
 
     private static func rectDescription(_ rect: CGRect) -> String {

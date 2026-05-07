@@ -25,6 +25,44 @@ struct WorkspaceLayoutPersistenceStoreTests {
     }
 
     @Test
+    func persistsCommittedSplitRatio() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+
+        let splitNodeID: UUID
+        if case .split(let nodeID, _, _, _, _) = try #require(state.workspacesByID[workspaceID]?.layoutTree) {
+            splitNodeID = nodeID
+        } else {
+            Issue.record("Expected bootstrap split")
+            return
+        }
+        #expect(
+            reducer.send(
+                .setLayoutSplitRatio(workspaceID: workspaceID, nodeID: splitNodeID, ratio: 0.68),
+                state: &state
+            )
+        )
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        #expect(store.persistLayout(WorkspaceLayoutSnapshot(state: state), for: "desktop"))
+
+        let loaded = try #require(store.loadLayout(for: "desktop"))
+        let restoredState = loaded.layout.makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        guard case .split(_, _, let restoredRatio, _, _) = restoredWorkspace.layoutTree else {
+            Issue.record("Expected restored split")
+            return
+        }
+
+        #expect(restoredRatio == 0.68)
+    }
+
+    @Test
     func usesFallbackAndSingleProfileResolutionOrder() throws {
         let fileURL = try makeTempStoreURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }

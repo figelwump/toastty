@@ -88,6 +88,7 @@ public enum AppAction: Equatable, Sendable {
     )
     case focusSlot(workspaceID: UUID, direction: SlotFocusDirection)
     case resizeFocusedSlotSplit(workspaceID: UUID, direction: SplitResizeDirection, amount: Int)
+    case setLayoutSplitRatio(workspaceID: UUID, nodeID: UUID, ratio: Double)
     case equalizeLayoutSplits(workspaceID: UUID)
     case createTerminalPanel(workspaceID: UUID, slotID: UUID)
     case updateTerminalPanelMetadata(panelID: UUID, title: String?, cwd: String?)
@@ -204,6 +205,8 @@ public extension AppAction {
             return "focusSlot"
         case .resizeFocusedSlotSplit:
             return "resizeFocusedSlotSplit"
+        case .setLayoutSplitRatio:
+            return "setLayoutSplitRatio"
         case .equalizeLayoutSplits:
             return "equalizeLayoutSplits"
         case .createTerminalPanel:

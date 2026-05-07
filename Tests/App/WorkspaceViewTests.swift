@@ -304,6 +304,106 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testSplitDividerResizeHandleFrameExpandsHorizontalSplitVertically() {
+        let placement = LayoutDividerPlacement(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            frame: LayoutFrame(minX: 120, minY: 20, width: 1, height: 180),
+            parentFrame: LayoutFrame(minX: 10, minY: 20, width: 300, height: 180),
+            adjustedPrimaryDimension: 299
+        )
+
+        XCTAssertEqual(
+            WorkspaceView.splitDividerResizeHandleFrame(for: placement),
+            CGRect(x: 115.5, y: 20, width: 10, height: 180)
+        )
+    }
+
+    func testSplitDividerResizeHandleFrameExpandsVerticalSplitHorizontally() {
+        let placement = LayoutDividerPlacement(
+            nodeID: UUID(),
+            orientation: .vertical,
+            frame: LayoutFrame(minX: 10, minY: 120, width: 300, height: 1),
+            parentFrame: LayoutFrame(minX: 10, minY: 20, width: 300, height: 180),
+            adjustedPrimaryDimension: 179
+        )
+
+        XCTAssertEqual(
+            WorkspaceView.splitDividerResizeHandleFrame(for: placement),
+            CGRect(x: 10, y: 115.5, width: 300, height: 10)
+        )
+    }
+
+    func testSplitDividerRatioUsesPrimaryDragAxisAndMinimumPanelClamp() {
+        XCTAssertEqual(
+            WorkspaceView.splitDividerRatio(
+                startRatio: 0.5,
+                translation: CGSize(width: 40, height: 90),
+                orientation: .horizontal,
+                adjustedPrimaryDimension: 400
+            ),
+            0.6
+        )
+        XCTAssertEqual(
+            WorkspaceView.splitDividerRatio(
+                startRatio: 0.5,
+                translation: CGSize(width: 40, height: -160),
+                orientation: .vertical,
+                adjustedPrimaryDimension: 400
+            ),
+            0.2
+        )
+    }
+
+    @MainActor
+    func testSplitResizeCoordinatorDoesNotCommitPlainClickOnPixelClampedDivider() {
+        let coordinator = WorkspaceSplitResizeCoordinator()
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let nodeID = UUID()
+
+        coordinator.begin(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            nodeID: nodeID,
+            orientation: .horizontal,
+            startRatio: 0.1,
+            adjustedPrimaryDimension: 400
+        )
+
+        XCTAssertNil(coordinator.end(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+    }
+
+    @MainActor
+    func testSplitResizeCoordinatorCommitsOnlyEffectiveDragChange() {
+        let coordinator = WorkspaceSplitResizeCoordinator()
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let nodeID = UUID()
+
+        coordinator.begin(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            nodeID: nodeID,
+            orientation: .horizontal,
+            startRatio: 0.1,
+            adjustedPrimaryDimension: 400
+        )
+        coordinator.update(translation: CGSize(width: -20, height: 0))
+        XCTAssertNil(coordinator.end(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+
+        coordinator.begin(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            nodeID: nodeID,
+            orientation: .horizontal,
+            startRatio: 0.1,
+            adjustedPrimaryDimension: 400
+        )
+        coordinator.update(translation: CGSize(width: 20, height: 0))
+        XCTAssertEqual(coordinator.end(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID), 0.25)
+    }
+
     func testRightAuxPanelVisibilityAnimationOnlyRunsForSelectedTabSurface() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(

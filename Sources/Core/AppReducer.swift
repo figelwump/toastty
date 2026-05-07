@@ -763,6 +763,14 @@ public struct AppReducer {
                 state: &state
             )
 
+        case .setLayoutSplitRatio(let workspaceID, let nodeID, let ratio):
+            return setLayoutSplitRatio(
+                workspaceID: workspaceID,
+                nodeID: nodeID,
+                ratio: ratio,
+                state: &state
+            )
+
         case .equalizeLayoutSplits(let workspaceID):
             return equalizeLayoutSplits(workspaceID: workspaceID, state: &state)
 
@@ -1624,6 +1632,63 @@ public struct AppReducer {
         case .up, .down:
             return 0
         }
+    }
+
+    private static func setLayoutSplitRatio(
+        workspaceID: UUID,
+        nodeID: UUID,
+        ratio: Double,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID],
+              let selectedTabID = workspace.resolvedSelectedTabID,
+              var selectedTab = workspace.tab(id: selectedTabID) else {
+            ToasttyLog.debug(
+                "Set layout split ratio rejected: workspace or selected tab missing",
+                category: .reducer,
+                metadata: ["workspace_id": workspaceID.uuidString]
+            )
+            return false
+        }
+
+        guard selectedTab.focusedPanelModeActive == false else {
+            ToasttyLog.debug(
+                "Set layout split ratio rejected: focused panel mode active",
+                category: .reducer,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "node_id": nodeID.uuidString,
+                ]
+            )
+            return false
+        }
+
+        guard let updatedSplitTree = WorkspaceSplitTree(root: selectedTab.layoutTree)
+            .settingSplitRatio(nodeID: nodeID, ratio: ratio) else {
+            ToasttyLog.debug(
+                "Set layout split ratio rejected: split missing or unchanged",
+                category: .reducer,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "node_id": nodeID.uuidString,
+                ]
+            )
+            return false
+        }
+
+        selectedTab.layoutTree = updatedSplitTree.root
+        workspace.tabsByID[selectedTabID] = selectedTab
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+        ToasttyLog.debug(
+            "Set layout split ratio applied",
+            category: .reducer,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "node_id": nodeID.uuidString,
+                "ratio": String(ratio),
+            ]
+        )
+        return true
     }
 
     private static func equalizeLayoutSplits(workspaceID: UUID, state: inout AppState) -> Bool {

@@ -385,6 +385,117 @@ struct WorkspaceSplitTreeTests {
     }
 
     @Test
+    func settingSplitRatioUpdatesRootSplit() throws {
+        let rootNodeID = UUID()
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
+        let tree = WorkspaceSplitTree(
+            root: .split(
+                nodeID: rootNodeID,
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: leftSlotID, panelID: UUID()),
+                second: .slot(slotID: rightSlotID, panelID: UUID())
+            )
+        )
+
+        let updatedTree = try #require(tree.settingSplitRatio(nodeID: rootNodeID, ratio: 0.7))
+
+        guard case .split(let updatedNodeID, let orientation, let ratio, let first, let second) = updatedTree.root,
+              case .slot(let updatedLeftSlotID, _) = first,
+              case .slot(let updatedRightSlotID, _) = second else {
+            Issue.record("expected updated root split")
+            return
+        }
+
+        #expect(updatedNodeID == rootNodeID)
+        #expect(orientation == .horizontal)
+        #expect(ratio == 0.7)
+        #expect(updatedLeftSlotID == leftSlotID)
+        #expect(updatedRightSlotID == rightSlotID)
+    }
+
+    @Test
+    func settingSplitRatioUpdatesNestedSplitOnly() throws {
+        let rootNodeID = UUID()
+        let nestedNodeID = UUID()
+        let tree = WorkspaceSplitTree(
+            root: .split(
+                nodeID: rootNodeID,
+                orientation: .horizontal,
+                ratio: 0.4,
+                first: .slot(slotID: UUID(), panelID: UUID()),
+                second: .split(
+                    nodeID: nestedNodeID,
+                    orientation: .vertical,
+                    ratio: 0.5,
+                    first: .slot(slotID: UUID(), panelID: UUID()),
+                    second: .slot(slotID: UUID(), panelID: UUID())
+                )
+            )
+        )
+
+        let updatedTree = try #require(tree.settingSplitRatio(nodeID: nestedNodeID, ratio: 0.65))
+
+        guard case .split(let updatedRootNodeID, _, let rootRatio, _, let nestedNode) = updatedTree.root,
+              case .split(let updatedNestedNodeID, _, let nestedRatio, _, _) = nestedNode else {
+            Issue.record("expected updated nested split")
+            return
+        }
+
+        #expect(updatedRootNodeID == rootNodeID)
+        #expect(rootRatio == 0.4)
+        #expect(updatedNestedNodeID == nestedNodeID)
+        #expect(nestedRatio == 0.65)
+    }
+
+    @Test
+    func settingSplitRatioReturnsNilForMissingOrUnchangedSplit() {
+        let rootNodeID = UUID()
+        let tree = WorkspaceSplitTree(
+            root: .split(
+                nodeID: rootNodeID,
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: UUID()),
+                second: .slot(slotID: UUID(), panelID: UUID())
+            )
+        )
+
+        #expect(tree.settingSplitRatio(nodeID: UUID(), ratio: 0.7) == nil)
+        #expect(tree.settingSplitRatio(nodeID: rootNodeID, ratio: 0.50001) == nil)
+    }
+
+    @Test
+    func settingSplitRatioClampsToMinimumPanelDimensionWhenDimensionIsKnown() throws {
+        let rootNodeID = UUID()
+        let tree = WorkspaceSplitTree(
+            root: .split(
+                nodeID: rootNodeID,
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: UUID()),
+                second: .slot(slotID: UUID(), panelID: UUID())
+            )
+        )
+
+        let updatedTree = try #require(
+            tree.settingSplitRatio(
+                nodeID: rootNodeID,
+                ratio: 0.01,
+                adjustedPrimaryDimension: 400
+            )
+        )
+
+        guard case .split(_, _, let ratio, _, _) = updatedTree.root else {
+            Issue.record("expected updated split")
+            return
+        }
+
+        #expect(ratio == 0.2)
+    }
+
+    @Test
     func equalizedUsesOrientationAwareWeightsForMixedTree() throws {
         let leftPanelID = UUID()
         let rightPanelID = UUID()

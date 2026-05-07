@@ -7,8 +7,9 @@ struct LayoutProjectionTests {
     func horizontalSplitProjectionIncludesDividerThickness() {
         let leftSlotID = UUID()
         let rightSlotID = UUID()
+        let splitNodeID = UUID()
         let tree = LayoutNode.split(
-            nodeID: UUID(),
+            nodeID: splitNodeID,
             orientation: .horizontal,
             ratio: 0.5,
             first: .slot(slotID: leftSlotID, panelID: UUID()),
@@ -29,7 +30,59 @@ struct LayoutProjectionTests {
 
         #expect(left?.frame == LayoutFrame(minX: 0, minY: 0, width: 49.5, height: 40))
         #expect(divider?.frame == LayoutFrame(minX: 49.5, minY: 0, width: 1, height: 40))
+        #expect(divider?.parentFrame == LayoutFrame(minX: 0, minY: 0, width: 100, height: 40))
+        #expect(divider?.adjustedPrimaryDimension == 99)
         #expect(right?.frame == LayoutFrame(minX: 50.5, minY: 0, width: 49.5, height: 40))
+    }
+
+    @Test
+    func projectionClampsLargeSplitsToMinimumPanelDimension() {
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
+        let tree = LayoutNode.split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.01,
+            first: .slot(slotID: leftSlotID, panelID: UUID()),
+            second: .slot(slotID: rightSlotID, panelID: UUID())
+        )
+
+        let projection = tree.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 401, height: 40),
+            dividerThickness: 1
+        )
+
+        let left = projection.slots.first(where: { $0.slotID == leftSlotID })
+        let right = projection.slots.first(where: { $0.slotID == rightSlotID })
+        let divider = projection.dividers.first
+
+        #expect(left?.frame == LayoutFrame(minX: 0, minY: 0, width: 80, height: 40))
+        #expect(divider?.frame == LayoutFrame(minX: 80, minY: 0, width: 1, height: 40))
+        #expect(right?.frame == LayoutFrame(minX: 81, minY: 0, width: 320, height: 40))
+    }
+
+    @Test
+    func projectionFallsBackToSafeRatioClampForSmallSplits() {
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
+        let tree = LayoutNode.split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.01,
+            first: .slot(slotID: leftSlotID, panelID: UUID()),
+            second: .slot(slotID: rightSlotID, panelID: UUID())
+        )
+
+        let projection = tree.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 101, height: 40),
+            dividerThickness: 1
+        )
+
+        let left = projection.slots.first(where: { $0.slotID == leftSlotID })
+        let right = projection.slots.first(where: { $0.slotID == rightSlotID })
+
+        #expect(left?.frame == LayoutFrame(minX: 0, minY: 0, width: 10, height: 40))
+        #expect(right?.frame == LayoutFrame(minX: 11, minY: 0, width: 90, height: 40))
     }
 
     @Test
@@ -63,6 +116,38 @@ struct LayoutProjectionTests {
         #expect(topLeft?.frame == LayoutFrame(minX: 0, minY: 0, width: 0.4, height: 0.25))
         #expect(bottomLeft?.frame == LayoutFrame(minX: 0, minY: 0.25, width: 0.4, height: 0.75))
         #expect(right?.frame == LayoutFrame(minX: 0.4, minY: 0, width: 0.6, height: 1))
+    }
+
+    @Test
+    func nestedProjectionCarriesParentGeometryForEachDivider() throws {
+        let rootNodeID = UUID()
+        let nestedNodeID = UUID()
+        let tree = LayoutNode.split(
+            nodeID: rootNodeID,
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .slot(slotID: UUID(), panelID: UUID()),
+            second: .split(
+                nodeID: nestedNodeID,
+                orientation: .vertical,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: UUID()),
+                second: .slot(slotID: UUID(), panelID: UUID())
+            )
+        )
+
+        let projection = tree.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 201, height: 101),
+            dividerThickness: 1
+        )
+
+        let rootDivider = try #require(projection.dividers.first(where: { $0.nodeID == rootNodeID }))
+        let nestedDivider = try #require(projection.dividers.first(where: { $0.nodeID == nestedNodeID }))
+
+        #expect(rootDivider.parentFrame == LayoutFrame(minX: 0, minY: 0, width: 201, height: 101))
+        #expect(rootDivider.adjustedPrimaryDimension == 200)
+        #expect(nestedDivider.parentFrame == LayoutFrame(minX: 101, minY: 0, width: 100, height: 101))
+        #expect(nestedDivider.adjustedPrimaryDimension == 100)
     }
 
     @Test

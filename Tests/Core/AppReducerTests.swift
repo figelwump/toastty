@@ -2978,6 +2978,85 @@ struct AppReducerTests {
     }
 
     @Test
+    func setLayoutSplitRatioCommitsSelectedTabRatio() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        guard case .split(let nodeID, _, _, _, _) = workspaceBefore.layoutTree else {
+            Issue.record("expected split root before setting ratio")
+            return
+        }
+
+        #expect(
+            reducer.send(
+                .setLayoutSplitRatio(workspaceID: workspaceID, nodeID: nodeID, ratio: 0.72),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, _, let ratio, _, _) = workspaceAfter.layoutTree else {
+            Issue.record("expected split root after setting ratio")
+            return
+        }
+
+        #expect(ratio == 0.72)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setLayoutSplitRatioReturnsFalseForMissingNode() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+
+        #expect(
+            reducer.send(
+                .setLayoutSplitRatio(workspaceID: workspaceID, nodeID: UUID(), ratio: 0.72),
+                state: &state
+            ) == false
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.layoutTree == workspaceBefore.layoutTree)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setLayoutSplitRatioIsRejectedInFocusedPanelMode() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        guard case .split(let nodeID, _, _, _, _) = workspaceBefore.layoutTree else {
+            Issue.record("expected split root before setting ratio")
+            return
+        }
+        #expect(workspaceBefore.focusedPanelModeActive)
+
+        #expect(
+            reducer.send(
+                .setLayoutSplitRatio(workspaceID: workspaceID, nodeID: nodeID, ratio: 0.72),
+                state: &state
+            ) == false
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.layoutTree == workspaceBefore.layoutTree)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func resizeFocusedSlotSplitAdjustsFocusedRightPanelWidth() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
