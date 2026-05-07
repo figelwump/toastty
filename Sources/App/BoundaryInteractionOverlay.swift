@@ -189,6 +189,7 @@ final class BoundaryInteractionOverlayView: NSView {
     private var isTrackingBoundarySequence = false
     private var pendingCursorReassertionDescriptorID: String?
     private var isCursorReassertionScheduled = false
+    private var diagnosticMouseDownMonitor: Any?
 
     override var isFlipped: Bool { true }
 
@@ -367,6 +368,7 @@ final class BoundaryInteractionOverlayView: NSView {
         super.viewDidMoveToWindow()
         if window == nil {
             logCursorDiagnostic("view-did-move-to-window-removed")
+            removeDiagnosticMouseDownMonitor()
             setHoveredDescriptor(nil)
             if isTrackingBoundarySequence == false {
                 cancelBoundarySequence(
@@ -376,6 +378,7 @@ final class BoundaryInteractionOverlayView: NSView {
                 )
             }
         } else {
+            installDiagnosticMouseDownMonitorIfNeeded()
             logCursorDiagnostic("view-did-move-to-window-attached")
             refreshBoundaryInteractionRegionsIfNeeded(force: true)
             reconcileHoverAfterDescriptorUpdate(deliversCallbacksImmediately: true)
@@ -401,6 +404,7 @@ final class BoundaryInteractionOverlayView: NSView {
                 WindowMovementSuppression.restore(ownerID: ownerID, reason: reason)
             }
         }
+        removeDiagnosticMouseDownMonitor()
     }
 
     private func descriptor(at location: CGPoint) -> BoundaryInteractionDescriptor? {
@@ -770,6 +774,56 @@ final class BoundaryInteractionOverlayView: NSView {
             removeTrackingArea(trackingArea)
         }
         boundaryTrackingAreas.removeAll()
+    }
+
+    private func installDiagnosticMouseDownMonitorIfNeeded() {
+        guard CursorDiagnostics.enabled,
+              diagnosticMouseDownMonitor == nil else {
+            return
+        }
+
+        diagnosticMouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            self?.logDiagnosticMouseDownMonitorEvent(event)
+            return event
+        }
+    }
+
+    private func removeDiagnosticMouseDownMonitor() {
+        guard let diagnosticMouseDownMonitor else { return }
+        NSEvent.removeMonitor(diagnosticMouseDownMonitor)
+        self.diagnosticMouseDownMonitor = nil
+    }
+
+    private func logDiagnosticMouseDownMonitorEvent(_ event: NSEvent) {
+        guard CursorDiagnostics.enabled,
+              event.window === window else {
+            return
+        }
+
+        let location = localLocation(for: event)
+        guard bounds.contains(location),
+              let descriptor = descriptor(at: location) else {
+            return
+        }
+
+        var metadata = CursorDiagnostics.hitTestMetadata(
+            window: window,
+            windowLocation: event.locationInWindow,
+            referenceView: self
+        )
+        if let contentView = window?.contentView {
+            let contentLocation = contentView.convert(event.locationInWindow, from: nil)
+            metadata["monitorHitViewIsOverlay"] = "\(contentView.hitTest(contentLocation) === self)"
+        }
+        metadata["monitorLocalLocation"] = Self.pointDescription(location)
+        metadata["monitorDescriptorID"] = descriptor.id
+        logCursorDiagnostic(
+            "local-mouse-down-monitor-boundary-hit",
+            descriptor: descriptor,
+            event: event,
+            location: location,
+            extraMetadata: metadata
+        )
     }
 
     private func refreshBoundaryInteractionRegionsIfNeeded(force: Bool = false) {
