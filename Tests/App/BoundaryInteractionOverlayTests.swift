@@ -54,6 +54,43 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testMouseDownMissForwardsToUnderlyingHitView() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+        let content = MouseDownProbeView(frame: container.bounds)
+        let overlay = BoundaryInteractionOverlayView(frame: container.bounds)
+        container.addSubview(content)
+        container.addSubview(overlay)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        container.layoutSubtreeIfNeeded()
+
+        var beganValue: BoundaryInteractionValue?
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                onBegan: { beganValue = $0 }
+            ),
+        ])
+
+        let mouseDown = try mouseEvent(type: .leftMouseDown, location: NSPoint(x: 70, y: 50), window: window)
+        XCTAssertIdentical(container.hitTest(NSPoint(x: 70, y: 50)), content)
+
+        overlay.mouseDown(with: mouseDown)
+
+        XCTAssertEqual(content.mouseDownCount, 1)
+        XCTAssertNil(beganValue)
+    }
+
+    @MainActor
     func testDragReportsOverlayLocalTranslationAndRestoresWindowMovement() throws {
         defer { WindowMovementSuppression.resetForTesting() }
         let (window, overlay) = makeWindowWithOverlay()
@@ -848,3 +885,12 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
 }
 
 private final class HitProbeView: NSView {}
+
+private final class MouseDownProbeView: NSView {
+    private(set) var mouseDownCount = 0
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownCount += 1
+        super.mouseDown(with: event)
+    }
+}

@@ -348,6 +348,9 @@ final class BoundaryInteractionOverlayView: NSView {
                 event: event,
                 location: location
             )
+            if forwardMouseDownMissToUnderlyingHitView(event) {
+                return
+            }
             super.mouseDown(with: event)
             return
         }
@@ -768,6 +771,29 @@ final class BoundaryInteractionOverlayView: NSView {
         }
         guard let window else { return nil }
         return convert(window.mouseLocationOutsideOfEventStream, from: nil)
+    }
+
+    private func forwardMouseDownMissToUnderlyingHitView(_ event: NSEvent) -> Bool {
+        guard let contentView = window?.contentView else { return false }
+
+        let contentLocation = contentView.convert(event.locationInWindow, from: nil)
+        guard let hitView = contentView.hitTest(contentLocation),
+              hitView !== self,
+              hitView.isDescendant(of: self) == false else {
+            return false
+        }
+
+        logCursorDiagnostic(
+            "mouse-down-miss-forwarded",
+            event: event,
+            location: localLocation(for: event),
+            extraMetadata: [
+                "forwardedHitView": CursorDiagnostics.viewDescription(hitView),
+                "forwardedHitViewHierarchy": CursorDiagnostics.viewHierarchyDescription(hitView, stopAt: self),
+            ]
+        )
+        hitView.mouseDown(with: event)
+        return true
     }
 
     private func suppressWindowMovementForCurrentSequence() {
