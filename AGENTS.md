@@ -7,8 +7,8 @@
 - Keep this file concise. Detailed reference material lives under `docs/agents/`:
   - `docs/agents/automation.md` for smoke, remote, test, and dev-run details.
   - `docs/agents/menu-performance.md` for menu-related regressions and shortcuts.
-  - `docs/agents/manual-interaction.md` for local UI scripting notes.
-  - `.agents/skills/toastty-computer-use/SKILL.md` for opportunistic remote Computer Use GUI debugging and verification beyond smoke-test coverage.
+  - `docs/agents/manual-interaction.md` for background notes on interaction pitfalls.
+  - `.agents/skills/toastty-computer-use/SKILL.md` for remote Computer Use GUI debugging and verification beyond smoke-test coverage.
 
 ## Build And Generate
 
@@ -43,8 +43,7 @@ sv exec -- scripts/remote/test.sh -- ...
 - Agent-driven `xcodebuild test` runs should start with `sv exec -- scripts/remote/test.sh -- ...`, not direct local `xcodebuild test`.
 - Prefer omitting `-destination` for remote tests, or set `arch=arm64` explicitly. Remote `x86_64` test destinations are blocked by default; override only when intentionally validating Rosetta.
 - Use local smoke helpers only when the user explicitly wants a local run, the check is local-only, or the remote wrapper has already fallen back or failed and you are intentionally continuing locally.
-- For live UI validation of a running app instance, follow `.agents/skills/toastty-dev-run/SKILL.md` and the `peekaboo` workflow if available.
-- Before required local `peekaboo`, run `peekaboo permissions --json`. If Accessibility is missing, stop and ask the user to grant it; do not improvise local GUI workarounds.
+- For live UI validation of a running app instance, follow `.agents/skills/toastty-dev-run/SKILL.md` to launch or locate the isolated instance, then use remote Computer Use for human-like GUI interaction that is not covered by smoke tests.
 - When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
 - When a GUI bug or fix needs human-like interaction beyond the supported smoke tests, use `.agents/skills/toastty-computer-use/SKILL.md` to write a focused Computer Use prompt and run `scripts/remote/computer-use-run.sh`.
 - In handoffs, say whether validation ran remotely, locally, or through `validate.sh` with local fallback.
@@ -56,7 +55,7 @@ sv exec -- scripts/remote/test.sh -- ...
 - Either set `TOASTTY_RUNTIME_HOME` explicitly or set `TOASTTY_DEV_WORKTREE_ROOT` to the repo/worktree root and let Toastty derive a stable runtime home under `artifacts/dev-runs/`.
 - Tuist-generated Xcode Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` for `ToasttyApp` and `ToasttyApp-Release`. Preserve that behavior when editing `Project.swift`.
 - Before a Ghostty-backed build from a fresh worktree, run `./scripts/dev/bootstrap-worktree.sh`. The smoke, shortcut-trace, and check helpers already do this.
-- Capture launched app PID and use PID-targeted tooling whenever possible. Prefer `peekaboo ... --pid <pid>` and avoid generic `osascript` or app-name-only targeting when multiple Toastty instances may be running.
+- Capture launched app PID and use runtime-specific tooling whenever possible. Avoid generic `osascript` or app-name-only targeting when multiple Toastty instances may be running.
 - Runtime isolation writes `instance.json` inside the runtime home. Treat it as authoritative for `pid`, `bundlePath`, `runtimeHomePath`, `logFilePath`, `socketPath`, derived path, and worktree root.
 - For Xcode-launched Toastty runs, assume runtime isolation is active unless you have evidence otherwise. Start from `artifacts/dev-runs/worktree-*/runtime-home/instance.json`, not global logs.
 - Shell integration installation is intentionally disabled when runtime isolation is enabled. Sandboxed dev/test runs must not rewrite the user's login shell files.
@@ -97,4 +96,4 @@ sv exec -- scripts/remote/test.sh -- ...
 - Do not recreate broad `NSMenu` mutation observer refresh loops. Keep menu refresh bounded, coalesced, idempotent, and separate from dynamic bridge reinsertion.
 - Menu-advertised `Option+digit` workspace shortcuts are not sufficient by themselves; keep app-level interception for workspace switching.
 - Do not retarget native File > Close / Close All slots in place. Prefer Toastty-owned File menu items wired to the same command paths as `Cmd+W` and workspace close.
-- For manual local UI scripting, read `docs/agents/manual-interaction.md`. Click into the target terminal panel before typing; activation alone is insufficient.
+- For manual GUI reproduction, prefer the remote Computer Use workflow in `.agents/skills/toastty-computer-use/SKILL.md`; `docs/agents/manual-interaction.md` is background context for interaction pitfalls.
