@@ -160,6 +160,9 @@ final class BoundaryInteractionOverlayView: NSView {
     #if DEBUG
     var cursorSetter: (NSCursor) -> Void = { $0.set() }
     var trackingEventProviderForTesting: ((NSWindow) -> NSEvent?)?
+    var localMouseDownMonitorInstallerForTesting:
+        ((NSEvent.EventTypeMask, @escaping (NSEvent) -> NSEvent?) -> Any)?
+    var localMouseDownMonitorRemoverForTesting: ((Any) -> Void)?
     #endif
     private(set) var boundaryTrackingAreaRebuildCount = 0
     private(set) var deferredCursorReassertionCount = 0
@@ -796,13 +799,30 @@ final class BoundaryInteractionOverlayView: NSView {
             return
         }
 
-        localMouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            self?.handleLocalMouseDownMonitorEvent(event) ?? event
+        let handler: (NSEvent) -> NSEvent? = { [weak self] event in
+            guard let self else { return event }
+            return self.handleLocalMouseDownMonitorEvent(event)
         }
+        #if DEBUG
+        if let localMouseDownMonitorInstallerForTesting {
+            localMouseDownMonitor = localMouseDownMonitorInstallerForTesting(.leftMouseDown, handler)
+            return
+        }
+        #endif
+
+        localMouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: handler)
     }
 
     private func removeLocalMouseDownMonitor() {
         guard let localMouseDownMonitor else { return }
+        #if DEBUG
+        if let localMouseDownMonitorRemoverForTesting {
+            localMouseDownMonitorRemoverForTesting(localMouseDownMonitor)
+            self.localMouseDownMonitor = nil
+            return
+        }
+        #endif
+
         NSEvent.removeMonitor(localMouseDownMonitor)
         self.localMouseDownMonitor = nil
     }

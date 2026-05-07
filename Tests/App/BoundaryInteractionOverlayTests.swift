@@ -146,6 +146,64 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testInstalledLocalMouseDownMonitorConsumesBoundaryHit() throws {
+        defer { WindowMovementSuppression.resetForTesting() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+        let overlay = BoundaryInteractionOverlayView(frame: container.bounds)
+        let coveringContent = HitProbeView(frame: container.bounds)
+        let monitorToken = NSObject()
+        var installedHandler: ((NSEvent) -> NSEvent?)?
+        overlay.localMouseDownMonitorInstallerForTesting = { mask, handler in
+            XCTAssertTrue(mask.contains(.leftMouseDown))
+            installedHandler = handler
+            return monitorToken
+        }
+        overlay.localMouseDownMonitorRemoverForTesting = { monitor in
+            XCTAssertTrue((monitor as AnyObject) === monitorToken)
+        }
+
+        container.addSubview(overlay)
+        container.addSubview(coveringContent)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        container.layoutSubtreeIfNeeded()
+
+        var beganValue: BoundaryInteractionValue?
+        var endedValue: BoundaryInteractionValue?
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                onBegan: { beganValue = $0 },
+                onEnded: { endedValue = $0 }
+            ),
+        ])
+        var trackingEvents = [
+            try mouseEvent(type: .leftMouseUp, location: NSPoint(x: 100, y: 50), window: window),
+        ]
+        overlay.trackingEventProviderForTesting = { _ in
+            trackingEvents.isEmpty ? nil : trackingEvents.removeFirst()
+        }
+
+        XCTAssertIdentical(container.hitTest(NSPoint(x: 100, y: 50)), coveringContent)
+        let mouseDown = try mouseEvent(type: .leftMouseDown, location: NSPoint(x: 100, y: 50), window: window)
+        let handler = try XCTUnwrap(installedHandler)
+
+        XCTAssertNil(handler(mouseDown))
+        XCTAssertNotNil(beganValue)
+        XCTAssertEqual(endedValue, beganValue)
+        XCTAssertTrue(trackingEvents.isEmpty)
+    }
+
+    @MainActor
     func testLocalMouseDownMonitorPassesThroughNonBoundaryClicks() throws {
         let (window, _, overlay, _) = makeWindowWithCoveredOverlay()
         defer { window.orderOut(nil) }
