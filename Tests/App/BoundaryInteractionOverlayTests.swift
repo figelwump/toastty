@@ -91,6 +91,45 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testMouseDownMissForwardsToValidSuperviewCandidateWhenWindowCandidateIsOutsideBounds() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let contentView = ForcedHitContentView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+        let staleTarget = MouseDownProbeView(frame: NSRect(x: 0, y: 70, width: 300, height: 20))
+        let container = NSView(frame: contentView.bounds)
+        let validTarget = MouseDownProbeView(frame: contentView.bounds)
+        let overlay = BoundaryInteractionOverlayView(frame: container.bounds)
+        contentView.addSubview(staleTarget)
+        contentView.addSubview(container)
+        container.addSubview(validTarget)
+        container.addSubview(overlay)
+        contentView.forcedHitView = staleTarget
+        window.contentView = contentView
+        window.makeKeyAndOrderFront(nil)
+        contentView.layoutSubtreeIfNeeded()
+
+        overlay.updateDescriptors([
+            descriptor(id: "seam", hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100)),
+        ])
+
+        let mouseDown = try mouseEvent(type: .leftMouseDown, location: NSPoint(x: 70, y: 50), window: window)
+        let staleTargetLocation = staleTarget.convert(mouseDown.locationInWindow, from: nil)
+        XCTAssertFalse(staleTarget.bounds.contains(staleTargetLocation))
+        XCTAssertIdentical(container.hitTest(NSPoint(x: 70, y: 50)), validTarget)
+
+        overlay.mouseDown(with: mouseDown)
+
+        XCTAssertEqual(staleTarget.mouseDownCount, 0)
+        XCTAssertEqual(validTarget.mouseDownCount, 1)
+    }
+
+    @MainActor
     func testDragReportsOverlayLocalTranslationAndRestoresWindowMovement() throws {
         defer { WindowMovementSuppression.resetForTesting() }
         let (window, overlay) = makeWindowWithOverlay()
@@ -892,5 +931,13 @@ private final class MouseDownProbeView: NSView {
     override func mouseDown(with event: NSEvent) {
         mouseDownCount += 1
         super.mouseDown(with: event)
+    }
+}
+
+private final class ForcedHitContentView: NSView {
+    weak var forcedHitView: NSView?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        forcedHitView ?? super.hitTest(point)
     }
 }
