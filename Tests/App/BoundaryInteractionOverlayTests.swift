@@ -35,6 +35,27 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testHitTestConvertsSuperviewCoordinatesBeforeDescriptorLookup() {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1407, height: 951))
+        let content = HitProbeView(frame: container.bounds)
+        let overlay = BoundaryInteractionOverlayView(frame: container.bounds)
+        container.addSubview(content)
+        container.addSubview(overlay)
+        overlay.updateDescriptors([
+            descriptor(
+                id: "horizontal-divider",
+                hitFrame: CGRect(x: 448, y: 388.5, width: 959, height: 10.5)
+            ),
+        ])
+
+        let visualBottomRowClick = NSPoint(x: 1044.8, y: 396.7)
+        let overlayLocalClick = overlay.convert(visualBottomRowClick, from: container)
+        XCTAssertEqual(overlayLocalClick.y, 554.3, accuracy: 0.1)
+        XCTAssertNil(overlay.descriptorID(at: overlayLocalClick))
+        XCTAssertIdentical(container.hitTest(visualBottomRowClick), content)
+    }
+
+    @MainActor
     func testOverlayWinsInsideBoundaryWhenBoundaryOverlapsSiblingContent() {
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
         let primaryContent = HitProbeView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))

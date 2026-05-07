@@ -2,6 +2,14 @@ import AppKit
 import CoreState
 import SwiftUI
 
+@MainActor
+private func hitTestPoint(for view: NSView, windowLocation: NSPoint) -> NSPoint {
+    if let superview = view.superview {
+        return superview.convert(windowLocation, from: nil)
+    }
+    return view.convert(windowLocation, from: nil)
+}
+
 enum CursorDiagnostics {
     static let environmentKey = "TOASTTY_BOUNDARY_CURSOR_DIAGNOSTICS"
     static let enabled = truthy(ProcessInfo.processInfo.environment[environmentKey])
@@ -35,8 +43,7 @@ enum CursorDiagnostics {
             return ["windowHitView": "nil"]
         }
 
-        let contentLocation = contentView.convert(windowLocation, from: nil)
-        let hitView = contentView.hitTest(contentLocation)
+        let hitView = contentView.hitTest(hitTestPoint(for: contentView, windowLocation: windowLocation))
         return [
             "windowHitView": viewDescription(hitView),
             "windowHitViewHierarchy": viewHierarchyDescription(hitView, stopAt: referenceView),
@@ -258,9 +265,10 @@ final class BoundaryInteractionOverlayView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
+        let localPoint = superview.map { convert(point, from: $0) } ?? point
         guard isVisibleForBoundaryInteraction,
-              bounds.contains(point),
-              descriptor(at: point) != nil else {
+              bounds.contains(localPoint),
+              descriptor(at: localPoint) != nil else {
             return nil
         }
 
@@ -776,11 +784,11 @@ final class BoundaryInteractionOverlayView: NSView {
     private func forwardMouseDownMissToUnderlyingHitView(_ event: NSEvent) -> Bool {
         guard let contentView = window?.contentView else { return false }
 
-        let contentLocation = contentView.convert(event.locationInWindow, from: nil)
-        let windowContentCandidate = contentView.hitTest(contentLocation)
+        let windowContentCandidate = contentView.hitTest(
+            hitTestPoint(for: contentView, windowLocation: event.locationInWindow)
+        )
         let superviewCandidate = superview.map { container -> NSView? in
-            let containerLocation = container.convert(event.locationInWindow, from: nil)
-            return container.hitTest(containerLocation)
+            container.hitTest(hitTestPoint(for: container, windowLocation: event.locationInWindow))
         } ?? nil
 
         logMouseDownMissForwardingCandidates(
@@ -1076,8 +1084,10 @@ final class BoundaryInteractionOverlayView: NSView {
             referenceView: self
         )
         if let contentView = window?.contentView {
-            let contentLocation = contentView.convert(event.locationInWindow, from: nil)
-            metadata["monitorHitViewIsOverlay"] = "\(contentView.hitTest(contentLocation) === self)"
+            let hitView = contentView.hitTest(
+                hitTestPoint(for: contentView, windowLocation: event.locationInWindow)
+            )
+            metadata["monitorHitViewIsOverlay"] = "\(hitView === self)"
         }
         metadata["monitorDecision"] = decision
         metadata["monitorDecisionReason"] = reason
