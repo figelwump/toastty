@@ -777,12 +777,26 @@ final class BoundaryInteractionOverlayView: NSView {
         guard let contentView = window?.contentView else { return false }
 
         let contentLocation = contentView.convert(event.locationInWindow, from: nil)
-        guard let hitView = contentView.hitTest(contentLocation),
+        let windowContentCandidate = contentView.hitTest(contentLocation)
+        let superviewCandidate = superview.map { container -> NSView? in
+            let containerLocation = container.convert(event.locationInWindow, from: nil)
+            return container.hitTest(containerLocation)
+        } ?? nil
+
+        logMouseDownMissForwardingCandidates(
+            event: event,
+            windowContentView: contentView,
+            windowContentCandidate: windowContentCandidate,
+            superviewCandidate: superviewCandidate
+        )
+
+        guard let hitView = windowContentCandidate,
               hitView !== self,
               hitView.isDescendant(of: self) == false else {
             return false
         }
 
+        let forwardedLocalLocation = hitView.convert(event.locationInWindow, from: nil)
         logCursorDiagnostic(
             "mouse-down-miss-forwarded",
             event: event,
@@ -790,10 +804,91 @@ final class BoundaryInteractionOverlayView: NSView {
             extraMetadata: [
                 "forwardedHitView": CursorDiagnostics.viewDescription(hitView),
                 "forwardedHitViewHierarchy": CursorDiagnostics.viewHierarchyDescription(hitView, stopAt: self),
+                "forwardedHitViewFrame": Self.rectDescription(hitView.frame),
+                "forwardedHitViewBounds": Self.rectDescription(hitView.bounds),
+                "forwardedLocalLocation": Self.pointDescription(forwardedLocalLocation),
+                "forwardedLocalLocationInsideBounds": "\(hitView.bounds.contains(forwardedLocalLocation))",
             ]
         )
         hitView.mouseDown(with: event)
         return true
+    }
+
+    private func logMouseDownMissForwardingCandidates(
+        event: NSEvent,
+        windowContentView: NSView,
+        windowContentCandidate: NSView?,
+        superviewCandidate: NSView?
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
+        var metadata: [String: String] = [
+            "currentForwardingScope": "windowContentView",
+            "proposedForwardingScope": "superview",
+            "windowContentLocation": Self.pointDescription(windowContentView.convert(event.locationInWindow, from: nil)),
+        ]
+        if let superview {
+            metadata["superviewLocation"] = Self.pointDescription(superview.convert(event.locationInWindow, from: nil))
+            metadata["superviewFrame"] = Self.rectDescription(superview.frame)
+            metadata["superviewBounds"] = Self.rectDescription(superview.bounds)
+        } else {
+            metadata["superviewLocation"] = "nil"
+            metadata["superviewFrame"] = "nil"
+            metadata["superviewBounds"] = "nil"
+        }
+        metadata.merge(
+            forwardingCandidateMetadata(
+                prefix: "windowContentCandidate",
+                candidate: windowContentCandidate,
+                event: event
+            ),
+            uniquingKeysWith: { _, new in new }
+        )
+        metadata.merge(
+            forwardingCandidateMetadata(
+                prefix: "superviewCandidate",
+                candidate: superviewCandidate,
+                event: event
+            ),
+            uniquingKeysWith: { _, new in new }
+        )
+
+        logCursorDiagnostic(
+            "mouse-down-miss-forwarding-candidates",
+            event: event,
+            location: localLocation(for: event),
+            extraMetadata: metadata
+        )
+    }
+
+    private func forwardingCandidateMetadata(
+        prefix: String,
+        candidate: NSView?,
+        event: NSEvent
+    ) -> [String: String] {
+        guard let candidate else {
+            return [
+                "\(prefix)HitView": "nil",
+                "\(prefix)WouldForwardCurrent": "false",
+                "\(prefix)WouldForwardWithBoundsGuard": "false",
+            ]
+        }
+
+        let localLocation = candidate.convert(event.locationInWindow, from: nil)
+        let isForwardable = candidate !== self && candidate.isDescendant(of: self) == false
+        let containsLocalLocation = candidate.bounds.contains(localLocation)
+        return [
+            "\(prefix)HitView": CursorDiagnostics.viewDescription(candidate),
+            "\(prefix)HitViewHierarchy": CursorDiagnostics.viewHierarchyDescription(candidate, stopAt: self),
+            "\(prefix)Frame": Self.rectDescription(candidate.frame),
+            "\(prefix)Bounds": Self.rectDescription(candidate.bounds),
+            "\(prefix)LocalLocation": Self.pointDescription(localLocation),
+            "\(prefix)ContainsLocalLocation": "\(containsLocalLocation)",
+            "\(prefix)IsOverlay": "\(candidate === self)",
+            "\(prefix)IsOverlayDescendant": "\(candidate.isDescendant(of: self))",
+            "\(prefix)WouldForwardCurrent": "\(isForwardable)",
+            "\(prefix)WouldForwardWithBoundsGuard": "\(isForwardable && containsLocalLocation)",
+        ]
     }
 
     private func suppressWindowMovementForCurrentSequence() {
