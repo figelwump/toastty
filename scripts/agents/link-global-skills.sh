@@ -3,14 +3,21 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 SOURCE_SKILLS_DIR="$ROOT_DIR/.agents/skills"
+DEFAULT_SKILLS=(
+  "toastty-open-markdown"
+  "toastty-scratchpad"
+  "worktree-create"
+  "worktree-done"
+)
 
 declare -a REQUESTED_TARGETS=()
 declare -a REQUESTED_SKILLS=()
 FORCE=0
+CLEAN=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/agents/link-global-skills.sh [--target agents|claude|codex|all] [--skill name] [--force]
+Usage: scripts/agents/link-global-skills.sh [--target agents|claude|codex|all] [--skill name] [--force] [--clean]
 
 Links Toastty repo skills into global agent skill directories.
 
@@ -23,6 +30,7 @@ Targets:
 Options:
   --skill name  Link only the named skill. May be repeated.
   --force       Replace existing non-symlink paths after moving them aside as backups.
+  --clean       Remove Toastty repo symlinks in target directories that are not selected.
   -h, --help    Show this help.
 EOF
 }
@@ -65,6 +73,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --force)
       FORCE=1
+      shift
+      ;;
+    --clean)
+      CLEAN=1
       shift
       ;;
     -h|--help)
@@ -112,11 +124,7 @@ discover_skills() {
     return
   fi
 
-  find "$SOURCE_SKILLS_DIR" -mindepth 2 -maxdepth 2 -name SKILL.md -print \
-    | while IFS= read -r skill_file; do
-        basename "$(dirname "$skill_file")"
-      done \
-    | sort
+  printf '%s\n' "${DEFAULT_SKILLS[@]}"
 }
 
 backup_path_for() {
@@ -168,6 +176,40 @@ link_skill() {
   log "linked $target_name/$skill_name -> $source_path"
 }
 
+skill_is_selected() {
+  local candidate="$1"
+  local selected
+
+  for selected in "${SKILLS[@]}"; do
+    if [[ "$selected" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+clean_unselected_repo_links() {
+  local target_name="$1"
+  local destination_dir link_path skill_name current_target
+
+  destination_dir="$(target_directory "$target_name")"
+  [[ -d "$destination_dir" ]] || return 0
+
+  while IFS= read -r link_path; do
+    skill_name="$(basename "$link_path")"
+    if skill_is_selected "$skill_name"; then
+      continue
+    fi
+
+    current_target="$(readlink "$link_path")"
+    if [[ "$current_target" == "$SOURCE_SKILLS_DIR/"* ]]; then
+      rm "$link_path"
+      log "removed unselected $target_name/$skill_name link"
+    fi
+  done < <(find "$destination_dir" -mindepth 1 -maxdepth 1 -type l -print)
+}
+
 declare -a TARGETS=()
 declare -a SKILLS=()
 
@@ -184,6 +226,9 @@ if [[ "${#SKILLS[@]}" -eq 0 ]]; then
 fi
 
 for target in "${TARGETS[@]}"; do
+  if [[ "$CLEAN" == "1" ]]; then
+    clean_unselected_repo_links "$target"
+  fi
   for skill in "${SKILLS[@]}"; do
     link_skill "$target" "$skill"
   done
