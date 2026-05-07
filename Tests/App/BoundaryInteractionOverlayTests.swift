@@ -103,6 +103,108 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
     }
 
     @MainActor
+    func testLocalMouseDownMonitorCapturesBoundaryWhenSiblingWouldReceiveHitTest() throws {
+        defer { WindowMovementSuppression.resetForTesting() }
+        let (window, container, overlay, coveringContent) = makeWindowWithCoveredOverlay()
+        defer { window.orderOut(nil) }
+
+        var beganValue: BoundaryInteractionValue?
+        var changedValue: BoundaryInteractionValue?
+        var endedValue: BoundaryInteractionValue?
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                onBegan: { beganValue = $0 },
+                onChanged: { changedValue = $0 },
+                onEnded: { endedValue = $0 }
+            ),
+        ])
+
+        XCTAssertIdentical(container.hitTest(NSPoint(x: 100, y: 50)), coveringContent)
+        let mouseDown = try mouseEvent(type: .leftMouseDown, location: NSPoint(x: 100, y: 50), window: window)
+        var trackingEvents = [
+            try mouseEvent(type: .leftMouseDragged, location: NSPoint(x: 80, y: 40), window: window),
+            try mouseEvent(type: .leftMouseUp, location: NSPoint(x: 80, y: 40), window: window),
+        ]
+        overlay.trackingEventProviderForTesting = { _ in
+            trackingEvents.isEmpty ? nil : trackingEvents.removeFirst()
+        }
+
+        XCTAssertNil(overlay.handleLocalMouseDownMonitorEventForTesting(mouseDown))
+        XCTAssertTrue(window.isMovable)
+        XCTAssertTrue(trackingEvents.isEmpty)
+
+        let began = try XCTUnwrap(beganValue)
+        XCTAssertEqual(began.descriptorID, "seam")
+        XCTAssertEqual(began.startLocation.x, 100, accuracy: 0.001)
+        XCTAssertEqual(began.startLocation.y, 50, accuracy: 0.001)
+        let changed = try XCTUnwrap(changedValue)
+        XCTAssertEqual(changed.translation.width, -20, accuracy: 0.001)
+        XCTAssertEqual(changed.translation.height, 10, accuracy: 0.001)
+        XCTAssertEqual(endedValue, changedValue)
+    }
+
+    @MainActor
+    func testLocalMouseDownMonitorPassesThroughNonBoundaryClicks() throws {
+        let (window, _, overlay, _) = makeWindowWithCoveredOverlay()
+        defer { window.orderOut(nil) }
+
+        var beganValue: BoundaryInteractionValue?
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                onBegan: { beganValue = $0 }
+            ),
+        ])
+        let mouseDown = try mouseEvent(type: .leftMouseDown, location: NSPoint(x: 70, y: 50), window: window)
+
+        XCTAssertIdentical(overlay.handleLocalMouseDownMonitorEventForTesting(mouseDown), mouseDown)
+        XCTAssertNil(beganValue)
+    }
+
+    @MainActor
+    func testLocalMouseDownMonitorPassesThroughWhenOverlayIsHidden() throws {
+        let (window, _, overlay, _) = makeWindowWithCoveredOverlay()
+        defer { window.orderOut(nil) }
+
+        var beganValue: BoundaryInteractionValue?
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                onBegan: { beganValue = $0 }
+            ),
+        ])
+        overlay.isHidden = true
+        let mouseDown = try mouseEvent(type: .leftMouseDown, location: NSPoint(x: 100, y: 50), window: window)
+
+        XCTAssertIdentical(overlay.handleLocalMouseDownMonitorEventForTesting(mouseDown), mouseDown)
+        XCTAssertNil(beganValue)
+    }
+
+    @MainActor
+    func testLocalMouseDownMonitorPassesThroughWhenAncestorIsHidden() throws {
+        let (window, container, overlay, _) = makeWindowWithCoveredOverlay()
+        defer { window.orderOut(nil) }
+
+        var beganValue: BoundaryInteractionValue?
+        overlay.updateDescriptors([
+            descriptor(
+                id: "seam",
+                hitFrame: CGRect(x: 95, y: 0, width: 10, height: 100),
+                onBegan: { beganValue = $0 }
+            ),
+        ])
+        container.isHidden = true
+        let mouseDown = try mouseEvent(type: .leftMouseDown, location: NSPoint(x: 100, y: 50), window: window)
+
+        XCTAssertIdentical(overlay.handleLocalMouseDownMonitorEventForTesting(mouseDown), mouseDown)
+        XCTAssertNil(beganValue)
+    }
+
+    @MainActor
     func testHoverClearsWhenDescriptorReplacementNoLongerContainsPointer() throws {
         let (window, overlay) = makeWindowWithOverlay()
         defer { window.orderOut(nil) }
@@ -612,6 +714,30 @@ final class BoundaryInteractionOverlayTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         container.layoutSubtreeIfNeeded()
         return (window, overlay)
+    }
+
+    @MainActor
+    private func makeWindowWithCoveredOverlay() -> (
+        NSWindow,
+        NSView,
+        BoundaryInteractionOverlayView,
+        HitProbeView
+    ) {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+        let overlay = BoundaryInteractionOverlayView(frame: container.bounds)
+        let coveringContent = HitProbeView(frame: container.bounds)
+        container.addSubview(overlay)
+        container.addSubview(coveringContent)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        container.layoutSubtreeIfNeeded()
+        return (window, container, overlay, coveringContent)
     }
 
     private func descriptor(
