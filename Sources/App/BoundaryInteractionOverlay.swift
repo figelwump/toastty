@@ -334,10 +334,21 @@ final class BoundaryInteractionOverlayView: NSView {
     override func mouseDown(with event: NSEvent) {
         let location = localLocation(for: event)
         guard let descriptor = descriptor(at: location) else {
+            logBoundarySequenceDiagnostic(
+                "mouse-down-miss",
+                event: event,
+                location: location
+            )
             super.mouseDown(with: event)
             return
         }
 
+        logBoundarySequenceDiagnostic(
+            "mouse-down-hit",
+            descriptor: descriptor,
+            event: event,
+            location: location
+        )
         setHoveredDescriptor(descriptor)
         beginBoundarySequence(with: event, descriptor: descriptor)
         guard usesEventTrackingLoop else { return }
@@ -539,6 +550,12 @@ final class BoundaryInteractionOverlayView: NSView {
             location: startLocation ?? .zero
         )
         suppressWindowMovementForCurrentSequence()
+        logBoundarySequenceDiagnostic(
+            "drag-begin",
+            descriptor: descriptor,
+            event: event,
+            value: lastInteractionValue
+        )
         if let lastInteractionValue {
             descriptor.onBegan(lastInteractionValue)
         }
@@ -547,15 +564,31 @@ final class BoundaryInteractionOverlayView: NSView {
     private func handleBoundaryDragged(with event: NSEvent) {
         guard let activeDescriptorID else { return }
         guard let descriptor = descriptorsByID[activeDescriptorID] else {
+            logBoundarySequenceDiagnostic(
+                "drag-descriptor-missing",
+                event: event,
+                extraMetadata: ["missingDescriptorID": activeDescriptorID]
+            )
             cancelBoundarySequence(reason: "descriptor-missing-during-drag", notifyEnded: true)
             return
         }
         guard let value = interactionValue(for: event) else {
+            logBoundarySequenceDiagnostic(
+                "drag-value-missing",
+                descriptor: descriptor,
+                event: event
+            )
             cancelBoundarySequence(reason: "drag-without-start", notifyEnded: true)
             return
         }
 
         lastInteractionValue = value
+        logBoundarySequenceDiagnostic(
+            "drag-change",
+            descriptor: descriptor,
+            event: event,
+            value: value
+        )
         descriptor.onChanged(value)
     }
 
@@ -564,10 +597,21 @@ final class BoundaryInteractionOverlayView: NSView {
         let descriptor = descriptorsByID[activeDescriptorID] ?? capturedDescriptor
         guard let value = interactionValue(for: event),
               let descriptor else {
+            logBoundarySequenceDiagnostic(
+                "drag-end-value-missing",
+                event: event,
+                extraMetadata: ["finishingDescriptorID": activeDescriptorID]
+            )
             cancelBoundarySequence(reason: "mouse-up-without-start", notifyEnded: true)
             return
         }
 
+        logBoundarySequenceDiagnostic(
+            "drag-end",
+            descriptor: descriptor,
+            event: event,
+            value: value
+        )
         clearBoundarySequenceState()
         restoreSequenceWindowMovementIfNeeded(reason: "mouse-up")
         descriptor.onEnded(value)
@@ -619,7 +663,7 @@ final class BoundaryInteractionOverlayView: NSView {
     }
 
     private func cancelBoundarySequence(
-        reason _: String,
+        reason: String,
         notifyEnded: Bool,
         deliversCallbacksImmediately: Bool = true
     ) {
@@ -632,6 +676,16 @@ final class BoundaryInteractionOverlayView: NSView {
 
         let descriptor = capturedDescriptor
         let value = lastInteractionValue
+        logBoundarySequenceDiagnostic(
+            "drag-cancel",
+            descriptor: descriptor,
+            value: value,
+            extraMetadata: [
+                "cancelReason": reason,
+                "notifyEnded": "\(notifyEnded)",
+                "deliversCallbacksImmediately": "\(deliversCallbacksImmediately)",
+            ]
+        )
         clearBoundarySequenceState()
         restoreSequenceWindowMovementIfNeeded(reason: "cancel")
         if notifyEnded,
@@ -967,8 +1021,38 @@ final class BoundaryInteractionOverlayView: NSView {
         )
     }
 
+    private func logBoundarySequenceDiagnostic(
+        _ phase: String,
+        descriptor: BoundaryInteractionDescriptor? = nil,
+        event: NSEvent? = nil,
+        location: CGPoint? = nil,
+        value: BoundaryInteractionValue? = nil,
+        extraMetadata: [String: String] = [:]
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
+        var metadata = extraMetadata
+        if let value {
+            metadata["valueDescriptorID"] = value.descriptorID
+            metadata["valueStartLocation"] = Self.pointDescription(value.startLocation)
+            metadata["valueLocation"] = Self.pointDescription(value.location)
+            metadata["valueTranslation"] = Self.sizeDescription(value.translation)
+        }
+        logCursorDiagnostic(
+            phase,
+            descriptor: descriptor,
+            event: event,
+            location: location,
+            extraMetadata: metadata
+        )
+    }
+
     private static func pointDescription(_ point: CGPoint) -> String {
         String(format: "%.1f,%.1f", point.x, point.y)
+    }
+
+    private static func sizeDescription(_ size: CGSize) -> String {
+        String(format: "%.1fx%.1f", size.width, size.height)
     }
 
     private static func rectDescription(_ rect: CGRect) -> String {

@@ -124,6 +124,7 @@ struct WorkspaceView: View {
     fileprivate nonisolated static let rightAuxPanelResizeHandleHairlineWidth: CGFloat = 1
     fileprivate nonisolated static let splitDividerResizeHandleHitWidth: CGFloat = 10
     fileprivate nonisolated static let splitDividerResizeHandleHairlineWidth: CGFloat = 1
+    fileprivate nonisolated static let boundaryInteractionOverlayZIndex: Double = 10_000
     private nonisolated static let workspaceTabDragActivationDistance: CGFloat = 4
 
     nonisolated static func mountedContentOpacity(isVisible: Bool) -> Double {
@@ -1217,6 +1218,7 @@ struct WorkspaceView: View {
             if splitResizeDescriptors.isEmpty == false {
                 BoundaryInteractionOverlay(descriptors: splitResizeDescriptors)
                     .frame(width: width, height: height, alignment: .topLeading)
+                    .zIndex(Self.boundaryInteractionOverlayZIndex)
             }
         }
         .frame(width: width, height: height, alignment: .topLeading)
@@ -2645,10 +2647,29 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
             currentRatio: clampedStartRatio
         )
         hoveredNodeID = nodeID
+        logDiagnostic(
+            "begin",
+            workspaceID: workspaceID,
+            tabID: tabID,
+            nodeID: nodeID,
+            orientation: orientation,
+            metadata: [
+                "startRatio": Self.ratioDescription(startRatio),
+                "clampedStartRatio": Self.ratioDescription(clampedStartRatio),
+                "adjustedPrimaryDimension": Self.dimensionDescription(adjustedPrimaryDimension),
+            ]
+        )
     }
 
     func update(translation: CGSize) {
-        guard var drag = activeDrag else { return }
+        guard var drag = activeDrag else {
+            logDiagnostic(
+                "update-ignored-no-active-drag",
+                metadata: ["translation": Self.sizeDescription(translation)]
+            )
+            return
+        }
+        let previousRatio = drag.currentRatio
         drag.currentRatio = WorkspaceView.splitDividerRatio(
             startRatio: drag.startRatio,
             translation: translation,
@@ -2656,6 +2677,15 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
             adjustedPrimaryDimension: drag.adjustedPrimaryDimension
         )
         activeDrag = drag
+        logDiagnostic(
+            "update",
+            drag: drag,
+            metadata: [
+                "previousRatio": Self.ratioDescription(previousRatio),
+                "currentRatio": Self.ratioDescription(drag.currentRatio),
+                "translation": Self.sizeDescription(translation),
+            ]
+        )
     }
 
     func end(workspaceID: UUID, tabID: UUID, nodeID: UUID) -> Double? {
@@ -2663,13 +2693,41 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
               drag.workspaceID == workspaceID,
               drag.tabID == tabID,
               drag.nodeID == nodeID else {
+            logDiagnostic(
+                "end-rejected-mismatch",
+                workspaceID: workspaceID,
+                tabID: tabID,
+                nodeID: nodeID,
+                metadata: activeDrag.map { activeDrag in
+                    [
+                        "activeWorkspaceID": activeDrag.workspaceID.uuidString,
+                        "activeTabID": activeDrag.tabID.uuidString,
+                        "activeNodeID": activeDrag.nodeID.uuidString,
+                    ]
+                } ?? ["activeDrag": "nil"]
+            )
             return nil
         }
 
         activeDrag = nil
         guard abs(drag.currentRatio - drag.startRatio) > LayoutNode.splitRatioChangeEpsilon else {
+            logDiagnostic(
+                "end-rejected-unchanged",
+                drag: drag,
+                metadata: [
+                    "ratioDelta": Self.ratioDescription(abs(drag.currentRatio - drag.startRatio)),
+                    "epsilon": Self.ratioDescription(LayoutNode.splitRatioChangeEpsilon),
+                ]
+            )
             return nil
         }
+        logDiagnostic(
+            "end-commit",
+            drag: drag,
+            metadata: [
+                "ratioDelta": Self.ratioDescription(abs(drag.currentRatio - drag.startRatio)),
+            ]
+        )
         return drag.currentRatio
     }
 
@@ -2719,6 +2777,14 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
 
         if focusedPanelModeActive ||
             layoutTree.findSubtree(nodeID: activeDrag.nodeID) == nil {
+            logDiagnostic(
+                "reconcile-cancel",
+                drag: activeDrag,
+                metadata: [
+                    "focusedPanelModeActive": "\(focusedPanelModeActive)",
+                    "nodeExists": "\(layoutTree.findSubtree(nodeID: activeDrag.nodeID) != nil)",
+                ]
+            )
             cancelIfMatching(workspaceID: workspaceID, tabID: tabID, nodeID: activeDrag.nodeID)
         }
     }
@@ -2728,16 +2794,94 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
            activeDrag.workspaceID == workspaceID,
            activeDrag.tabID == tabID,
            (nodeID == nil || activeDrag.nodeID == nodeID) {
+            logDiagnostic(
+                "cancel-active-drag",
+                drag: activeDrag,
+                metadata: ["requestedNodeID": nodeID?.uuidString ?? "nil"]
+            )
             self.activeDrag = nil
         }
 
         if let nodeID {
             if hoveredNodeID == nodeID {
+                logDiagnostic(
+                    "clear-hover",
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    nodeID: nodeID
+                )
                 hoveredNodeID = nil
             }
         } else {
+            if let hoveredNodeID {
+                logDiagnostic(
+                    "clear-hover",
+                    workspaceID: workspaceID,
+                    tabID: tabID,
+                    nodeID: hoveredNodeID
+                )
+            }
             hoveredNodeID = nil
         }
+    }
+
+    private func logDiagnostic(
+        _ phase: String,
+        drag: ActiveDrag,
+        metadata: [String: String] = [:]
+    ) {
+        logDiagnostic(
+            phase,
+            workspaceID: drag.workspaceID,
+            tabID: drag.tabID,
+            nodeID: drag.nodeID,
+            orientation: drag.orientation,
+            metadata: metadata.merging(
+                [
+                    "startRatio": Self.ratioDescription(drag.startRatio),
+                    "currentRatio": Self.ratioDescription(drag.currentRatio),
+                    "adjustedPrimaryDimension": Self.dimensionDescription(drag.adjustedPrimaryDimension),
+                ],
+                uniquingKeysWith: { current, _ in current }
+            )
+        )
+    }
+
+    private func logDiagnostic(
+        _ phase: String,
+        workspaceID: UUID? = nil,
+        tabID: UUID? = nil,
+        nodeID: UUID? = nil,
+        orientation: SplitOrientation? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        guard CursorDiagnostics.enabled else { return }
+
+        var metadata = metadata
+        metadata["phase"] = phase
+        metadata["workspaceID"] = workspaceID?.uuidString ?? "nil"
+        metadata["tabID"] = tabID?.uuidString ?? "nil"
+        metadata["nodeID"] = nodeID?.uuidString ?? "nil"
+        metadata["orientation"] = orientation?.rawValue ?? "nil"
+        metadata["hoveredNodeID"] = hoveredNodeID?.uuidString ?? "nil"
+        metadata["activeDragNodeID"] = activeDrag?.nodeID.uuidString ?? "nil"
+        ToasttyLog.info(
+            "workspace split resize diagnostic",
+            category: .input,
+            metadata: metadata
+        )
+    }
+
+    private static func ratioDescription(_ ratio: Double) -> String {
+        String(format: "%.6f", ratio)
+    }
+
+    private static func dimensionDescription(_ dimension: Double) -> String {
+        String(format: "%.1f", dimension)
+    }
+
+    private static func sizeDescription(_ size: CGSize) -> String {
+        String(format: "%.1fx%.1f", size.width, size.height)
     }
 }
 
@@ -2771,6 +2915,7 @@ private struct RightAuxPanelResizeLayer: View {
 
             BoundaryInteractionOverlay(descriptors: [boundaryDescriptor])
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .zIndex(WorkspaceView.boundaryInteractionOverlayZIndex)
         }
         .onDisappear {
             releaseInteraction()
