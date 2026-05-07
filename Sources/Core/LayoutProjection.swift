@@ -37,11 +37,21 @@ public struct LayoutDividerPlacement: Equatable, Identifiable, Sendable {
     public let nodeID: UUID
     public let orientation: SplitOrientation
     public let frame: LayoutFrame
+    public let parentFrame: LayoutFrame
+    public let adjustedPrimaryDimension: Double
 
-    public init(nodeID: UUID, orientation: SplitOrientation, frame: LayoutFrame) {
+    public init(
+        nodeID: UUID,
+        orientation: SplitOrientation,
+        frame: LayoutFrame,
+        parentFrame: LayoutFrame,
+        adjustedPrimaryDimension: Double
+    ) {
         self.nodeID = nodeID
         self.orientation = orientation
         self.frame = frame
+        self.parentFrame = parentFrame
+        self.adjustedPrimaryDimension = adjustedPrimaryDimension
     }
 
     public var id: UUID { nodeID }
@@ -62,7 +72,9 @@ public extension LayoutNode {
         in frame: LayoutFrame,
         dividerThickness: Double = 1,
         minimumSplitRatio: Double = 0.1,
-        maximumSplitRatio: Double = 0.9
+        maximumSplitRatio: Double = 0.9,
+        minimumPanelDimension: Double = LayoutNode.defaultMinimumSplitPanelDimension,
+        ratioOverrides: [UUID: Double] = [:]
     ) -> LayoutProjection {
         var slots: [LayoutSlotPlacement] = []
         var dividers: [LayoutDividerPlacement] = []
@@ -79,11 +91,24 @@ public extension LayoutNode {
                 )
 
             case .split(let nodeID, let orientation, let ratio, let first, let second):
-                let clampedRatio = min(max(ratio, minimumSplitRatio), maximumSplitRatio)
+                let adjustedPrimaryDimension = switch orientation {
+                case .horizontal:
+                    max(frame.width - dividerThickness, 0)
+                case .vertical:
+                    max(frame.height - dividerThickness, 0)
+                }
+                let requestedRatio = ratioOverrides[nodeID] ?? ratio
+                let clampedRatio = LayoutNode.clampedSplitRatio(
+                    requestedRatio,
+                    adjustedPrimaryDimension: adjustedPrimaryDimension,
+                    minimumPanelDimension: minimumPanelDimension,
+                    minimumSplitRatio: minimumSplitRatio,
+                    maximumSplitRatio: maximumSplitRatio
+                )
 
                 switch orientation {
                 case .horizontal:
-                    let adjustedWidth = max(frame.width - dividerThickness, 0)
+                    let adjustedWidth = adjustedPrimaryDimension
                     let firstWidth = adjustedWidth * clampedRatio
                     let secondWidth = max(adjustedWidth - firstWidth, 0)
                     let firstFrame = LayoutFrame(
@@ -110,12 +135,14 @@ public extension LayoutNode {
                         LayoutDividerPlacement(
                             nodeID: nodeID,
                             orientation: orientation,
-                            frame: dividerFrame
+                            frame: dividerFrame,
+                            parentFrame: frame,
+                            adjustedPrimaryDimension: adjustedWidth
                         )
                     )
 
                 case .vertical:
-                    let adjustedHeight = max(frame.height - dividerThickness, 0)
+                    let adjustedHeight = adjustedPrimaryDimension
                     let firstHeight = adjustedHeight * clampedRatio
                     let secondHeight = max(adjustedHeight - firstHeight, 0)
                     let firstFrame = LayoutFrame(
@@ -142,7 +169,9 @@ public extension LayoutNode {
                         LayoutDividerPlacement(
                             nodeID: nodeID,
                             orientation: orientation,
-                            frame: dividerFrame
+                            frame: dividerFrame,
+                            parentFrame: frame,
+                            adjustedPrimaryDimension: adjustedHeight
                         )
                     )
                 }

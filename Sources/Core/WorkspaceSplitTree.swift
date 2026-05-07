@@ -23,13 +23,17 @@ public struct WorkspaceRenderedLayout: Equatable, Sendable {
         in frame: LayoutFrame,
         dividerThickness: Double = 1,
         minimumSplitRatio: Double = 0.1,
-        maximumSplitRatio: Double = 0.9
+        maximumSplitRatio: Double = 0.9,
+        minimumPanelDimension: Double = LayoutNode.defaultMinimumSplitPanelDimension,
+        ratioOverrides: [UUID: Double] = [:]
     ) -> LayoutProjection {
         layoutTree.projectLayout(
             in: frame,
             dividerThickness: dividerThickness,
             minimumSplitRatio: minimumSplitRatio,
-            maximumSplitRatio: maximumSplitRatio
+            maximumSplitRatio: maximumSplitRatio,
+            minimumPanelDimension: minimumPanelDimension,
+            ratioOverrides: ratioOverrides
         )
     }
 }
@@ -188,6 +192,21 @@ public struct WorkspaceSplitTree: Equatable, Sendable {
             return nil
         }
         return WorkspaceSplitTree(root: result.node)
+    }
+
+    public func settingSplitRatio(
+        nodeID: UUID,
+        ratio: Double,
+        adjustedPrimaryDimension: Double? = nil
+    ) -> WorkspaceSplitTree? {
+        guard let updatedRoot = root.settingSplitRatio(
+            nodeID: nodeID,
+            ratio: ratio,
+            adjustedPrimaryDimension: adjustedPrimaryDimension
+        ) else {
+            return nil
+        }
+        return WorkspaceSplitTree(root: updatedRoot)
     }
 
     public func renderedLayout(
@@ -609,7 +628,7 @@ private extension WorkspaceSplitTree {
     }
 
     func clampedSplitRatio(_ value: Double) -> Double {
-        min(max(value, 0.1), 0.9)
+        LayoutNode.clampedSplitRatio(value)
     }
 
     func hasMeaningfulSplitRatioChange(from oldValue: Double, to newValue: Double) -> Bool {

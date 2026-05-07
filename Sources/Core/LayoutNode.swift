@@ -118,6 +118,40 @@ extension LayoutNode: Codable {
 }
 
 public extension LayoutNode {
+    static let defaultMinimumSplitRatio: Double = 0.1
+    static let defaultMaximumSplitRatio: Double = 0.9
+    static let defaultMinimumSplitPanelDimension: Double = 80
+    static let splitRatioChangeEpsilon: Double = 0.0001
+
+    static func clampedSplitRatio(
+        _ value: Double,
+        adjustedPrimaryDimension: Double? = nil,
+        minimumPanelDimension: Double = LayoutNode.defaultMinimumSplitPanelDimension,
+        minimumSplitRatio: Double = LayoutNode.defaultMinimumSplitRatio,
+        maximumSplitRatio: Double = LayoutNode.defaultMaximumSplitRatio
+    ) -> Double {
+        let finiteValue = value.isFinite ? value : 0.5
+        let safeLowerBound = min(minimumSplitRatio, maximumSplitRatio)
+        let safeUpperBound = max(minimumSplitRatio, maximumSplitRatio)
+        var lowerBound = safeLowerBound
+        var upperBound = safeUpperBound
+
+        if let adjustedPrimaryDimension,
+           adjustedPrimaryDimension.isFinite,
+           adjustedPrimaryDimension >= minimumPanelDimension * 2,
+           minimumPanelDimension > 0 {
+            let minimumPanelRatio = minimumPanelDimension / adjustedPrimaryDimension
+            let pixelLowerBound = max(safeLowerBound, minimumPanelRatio)
+            let pixelUpperBound = min(safeUpperBound, 1 - minimumPanelRatio)
+            if pixelLowerBound <= pixelUpperBound {
+                lowerBound = pixelLowerBound
+                upperBound = pixelUpperBound
+            }
+        }
+
+        return min(max(finiteValue, lowerBound), upperBound)
+    }
+
     var resolvedNodeID: UUID {
         switch self {
         case .slot(let slotID, _):
@@ -277,6 +311,65 @@ public extension LayoutNode {
             }
 
             return false
+        }
+    }
+
+    func settingSplitRatio(
+        nodeID targetNodeID: UUID,
+        ratio requestedRatio: Double,
+        adjustedPrimaryDimension: Double? = nil
+    ) -> LayoutNode? {
+        switch self {
+        case .slot:
+            return nil
+
+        case .split(let nodeID, let orientation, let ratio, let first, let second):
+            if nodeID == targetNodeID {
+                let clampedRatio = Self.clampedSplitRatio(
+                    requestedRatio,
+                    adjustedPrimaryDimension: adjustedPrimaryDimension
+                )
+                guard abs(clampedRatio - ratio) > Self.splitRatioChangeEpsilon else {
+                    return nil
+                }
+                return .split(
+                    nodeID: nodeID,
+                    orientation: orientation,
+                    ratio: clampedRatio,
+                    first: first,
+                    second: second
+                )
+            }
+
+            if let updatedFirst = first.settingSplitRatio(
+                nodeID: targetNodeID,
+                ratio: requestedRatio,
+                adjustedPrimaryDimension: adjustedPrimaryDimension
+            ) {
+                return .split(
+                    nodeID: nodeID,
+                    orientation: orientation,
+                    ratio: ratio,
+                    first: updatedFirst,
+                    second: second
+                )
+            }
+
+            if let updatedSecond = second.settingSplitRatio(
+                nodeID: targetNodeID,
+                ratio: requestedRatio,
+                adjustedPrimaryDimension: adjustedPrimaryDimension
+            ) {
+                return .split(
+                    nodeID: nodeID,
+                    orientation: orientation,
+                    ratio: ratio,
+                    first: first,
+                    second: updatedSecond
+                )
+            }
+
+            return nil
         }
     }
 
