@@ -1418,46 +1418,111 @@ final class TerminalHostView: NSView {
         pendingCommandClickLinkUsesAlternatePlacement = false
     }
 
-    private func refreshedHoveredGhosttyLinkURLForCommandClick(with event: NSEvent) -> URL? {
-        if let url = hoveredGhosttyLinkURL() {
-            return url
+    private enum CommandClickLinkResolution {
+        case resolved(URL)
+        case missingGhosttySurface
+        case missingHoveredLink
+        case malformedHoveredLink(rawURL: String)
+    }
+
+    private func refreshedHoveredGhosttyLinkURLForCommandClick(with event: NSEvent) -> CommandClickLinkResolution {
+        let initialResolution = currentHoveredGhosttyLinkResolution()
+        if let initialResolution,
+           case .resolved = initialResolution {
+            return initialResolution
         }
 
         guard let ghosttySurface else {
-            return nil
+            return initialResolution ?? .missingGhosttySurface
         }
 
+        let hoverModifierFlags = Self.ghosttyLinkHoverModifierFlags(for: event.modifierFlags)
+        let mods = Self.ghosttyModifierFlags(for: hoverModifierFlags)
+        let refreshedResolution = refreshedHoveredGhosttyLinkResolution(
+            surface: ghosttySurface,
+            event: event,
+            hoverModifierFlags: hoverModifierFlags,
+            ghosttyModifierFlags: mods
+        )
+        if let resolution = refreshedResolution {
+            return resolution
+        }
+
+        return initialResolution ?? .missingHoveredLink
+    }
+
+    private func refreshedHoveredGhosttyLinkResolution(
+        surface ghosttySurface: ghostty_surface_t,
+        event: NSEvent,
+        hoverModifierFlags: NSEvent.ModifierFlags,
+        ghosttyModifierFlags mods: ghostty_input_mods_e
+    ) -> CommandClickLinkResolution? {
         // Cmd-click should resolve the link under the pointer right now, not
         // depend on some earlier hover callback having populated state. Force
         // Ghostty to leave and re-enter the current hover target so stationary
         // pointers get a fresh mouse_over_link evaluation before we give up.
         // This path relies on Ghostty surfacing mouse_over_link updates
         // synchronously while the mouse position callback is in flight.
-        let hoverModifierFlags = Self.ghosttyLinkHoverModifierFlags(for: event.modifierFlags)
-        let mods = Self.ghosttyModifierFlags(for: hoverModifierFlags)
         ghosttySurfaceHooks.sendMousePosition(ghosttySurface, -1, -1, mods)
         forwardMousePosition(event, surface: ghosttySurface, modifierFlags: hoverModifierFlags)
-        return hoveredGhosttyLinkURL()
+        return currentHoveredGhosttyLinkResolution()
     }
 
     private func preparePendingCommandClickLinkOpen(with event: NSEvent) -> Bool {
-        guard openCommandClickLink != nil else {
-            clearPendingCommandClickLinkOpen()
-            return false
-        }
-
         guard event.modifierFlags.contains(.command) else {
             clearPendingCommandClickLinkOpen()
             return false
         }
 
-        guard let url = refreshedHoveredGhosttyLinkURLForCommandClick(with: event) else {
+        guard openCommandClickLink != nil else {
+            ToasttyLog.warning(
+                "Terminal command-click could not arm link open because handler is missing",
+                category: .input,
+                metadata: commandClickLogMetadata(
+                    phase: "mouseDown",
+                    event: event
+                )
+            )
+            clearPendingCommandClickLinkOpen()
+            return false
+        }
+
+        let resolution = refreshedHoveredGhosttyLinkURLForCommandClick(with: event)
+        let url: URL
+        switch resolution {
+        case .resolved(let resolvedURL):
+            url = resolvedURL
+        case .missingGhosttySurface:
+            ToasttyLog.warning(
+                "Terminal command-click had no Ghostty surface for hovered-link refresh",
+                category: .input,
+                metadata: commandClickLogMetadata(
+                    phase: "mouseDown",
+                    event: event
+                )
+            )
+            clearPendingCommandClickLinkOpen()
+            return false
+        case .missingHoveredLink:
             ToasttyLog.warning(
                 "Terminal command-click had no hovered link URL",
                 category: .input,
-                metadata: [
-                    "shift": event.modifierFlags.contains(.shift) ? "true" : "false",
-                ]
+                metadata: commandClickLogMetadata(
+                    phase: "mouseDown",
+                    event: event
+                )
+            )
+            clearPendingCommandClickLinkOpen()
+            return false
+        case .malformedHoveredLink(let rawURL):
+            ToasttyLog.warning(
+                "Terminal command-click hovered link URL could not be parsed",
+                category: .input,
+                metadata: commandClickLogMetadata(
+                    phase: "mouseDown",
+                    event: event,
+                    rawURL: rawURL
+                )
             )
             clearPendingCommandClickLinkOpen()
             return false
@@ -1470,10 +1535,14 @@ final class TerminalHostView: NSView {
         ToasttyLog.info(
             "Armed terminal command-click link open",
             category: .input,
-            metadata: [
-                "url": url.absoluteString,
-                "alternate_placement": pendingCommandClickLinkUsesAlternatePlacement ? "true" : "false",
-            ]
+            metadata: commandClickLogMetadata(
+                phase: "mouseDown",
+                event: event,
+                url: url,
+                extraMetadata: [
+                    "alternate_placement": pendingCommandClickLinkUsesAlternatePlacement ? "true" : "false",
+                ]
+            )
         )
         return true
     }
@@ -1490,10 +1559,14 @@ final class TerminalHostView: NSView {
             ToasttyLog.warning(
                 "Dropped pending terminal command-click because Command was not pressed on mouse up",
                 category: .input,
-                metadata: [
-                    "url": url.absoluteString,
-                    "alternate_placement": useAlternatePlacement ? "true" : "false",
-                ]
+                metadata: commandClickLogMetadata(
+                    phase: "mouseUp",
+                    event: event,
+                    url: url,
+                    extraMetadata: [
+                        "alternate_placement": useAlternatePlacement ? "true" : "false",
+                    ]
+                )
             )
             return true
         }
@@ -1502,30 +1575,72 @@ final class TerminalHostView: NSView {
             ToasttyLog.info(
                 "Opened terminal command-click link",
                 category: .input,
-                metadata: [
-                    "url": url.absoluteString,
-                    "alternate_placement": useAlternatePlacement ? "true" : "false",
-                ]
+                metadata: commandClickLogMetadata(
+                    phase: "mouseUp",
+                    event: event,
+                    url: url,
+                    extraMetadata: [
+                        "alternate_placement": useAlternatePlacement ? "true" : "false",
+                    ]
+                )
             )
         } else {
             ToasttyLog.warning(
                 "Terminal command-click handler returned false",
                 category: .input,
-                metadata: [
-                    "url": url.absoluteString,
-                    "alternate_placement": useAlternatePlacement ? "true" : "false",
-                ]
+                metadata: commandClickLogMetadata(
+                    phase: "mouseUp",
+                    event: event,
+                    url: url,
+                    extraMetadata: [
+                        "alternate_placement": useAlternatePlacement ? "true" : "false",
+                    ]
+                )
             )
         }
         return true
     }
 
-    private func hoveredGhosttyLinkURL() -> URL? {
-        guard let ghosttyMouseOverLinkURL,
-              let url = URL(string: ghosttyMouseOverLinkURL) else {
+    private func currentHoveredGhosttyLinkResolution() -> CommandClickLinkResolution? {
+        guard let ghosttyMouseOverLinkURL else {
             return nil
         }
-        return url
+        guard let url = URL(string: ghosttyMouseOverLinkURL) else {
+            return .malformedHoveredLink(rawURL: ghosttyMouseOverLinkURL)
+        }
+        return .resolved(url)
+    }
+
+    private func commandClickLogMetadata(
+        phase: String,
+        event: NSEvent,
+        url: URL? = nil,
+        rawURL: String? = nil,
+        extraMetadata: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "phase": phase,
+            "eventType": DraggableInteractionLog.eventTypeDescription(event.type),
+            "eventWindowLocation": DraggableInteractionLog.pointDescription(event.locationInWindow),
+            "eventLocalLocation": DraggableInteractionLog.pointDescription(convert(event.locationInWindow, from: nil)),
+            "buttonNumber": "\(event.buttonNumber)",
+            "modifiers": Self.modifierDescription(event.modifierFlags),
+            "modifierRawValue": "\(event.modifierFlags.rawValue)",
+            "command": event.modifierFlags.contains(.command) ? "true" : "false",
+            "shift": event.modifierFlags.contains(.shift) ? "true" : "false",
+            "hasGhosttySurface": ghosttySurface == nil ? "false" : "true",
+            "cachedHoverURL": ghosttyMouseOverLinkURL ?? "nil",
+            "pendingURL": pendingCommandClickLinkURL?.absoluteString ?? "nil",
+            "syntheticLinkHoverRefreshSuppressionCount": "\(syntheticLinkHoverRefreshSuppressionCount)",
+        ]
+        if let url {
+            metadata["url"] = url.absoluteString
+        }
+        if let rawURL {
+            metadata["rawHoverURL"] = rawURL
+        }
+        metadata.merge(extraMetadata) { _, new in new }
+        return metadata
     }
 
     private func beginSyntheticLinkHoverRefreshSuppression() {

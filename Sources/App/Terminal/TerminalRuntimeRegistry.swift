@@ -1075,6 +1075,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
         let result: Bool
         let openedRightPanelInToastty: Bool
+        var passthroughOpenResult: AppURLRouterOpenResult? = nil
+        var passthroughExternalTarget: URL? = nil
         switch target {
         case .localDocumentFile(let path, let lineNumber, let placement):
             let outcome = store.createLocalDocumentPanelFromCommandOutcome(
@@ -1094,6 +1096,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     lineNumber: lineNumber
                 )
             }
+            passthroughOpenResult = nil
         case .localDirectory(let path):
             guard let workspaceID = selection?.workspaceID else {
                 ToasttyLog.warning(
@@ -1115,6 +1118,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 workingDirectory: path
             )
             openedRightPanelInToastty = false
+            passthroughOpenResult = nil
         case .localBrowserFile(let fileURL):
             let placement = store.urlRoutingPreferences.resolvedBrowserPlacement(
                 alternateOpen: useAlternatePlacement
@@ -1125,17 +1129,24 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 placement: placement
             )
             openedRightPanelInToastty = result && placement == .rightPanel
+            passthroughOpenResult = nil
         case .unresolvedLocalDocument(let unresolvedURL, let issue):
             presentLocalDocumentLinkAlert(preferredWindowID, unresolvedURL, issue)
             result = false
             openedRightPanelInToastty = false
+            passthroughOpenResult = nil
         case .passthrough(let passthroughURL):
             let openResult = AppURLRouter.openResult(
                 passthroughURL,
                 preferredWindowID: preferredWindowID,
                 appStore: store,
-                useAlternatePlacement: useAlternatePlacement
+                useAlternatePlacement: useAlternatePlacement,
+                openExternally: { externalTarget in
+                    passthroughExternalTarget = externalTarget
+                    return NSWorkspace.shared.open(externalTarget)
+                }
             )
+            passthroughOpenResult = openResult
             result = openResult.didOpen
             openedRightPanelInToastty = openResult.openedRightPanelInToastty
         }
@@ -1200,6 +1211,25 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             metadata["cwd"] = cwd
         }
         metadata.merge(targetMetadata) { _, new in new }
+        if let passthroughOpenResult {
+            metadata.merge(
+                Self.passthroughOpenResultMetadata(
+                    passthroughOpenResult,
+                    externalTarget: passthroughExternalTarget
+                )
+            ) { _, new in new }
+        }
+
+        if case .passthrough(let passthroughURL) = target,
+           let reason = Self.suspiciousCommandClickPassthroughReason(for: passthroughURL) {
+            var passthroughMetadata = metadata
+            passthroughMetadata["passthrough_reason"] = reason
+            ToasttyLog.warning(
+                "Terminal command-click local-looking link fell through to passthrough routing",
+                category: .input,
+                metadata: passthroughMetadata
+            )
+        }
 
         if result {
             ToasttyLog.info(
@@ -1215,6 +1245,100 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
         }
         return result
+    }
+
+    private static func passthroughOpenResultMetadata(
+        _ result: AppURLRouterOpenResult,
+        externalTarget: URL?
+    ) -> [String: String] {
+        var metadata: [String: String]
+        switch result {
+        case .openedInToastty(let route):
+            metadata = [
+                "passthrough_open_result": "opened_in_toastty",
+                "passthrough_open_route": appURLRouteDescription(route),
+            ]
+        case .openedExternally(let externalURL):
+            metadata = [
+                "passthrough_open_result": "opened_externally",
+                "passthrough_external_url": externalURL.absoluteString,
+            ]
+        case .failed:
+            metadata = [
+                "passthrough_open_result": "failed",
+            ]
+        }
+
+        if let externalTarget {
+            metadata["passthrough_external_target"] = externalTarget.absoluteString
+        }
+        return metadata
+    }
+
+    private static func appURLRouteDescription(_ route: AppURLRoute) -> String {
+        switch route {
+        case .external:
+            return "external"
+        case .localDocument:
+            return "local_document"
+        case .toasttyBrowser(let placement):
+            return "toastty_browser:\(placement.rawValue)"
+        }
+    }
+
+    private static func suspiciousCommandClickPassthroughReason(for url: URL) -> String? {
+        if let scheme = url.scheme?.lowercased() {
+            if scheme == "file" {
+                return "file-url"
+            }
+
+            if suspiciousLocalDocumentLineSuffixURL(url) {
+                return "supported-local-document-line-suffix"
+            }
+
+            return nil
+        }
+
+        let path = url.path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard path.isEmpty == false else {
+            return nil
+        }
+
+        if path.hasPrefix("/") {
+            return "absolute-path"
+        }
+
+        if path.hasPrefix("~/") {
+            return "home-relative-path"
+        }
+
+        if path.hasPrefix(".") || path.contains("/") {
+            return "relative-path"
+        }
+
+        if LocalDocumentClassifier.format(forFilePath: path) != nil {
+            return "supported-local-document-name"
+        }
+
+        return nil
+    }
+
+    private static func suspiciousLocalDocumentLineSuffixURL(_ url: URL) -> Bool {
+        let absoluteString = url.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separatorIndex = absoluteString.firstIndex(of: ":") else {
+            return false
+        }
+
+        let candidatePath = String(absoluteString[..<separatorIndex])
+        let suffix = String(absoluteString[absoluteString.index(after: separatorIndex)...])
+        guard candidatePath.isEmpty == false,
+              suffix.isEmpty == false,
+              suffix.allSatisfy(\.isNumber),
+              LocalDocumentClassifier.format(forFilePath: candidatePath) != nil else {
+            return false
+        }
+
+        return true
     }
 
     @discardableResult
