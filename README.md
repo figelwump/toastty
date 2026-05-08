@@ -37,7 +37,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Workspaces** — named workspaces in the vertical sidebar, drag to reorder, switch with `Option+1`–`Option+9`, persisted across restarts
 - **Multi-window** — `Cmd+N` opens a new window with its own sidebar and workspace list
 - **Horizontal tabs** — per-workspace tabs with `Cmd+T`, drag to reorder
-- **Split panes** — split horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize (`Cmd+Ctrl+Arrow`), equalize (`Cmd+Ctrl+=`)
+- **Split panes** — split horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), drag dividers or use `Cmd+Ctrl+Arrow` to resize, equalize (`Cmd+Ctrl+=`)
 - **Command palette** — `Cmd+Shift+P` to run actions, switch workspaces, launch agents, or split with terminal profiles
 
 ### Right panel
@@ -213,12 +213,14 @@ For the full command reference including all flags, environment variables, JSON 
 
 ### Workflow automation with the CLI
 
-The CLI can also drive higher-level workflows against a normal running Toastty instance. This repo's `worktree-create` skill is one example: it resolves the current Toastty window, creates a background workspace, opens `WORKTREE_HANDOFF.md` in a split, and sends the startup command into the new terminal via `query run` and `action run`.
+The CLI can also drive higher-level workflows against a normal running Toastty instance. This repo's `worktree-create` skill is one example: it resolves the current Toastty window, creates a background workspace, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and sends the startup command into the new terminal via `query run` and `action run`.
+
+Repo-local skills can be linked into supported global agent skill directories with `scripts/agents/link-global-skills.sh`. Run it with `--help` to list supported targets, selected skills, and cleanup options.
 
 If you want to point an agent at that pattern and have it adapt the workflow for another repo, use this prompt:
 
 ```text
-Read `.agents/skills/worktree-create/SKILL.md` and `.agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh`, then adapt that workflow for this repo. Reuse the same Toastty CLI pattern: resolve the current window/panel, create a workspace, open a handoff document in a split, and send the startup command into the new terminal.
+Read `.agents/skills/worktree-create/SKILL.md` and `.agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh`, then adapt that workflow for this repo. Reuse the same Toastty CLI pattern: resolve the current window/panel, create a workspace, open a handoff document as a local-document panel, and send the startup command into the new terminal.
 ```
 
 ## Configuration

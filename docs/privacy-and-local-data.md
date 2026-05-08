@@ -44,6 +44,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 
 - Automation mode creates a Unix domain socket at a short temp path derived from the active runtime home when runtime isolation is enabled, otherwise under `$TMPDIR/toastty-$UID/events-v1.sock`, unless `TOASTTY_SOCKET_PATH` overrides it.
 - Automation runs can also write screenshots and state dumps under `artifacts/` or the directory provided via `--artifacts-dir`.
+- Browser panel screenshot actions can write user-selected PNG files, place PNG data on the macOS pasteboard, or write temporary agent-share screenshots under the system temp directory in `toastty-browser-screenshots/`.
 
 ## Permissions and platform integrations
 
