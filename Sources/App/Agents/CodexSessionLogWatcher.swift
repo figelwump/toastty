@@ -13,11 +13,18 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     let kind: Kind
     let detail: String
     let rootInputFingerprint: String?
+    let rootThreadID: String?
 
-    init(kind: Kind, detail: String, rootInputFingerprint: String? = nil) {
+    init(
+        kind: Kind,
+        detail: String,
+        rootInputFingerprint: String? = nil,
+        rootThreadID: String? = nil
+    ) {
         self.kind = kind
         self.detail = detail
         self.rootInputFingerprint = rootInputFingerprint
+        self.rootThreadID = rootThreadID
     }
 }
 
@@ -221,6 +228,14 @@ private extension CodexSessionLogWatcher {
             return event
         }
 
+        if let event = parseAppEvent(
+            object: object,
+            fallbackLine: fallbackLine,
+            seenKeys: &seenKeys
+        ) {
+            return event
+        }
+
         if let event = parseHistoryInsertEvent(
             object: object,
             fallbackLine: fallbackLine,
@@ -309,6 +324,31 @@ private extension CodexSessionLogWatcher {
                 detail: approvalDetail(type: type, message: message)
             )
         }
+    }
+
+    static func parseAppEvent(
+        object: [String: Any],
+        fallbackLine: String,
+        seenKeys: inout Set<String>
+    ) -> CodexSessionLogEvent? {
+        guard normalizedString(object["dir"]) == "to_tui",
+              normalizedString(object["kind"]) == "app_event",
+              let variant = nonEmptyString(object["variant"]),
+              let goal = threadGoalObjective(from: variant) else {
+            return nil
+        }
+
+        let dedupeKey = "set_thread_goal_objective:\(fallbackLine)"
+        guard seenKeys.insert(dedupeKey).inserted else {
+            return nil
+        }
+
+        return CodexSessionLogEvent(
+            kind: .turnStarted,
+            detail: normalizedSummaryText(goal.objective, limit: 140) ?? "Responding to your goal",
+            rootInputFingerprint: CodexInputFingerprint.fingerprint(for: goal.objective),
+            rootThreadID: goal.threadID
+        )
     }
 
     static func parseOperationEvent(
@@ -539,6 +579,94 @@ private extension CodexSessionLogWatcher {
             }
         }
         return normalizedString(payload["text"])
+    }
+
+    static func threadGoalObjective(from variant: String) -> (threadID: String?, objective: String)? {
+        guard variant.hasPrefix("SetThreadGoalObjective "),
+              let objective = quotedValue(in: variant, after: "objective: ") else {
+            return nil
+        }
+
+        return (
+            threadID: threadID(fromGoalVariant: variant),
+            objective: objective
+        )
+    }
+
+    static func threadID(fromGoalVariant variant: String) -> String? {
+        let marker = "thread_id: ThreadId { uuid: "
+        guard let markerRange = variant.range(of: marker) else {
+            return nil
+        }
+
+        var endIndex = markerRange.upperBound
+        while endIndex < variant.endIndex, isThreadIDCharacter(variant[endIndex]) {
+            variant.formIndex(after: &endIndex)
+        }
+
+        let candidate = String(variant[markerRange.upperBound..<endIndex])
+        return candidate.isEmpty ? nil : candidate
+    }
+
+    static func quotedValue(in value: String, after marker: String) -> String? {
+        guard let markerRange = value.range(of: marker) else {
+            return nil
+        }
+
+        var index = markerRange.upperBound
+        guard index < value.endIndex, value[index] == "\"" else {
+            return nil
+        }
+        value.formIndex(after: &index)
+
+        var result = ""
+        var isEscaped = false
+        while index < value.endIndex {
+            let character = value[index]
+            value.formIndex(after: &index)
+
+            if isEscaped {
+                switch character {
+                case "n":
+                    result.append("\n")
+                case "r":
+                    result.append("\r")
+                case "t":
+                    result.append("\t")
+                default:
+                    result.append(character)
+                }
+                isEscaped = false
+                continue
+            }
+
+            if character == "\\" {
+                isEscaped = true
+                continue
+            }
+
+            if character == "\"" {
+                return normalizedString(result)
+            }
+
+            result.append(character)
+        }
+
+        return nil
+    }
+
+    static func isThreadIDCharacter(_ character: Character) -> Bool {
+        guard character.unicodeScalars.count == 1,
+              let scalar = character.unicodeScalars.first else {
+            return false
+        }
+
+        switch scalar.value {
+        case 45, 48...57, 65...90, 97...122:
+            return true
+        default:
+            return false
+        }
     }
 
     static func normalizedJSONLineData(from lineData: Data) -> Data? {

@@ -348,6 +348,36 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesThreadGoalObjectiveAppEventsAsRootTurns() async throws {
+        let objective = "implement docs/plans/meal-water-logger-v1.md with fidelity to mockups at docs/plans/v1_mockups"
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"ts":"2026-05-08T03:17:50.862Z","dir":"to_tui","kind":"app_event","variant":"SetThreadGoalObjective { thread_id: ThreadId { uuid: 019e0597-141c-79b3-93d4-ac9dbfe3bdf1 }, objective: \"implement docs/plans/meal-water-logger-v1.md with fidelity to mockups at docs/plans/v1_mockups\", mode: ConfirmIfExists }"}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: objective,
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: objective),
+                rootThreadID: "019e0597-141c-79b3-93d4-ac9dbfe3bdf1"
+            )
+        ])
+    }
+
+    func testWatcherIgnoresThreadGoalMenuOpenAppEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                #"{"ts":"2026-05-08T03:17:33.351Z","dir":"to_tui","kind":"app_event","variant":"OpenThreadGoalMenu { thread_id: ThreadId { uuid: 019e0597-141c-79b3-93d4-ac9dbfe3bdf1 } }"}"#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
     func testWatcherParsesCurrentCodexInterruptOperationEvents() async throws {
         let events = try await recordEvents(
             from:

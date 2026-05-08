@@ -203,6 +203,76 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexRootTurnInputThreadIDCanReplaceLatchedThreadForLaterGoal() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let firstFingerprint = CodexInputFingerprint.fingerprint(for: "Fix the sidebar state")
+        let goalFingerprint = CodexInputFingerprint.fingerprint(for: "Implement the saved goal")
+
+        store.startSession(
+            sessionID: "sess-codex-goal-thread",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-goal-thread",
+            fingerprint: firstFingerprint,
+            threadID: "thread-first"
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-goal-thread",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Implement the saved goal"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-goal-thread",
+            fingerprint: goalFingerprint,
+            threadID: "thread-goal"
+        )
+
+        let ignoredPreviousThread = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-goal-thread",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: "thread-first",
+                turnID: "turn-first",
+                lastInputMessageFingerprint: firstFingerprint,
+                inputMessageCount: 1,
+                detail: "Earlier thread finished"
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(ignoredPreviousThread == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-goal-thread")?.status?.kind == .working)
+
+        let acceptedGoalThread = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-goal-thread",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: "thread-goal",
+                turnID: "turn-goal",
+                lastInputMessageFingerprint: nil,
+                inputMessageCount: 0,
+                detail: "Goal finished"
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(acceptedGoalThread)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-goal-thread")?.status
+        #expect(status?.kind == .ready)
+        #expect(status?.detail == "Goal finished")
+    }
+
+    @Test
     func codexNotifyCompletionIgnoresThreadedInputWhenRootInputWasNotRecorded() {
         let store = SessionRuntimeStore()
         let panelID = UUID()

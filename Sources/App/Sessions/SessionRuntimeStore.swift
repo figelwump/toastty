@@ -193,7 +193,8 @@ final class SessionRuntimeStore: ObservableObject {
 
     func recordCodexRootTurnInput(
         sessionID: String,
-        fingerprint: String?
+        fingerprint: String?,
+        threadID: String? = nil
     ) {
         guard let record = sessionRegistry.sessionsByID[sessionID],
               record.agent == .codex,
@@ -203,6 +204,9 @@ final class SessionRuntimeStore: ObservableObject {
 
         var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
         state.pendingRootInputFingerprint = fingerprint
+        if let threadID {
+            state.rootThreadID = threadID
+        }
         codexNotifyStateBySessionID[sessionID] = state
 
         ToasttyLog.debug(
@@ -214,6 +218,7 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 additional: [
                     "input_fingerprint": truncatedFingerprint(fingerprint),
+                    "thread_id": threadID ?? "none",
                 ]
             )
         )
