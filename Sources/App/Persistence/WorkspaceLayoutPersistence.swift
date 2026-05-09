@@ -68,11 +68,24 @@ final class WorkspaceLayoutPersistenceCoordinator {
 
     private let context: WorkspaceLayoutPersistenceContext
     private let store: WorkspaceLayoutPersistenceStore
+    private let persistDropAuditLogger: @MainActor ([String: String]) -> Void
     private var pendingPersistTask: Task<Void, Never>?
     private var lastPersistedLayout: WorkspaceLayoutSnapshot?
+    private var pendingPersistBaselineLayout: WorkspaceLayoutSnapshot?
+    private var pendingPersistDropTrigger: String?
 
-    init(context: WorkspaceLayoutPersistenceContext) {
+    init(
+        context: WorkspaceLayoutPersistenceContext,
+        persistDropAuditLogger: @escaping @MainActor ([String: String]) -> Void = { metadata in
+            ToasttyLog.info(
+                "Persisted workspace layout after window/workspace drop",
+                category: .state,
+                metadata: metadata
+            )
+        }
+    ) {
         self.context = context
+        self.persistDropAuditLogger = persistDropAuditLogger
         store = WorkspaceLayoutPersistenceStore(fileURL: context.fileURL)
     }
 
@@ -84,16 +97,49 @@ final class WorkspaceLayoutPersistenceCoordinator {
         let previousLayout = WorkspaceLayoutSnapshot(state: previousState)
         let nextLayout = WorkspaceLayoutSnapshot(state: nextState)
         guard previousLayout != nextLayout else { return }
-        schedulePersist(layout: nextLayout, reason: "action_\(action.logName)")
+        schedulePersist(
+            layout: nextLayout,
+            reason: "action_\(action.logName)",
+            baselineLayout: previousLayout,
+            baselineTrigger: "action_\(action.logName)"
+        )
     }
 
     func flushCurrentState(_ state: AppState, reason: String) {
         pendingPersistTask?.cancel()
         pendingPersistTask = nil
-        persistNow(layout: WorkspaceLayoutSnapshot(state: state), reason: reason)
+        let baselineLayout = pendingPersistBaselineLayout
+        let dropTrigger = pendingPersistDropTrigger
+        pendingPersistBaselineLayout = nil
+        pendingPersistDropTrigger = nil
+        persistNow(
+            layout: WorkspaceLayoutSnapshot(state: state),
+            reason: reason,
+            baselineLayout: baselineLayout,
+            dropTrigger: dropTrigger
+        )
     }
 
-    private func schedulePersist(layout: WorkspaceLayoutSnapshot, reason: String) {
+    private func schedulePersist(
+        layout: WorkspaceLayoutSnapshot,
+        reason: String,
+        baselineLayout: WorkspaceLayoutSnapshot,
+        baselineTrigger: String
+    ) {
+        let pendingBaselineLayout: WorkspaceLayoutSnapshot
+        if pendingPersistBaselineLayout == nil {
+            pendingPersistBaselineLayout = baselineLayout
+            pendingBaselineLayout = baselineLayout
+        } else {
+            pendingBaselineLayout = pendingPersistBaselineLayout ?? baselineLayout
+        }
+        if pendingPersistDropTrigger == nil,
+           LayoutAuditDiff(
+               before: LayoutAuditSummary(layout: pendingBaselineLayout),
+               after: LayoutAuditSummary(layout: layout)
+           ).didDropContainerLayout {
+            pendingPersistDropTrigger = baselineTrigger
+        }
         pendingPersistTask?.cancel()
         pendingPersistTask = Task { @MainActor [weak self] in
             do {
@@ -103,12 +149,41 @@ final class WorkspaceLayoutPersistenceCoordinator {
             }
             guard let self else { return }
             guard Task.isCancelled == false else { return }
-            self.persistNow(layout: layout, reason: reason)
+            let baselineLayout = self.pendingPersistBaselineLayout
+            let dropTrigger = self.pendingPersistDropTrigger
+            self.pendingPersistBaselineLayout = nil
+            self.pendingPersistDropTrigger = nil
+            self.persistNow(
+                layout: layout,
+                reason: reason,
+                baselineLayout: baselineLayout,
+                dropTrigger: dropTrigger
+            )
         }
     }
 
-    private func persistNow(layout: WorkspaceLayoutSnapshot, reason: String) {
+    private func persistNow(
+        layout: WorkspaceLayoutSnapshot,
+        reason: String,
+        baselineLayout: WorkspaceLayoutSnapshot?,
+        dropTrigger: String?
+    ) {
         guard layout != lastPersistedLayout else { return }
+        let baselineDropMetadata = baselineLayout.flatMap {
+            persistDropMetadata(
+                previousLayout: $0,
+                nextLayout: layout,
+                trigger: dropTrigger ?? "pending_persist_drop"
+            )
+        }
+        let lastPersistedDropMetadata = lastPersistedLayout.flatMap {
+            persistDropMetadata(
+                previousLayout: $0,
+                nextLayout: layout,
+                trigger: "last_persisted_layout"
+            )
+        }
+        let effectiveDropMetadata = baselineDropMetadata ?? lastPersistedDropMetadata
 
         guard store.persistLayout(layout, for: context.profileID) else {
             return
@@ -124,6 +199,30 @@ final class WorkspaceLayoutPersistenceCoordinator {
                 "path": context.fileURL.path,
             ]
         )
+
+        if let effectiveDropMetadata {
+            var metadata = effectiveDropMetadata
+            metadata["profile_id"] = context.profileID
+            metadata["reason"] = reason
+            metadata["path"] = context.fileURL.path
+            metadata["mutation"] = "persist_layout_drop"
+            persistDropAuditLogger(metadata)
+        }
+    }
+
+    private func persistDropMetadata(
+        previousLayout: WorkspaceLayoutSnapshot,
+        nextLayout: WorkspaceLayoutSnapshot,
+        trigger: String
+    ) -> [String: String]? {
+        let diff = LayoutAuditDiff(
+            before: LayoutAuditSummary(layout: previousLayout),
+            after: LayoutAuditSummary(layout: nextLayout)
+        )
+        guard diff.didDropContainerLayout else { return nil }
+        var metadata = diff.metadata
+        metadata["trigger"] = trigger
+        return metadata
     }
 }
 

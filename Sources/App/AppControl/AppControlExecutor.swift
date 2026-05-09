@@ -157,7 +157,10 @@ final class AppControlExecutor {
 
         case .workspaceClose:
             return .init(
-                didMutateState: try requiredStore().send(.closeWorkspace(workspaceID: try resolveWorkspaceID(args: args))),
+                didMutateState: try requiredStore().send(
+                    .closeWorkspace(workspaceID: try resolveWorkspaceID(args: args)),
+                    source: .appControl(actionID: action.rawValue)
+                ),
                 result: nil
             )
 
@@ -238,7 +241,10 @@ final class AppControlExecutor {
             let workspaceID = try resolveWorkspaceID(args: args)
             let tabID = try resolveWorkspaceTabID(args: args, workspaceID: workspaceID, allowSelectedTabFallback: true)
             return .init(
-                didMutateState: try requiredStore().send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID)),
+                didMutateState: try requiredStore().send(
+                    .closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID),
+                    source: .appControl(actionID: action.rawValue)
+                ),
                 result: nil
             )
 
@@ -285,7 +291,10 @@ final class AppControlExecutor {
 
         case .panelClose:
             return .init(
-                didMutateState: focusedPanelCommandController.closeFocusedPanel(in: try resolveWorkspaceID(args: args)).didMutateState,
+                didMutateState: focusedPanelCommandController.closeFocusedPanel(
+                    in: try resolveWorkspaceID(args: args),
+                    source: .appControl(actionID: action.rawValue)
+                ).didMutateState,
                 result: nil
             )
 

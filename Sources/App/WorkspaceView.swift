@@ -2202,7 +2202,10 @@ struct WorkspaceView: View {
 
         guard closeAssessment.requiresConfirmation else {
             pendingWorkspaceTabClose = nil
-            _ = store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+            _ = store.send(
+                .closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID),
+                source: .ui("workspace_tab_close")
+            )
             return
         }
 
@@ -2270,7 +2273,10 @@ struct WorkspaceView: View {
 
     private func confirmWorkspaceTabClose(_ closeTarget: PendingWorkspaceTabClose) {
         pendingWorkspaceTabClose = nil
-        _ = store.send(.closeWorkspaceTab(workspaceID: closeTarget.workspaceID, tabID: closeTarget.tabID))
+        _ = store.send(
+            .closeWorkspaceTab(workspaceID: closeTarget.workspaceID, tabID: closeTarget.tabID),
+            source: .ui("workspace_tab_close_confirmation")
+        )
     }
 
     private func clearTabHoverState(for tabID: UUID) {
@@ -3879,7 +3885,10 @@ struct PanelCardView: View {
 
     private var panelHeaderCloseButton: some View {
         Button {
-            _ = focusedPanelCommandController.closePanel(panelID: panelID)
+            _ = focusedPanelCommandController.closePanel(
+                panelID: panelID,
+                source: .ui("panel_header_close")
+            )
         } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 9, weight: .bold))

@@ -183,7 +183,10 @@ struct AppWindowSceneView: View {
 
     private func handleWindowWillClose() {
         guard windowState != nil else { return }
-        _ = store.send(.closeWindow(windowID: windowID))
+        _ = store.send(
+            .closeWindow(windowID: windowID),
+            source: .ui("window_will_close")
+        )
     }
 
     private func scheduleWindowFocusRestore(avoidStealingKeyboardFocus: Bool = true) {

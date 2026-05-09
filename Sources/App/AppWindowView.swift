@@ -151,6 +151,7 @@ struct AppWindowView: View {
             pendingWorkspaceClose = PendingWorkspaceClose(
                 windowID: request.windowID,
                 workspaceID: request.workspaceID,
+                source: request.source,
                 unsavedLocalDocumentDraftCount: closeConfirmationSummary.dirtyDraftCount,
                 firstUnsavedLocalDocumentDisplayName: closeConfirmationSummary.firstDirtyDraftDisplayName,
                 localDocumentSaveInProgressCount: closeConfirmationSummary.saveInProgressCount,
@@ -335,7 +336,8 @@ struct AppWindowView: View {
         pendingWorkspaceClose = nil
         _ = store.confirmWorkspaceClose(
             windowID: closeTarget.windowID,
-            workspaceID: closeTarget.workspaceID
+            workspaceID: closeTarget.workspaceID,
+            source: closeTarget.source
         )
     }
 }
@@ -459,6 +461,7 @@ private extension SidebarResizeLayer {
 private struct PendingWorkspaceClose: Identifiable {
     let windowID: UUID
     let workspaceID: UUID
+    let source: AppActionSource
     let unsavedLocalDocumentDraftCount: Int
     let firstUnsavedLocalDocumentDisplayName: String?
     let localDocumentSaveInProgressCount: Int

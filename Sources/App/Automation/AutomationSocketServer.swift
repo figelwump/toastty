@@ -1010,7 +1010,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "automation.reset":
             try requireAutomationMode(for: command)
-            store.replaceState(.bootstrap())
+            store.replaceState(
+                .bootstrap(),
+                source: .automation(command: command)
+            )
             currentFixtureName = "default"
             sessionRuntimeStore.reset()
             notificationStore = NotificationStore()
@@ -1026,7 +1029,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("name is required")
             }
             let state = try AutomationFixtureLoader.loadRequired(named: fixtureName)
-            store.replaceState(state)
+            store.replaceState(
+                state,
+                source: .automation(command: command, actionID: fixtureName)
+            )
             currentFixtureName = fixtureName
             sessionRuntimeStore.reset()
             stateVersion += 1
@@ -1417,7 +1423,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 workspaceID: resolvedWorkspaceID,
                 allowSelectedTabFallback: true
             )
-            didMutate = store.send(.closeWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
+            didMutate = store.send(
+                .closeWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID),
+                source: .automation(command: "automation.perform_action", actionID: actionID)
+            )
 
         case "workspace.reopen-last-closed-panel":
             didMutate = store.send(.reopenLastClosedPanel(workspaceID: try workspaceID()))
@@ -1463,7 +1472,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             )
 
         case "workspace.close-focused-panel":
-            didMutate = focusedPanelCommandController.closeFocusedPanel(in: try workspaceID()).didMutateState
+            didMutate = focusedPanelCommandController.closeFocusedPanel(
+                in: try workspaceID(),
+                source: .automation(command: "automation.perform_action", actionID: actionID)
+            ).didMutateState
 
         case "workspace.focus-slot.previous":
             didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .previous))

@@ -81,7 +81,10 @@ final class FocusedPanelCommandController {
             // The callback identifies a specific surface, so close that panel
             // directly rather than whichever panel is focused after the async
             // main-actor hop completes.
-            return self.closePanel(panelID: panelID).consumesShortcut
+            return self.closePanel(
+                panelID: panelID,
+                source: .ui("ghostty_close_surface")
+            ).consumesShortcut
         }
     }
 
@@ -93,21 +96,31 @@ final class FocusedPanelCommandController {
     }
 
     @discardableResult
-    func closeFocusedPanel(in workspaceID: UUID? = nil) -> CloseResult {
+    func closeFocusedPanel(
+        in workspaceID: UUID? = nil,
+        source: AppActionSource = .command("close_focused_panel")
+    ) -> CloseResult {
         guard let workspace = resolvedWorkspace(preferredWorkspaceID: workspaceID),
               let focusedPanelID = focusedPanelID(in: workspace) else {
             return .notHandled
         }
-        return closePanel(panelID: focusedPanelID, preferredWorkspaceID: workspace.id)
+        return closePanel(panelID: focusedPanelID, preferredWorkspaceID: workspace.id, source: source)
     }
 
     @discardableResult
-    func closePanel(panelID: UUID) -> CloseResult {
-        closePanel(panelID: panelID, preferredWorkspaceID: nil)
+    func closePanel(
+        panelID: UUID,
+        source: AppActionSource = .command("close_panel")
+    ) -> CloseResult {
+        closePanel(panelID: panelID, preferredWorkspaceID: nil, source: source)
     }
 
     @discardableResult
-    private func closePanel(panelID: UUID, preferredWorkspaceID: UUID?) -> CloseResult {
+    private func closePanel(
+        panelID: UUID,
+        preferredWorkspaceID: UUID?,
+        source: AppActionSource
+    ) -> CloseResult {
         guard let store else { return .notHandled }
         let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
         guard let workspace = resolvedWorkspace(containing: panelID, preferredWorkspaceID: preferredWorkspaceID) else {
@@ -160,7 +173,7 @@ final class FocusedPanelCommandController {
             }
         }
 
-        let didClosePanel = store.send(.closePanel(panelID: panelID))
+        let didClosePanel = store.send(.closePanel(panelID: panelID), source: source)
         guard didClosePanel else {
             return didPromptForConfirmation ? .canceled : .notHandled
         }

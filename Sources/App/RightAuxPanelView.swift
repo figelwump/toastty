@@ -551,7 +551,10 @@ struct RightAuxPanelTabStrip: View {
 
     private func closeButton(for tab: RightAuxPanelTabState) -> some View {
         Button {
-            _ = focusedPanelCommandController.closePanel(panelID: tab.panelID)
+            _ = focusedPanelCommandController.closePanel(
+                panelID: tab.panelID,
+                source: .ui("right_aux_panel_tab_close")
+            )
         } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 8, weight: .bold))

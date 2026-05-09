@@ -16,6 +16,21 @@ struct WindowCommandSelection {
 struct PendingWorkspaceCloseRequest: Equatable {
     let windowID: UUID
     let workspaceID: UUID
+    let source: AppActionSource
+
+    init(
+        windowID: UUID,
+        workspaceID: UUID,
+        source: AppActionSource = .unknown
+    ) {
+        self.windowID = windowID
+        self.workspaceID = workspaceID
+        self.source = source
+    }
+
+    static func == (lhs: PendingWorkspaceCloseRequest, rhs: PendingWorkspaceCloseRequest) -> Bool {
+        lhs.windowID == rhs.windowID && lhs.workspaceID == rhs.workspaceID
+    }
 }
 
 struct PendingWorkspaceRenameRequest: Equatable {
@@ -374,7 +389,7 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func send(_ action: AppAction) -> Bool {
+    func send(_ action: AppAction, source: AppActionSource = .unknown) -> Bool {
         let actionName = action.logName
         ToasttyLog.debug(
             "Dispatching app action",
@@ -392,6 +407,12 @@ final class AppStore: ObservableObject {
             return false
         }
         state = next
+        logDestructiveLayoutActionIfNeeded(
+            action: action,
+            source: source,
+            previousState: previousState,
+            nextState: next
+        )
         prunePendingCommandRequests()
         let observers = Array(actionAppliedObservers.values)
         for observer in observers {
@@ -408,9 +429,58 @@ final class AppStore: ObservableObject {
         return true
     }
 
-    func replaceState(_ state: AppState) {
+    func replaceState(_ state: AppState, source: AppActionSource = .unknown) {
+        let previousState = self.state
         self.state = state
         nextActiveCycleState = nil
+        logStateReplacementIfNeeded(
+            source: source,
+            previousState: previousState,
+            nextState: state
+        )
+    }
+
+    private func logDestructiveLayoutActionIfNeeded(
+        action: AppAction,
+        source: AppActionSource,
+        previousState: AppState,
+        nextState: AppState
+    ) {
+        guard action.isDestructiveLayoutAction else { return }
+        var metadata = LayoutAuditDiff(
+            before: LayoutAuditSummary(state: previousState),
+            after: LayoutAuditSummary(state: nextState)
+        ).metadata
+        metadata["action"] = action.logName
+        metadata["mutation"] = "destructive_layout_action"
+        metadata.merge(action.layoutAuditTargetMetadata) { current, _ in current }
+        metadata.merge(source.metadata) { current, _ in current }
+        ToasttyLog.info(
+            "Applied destructive layout action",
+            category: .store,
+            metadata: metadata
+        )
+    }
+
+    private func logStateReplacementIfNeeded(
+        source: AppActionSource,
+        previousState: AppState,
+        nextState: AppState
+    ) {
+        let diff = LayoutAuditDiff(
+            before: LayoutAuditSummary(state: previousState),
+            after: LayoutAuditSummary(state: nextState)
+        )
+        guard diff.didDropContainerLayout || diff.removedPanelIDs.isEmpty == false else { return }
+
+        var metadata = diff.metadata
+        metadata["mutation"] = "replace_state"
+        metadata.merge(source.metadata) { current, _ in current }
+        ToasttyLog.info(
+            "Replaced app layout state",
+            category: .store,
+            metadata: metadata
+        )
     }
 
     func window(id windowID: UUID) -> WindowState? {
@@ -1250,16 +1320,21 @@ final class AppStore: ObservableObject {
         guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID) else { return false }
         return requestWorkspaceClose(
             windowID: selection.windowID,
-            workspaceID: selection.workspaceID
+            workspaceID: selection.workspaceID,
+            source: .ui("sidebar_workspace_close")
         )
     }
 
     @discardableResult
-    func closeSelectedWorkspaceFromCommand(preferredWindowID: UUID?) -> Bool {
+    func closeSelectedWorkspaceFromCommand(
+        preferredWindowID: UUID?,
+        source: AppActionSource = .command("close_workspace")
+    ) -> Bool {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return false }
         return requestWorkspaceClose(
             windowID: selection.windowID,
-            workspaceID: selection.workspace.id
+            workspaceID: selection.workspace.id,
+            source: source
         )
     }
 
@@ -1365,14 +1440,28 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func confirmWorkspaceClose(windowID: UUID, workspaceID: UUID) -> Bool {
-        let request = PendingWorkspaceCloseRequest(windowID: windowID, workspaceID: workspaceID)
+    func confirmWorkspaceClose(
+        windowID: UUID,
+        workspaceID: UUID,
+        source: AppActionSource = .workspaceCloseConfirmation
+    ) -> Bool {
+        let request = PendingWorkspaceCloseRequest(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            source: source
+        )
+        let actionSource = pendingCloseWorkspaceRequest == request
+            ? pendingCloseWorkspaceRequest?.source ?? source
+            : source
         if pendingCloseWorkspaceRequest == request {
             pendingCloseWorkspaceRequest = nil
         }
         guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID),
               selection.windowID == windowID else { return false }
-        let didCloseWorkspace = send(.closeWorkspace(workspaceID: workspaceID))
+        let didCloseWorkspace = send(
+            .closeWorkspace(workspaceID: workspaceID),
+            source: actionSource
+        )
         if didCloseWorkspace, pendingRenameWorkspaceRequest?.workspaceID == workspaceID {
             pendingRenameWorkspaceRequest = nil
         }
@@ -2320,12 +2409,20 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    private func requestWorkspaceClose(windowID: UUID, workspaceID: UUID) -> Bool {
+    private func requestWorkspaceClose(
+        windowID: UUID,
+        workspaceID: UUID,
+        source: AppActionSource
+    ) -> Bool {
         guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID),
               selection.windowID == windowID else {
             return false
         }
-        let request = PendingWorkspaceCloseRequest(windowID: windowID, workspaceID: workspaceID)
+        let request = PendingWorkspaceCloseRequest(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            source: source
+        )
         if let pendingCloseWorkspaceRequest {
             return pendingCloseWorkspaceRequest == request
         }

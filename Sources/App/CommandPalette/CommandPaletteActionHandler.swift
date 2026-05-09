@@ -370,7 +370,10 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         guard let workspaceID = store?.commandSelection(preferredWindowID: originWindowID)?.workspace.id else {
             return false
         }
-        return focusedPanelCommandController.closeFocusedPanel(in: workspaceID).didMutateState
+        return focusedPanelCommandController.closeFocusedPanel(
+            in: workspaceID,
+            source: .command("command_palette_close_panel")
+        ).didMutateState
     }
 
     // The menu controllers wrap these same AppStore command helpers, but the
@@ -389,7 +392,10 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     }
 
     func closeWorkspace(originWindowID: UUID) -> Bool {
-        store?.closeSelectedWorkspaceFromCommand(preferredWindowID: originWindowID) ?? false
+        store?.closeSelectedWorkspaceFromCommand(
+            preferredWindowID: originWindowID,
+            source: .command("command_palette_close_workspace")
+        ) ?? false
     }
 
     func canRenameTab(originWindowID: UUID) -> Bool {
