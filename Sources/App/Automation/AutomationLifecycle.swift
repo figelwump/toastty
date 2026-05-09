@@ -35,6 +35,7 @@ final class AutomationLifecycle {
 
         do {
             try fileManager.createDirectory(at: artifactsURL, withIntermediateDirectories: true)
+            let runtimePaths = ToasttyRuntimePaths.resolve()
 
             let readyPayload = AutomationReadyPayload(
                 protocolVersion: "1.0",
@@ -42,6 +43,9 @@ final class AutomationLifecycle {
                 runID: config.runID,
                 fixture: config.fixtureName,
                 socketPath: currentSocketPath(),
+                runtimeHomePath: runtimePaths.runtimeHomeURL?.path,
+                runtimeHomeStrategy: runtimePaths.runtimeHomeStrategy.rawValue,
+                runtimeLabel: runtimePaths.runtimeLabel,
                 status: finalError == nil ? "ready" : "error",
                 error: finalError,
                 timestamp: ISO8601DateFormatter().string(from: Date())
@@ -80,6 +84,9 @@ private struct AutomationReadyPayload: Codable {
     let runID: String
     let fixture: String?
     let socketPath: String
+    let runtimeHomePath: String?
+    let runtimeHomeStrategy: String
+    let runtimeLabel: String?
     let status: String
     let error: String?
     let timestamp: String

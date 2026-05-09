@@ -64,6 +64,24 @@ struct ToasttyRuntimePathsTests {
     }
 
     @Test
+    func explicitRuntimeHomeCanCarryRunOwnedRuntimeLabel() throws {
+        let runtimeHomePath = "/tmp/toastty-runtime-home-tests/runtime-a"
+        let environment = [
+            "TOASTTY_RUNTIME_HOME": runtimeHomePath,
+            "TOASTTY_RUNTIME_LABEL": "Smoke Run 01!",
+        ]
+
+        let paths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/ignored-home",
+            environment: environment
+        )
+
+        #expect(paths.runtimeHomeURL?.path == runtimeHomePath)
+        #expect(paths.runtimeHomeStrategy == .explicitRuntimeHome)
+        #expect(paths.runtimeLabel == "smoke-run-01")
+    }
+
+    @Test
     func resolveWorktreeRootDerivesStableRuntimeHome() throws {
         let worktreeRootPath = "/tmp/Toastty Runtime/main"
         let environment = ["TOASTTY_DEV_WORKTREE_ROOT": worktreeRootPath]
@@ -85,6 +103,23 @@ struct ToasttyRuntimePathsTests {
         #expect(first.runtimeHomeURL?.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home")
         #expect(first.configFileURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/config")
         #expect(first.agentShimDirectoryURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/bin")
+    }
+
+    @Test
+    func runtimeLabelOverrideOwnsWorktreeDerivedRuntimeHome() throws {
+        let worktreeRootPath = "/tmp/Toastty Runtime/main"
+        let environment = [
+            "TOASTTY_DEV_WORKTREE_ROOT": worktreeRootPath,
+            "TOASTTY_RUNTIME_LABEL": "shortcut-trace-20260509-120000",
+        ]
+        let paths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/ignored-home",
+            environment: environment
+        )
+
+        #expect(paths.runtimeHomeStrategy == .worktreeDerived)
+        #expect(paths.runtimeLabel == "shortcut-trace-20260509-120000")
+        #expect(paths.runtimeHomeURL?.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-shortcut-trace-20260509-120000/runtime-home")
     }
 
     @Test

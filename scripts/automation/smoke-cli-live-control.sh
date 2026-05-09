@@ -2,8 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-cli-live-control-$(date +%Y%m%d-%H%M%S)}"
+RUNTIME_LABEL="$(toastty_sanitize_runtime_label "$RUN_ID")"
 RESTORE_FRONT_APP_AFTER_LAUNCH="${TOASTTY_CLI_LIVE_RESTORE_FRONT_APP:-1}"
 DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
 DERIVED_PATH="${DERIVED_PATH:-$DEV_RUN_ROOT/Derived}"
@@ -114,7 +116,7 @@ launch_toastty_app() {
   local key
   while IFS= read -r key; do
     case "$key" in
-      TOASTTY_RUNTIME_HOME|TOASTTY_DERIVED_PATH|TOASTTY_SKIP_QUIT_CONFIRMATION)
+      TOASTTY_RUNTIME_HOME|TOASTTY_RUNTIME_LABEL|TOASTTY_DERIVED_PATH|TOASTTY_SKIP_QUIT_CONFIRMATION)
         ;;
       TOASTTY_*)
         launch_command+=("-u" "$key")
@@ -127,6 +129,7 @@ launch_toastty_app() {
   launch_command+=(
     "TOASTTY_SKIP_QUIT_CONFIRMATION=1"
     "TOASTTY_RUNTIME_HOME=$TOASTTY_RUNTIME_HOME"
+    "TOASTTY_RUNTIME_LABEL=$RUNTIME_LABEL"
     "TOASTTY_DERIVED_PATH=$DERIVED_PATH"
     "$APP_BINARY"
   )
@@ -229,6 +232,7 @@ if [[ -z "$SOCKET_PATH" || ! -S "$SOCKET_PATH" ]]; then
   tail -n 80 "$LOG_FILE" >&2 || true
   exit 1
 fi
+toastty_assert_run_owned_instance "$INSTANCE_JSON" "$RUN_ID" "$TOASTTY_RUNTIME_HOME" "$SOCKET_PATH" 0
 
 if ! retry_command 50 0.2 cli_json action list >/dev/null; then
   echo "error: launched Toastty instance did not respond to live CLI requests" >&2

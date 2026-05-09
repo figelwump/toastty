@@ -9,6 +9,7 @@ public enum ToasttyRuntimeHomeStrategy: String, Equatable, Sendable {
 public struct ToasttyRuntimePaths: Equatable, Sendable {
     public static let environmentKey = "TOASTTY_RUNTIME_HOME"
     public static let worktreeRootEnvironmentKey = "TOASTTY_DEV_WORKTREE_ROOT"
+    public static let runtimeLabelEnvironmentKey = "TOASTTY_RUNTIME_LABEL"
 
     private static let configDirectoryName = ".toastty"
     private static let logDirectoryName = "logs"
@@ -161,26 +162,31 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     ) -> ToasttyRuntimePaths {
         let explicitRuntimeHomeURL = normalizedRuntimeHomeURL(environment: environment)
         let worktreeRootURL = normalizedWorktreeRootURL(environment: environment)
-        let runtimeLabel = worktreeRootURL.map(Self.runtimeLabel(for:))
+        let runtimeLabelOverride = normalizedRuntimeLabel(environment: environment)
         let runtimeHomeStrategy: ToasttyRuntimeHomeStrategy
         let runtimeHomeURL: URL?
+        let runtimeLabel: String?
 
         if let explicitRuntimeHomeURL {
             runtimeHomeStrategy = .explicitRuntimeHome
             runtimeHomeURL = explicitRuntimeHomeURL
-        } else if let worktreeRootURL, let runtimeLabel {
+            runtimeLabel = runtimeLabelOverride
+        } else if let worktreeRootURL {
+            let resolvedRuntimeLabel = runtimeLabelOverride ?? Self.runtimeLabel(for: worktreeRootURL)
             runtimeHomeStrategy = .worktreeDerived
-            runtimeHomeURL = derivedRuntimeHomeURL(worktreeRootURL: worktreeRootURL, runtimeLabel: runtimeLabel)
+            runtimeHomeURL = derivedRuntimeHomeURL(worktreeRootURL: worktreeRootURL, runtimeLabel: resolvedRuntimeLabel)
+            runtimeLabel = resolvedRuntimeLabel
         } else {
             runtimeHomeStrategy = .userHome
             runtimeHomeURL = nil
+            runtimeLabel = nil
         }
 
         return ToasttyRuntimePaths(
             runtimeHomeURL: runtimeHomeURL,
             runtimeHomeStrategy: runtimeHomeStrategy,
             worktreeRootURL: worktreeRootURL,
-            runtimeLabel: runtimeHomeStrategy == .worktreeDerived ? runtimeLabel : nil,
+            runtimeLabel: runtimeLabel,
             homeDirectoryPath: homeDirectoryPath,
             temporaryDirectoryPath: environment["TMPDIR"] ?? NSTemporaryDirectory()
         )
@@ -249,6 +255,19 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
         let expandedPath = (rawValue as NSString).expandingTildeInPath
         return URL(filePath: expandedPath).standardizedFileURL
+    }
+
+    private static func normalizedRuntimeLabel(environment: [String: String]) -> String? {
+        guard let rawValue = environment[runtimeLabelEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawValue.isEmpty == false else {
+            return nil
+        }
+
+        let label = sanitizedLabelComponent(rawValue)
+        let clippedLabel = String(label.prefix(80))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return clippedLabel.isEmpty ? nil : clippedLabel
     }
 
     private static func derivedRuntimeHomeURL(worktreeRootURL: URL, runtimeLabel: String) -> URL {

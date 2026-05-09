@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
 SCRIPT_PATH="scripts/remote/computer-use-run.sh"
 
 REMOTE_PREPARE=0
@@ -352,6 +353,8 @@ run_remote_prepare_mode() {
   run_hash_value="$(run_hash "$RUN_LABEL")"
   local derived_path="$remote_run_root/Derived"
   local runtime_home="$remote_run_root/runtime-home"
+  local runtime_label
+  runtime_label="$(toastty_sanitize_runtime_label "$RUN_LABEL")"
   local socket_path="${TMPDIR:-/tmp}/tt-cu-${run_hash_value}.sock"
   local build_log="$remote_run_root/build.log"
   local app_log="$remote_run_root/app.log"
@@ -412,6 +415,7 @@ run_remote_prepare_mode() {
   ) >"$build_log" 2>&1
 
   TOASTTY_RUNTIME_HOME="$runtime_home" \
+  TOASTTY_RUNTIME_LABEL="$runtime_label" \
   TOASTTY_SOCKET_PATH="$socket_path" \
   TOASTTY_DERIVED_PATH="$derived_path" \
   "$app_binary" >"$app_log" 2>&1 &
@@ -429,6 +433,7 @@ run_remote_prepare_mode() {
 
   [[ -f "$instance_json" ]] || fail "Toastty did not write instance.json at $instance_json"
   kill -0 "$app_pid" >/dev/null 2>&1 || fail "Toastty exited before the remote Computer Use turn started"
+  toastty_assert_run_owned_instance "$instance_json" "$RUN_LABEL" "$runtime_home" "$socket_path" 0
 
   local recorded_pid
   recorded_pid="$(grep -Eo '"pid"[[:space:]]*:[[:space:]]*[0-9]+' "$instance_json" | grep -Eo '[0-9]+' | head -n 1 || true)"
@@ -467,6 +472,7 @@ run_remote_prepare_mode() {
   "remoteWorktreeDir": "$(json_escape "$remote_worktree_dir")",
   "derivedPath": "$(json_escape "$derived_path")",
   "runtimeHome": "$(json_escape "$runtime_home")",
+  "runtimeLabel": "$(json_escape "$runtime_label")",
   "socketPath": "$(json_escape "$socket_path")",
   "instanceJson": "$(json_escape "$instance_json")",
   "appBundle": "$(json_escape "$app_bundle")",

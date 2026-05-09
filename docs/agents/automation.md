@@ -58,7 +58,9 @@ Default focus coordinates for shortcut tracing are `CLICK_X=760`, `CLICK_Y=420`;
 
 For any local dev/debug/test Toastty run, use an isolated runtime home and per-run filesystem paths. Treat PID, bundle path, and per-run directories as required targeting data.
 
-Automation helpers default to `artifacts/dev-runs/<RUN_ID>/...` and set unique `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, and `SOCKET_PATH` for each run. Follow the same pattern for custom launch flows.
+Automation helpers default to `artifacts/dev-runs/<RUN_ID>/...` and set unique `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, and `SOCKET_PATH` for each run. Follow the same pattern for custom launch flows.
+
+Use `TOASTTY_RUNTIME_LABEL` as the run-owned targeting label. Before a script sends destructive socket actions, verify the target `instance.json` has the expected `runtimeLabel`, `runtimeHomePath`, and `socketPath`; do not drive a stable worktree-derived Xcode runtime by accident.
 
 For `shortcut-trace.sh` or other trace-style runs, also use a unique `TRACE_LOG_PATH` per instance instead of a shared log path.
 
@@ -92,13 +94,13 @@ If visual validation is taking several minutes or several turns and keeps failin
 
 Artifacts are stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 
-Common smoke env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
+Common smoke env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
 
-CLI live-control env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `ARCH`, `TOASTTY_CLI_LIVE_RESTORE_FRONT_APP`.
+CLI live-control env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `ARCH`, `TOASTTY_CLI_LIVE_RESTORE_FRONT_APP`.
 
-Shortcut-hints env: `RUN_ID`, `FIXTURE`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`, `TOASTTY_SHORTCUT_HINTS_RESTORE_FRONT_APP`.
+Shortcut-hints env: `RUN_ID`, `FIXTURE`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`, `TOASTTY_SHORTCUT_HINTS_RESTORE_FRONT_APP`.
 
-Shortcut-trace env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`, `TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE`.
+Shortcut-trace env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`, `TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE`.
 
 Remote GUI env: `TOASTTY_REMOTE_GUI_HOST`, `TOASTTY_REMOTE_GUI_REPO_ROOT`, `TOASTTY_REMOTE_GUI_ROOT`.
 

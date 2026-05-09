@@ -11,6 +11,7 @@ final class ToasttyRuntimeInstanceRecorderTests: XCTestCase {
 
         let environment = [
             "TOASTTY_RUNTIME_HOME": rootURL.appendingPathComponent("runtime-home", isDirectory: true).path,
+            "TOASTTY_RUNTIME_LABEL": "CLI Live Control",
             "TMPDIR": rootURL.appendingPathComponent("tmp", isDirectory: true).path + "/",
             "TOASTTY_DERIVED_PATH": rootURL.appendingPathComponent("Derived", isDirectory: true).path,
         ]
@@ -40,6 +41,7 @@ final class ToasttyRuntimeInstanceRecorderTests: XCTestCase {
             manifest["derivedPath"] as? String,
             environment["TOASTTY_DERIVED_PATH"]
         )
+        XCTAssertEqual(manifest["runtimeLabel"] as? String, "cli-live-control")
     }
 
     func testRecordLaunchUsesSocketPathOverrideWhenProvided() throws {

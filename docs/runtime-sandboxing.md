@@ -19,7 +19,9 @@ Runtime sandboxing keeps:
 | Explicit runtime home | `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` | exactly the path you provide |
 | Worktree-derived runtime home | `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` | `<worktree>/artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home` |
 
-The automation helpers build on the same model by defaulting each run to its own isolated root under `artifacts/dev-runs/<RUN_ID>/`.
+`TOASTTY_RUNTIME_LABEL=<label>` gives a runtime a run-owned identity. With `TOASTTY_DEV_WORKTREE_ROOT` and no explicit `TOASTTY_RUNTIME_HOME`, it overrides the stable worktree label and derives `<worktree>/artifacts/dev-runs/worktree-<label>/runtime-home`. With explicit `TOASTTY_RUNTIME_HOME`, it is metadata only and the provided path remains authoritative.
+
+The automation helpers build on the same model by defaulting each run to its own isolated root under `artifacts/dev-runs/<RUN_ID>/`, setting `TOASTTY_RUNTIME_LABEL` from `RUN_ID`, and checking `instance.json` before driving socket actions.
 
 ## What moves into the runtime home
 
@@ -71,6 +73,8 @@ It may also record these fields when the launch flow provided them:
 - `runID`
 - `arguments`
 
+For automation and remote validation scripts, treat `runtimeLabel`, `runtimeHomePath`, and `socketPath` as a target ownership tuple. Destructive socket actions should only run after those fields match the current run.
+
 Typical usage:
 
 ```bash
@@ -91,6 +95,7 @@ Use this when you want a disposable isolated run:
 
 ```bash
 TOASTTY_RUNTIME_HOME="$PWD/artifacts/dev-runs/manual/runtime-home" \
+TOASTTY_RUNTIME_LABEL="manual" \
 TOASTTY_DERIVED_PATH="$PWD/artifacts/dev-runs/manual/Derived" \
 /path/to/Toastty.app/Contents/MacOS/Toastty
 ```
@@ -117,6 +122,8 @@ artifacts/dev-runs/<RUN_ID>/
 ├── artifacts/
 └── runtime-home/
 ```
+
+They also pass `TOASTTY_RUNTIME_LABEL=<RUN_ID>` and verify the manifest before sending automation or app-control requests.
 
 This pattern is used by:
 

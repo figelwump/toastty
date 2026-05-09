@@ -2,8 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-shortcut-trace-$(date +%Y%m%d-%H%M%S)}"
+RUNTIME_LABEL="$(toastty_sanitize_runtime_label "$RUN_ID")"
 FIXTURE="${FIXTURE:-split-workspace}"
 DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
 DERIVED_PATH="${DERIVED_PATH:-$DEV_RUN_ROOT/Derived}"
@@ -26,13 +28,14 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
 fi
 
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
+INSTANCE_JSON="$TOASTTY_RUNTIME_HOME/instance.json"
 APP_BINARY="$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
 APP_LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 
 mkdir -p "$ARTIFACTS_DIR" "$TOASTTY_RUNTIME_HOME" "$(dirname "$SOCKET_PATH")" "$(dirname "$TRACE_LOG_PATH")"
-rm -f "$SOCKET_PATH" "$READY_FILE" "$APP_LOG_FILE"
+rm -f "$SOCKET_PATH" "$READY_FILE" "$INSTANCE_JSON" "$APP_LOG_FILE"
 rm -f "$TRACE_LOG_PATH"
 
 if [[ "${TUIST_DISABLE_GHOSTTY:-0}" == "1" || "${TOASTTY_DISABLE_GHOSTTY:-0}" == "1" ]]; then
@@ -440,6 +443,7 @@ xcodebuild \
 TOASTTY_AUTOMATION=1 \
 TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
 TOASTTY_RUNTIME_HOME="$TOASTTY_RUNTIME_HOME" \
+TOASTTY_RUNTIME_LABEL="$RUNTIME_LABEL" \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
 TOASTTY_DERIVED_PATH="$DERIVED_PATH" \
 TOASTTY_LOG_LEVEL=debug \
@@ -475,6 +479,7 @@ if [[ ! -S "$SOCKET_PATH" ]]; then
   echo "error: socket not available: $SOCKET_PATH" >&2
   exit 1
 fi
+toastty_assert_run_owned_instance "$INSTANCE_JSON" "$RUN_ID" "$TOASTTY_RUNTIME_HOME" "$SOCKET_PATH" 1
 
 send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"

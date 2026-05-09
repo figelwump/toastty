@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
 SCRIPT_PATH="scripts/remote/validate.sh"
 
 REMOTE_EXEC=0
@@ -788,6 +789,8 @@ run_remote_custom_mode() {
   require_command peekaboo
 
   local run_label="${TOASTTY_REMOTE_VALIDATE_RUN_LABEL:?TOASTTY_REMOTE_VALIDATE_RUN_LABEL is required}"
+  local runtime_label
+  runtime_label="$(toastty_sanitize_runtime_label "$run_label")"
   local remote_run_root="${TOASTTY_REMOTE_VALIDATE_REMOTE_RUN_ROOT:?TOASTTY_REMOTE_VALIDATE_REMOTE_RUN_ROOT is required}"
   local validation_command_b64="${TOASTTY_REMOTE_VALIDATE_VALIDATION_COMMAND_B64:-}"
   local validation_command
@@ -836,6 +839,7 @@ run_remote_custom_mode() {
     build >/dev/null
 
   TOASTTY_RUNTIME_HOME="$runtime_home" \
+  TOASTTY_RUNTIME_LABEL="$runtime_label" \
   TOASTTY_SOCKET_PATH="$socket_path" \
   TOASTTY_DERIVED_PATH="$derived_path" \
   "$app_binary" >"$artifacts_dir/app.log" 2>&1 &
@@ -868,6 +872,10 @@ run_remote_custom_mode() {
       exit_code=1
       status="fail"
       failure_summary="Remote Toastty process is not running"
+    elif ! toastty_assert_run_owned_instance "$instance_json" "$run_label" "$runtime_home" "$socket_path" 0; then
+      exit_code=1
+      status="fail"
+      failure_summary="Remote Toastty instance did not match run-owned runtime"
     fi
   fi
 

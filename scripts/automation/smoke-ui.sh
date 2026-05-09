@@ -2,8 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-smoke-$(date +%Y%m%d-%H%M%S)}"
+RUNTIME_LABEL="$(toastty_sanitize_runtime_label "$RUN_ID")"
 FIXTURE="${FIXTURE:-split-workspace}"
 RESTORE_FRONT_APP_AFTER_LAUNCH="${TOASTTY_SMOKE_RESTORE_FRONT_APP:-1}"
 DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
@@ -18,6 +20,7 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
 fi
 
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
+INSTANCE_JSON="$TOASTTY_RUNTIME_HOME/instance.json"
 APP_BINARY="$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
 LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
@@ -37,7 +40,7 @@ PREVIOUS_FRONT_BUNDLE_ID=""
 FRONT_APP_RESTORE_DONE=0
 
 mkdir -p "$ARTIFACTS_DIR" "$TOASTTY_RUNTIME_HOME" "$(dirname "$SOCKET_PATH")"
-rm -f "$SOCKET_PATH" "$READY_FILE" "$LOG_FILE"
+rm -f "$SOCKET_PATH" "$READY_FILE" "$INSTANCE_JSON" "$LOG_FILE"
 
 if ! command -v nc >/dev/null 2>&1; then
   echo "error: nc is required for socket requests" >&2
@@ -145,6 +148,7 @@ xcodebuild \
 TOASTTY_AUTOMATION=1 \
 TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
 TOASTTY_RUNTIME_HOME="$TOASTTY_RUNTIME_HOME" \
+TOASTTY_RUNTIME_LABEL="$RUNTIME_LABEL" \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
 TOASTTY_DERIVED_PATH="$DERIVED_PATH" \
 "$APP_BINARY" \
@@ -171,6 +175,7 @@ if [[ ! -S "$SOCKET_PATH" ]]; then
   echo "error: socket not available: $SOCKET_PATH" >&2
   exit 1
 fi
+toastty_assert_run_owned_instance "$INSTANCE_JSON" "$RUN_ID" "$TOASTTY_RUNTIME_HOME" "$SOCKET_PATH" 1
 
 restore_previous_front_app
 

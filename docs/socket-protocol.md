@@ -66,6 +66,9 @@ Ready file:
   - `runID`
   - `fixture`
   - `socketPath` (the resolved live socket path for that launch)
+  - `runtimeHomePath`
+  - `runtimeHomeStrategy`
+  - `runtimeLabel`
   - `status`
   - `error`
   - `timestamp`
