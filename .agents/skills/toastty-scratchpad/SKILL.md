@@ -66,33 +66,48 @@ Avoid Scratchpad for ordinary logs, raw command output, long code listings, or p
 
 ## Design Direction
 
-Treat each artifact as a fresh design problem. Pick an aesthetic that fits the content rather than defaulting to a generic dark dashboard with a grid of cards. Variety is part of the value of this surface.
-
-Vary across runs:
-
-- **Aesthetic**: technical blueprint, editorial print, scientific paper, infographic poster, hand-sketched, isometric/3D, retro CRT or terminal, modern minimal, bold magazine, schematic, cartographic map, annotated diagram, data art.
-- **Palette**: dark slate plus blue is one option, not the default. Light cream, paper white, warm tan, deep navy, washed pastel, high-contrast monochrome, single accent on neutral, duotone, and content-driven palettes (sunset for time, red for risk, forest for systems, sepia for archive) all work. Match the palette to the subject matter.
-- **Typography**: serif for editorial or scientific, mono or condensed for technical, geometric sans for modern UI, display weight for posters and headlines. Mix weights, sizes, and tracking for hierarchy. System fonts only — no remote fonts or imports.
-- **Layout**: avoid auto-fit card grids by default. Try asymmetric two-column, single hero with annotations, full-bleed schematic, vertical narrative, radial/orbital, isometric stacks, swimlanes, table-as-art, broadside poster, magazine spread, side margin notes.
-- **Visual primitives**: SVG arrows and connectors, dashed routes, hand-drawn strokes, isometric blocks, orthographic projections, sankey-style flows, dot matrices, sparklines, badges, callouts with leader lines, axes with real tick marks, hand-labeled annotations.
-- **Texture and depth**: subtle paper grain, blueprint grid, halftone, soft shadow, line weight variation, deliberate negative space. Flat is fine; uniformly flat is boring.
+Reach for the simplest visual that communicates the structure. Restraint is the goal, not richness. Three boxes and two arrows on a clean background usually beats an ornate poster with the same information. Variety should emerge from picking the right structure for each subject, not from changing the decorative skin.
 
 Match the visual to the structure of the content:
 
-- Architecture or systems → schematic, blueprint, or layered diagram with explicit connectors and labeled boundaries.
-- Data or metrics → editorial chart with annotation, ranked list with typography hierarchy, or small-multiples — not just bars in cards.
-- Flows or sequences → swimlane, sankey, numbered narrative, or step-by-step storyboard — not a card grid.
-- Comparisons → side-by-side as deliberate typography, scoring matrix, head-to-head columns with shared rows.
-- Timelines → horizontal track or vertical narrative with proportional spacing — not equal-sized boxes.
-- Wireframes → fidelity-matched line drawings on a neutral background with annotations.
-- State machines → nodes and labeled transitions, not a grid.
-- Risk or tradeoffs → 2x2, radar, or quadrant.
+- Architecture or systems → labeled boxes with explicit connectors. Show boundaries, hide internals.
+- Data or metrics → one well-annotated chart, or a ranked list with hierarchy. Annotate the points that matter; drop the rest.
+- Flows or sequences → numbered steps or a swimlane. Linear beats radial unless the data is genuinely cyclic.
+- Comparisons → side-by-side columns sharing rows, or a 2×2.
+- Timelines → one horizontal track with proportional spacing.
+- Wireframes → line drawings on a neutral background with sparse annotations.
+- State machines → nodes and labeled transitions.
+- Risk or tradeoffs → 2×2 or quadrant.
 
-If you find yourself reaching for `display: grid; grid-template-columns: repeat(auto-fit, minmax(...))` of identical cards on a dark slate background, stop. That is the AI-default look. Pick a structure and palette that actually expresses the content.
+Default visual choices:
+
+- **Palette**: two to four colors total. One background, one foreground for text, one accent for emphasis. Add a second accent only when the content has two real categories. Prefer light or neutral backgrounds; avoid saturated dark dashboards and full-bleed gradients. Let content-driven palettes (red for risk, sepia for archive) inform choice when relevant, but stay restrained.
+- **Typography**: one typeface, with weight and size carrying hierarchy. Add a second face only with a real reason (mono for code or tabular data, a display weight for a single headline). System fonts only — no remote fonts or imports.
+- **Layout**: generous whitespace, clear alignment, deliberate negative space. Avoid auto-fit grids of identical cards (the AI-default look) and avoid magazine spreads or poster compositions that compete with the content.
+- **Visual primitives**: thin clean strokes, simple boxes, plain arrows, real tick marks. Decorative texture (paper grain, halftone, blueprint grid, isometric stacks) only when the subject genuinely calls for it — never as default polish.
+
+Two failure modes to avoid:
+
+- **AI-default dashboard**: `display: grid; grid-template-columns: repeat(auto-fit, minmax(...))` of identical cards on dark slate. Stop and pick a structure that expresses the content.
+- **Over-designed poster**: heavy ornament, multiple typefaces, decorative textures, and high-saturation palettes that drown the actual information. If the artifact looks impressive before you read it, it is too loud.
+
+## Distill First
+
+Concision is the second goal, alongside restraint. Even when the source is large or complex, the artifact should show the smallest set of nodes, lines, and labels that answers the user's question.
+
+Before generating HTML:
+
+1. State, in one sentence, what the artifact must communicate. Build around that and cut anything that does not serve it.
+2. Cluster and group. If the source has thirty items, find the four or five groupings that explain the shape. Show the groupings; leave specifics to chat or a follow-up artifact.
+3. Shorten labels. Three or four words per node usually beats a sentence. Move detail to small captions or a single side-margin block.
+4. Prefer one tight diagram over a dashboard of small multiples, unless comparison across multiples is the point.
+5. Drop decoration that does not encode meaning. Every line, color, and shape should carry information.
+
+If the artifact starts to feel busy, the answer is almost always to remove elements, not to redesign them.
 
 ## Build The Artifact
 
-1. After the loading screen is visible, decide the most useful final visual form, aesthetic, and palette before writing the detailed HTML. Sketch the structure mentally first; do not start with a card grid by reflex.
+1. After the loading screen is visible, write the one-sentence purpose, pick the simplest visual form that captures it, and choose a restrained palette and typeface. Sketch the structure mentally first; do not start with a card grid by reflex, and do not start with poster ornament.
 2. Generate one complete HTML document with inline CSS and optional inline JavaScript.
 3. Keep it self-contained:
    - no remote scripts, fonts, stylesheets, images, or network fetches
