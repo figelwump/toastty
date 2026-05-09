@@ -168,6 +168,9 @@ enum AgentLaunchInstrumentation {
             let logURL = artifactsDirectoryURL.appendingPathComponent("codex-session.jsonl", isDirectory: false)
             let notifyArray = tomlStringArrayLiteral(["/bin/sh", notifyScriptURL.path])
             let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .codex, argv: argv)
+            var environment = baselineEnvironment(for: .codex)
+            environment["CODEX_TUI_RECORD_SESSION"] = "1"
+            environment["CODEX_TUI_SESSION_LOG_PATH"] = logURL.path
 
             return PreparedAgentLaunchCommand(
                 argv: insertingArguments(
@@ -175,10 +178,7 @@ enum AgentLaunchInstrumentation {
                     into: argv,
                     afterIndex: insertionIndex
                 ),
-                environment: [
-                    "CODEX_TUI_RECORD_SESSION": "1",
-                    "CODEX_TUI_SESSION_LOG_PATH": logURL.path,
-                ],
+                environment: environment,
                 artifacts: PreparedAgentLaunchArtifacts(
                     directoryURL: artifactsDirectoryURL,
                     codexSessionLogURL: logURL,
@@ -571,6 +571,16 @@ private extension AgentLaunchInstrumentation {
 private final class AgentLaunchInstrumentationBundleMarker {}
 
 extension AgentLaunchInstrumentation {
+    static func baselineEnvironment(for agent: AgentKind) -> [String: String] {
+        guard agent == .codex else {
+            return [:]
+        }
+
+        return [
+            "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT": "1",
+        ]
+    }
+
     // Internal test seam for validating Codex config escaping behavior directly.
     static func tomlStringArrayLiteralForTesting(_ values: [String]) -> String {
         tomlStringArrayLiteral(values)

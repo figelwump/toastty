@@ -83,6 +83,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertFalse(configValue.contains("\\/"))
         XCTAssertEqual(preparedLaunch.argv.last, "--yolo")
         XCTAssertEqual(preparedLaunch.environment["CODEX_TUI_RECORD_SESSION"], "1")
+        XCTAssertEqual(preparedLaunch.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
         XCTAssertEqual(
             preparedLaunch.environment["CODEX_TUI_SESSION_LOG_PATH"],
             preparedLaunch.artifacts?.codexSessionLogURL?.path

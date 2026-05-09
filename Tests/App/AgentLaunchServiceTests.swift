@@ -172,6 +172,7 @@ struct AgentLaunchServiceTests {
         #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=\(projectRoot.path)"))
         #expect(injectedCommand.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
         #expect(injectedCommand.contains("CODEX_TUI_RECORD_SESSION=1"))
+        #expect(injectedCommand.contains("CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1"))
         #expect(injectedCommand.contains("CODEX_TUI_SESSION_LOG_PATH="))
         #expect(injectedCommand.contains("codex -c "))
         #expect(injectedCommand.contains("notify=[\"/bin/sh\",\""))
@@ -239,6 +240,7 @@ struct AgentLaunchServiceTests {
         #expect(plan.panelID == panelID)
         #expect(plan.environment["TOASTTY_SESSION_ID"] == plan.sessionID)
         #expect(plan.environment["TOASTTY_PANEL_ID"] == panelID.uuidString)
+        #expect(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"] == "1")
     }
 
     @Test

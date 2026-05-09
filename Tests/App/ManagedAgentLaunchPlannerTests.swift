@@ -68,10 +68,53 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             "Codex launch artifacts should continue deleting on session stop"
         )
     }
+
+    func testCodexLaunchPlanDisablesEnhancedKeyboardReporting() throws {
+        let fixture = try makePlannerFixture()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
+        XCTAssertEqual(plan.environment["CODEX_TUI_RECORD_SESSION"], "1")
+        XCTAssertEqual(
+            plan.environment["TOASTTY_PANEL_ID"],
+            fixture.panelID.uuidString
+        )
+    }
+
+    func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
+        let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(plan.argv, ["codex"])
+        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
+        XCTAssertNil(plan.environment["CODEX_TUI_RECORD_SESSION"])
+        XCTAssertEqual(
+            plan.environment["TOASTTY_PANEL_ID"],
+            fixture.panelID.uuidString
+        )
+    }
 }
 
 @MainActor
-private func makePlannerFixture() throws -> (
+private func makePlannerFixture(fileManager: FileManager = .default) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
     sessionRuntimeStore: SessionRuntimeStore,
@@ -86,6 +129,7 @@ private func makePlannerFixture() throws -> (
     let planner = ManagedAgentLaunchPlanner(
         store: store,
         sessionRuntimeStore: sessionRuntimeStore,
+        fileManager: fileManager,
         cliExecutablePathProvider: { "/bin/sh" },
         socketPathProvider: { "/tmp/toastty-tests.sock" },
         readVisibleText: { _ in nil },
@@ -131,5 +175,15 @@ private extension Array {
     subscript(safe index: Int) -> Element? {
         guard indices.contains(index) else { return nil }
         return self[index]
+    }
+}
+
+private final class ThrowingCreateDirectoryFileManager: FileManager {
+    override func createDirectory(
+        at url: URL,
+        withIntermediateDirectories createIntermediates: Bool,
+        attributes: [FileAttributeKey: Any]? = nil
+    ) throws {
+        throw CocoaError(.fileWriteNoPermission)
     }
 }

@@ -83,7 +83,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         )
         registerManagedArtifacts(preparedLaunch.artifacts, sessionID: sessionID)
 
-        var environment = preparedLaunch.environment
+        var environment = AgentLaunchInstrumentation.baselineEnvironment(for: request.agent)
+        for (key, value) in preparedLaunch.environment {
+            environment[key] = value
+        }
         environment[ToasttyLaunchContextEnvironment.sessionIDKey] = sessionID
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = target.panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.socketPathKey] = socketPathProvider()

@@ -145,7 +145,7 @@ When the profile ID is `codex`, Toastty:
 
 1. **Creates a notification script** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify`
 2. **Injects Codex config** with `-c notify=["/bin/sh", "<script-path>"]` to route lifecycle events through that script
-3. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`
+3. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit
 4. **Starts a compatibility log watcher** that polls the session log file (every 250 ms) and maps supported Codex recording events to sidebar status updates. Current Codex CLI recordings drive start-of-turn **Working**, interrupt-driven **Idle**, and coalesce repeated `insert_history_cell` records observed in a poll into immediate refresh nudges, while legacy `codex_event` recordings continue to cover **Needs approval** and older completion/abort paths
 5. **Samples rendered terminal text** on Toastty's existing workspace-maintenance pulse and on watcher nudges, upgrading active Codex `Working` rows with best-effort tool progress such as `Running ...`, `Ran ...`, or `Executing shell commands` when visible terminal text is available
 6. **Uses the Codex notify hook** to map supported root-turn completion notifications to **Ready**. Thread-aware Codex notifications are matched against the recorded root prompt so spawned subagent completions do not clear the parent session's **Working** state. Current Codex documents `notify` as a turn-finished hook, not a tool-progress stream
@@ -272,7 +272,7 @@ Every agent launched through Toastty receives these environment variables, set i
 | `TOASTTY_CWD` | Panel's working directory (if available) |
 | `TOASTTY_REPO_ROOT` | Inferred git repository root (if available) |
 
-Agent-specific variables are added on top of these (e.g. `CODEX_TUI_RECORD_SESSION` for Codex launches).
+Agent-specific variables are added on top of these (for example, `CODEX_TUI_RECORD_SESSION` and `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT` for Codex launches).
 
 ## Notifications and badges
 
