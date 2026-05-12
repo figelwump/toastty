@@ -554,6 +554,9 @@ struct WorkspaceView: View {
             pruneTransientPanelFlashState()
             pruneTransientUnfocusHighlightState()
         }
+        .onChange(of: selectedWorkspaceTabSignature) { previous, current in
+            handleSelectedWorkspaceTabChange(from: previous, to: current)
+        }
         .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
             consumePendingWorkspaceTabRenameRequestIfNeeded()
         }
@@ -572,6 +575,7 @@ struct WorkspaceView: View {
             prunePendingWorkspaceTabCloseState()
             pruneTransientPanelFlashState()
             pruneTransientUnfocusHighlightState()
+            splitResizeCoordinator.clearHover()
             handlePendingBrowserLocationFocusRequest()
         }
         .onChange(of: selectedWorkspace?.focusedPanelID) { _, _ in
@@ -591,6 +595,7 @@ struct WorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
+            splitResizeCoordinator.clearHover()
             scheduleFocusedUnreadPanelClearIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
@@ -599,6 +604,7 @@ struct WorkspaceView: View {
             cancelFocusedUnreadClearTask()
             hoveredTabID = nil
             hoveredTabCloseButtonID = nil
+            splitResizeCoordinator.clearHover()
         }
     }
 
@@ -1203,7 +1209,7 @@ struct WorkspaceView: View {
 
             ForEach(projection.dividers) { placement in
                 Rectangle()
-                    .fill(splitResizeDividerFill(for: placement))
+                    .fill(splitResizeDividerFill(for: placement, workspaceID: workspace.id, tabID: tab.id))
                     .frame(
                         width: CGFloat(placement.frame.width),
                         height: CGFloat(placement.frame.height)
@@ -1276,8 +1282,16 @@ struct WorkspaceView: View {
         }
     }
 
-    private func splitResizeDividerFill(for placement: LayoutDividerPlacement) -> Color {
-        if splitResizeCoordinator.isHighlighted(nodeID: placement.nodeID) {
+    private func splitResizeDividerFill(
+        for placement: LayoutDividerPlacement,
+        workspaceID: UUID,
+        tabID: UUID
+    ) -> Color {
+        if splitResizeCoordinator.isHighlighted(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            nodeID: placement.nodeID
+        ) {
             return appIsActive ? ToastyTheme.accent.opacity(0.72) : ToastyTheme.accent.opacity(0.48)
         }
         return ToastyTheme.slotDivider
@@ -1459,6 +1473,18 @@ struct WorkspaceView: View {
         )
     }
 
+    private var selectedWorkspaceTabSignature: SelectedWorkspaceTabSignature? {
+        guard let workspace = selectedWorkspace,
+              let tabID = workspace.resolvedSelectedTabID else {
+            return nil
+        }
+
+        return SelectedWorkspaceTabSignature(
+            workspaceID: workspace.id,
+            tabID: tabID
+        )
+    }
+
     private var selectedWorkspaceFocusModePresentationState: FocusModePresentationState? {
         guard let workspace = selectedWorkspace,
               let tab = workspace.selectedTab else {
@@ -1514,6 +1540,21 @@ struct WorkspaceView: View {
     private func cancelFocusedUnreadClearTask() {
         focusedUnreadClearTask?.cancel()
         focusedUnreadClearTask = nil
+    }
+
+    private func handleSelectedWorkspaceTabChange(
+        from previous: SelectedWorkspaceTabSignature?,
+        to current: SelectedWorkspaceTabSignature?
+    ) {
+        guard previous != current else { return }
+
+        if let previous {
+            splitResizeCoordinator.cancelIfMatching(
+                workspaceID: previous.workspaceID,
+                tabID: previous.tabID
+            )
+        }
+        splitResizeCoordinator.clearHover()
     }
 
     @MainActor
@@ -1619,6 +1660,10 @@ struct WorkspaceView: View {
         from previous: FocusModePresentationState?,
         to current: FocusModePresentationState?
     ) {
+        if previous?.focusedPanelModeActive != current?.focusedPanelModeActive {
+            splitResizeCoordinator.clearHover()
+        }
+
         guard let request = Self.transientUnfocusHighlightRequest(from: previous, to: current) else {
             if Self.shouldClearTransientUnfocusHighlight(from: previous, to: current) {
                 clearTransientUnfocusHighlight()
@@ -2618,6 +2663,12 @@ private struct WorkspaceSplitResizeContext: Equatable {
 
 @MainActor
 final class WorkspaceSplitResizeCoordinator: ObservableObject {
+    private struct HoveredDivider: Equatable {
+        let workspaceID: UUID
+        let tabID: UUID
+        let nodeID: UUID
+    }
+
     private struct ActiveDrag: Equatable {
         let workspaceID: UUID
         let tabID: UUID
@@ -2628,7 +2679,7 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
         var currentRatio: Double
     }
 
-    @Published private var hoveredNodeID: UUID?
+    @Published private var hoveredDivider: HoveredDivider?
     @Published private var activeDrag: ActiveDrag?
 
     func begin(
@@ -2652,7 +2703,7 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
             adjustedPrimaryDimension: adjustedPrimaryDimension,
             currentRatio: clampedStartRatio
         )
-        hoveredNodeID = nodeID
+        hoveredDivider = HoveredDivider(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID)
         logDiagnostic(
             "begin",
             workspaceID: workspaceID,
@@ -2739,17 +2790,11 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
 
     func updateHover(workspaceID: UUID, tabID: UUID, nodeID: UUID, hovering: Bool) {
         if hovering {
-            hoveredNodeID = nodeID
+            hoveredDivider = HoveredDivider(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID)
             return
         }
 
-        guard hoveredNodeID == nodeID else { return }
-        if activeDrag?.workspaceID == workspaceID,
-           activeDrag?.tabID == tabID,
-           activeDrag?.nodeID == nodeID {
-            return
-        }
-        hoveredNodeID = nil
+        clearHover(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID)
     }
 
     func ratioOverrides(workspaceID: UUID, tabID: UUID) -> [UUID: Double] {
@@ -2761,8 +2806,14 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
         return [activeDrag.nodeID: activeDrag.currentRatio]
     }
 
-    func isHighlighted(nodeID: UUID) -> Bool {
-        hoveredNodeID == nodeID || activeDrag?.nodeID == nodeID
+    func isHighlighted(workspaceID: UUID, tabID: UUID, nodeID: UUID) -> Bool {
+        let hoverMatches = hoveredDivider?.workspaceID == workspaceID &&
+            hoveredDivider?.tabID == tabID &&
+            hoveredDivider?.nodeID == nodeID
+        let dragMatches = activeDrag?.workspaceID == workspaceID &&
+            activeDrag?.tabID == tabID &&
+            activeDrag?.nodeID == nodeID
+        return hoverMatches || dragMatches
     }
 
     func isDragging(workspaceID: UUID, tabID: UUID) -> Bool {
@@ -2775,24 +2826,49 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
         layoutTree: LayoutNode,
         focusedPanelModeActive: Bool
     ) {
+        if let hoveredDivider,
+           hoveredDivider.workspaceID == workspaceID,
+           hoveredDivider.tabID == tabID,
+           (focusedPanelModeActive || layoutTree.findSubtree(nodeID: hoveredDivider.nodeID) == nil) {
+            clearHover(workspaceID: workspaceID, tabID: tabID, nodeID: hoveredDivider.nodeID)
+        }
+
         guard let activeDrag,
               activeDrag.workspaceID == workspaceID,
-              activeDrag.tabID == tabID else {
+              activeDrag.tabID == tabID,
+              (focusedPanelModeActive || layoutTree.findSubtree(nodeID: activeDrag.nodeID) == nil) else {
             return
         }
 
-        if focusedPanelModeActive ||
-            layoutTree.findSubtree(nodeID: activeDrag.nodeID) == nil {
-            logDiagnostic(
-                "reconcile-cancel",
-                drag: activeDrag,
-                metadata: [
-                    "focusedPanelModeActive": "\(focusedPanelModeActive)",
-                    "nodeExists": "\(layoutTree.findSubtree(nodeID: activeDrag.nodeID) != nil)",
-                ]
-            )
-            cancelIfMatching(workspaceID: workspaceID, tabID: tabID, nodeID: activeDrag.nodeID)
+        logDiagnostic(
+            "reconcile-cancel",
+            drag: activeDrag,
+            metadata: [
+                "focusedPanelModeActive": "\(focusedPanelModeActive)",
+                "nodeExists": "\(layoutTree.findSubtree(nodeID: activeDrag.nodeID) != nil)",
+            ]
+        )
+        cancelIfMatching(workspaceID: workspaceID, tabID: tabID, nodeID: activeDrag.nodeID)
+    }
+
+    func clearHover(workspaceID: UUID? = nil, tabID: UUID? = nil, nodeID: UUID? = nil) {
+        guard let hoveredDivider,
+              Self.matches(
+                  hoveredDivider: hoveredDivider,
+                  workspaceID: workspaceID,
+                  tabID: tabID,
+                  nodeID: nodeID
+              ) else {
+            return
         }
+
+        logDiagnostic(
+            "clear-hover",
+            workspaceID: hoveredDivider.workspaceID,
+            tabID: hoveredDivider.tabID,
+            nodeID: hoveredDivider.nodeID
+        )
+        self.hoveredDivider = nil
     }
 
     func cancelIfMatching(workspaceID: UUID, tabID: UUID, nodeID: UUID? = nil) {
@@ -2808,27 +2884,18 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
             self.activeDrag = nil
         }
 
-        if let nodeID {
-            if hoveredNodeID == nodeID {
-                logDiagnostic(
-                    "clear-hover",
-                    workspaceID: workspaceID,
-                    tabID: tabID,
-                    nodeID: nodeID
-                )
-                hoveredNodeID = nil
-            }
-        } else {
-            if let hoveredNodeID {
-                logDiagnostic(
-                    "clear-hover",
-                    workspaceID: workspaceID,
-                    tabID: tabID,
-                    nodeID: hoveredNodeID
-                )
-            }
-            hoveredNodeID = nil
-        }
+        clearHover(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID)
+    }
+
+    private static func matches(
+        hoveredDivider: HoveredDivider,
+        workspaceID: UUID?,
+        tabID: UUID?,
+        nodeID: UUID?
+    ) -> Bool {
+        (workspaceID == nil || hoveredDivider.workspaceID == workspaceID) &&
+            (tabID == nil || hoveredDivider.tabID == tabID) &&
+            (nodeID == nil || hoveredDivider.nodeID == nodeID)
     }
 
     private func logDiagnostic(
@@ -2869,7 +2936,11 @@ final class WorkspaceSplitResizeCoordinator: ObservableObject {
         metadata["tabID"] = tabID?.uuidString ?? "nil"
         metadata["nodeID"] = nodeID?.uuidString ?? "nil"
         metadata["orientation"] = orientation?.rawValue ?? "nil"
-        metadata["hoveredNodeID"] = hoveredNodeID?.uuidString ?? "nil"
+        metadata["hoveredWorkspaceID"] = hoveredDivider?.workspaceID.uuidString ?? "nil"
+        metadata["hoveredTabID"] = hoveredDivider?.tabID.uuidString ?? "nil"
+        metadata["hoveredNodeID"] = hoveredDivider?.nodeID.uuidString ?? "nil"
+        metadata["activeDragWorkspaceID"] = activeDrag?.workspaceID.uuidString ?? "nil"
+        metadata["activeDragTabID"] = activeDrag?.tabID.uuidString ?? "nil"
         metadata["activeDragNodeID"] = activeDrag?.nodeID.uuidString ?? "nil"
         ToasttyLog.info(
             "workspace split resize diagnostic",
@@ -3337,6 +3408,11 @@ private struct SelectedWorkspaceUnreadSignature: Equatable {
     let workspaceID: UUID
     let focusedPanelID: UUID?
     let unreadPanelIDs: Set<UUID>
+}
+
+private struct SelectedWorkspaceTabSignature: Equatable {
+    let workspaceID: UUID
+    let tabID: UUID
 }
 
 private struct SlotPlacementView: View {

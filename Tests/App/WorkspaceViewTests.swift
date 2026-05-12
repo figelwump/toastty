@@ -404,6 +404,111 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(coordinator.end(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID), 0.25)
     }
 
+    @MainActor
+    func testSplitResizeCoordinatorScopesHoverToWorkspaceAndTab() {
+        let coordinator = WorkspaceSplitResizeCoordinator()
+        let workspaceID = UUID()
+        let otherWorkspaceID = UUID()
+        let tabID = UUID()
+        let otherTabID = UUID()
+        let nodeID = UUID()
+
+        coordinator.updateHover(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID, hovering: true)
+
+        XCTAssertTrue(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+        XCTAssertFalse(coordinator.isHighlighted(workspaceID: otherWorkspaceID, tabID: tabID, nodeID: nodeID))
+        XCTAssertFalse(coordinator.isHighlighted(workspaceID: workspaceID, tabID: otherTabID, nodeID: nodeID))
+
+        coordinator.updateHover(workspaceID: otherWorkspaceID, tabID: tabID, nodeID: nodeID, hovering: false)
+        XCTAssertTrue(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+
+        coordinator.updateHover(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID, hovering: false)
+        XCTAssertFalse(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+    }
+
+    @MainActor
+    func testSplitResizeCoordinatorClearsHoverWithoutClearingActiveDrag() {
+        let coordinator = WorkspaceSplitResizeCoordinator()
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let nodeID = UUID()
+
+        coordinator.begin(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            nodeID: nodeID,
+            orientation: .horizontal,
+            startRatio: 0.5,
+            adjustedPrimaryDimension: 400
+        )
+        XCTAssertTrue(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+
+        coordinator.clearHover(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID)
+
+        XCTAssertTrue(coordinator.isDragging(workspaceID: workspaceID, tabID: tabID))
+        XCTAssertTrue(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+
+        XCTAssertNil(coordinator.end(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+        XCTAssertFalse(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+    }
+
+    @MainActor
+    func testSplitResizeCoordinatorCancelMatchingSelectedSurfaceClearsHoverAndDrag() {
+        let coordinator = WorkspaceSplitResizeCoordinator()
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let nodeID = UUID()
+
+        coordinator.begin(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            nodeID: nodeID,
+            orientation: .horizontal,
+            startRatio: 0.5,
+            adjustedPrimaryDimension: 400
+        )
+        coordinator.update(translation: CGSize(width: 20, height: 0))
+
+        coordinator.cancelIfMatching(workspaceID: workspaceID, tabID: tabID)
+
+        XCTAssertFalse(coordinator.isDragging(workspaceID: workspaceID, tabID: tabID))
+        XCTAssertFalse(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+        XCTAssertTrue(coordinator.ratioOverrides(workspaceID: workspaceID, tabID: tabID).isEmpty)
+    }
+
+    @MainActor
+    func testSplitResizeCoordinatorReconcileClearsHoverForHiddenOrRemovedDivider() {
+        let coordinator = WorkspaceSplitResizeCoordinator()
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let nodeID = UUID()
+        let layoutTree = LayoutNode.split(
+            nodeID: nodeID,
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .slot(slotID: UUID(), panelID: UUID()),
+            second: .slot(slotID: UUID(), panelID: UUID())
+        )
+
+        coordinator.updateHover(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID, hovering: true)
+        coordinator.reconcile(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            layoutTree: layoutTree,
+            focusedPanelModeActive: true
+        )
+        XCTAssertFalse(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+
+        coordinator.updateHover(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID, hovering: true)
+        coordinator.reconcile(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            focusedPanelModeActive: false
+        )
+        XCTAssertFalse(coordinator.isHighlighted(workspaceID: workspaceID, tabID: tabID, nodeID: nodeID))
+    }
+
     func testRightAuxPanelVisibilityAnimationOnlyRunsForSelectedTabSurface() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelAnimatesVisibilityChanges(
