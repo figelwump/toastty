@@ -11,7 +11,70 @@ final class TerminalMetadataService {
         let source: String
     }
 
+    private struct MetadataUpdateDiagnostics {
+        var startedAt: Date
+        var eventCount = 0
+        var titleUpdateCount = 0
+        var cwdUpdateCount = 0
+        var commandFinishedCount = 0
+        var storePublishCount = 0
+        var sourceCounts: [String: Int] = [:]
+        var lastTitleSample: String?
+        var lastCWDSample: String?
+        var lastExitCode: String?
+
+        mutating func record(
+            source: String,
+            titleChanged: Bool,
+            cwdChanged: Bool,
+            commandFinished: Bool,
+            storePublished: Bool,
+            titleSample: String?,
+            cwdSample: String?,
+            exitCode: Int?
+        ) {
+            eventCount += 1
+            if titleChanged {
+                titleUpdateCount += 1
+            }
+            if cwdChanged {
+                cwdUpdateCount += 1
+            }
+            if commandFinished {
+                commandFinishedCount += 1
+            }
+            if storePublished {
+                storePublishCount += 1
+            }
+            sourceCounts[source, default: 0] += 1
+            if let titleSample {
+                lastTitleSample = titleSample
+            }
+            if let cwdSample {
+                lastCWDSample = cwdSample
+            }
+            if commandFinished {
+                lastExitCode = exitCode.map(String.init) ?? "none"
+            }
+        }
+
+        var sourceSummary: String {
+            sourceCounts
+                .sorted { lhs, rhs in
+                    if lhs.value == rhs.value {
+                        return lhs.key < rhs.key
+                    }
+                    return lhs.value > rhs.value
+                }
+                .map { "\($0.key):\($0.value)" }
+                .joined(separator: ",")
+        }
+    }
+
     private static let nativeCWDProcessFallbackPollInterval: TimeInterval = 30
+    private static let metadataDiagnosticsMinimumLogEvents = 5
+    private static let metadataDiagnosticsMaximumBufferedEvents = 25
+    private static let metadataDiagnosticsMinimumLogInterval: TimeInterval = 2
     static let immediateProcessRefreshAttemptCount = immediateProcessRefreshRetryDelaysNanoseconds.count + 1
     // Retry quickly on startup so restored pane labels stop showing stale cwd
     // while the login -> shell child process is still materializing.
@@ -34,6 +97,7 @@ final class TerminalMetadataService {
     // arrives, but do not persist or promote it into panel state.
     private var suppressedBootstrapWorkingDirectoryByPanelID: [UUID: String] = [:]
     private var nativeCWDLastProcessFallbackPollAtByPanelID: [UUID: Date] = [:]
+    private var metadataDiagnosticsByPanelID: [UUID: MetadataUpdateDiagnostics] = [:]
     private let processWorkingDirectoryResolver = TerminalProcessWorkingDirectoryResolver()
     private let resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?
     private let initialProcessRefreshDeferral: @Sendable () async -> Void
@@ -117,6 +181,9 @@ final class TerminalMetadataService {
         nativeCWDLastProcessFallbackPollAtByPanelID = nativeCWDLastProcessFallbackPollAtByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
+        metadataDiagnosticsByPanelID = metadataDiagnosticsByPanelID.filter { panelID, _ in
+            livePanelIDs.contains(panelID)
+        }
     }
 
     func invalidate(panelID: UUID) {
@@ -126,6 +193,7 @@ final class TerminalMetadataService {
         panelsWithConfirmedNativeCWDSupport.remove(panelID)
         suppressedBootstrapWorkingDirectoryByPanelID.removeValue(forKey: panelID)
         nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
+        metadataDiagnosticsByPanelID.removeValue(forKey: panelID)
     }
 
     func handleDesktopNotificationAction(
@@ -156,6 +224,7 @@ final class TerminalMetadataService {
         switch intent {
         case .setTerminalTitle(let title):
             return handleTerminalMetadataUpdate(
+                source: "ghostty_title",
                 title: title,
                 cwd: nil,
                 allowLegacyCWDInference: prefersNativeCWDSignal(panelID: panelID) == false,
@@ -183,6 +252,7 @@ final class TerminalMetadataService {
             )
             recordNativeCWDSignal(panelID: panelID)
             return handleTerminalMetadataUpdate(
+                source: "ghostty_cwd",
                 title: nil,
                 cwd: effectiveCWD,
                 allowLegacyCWDInference: false,
@@ -288,6 +358,18 @@ final class TerminalMetadataService {
             )
         )
         if handled {
+            recordMetadataUpdateDiagnostics(
+                source: "cwd_sync:\(source)",
+                workspaceID: workspaceID,
+                panelID: panelID,
+                titleChanged: false,
+                cwdChanged: true,
+                commandFinished: false,
+                storePublished: true,
+                titleSample: nil,
+                cwdSample: normalizedWorkingDirectory,
+                exitCode: nil
+            )
             ToasttyLog.debug(
                 "Synchronized terminal cwd from Ghostty surface state",
                 category: .terminal,
@@ -745,7 +827,65 @@ final class TerminalMetadataService {
         )
     }
 
+    private func recordMetadataUpdateDiagnostics(
+        source: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        titleChanged: Bool,
+        cwdChanged: Bool,
+        commandFinished: Bool,
+        storePublished: Bool,
+        titleSample: String?,
+        cwdSample: String?,
+        exitCode: Int?,
+        now: Date = Date()
+    ) {
+        var diagnostics = metadataDiagnosticsByPanelID[panelID] ?? MetadataUpdateDiagnostics(startedAt: now)
+        diagnostics.record(
+            source: source,
+            titleChanged: titleChanged,
+            cwdChanged: cwdChanged,
+            commandFinished: commandFinished,
+            storePublished: storePublished,
+            titleSample: titleSample.map { String($0.prefix(80)) },
+            cwdSample: cwdSample.map { String($0.prefix(120)) },
+            exitCode: exitCode
+        )
+
+        let elapsed = now.timeIntervalSince(diagnostics.startedAt)
+        let shouldLog = diagnostics.eventCount >= Self.metadataDiagnosticsMaximumBufferedEvents ||
+            (
+                diagnostics.eventCount >= Self.metadataDiagnosticsMinimumLogEvents &&
+                    elapsed >= Self.metadataDiagnosticsMinimumLogInterval
+            )
+        guard shouldLog else {
+            metadataDiagnosticsByPanelID[panelID] = diagnostics
+            return
+        }
+
+        ToasttyLog.info(
+            "Terminal metadata update summary",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "panel_id": panelID.uuidString,
+                "duration_ms": String(Int((elapsed * 1000).rounded())),
+                "events": String(diagnostics.eventCount),
+                "title_updates": String(diagnostics.titleUpdateCount),
+                "cwd_updates": String(diagnostics.cwdUpdateCount),
+                "command_finished": String(diagnostics.commandFinishedCount),
+                "store_publishes": String(diagnostics.storePublishCount),
+                "sources": diagnostics.sourceSummary,
+                "last_title_sample": diagnostics.lastTitleSample ?? "nil",
+                "last_cwd_sample": diagnostics.lastCWDSample ?? "nil",
+                "last_exit_code": diagnostics.lastExitCode ?? "nil",
+            ]
+        )
+        metadataDiagnosticsByPanelID[panelID] = MetadataUpdateDiagnostics(startedAt: now)
+    }
+
     private func handleTerminalMetadataUpdate(
+        source: String,
         title: String?,
         cwd: String?,
         allowLegacyCWDInference: Bool,
@@ -827,14 +967,11 @@ final class TerminalMetadataService {
             cwdSource = "none"
         }
 
-        var hasChanges = false
-        if let normalizedTitle, normalizedTitle != terminalState.title {
-            hasChanges = true
-        }
-        if let normalizedCWD,
-           TerminalRuntimeRegistry.cwdValuesDiffer(normalizedCWD, terminalState.cwd) {
-            hasChanges = true
-        }
+        let titleChanged = normalizedTitle.map { $0 != terminalState.title } ?? false
+        let cwdChanged = normalizedCWD.map {
+            TerminalRuntimeRegistry.cwdValuesDiffer($0, terminalState.cwd)
+        } ?? false
+        let hasChanges = titleChanged || cwdChanged
 
         guard hasChanges else {
             if normalizedTitle != nil || normalizedCWD != nil {
@@ -863,14 +1000,27 @@ final class TerminalMetadataService {
         if handled {
             let titleSample = normalizedTitle.map { String($0.prefix(80)) } ?? "nil"
             let cwdSample = normalizedCWD.map { String($0.prefix(80)) } ?? "nil"
+            recordMetadataUpdateDiagnostics(
+                source: source,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                titleChanged: titleChanged,
+                cwdChanged: cwdChanged,
+                commandFinished: false,
+                storePublished: true,
+                titleSample: normalizedTitle,
+                cwdSample: normalizedCWD,
+                exitCode: nil
+            )
             ToasttyLog.debug(
                 "Applied terminal metadata update from Ghostty",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
-                    "title_updated": normalizedTitle == nil ? "false" : "true",
-                    "cwd_updated": normalizedCWD == nil ? "false" : "true",
+                    "source": source,
+                    "title_updated": titleChanged ? "true" : "false",
+                    "cwd_updated": cwdChanged ? "true" : "false",
                     "title_sample": titleSample,
                     "cwd_sample": cwdSample,
                     "cwd_source": cwdSource,
@@ -883,8 +1033,9 @@ final class TerminalMetadataService {
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
-                    "title_updated": normalizedTitle == nil ? "false" : "true",
-                    "cwd_updated": normalizedCWD == nil ? "false" : "true",
+                    "source": source,
+                    "title_updated": titleChanged ? "true" : "false",
+                    "cwd_updated": cwdChanged ? "true" : "false",
                 ]
             )
         }
@@ -1025,6 +1176,18 @@ final class TerminalMetadataService {
                 "panel_id": panelID.uuidString,
                 "exit_code": exitCode.map(String.init) ?? "none",
             ]
+        )
+        recordMetadataUpdateDiagnostics(
+            source: "command_finished",
+            workspaceID: workspaceID,
+            panelID: panelID,
+            titleChanged: false,
+            cwdChanged: false,
+            commandFinished: true,
+            storePublished: false,
+            titleSample: nil,
+            cwdSample: nil,
+            exitCode: exitCode
         )
         _ = sessionLifecycleTracker?.handleCommandFinished(
             panelID: panelID,
