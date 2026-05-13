@@ -31,6 +31,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -75,6 +78,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -102,6 +108,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 state: store.state
             )
         )
+        await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.cwd, "/tmp/restored")
@@ -135,6 +142,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -162,6 +172,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 state: store.state
             )
         )
+        await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.cwd, "/tmp/restored")
@@ -199,6 +210,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             registry: registry,
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -249,6 +263,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -260,6 +277,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 state: store.state
             )
         )
+        await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.title, "npm run dev")
@@ -293,6 +311,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -304,6 +325,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 state: store.state
             )
         )
+        await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.title, "zmx attach toastty.$TOASTTY_PANEL_ID")
@@ -337,6 +359,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -356,6 +381,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 state: store.state
             )
         )
+        await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.title, "zmx attach toastty.$TOASTTY_PANEL_ID")
@@ -388,6 +414,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             registry: registry,
             resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/bootstrap-shell" },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -441,6 +470,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/bootstrap-shell" },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -492,6 +524,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             registry: registry,
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -547,6 +582,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -600,6 +638,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             registry: registry,
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -673,6 +714,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -730,6 +774,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             registry: registry,
             resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/bootstrap-shell" },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -792,6 +839,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/process-fallback" },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -828,6 +878,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/process-fallback" },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -862,6 +915,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             registry: registry,
             resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/wrong" },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -909,6 +965,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -950,6 +1009,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await initialDeferralGate.wait()
             },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -994,6 +1056,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             },
             processRefreshRetryDelay: { _ in
                 await delayGate.wait()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -1038,6 +1103,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -1066,6 +1134,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             registry: registry,
             resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/other" },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -1110,6 +1181,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             registry: registry,
             resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/restored" },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -1156,6 +1230,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -1195,6 +1272,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -1214,6 +1294,373 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testTitleMetadataBurstPublishesOnlyLatestAfterQuietPeriod() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("first frame"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("latest frame"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(metadataPublishCount, 0)
+
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "latest frame")
+        XCTAssertEqual(metadataPublishCount, 1)
+        try StateValidator.validate(store.state)
+    }
+
+    func testIsolatedTitleMetadataPublishesAfterQuietPeriod() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("vim"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(metadataPublishCount, 0)
+
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "vim")
+        XCTAssertEqual(metadataPublishCount, 1)
+        try StateValidator.validate(store.state)
+    }
+
+    func testUnchangedTitleMetadataCancelsPendingTitleWithoutPublishing() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("pending title"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("Terminal 1"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(metadataPublishCount, 0)
+        try StateValidator.validate(store.state)
+    }
+
+    func testPendingTitleMatchingCurrentTitleAtFlushIsDropped() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("already current"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertTrue(
+            store.send(.updateTerminalPanelMetadata(panelID: panelID, title: "already current", cwd: nil))
+        )
+
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "already current")
+        XCTAssertEqual(metadataPublishCount, 1)
+        try StateValidator.validate(store.state)
+    }
+
+    func testTitleInferredCWDPublishesCWDImmediatelyAndTitleAfterQuietPeriod() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("/tmp/title-inferred"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        var currentTerminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(currentTerminalState.cwd, "/tmp/title-inferred")
+        XCTAssertEqual(currentTerminalState.title, "Terminal 1")
+        XCTAssertEqual(metadataPublishCount, 1)
+
+        await settleMetadataTasks()
+
+        currentTerminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(currentTerminalState.cwd, "/tmp/title-inferred")
+        XCTAssertEqual(currentTerminalState.title, "/tmp/title-inferred")
+        XCTAssertEqual(metadataPublishCount, 2)
+        try StateValidator.validate(store.state)
+    }
+
+    func testInvalidatedPanelDoesNotPublishPendingTitle() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("pending title"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        service.invalidate(panelID: panelID)
+
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(metadataPublishCount, 0)
+        try StateValidator.validate(store.state)
+    }
+
+    func testMultiplePanelsCoalesceTitlesIndependently() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let firstPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let previousPanelIDs = Set(try XCTUnwrap(store.state.workspacesByID[workspaceID]?.panels.keys))
+        XCTAssertTrue(store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal)))
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let secondPanelID = try XCTUnwrap(Set(workspace.panels.keys).subtracting(previousPanelIDs).first)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("first panel"),
+                workspaceID: workspaceID,
+                panelID: firstPanelID,
+                state: store.state
+            )
+        )
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("second panel"),
+                workspaceID: workspaceID,
+                panelID: secondPanelID,
+                state: store.state
+            )
+        )
+
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: firstPanelID, state: store.state).title, "first panel")
+        XCTAssertEqual(try terminalState(panelID: secondPanelID, state: store.state).title, "second panel")
+        XCTAssertEqual(metadataPublishCount, 2)
+        try StateValidator.validate(store.state)
+    }
+
+    func testSynchronizeLivePanelsCancelsPendingTitleForRemovedPanel() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("pending title"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        service.synchronizeLivePanels([])
+
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(metadataPublishCount, 0)
+        try StateValidator.validate(store.state)
+    }
+
     func testCommandFinishedStopsTrackedSession() async throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -1226,6 +1673,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             sessionLifecycleTracker: tracker,
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
                 await Task.yield()
             }
         )
@@ -1268,6 +1718,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -1288,7 +1741,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testBackgroundTabTerminalMetadataUpdatesApplyWithoutSelectingTab() throws {
+    func testBackgroundTabTerminalMetadataUpdatesApplyWithoutSelectingTab() async throws {
         let state = try makeTwoTabState()
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -1306,6 +1759,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             resolveWorkingDirectoryFromProcessOverride: { _ in nil },
             processRefreshRetryDelay: { _ in
                 await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
             }
         )
 
@@ -1322,6 +1778,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 state: store.state
             )
         )
+        await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: backgroundPanelID, state: store.state)
         let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])

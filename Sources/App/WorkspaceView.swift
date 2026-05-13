@@ -3523,44 +3523,44 @@ struct PanelCardView: View {
             switch panelState {
             case .terminal(let terminalState):
                 if let terminalRuntimeContext {
-                TerminalPanelHostView(
-                    workspaceID: workspaceID,
-                    panelID: panelID,
-                    terminalState: terminalState,
-                    focused: isFocused,
-                    windowFontPoints: windowFontPoints,
-                    runtimeContext: terminalRuntimeContext
-                )
-                .overlay {
-                    if isWorkspaceSelected,
-                       focusedPanelID != nil,
-                       !isFocused,
-                       unfocusedSplitStyle.fillOverlayOpacity > 0 {
-                        Rectangle()
-                            .fill(unfocusedSplitStyle.fillColor.color)
-                            .opacity(unfocusedSplitStyle.fillOverlayOpacity)
-                            .allowsHitTesting(false)
+                    TerminalPanelHostView(
+                        workspaceID: workspaceID,
+                        panelID: panelID,
+                        hostState: TerminalPanelHostState(terminalState: terminalState),
+                        focused: isFocused,
+                        windowFontPoints: windowFontPoints,
+                        runtimeContext: terminalRuntimeContext
+                    )
+                    .overlay {
+                        if isWorkspaceSelected,
+                           focusedPanelID != nil,
+                           !isFocused,
+                           unfocusedSplitStyle.fillOverlayOpacity > 0 {
+                            Rectangle()
+                                .fill(unfocusedSplitStyle.fillColor.color)
+                                .opacity(unfocusedSplitStyle.fillOverlayOpacity)
+                                .allowsHitTesting(false)
+                        }
                     }
-                }
-                .overlay {
-                    if panelFlashOverlayOpacity > 0 {
-                        Rectangle()
-                            .fill(ToastyTheme.accent.opacity(0.16 * panelFlashOverlayOpacity))
-                            .overlay {
-                                Rectangle()
-                                    .stroke(
-                                        ToastyTheme.accent.opacity(0.9 * panelFlashOverlayOpacity),
-                                        lineWidth: 1.5
-                                    )
-                            }
-                            .allowsHitTesting(false)
+                    .overlay {
+                        if panelFlashOverlayOpacity > 0 {
+                            Rectangle()
+                                .fill(ToastyTheme.accent.opacity(0.16 * panelFlashOverlayOpacity))
+                                .overlay {
+                                    Rectangle()
+                                        .stroke(
+                                            ToastyTheme.accent.opacity(0.9 * panelFlashOverlayOpacity),
+                                            lineWidth: 1.5
+                                        )
+                                }
+                                .allowsHitTesting(false)
+                        }
                     }
-                }
-                .frame(
-                    maxWidth: .infinity,
-                    maxHeight: .infinity,
-                    alignment: .topLeading
-                )
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: .infinity,
+                        alignment: .topLeading
+                    )
                 } else {
                     Color.clear
                 }

@@ -11,6 +11,14 @@ final class TerminalMetadataService {
         let source: String
     }
 
+    private struct PendingTitleMetadataUpdate {
+        let token: UUID
+        let workspaceID: UUID
+        let panelID: UUID
+        let source: String
+        let title: String
+    }
+
     private struct MetadataUpdateDiagnostics {
         var startedAt: Date
         var eventCount = 0
@@ -72,6 +80,7 @@ final class TerminalMetadataService {
     }
 
     private static let nativeCWDProcessFallbackPollInterval: TimeInterval = 30
+    private static let titleMetadataCoalescingDelayNanoseconds: UInt64 = 150_000_000
     private static let metadataDiagnosticsMinimumLogEvents = 5
     private static let metadataDiagnosticsMaximumBufferedEvents = 25
     private static let metadataDiagnosticsMinimumLogInterval: TimeInterval = 2
@@ -102,11 +111,17 @@ final class TerminalMetadataService {
     private let resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?
     private let initialProcessRefreshDeferral: @Sendable () async -> Void
     private let processRefreshRetryDelay: @Sendable (UInt64) async -> Void
+    private let titleCoalescingDelay: @Sendable () async -> Void
     private var immediateProcessRefreshTaskByPanelID: [UUID: Task<Void, Never>] = [:]
     private var immediateProcessRefreshTokenByPanelID: [UUID: UUID] = [:]
+    private var pendingTitleMetadataUpdateByPanelID: [UUID: PendingTitleMetadataUpdate] = [:]
+    private var titleCoalescingTaskByPanelID: [UUID: Task<Void, Never>] = [:]
 
     deinit {
         for task in immediateProcessRefreshTaskByPanelID.values {
+            task.cancel()
+        }
+        for task in titleCoalescingTaskByPanelID.values {
             task.cancel()
         }
     }
@@ -122,7 +137,8 @@ final class TerminalMetadataService {
             sessionLifecycleTracker: sessionLifecycleTracker,
             resolveWorkingDirectoryFromProcessOverride: nil,
             initialProcessRefreshDeferral: Self.defaultInitialProcessRefreshDeferral,
-            processRefreshRetryDelay: Self.defaultProcessRefreshRetryDelay
+            processRefreshRetryDelay: Self.defaultProcessRefreshRetryDelay,
+            titleCoalescingDelay: Self.defaultTitleCoalescingDelay
         )
     }
 
@@ -131,7 +147,8 @@ final class TerminalMetadataService {
         registry: TerminalRuntimeRegistry,
         sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)? = nil,
         resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?,
-        processRefreshRetryDelay: @escaping @Sendable (UInt64) async -> Void
+        processRefreshRetryDelay: @escaping @Sendable (UInt64) async -> Void,
+        titleCoalescingDelay: @escaping @Sendable () async -> Void = TerminalMetadataService.defaultTitleCoalescingDelay
     ) {
         self.init(
             store: store,
@@ -139,7 +156,8 @@ final class TerminalMetadataService {
             sessionLifecycleTracker: sessionLifecycleTracker,
             resolveWorkingDirectoryFromProcessOverride: resolveWorkingDirectoryFromProcessOverride,
             initialProcessRefreshDeferral: Self.defaultInitialProcessRefreshDeferral,
-            processRefreshRetryDelay: processRefreshRetryDelay
+            processRefreshRetryDelay: processRefreshRetryDelay,
+            titleCoalescingDelay: titleCoalescingDelay
         )
     }
 
@@ -149,7 +167,8 @@ final class TerminalMetadataService {
         sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)? = nil,
         resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?,
         initialProcessRefreshDeferral: @escaping @Sendable () async -> Void,
-        processRefreshRetryDelay: @escaping @Sendable (UInt64) async -> Void
+        processRefreshRetryDelay: @escaping @Sendable (UInt64) async -> Void,
+        titleCoalescingDelay: @escaping @Sendable () async -> Void = TerminalMetadataService.defaultTitleCoalescingDelay
     ) {
         self.store = store
         self.registry = registry
@@ -157,6 +176,7 @@ final class TerminalMetadataService {
         self.resolveWorkingDirectoryFromProcessOverride = resolveWorkingDirectoryFromProcessOverride
         self.initialProcessRefreshDeferral = initialProcessRefreshDeferral
         self.processRefreshRetryDelay = processRefreshRetryDelay
+        self.titleCoalescingDelay = titleCoalescingDelay
     }
 
     func bind(sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?) {
@@ -181,6 +201,15 @@ final class TerminalMetadataService {
         nativeCWDLastProcessFallbackPollAtByPanelID = nativeCWDLastProcessFallbackPollAtByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
+        for (panelID, task) in titleCoalescingTaskByPanelID where !livePanelIDs.contains(panelID) {
+            task.cancel()
+        }
+        titleCoalescingTaskByPanelID = titleCoalescingTaskByPanelID.filter { panelID, _ in
+            livePanelIDs.contains(panelID)
+        }
+        pendingTitleMetadataUpdateByPanelID = pendingTitleMetadataUpdateByPanelID.filter { panelID, _ in
+            livePanelIDs.contains(panelID)
+        }
         metadataDiagnosticsByPanelID = metadataDiagnosticsByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
@@ -193,6 +222,7 @@ final class TerminalMetadataService {
         panelsWithConfirmedNativeCWDSupport.remove(panelID)
         suppressedBootstrapWorkingDirectoryByPanelID.removeValue(forKey: panelID)
         nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
+        cancelPendingTitleMetadataUpdate(panelID: panelID)
         metadataDiagnosticsByPanelID.removeValue(forKey: panelID)
     }
 
@@ -638,6 +668,10 @@ final class TerminalMetadataService {
         try? await Task.sleep(nanoseconds: nanoseconds)
     }
 
+    private static func defaultTitleCoalescingDelay() async {
+        try? await Task.sleep(nanoseconds: titleMetadataCoalescingDelayNanoseconds)
+    }
+
     private static func defaultInitialProcessRefreshDeferral() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
@@ -884,6 +918,134 @@ final class TerminalMetadataService {
         metadataDiagnosticsByPanelID[panelID] = MetadataUpdateDiagnostics(startedAt: now)
     }
 
+    private func cancelPendingTitleMetadataUpdate(panelID: UUID) {
+        titleCoalescingTaskByPanelID.removeValue(forKey: panelID)?.cancel()
+        pendingTitleMetadataUpdateByPanelID.removeValue(forKey: panelID)
+    }
+
+    private func scheduleTitleMetadataUpdate(
+        workspaceID: UUID,
+        panelID: UUID,
+        source: String,
+        title: String
+    ) {
+        let token = UUID()
+        pendingTitleMetadataUpdateByPanelID[panelID] = PendingTitleMetadataUpdate(
+            token: token,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            source: source,
+            title: title
+        )
+        titleCoalescingTaskByPanelID.removeValue(forKey: panelID)?.cancel()
+        let titleCoalescingDelay = titleCoalescingDelay
+        titleCoalescingTaskByPanelID[panelID] = Task { @MainActor [weak self, titleCoalescingDelay] in
+            await titleCoalescingDelay()
+            guard Task.isCancelled == false, let self else { return }
+            self.flushPendingTitleMetadataUpdate(panelID: panelID, token: token)
+        }
+    }
+
+    private func flushPendingTitleMetadataUpdate(panelID: UUID, token: UUID) {
+        guard let pendingUpdate = pendingTitleMetadataUpdateByPanelID[panelID],
+              pendingUpdate.token == token else {
+            return
+        }
+        pendingTitleMetadataUpdateByPanelID.removeValue(forKey: panelID)
+        titleCoalescingTaskByPanelID.removeValue(forKey: panelID)
+
+        guard let currentTerminal = currentTerminalPanelState(
+            panelID: panelID,
+            preferredWorkspaceID: pendingUpdate.workspaceID,
+            state: store.state
+        ) else {
+            ToasttyLog.debug(
+                "Dropping coalesced terminal title update because panel no longer exists",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": pendingUpdate.workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "source": pendingUpdate.source,
+                ]
+            )
+            return
+        }
+
+        guard pendingUpdate.title != currentTerminal.terminalState.title else {
+            ToasttyLog.debug(
+                "Dropping coalesced terminal title update because value is already current",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": currentTerminal.workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "source": pendingUpdate.source,
+                    "title_sample": String(pendingUpdate.title.prefix(80)),
+                ]
+            )
+            return
+        }
+
+        let handled = store.send(
+            .updateTerminalPanelMetadata(
+                panelID: panelID,
+                title: pendingUpdate.title,
+                cwd: nil
+            )
+        )
+        if handled {
+            recordMetadataUpdateDiagnostics(
+                source: "\(pendingUpdate.source):coalesced_title",
+                workspaceID: currentTerminal.workspaceID,
+                panelID: panelID,
+                titleChanged: true,
+                cwdChanged: false,
+                commandFinished: false,
+                storePublished: true,
+                titleSample: pendingUpdate.title,
+                cwdSample: nil,
+                exitCode: nil
+            )
+            ToasttyLog.debug(
+                "Applied coalesced terminal title metadata update from Ghostty",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": currentTerminal.workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "source": pendingUpdate.source,
+                    "title_sample": String(pendingUpdate.title.prefix(80)),
+                ]
+            )
+        } else {
+            ToasttyLog.warning(
+                "Reducer rejected coalesced terminal title metadata update from Ghostty",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": currentTerminal.workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "source": pendingUpdate.source,
+                ]
+            )
+        }
+    }
+
+    private func currentTerminalPanelState(
+        panelID: UUID,
+        preferredWorkspaceID: UUID,
+        state: AppState
+    ) -> (workspaceID: UUID, terminalState: TerminalPanelState)? {
+        if let workspace = state.workspacesByID[preferredWorkspaceID],
+           case .terminal(let terminalState)? = workspace.panelState(for: panelID) {
+            return (preferredWorkspaceID, terminalState)
+        }
+
+        for (workspaceID, workspace) in state.workspacesByID {
+            if case .terminal(let terminalState)? = workspace.panelState(for: panelID) {
+                return (workspaceID, terminalState)
+            }
+        }
+        return nil
+    }
+
     private func handleTerminalMetadataUpdate(
         source: String,
         title: String?,
@@ -971,9 +1133,13 @@ final class TerminalMetadataService {
         let cwdChanged = normalizedCWD.map {
             TerminalRuntimeRegistry.cwdValuesDiffer($0, terminalState.cwd)
         } ?? false
-        let hasChanges = titleChanged || cwdChanged
 
-        guard hasChanges else {
+        if titleChanged == false, normalizedTitle != nil {
+            // A current title supersedes any older pending title burst frame.
+            cancelPendingTitleMetadataUpdate(panelID: panelID)
+        }
+
+        guard titleChanged || cwdChanged else {
             if normalizedTitle != nil || normalizedCWD != nil {
                 ToasttyLog.debug(
                     "Ignoring terminal metadata update because values are unchanged",
@@ -990,56 +1156,76 @@ final class TerminalMetadataService {
             return true
         }
 
-        let handled = store.send(
-            .updateTerminalPanelMetadata(
-                panelID: panelID,
-                title: normalizedTitle,
-                cwd: normalizedCWD
+        let didApplyImmediateCWD: Bool
+        if cwdChanged {
+            let handled = store.send(
+                .updateTerminalPanelMetadata(
+                    panelID: panelID,
+                    title: nil,
+                    cwd: normalizedCWD
+                )
             )
-        )
-        if handled {
-            let titleSample = normalizedTitle.map { String($0.prefix(80)) } ?? "nil"
-            let cwdSample = normalizedCWD.map { String($0.prefix(80)) } ?? "nil"
+            guard handled else {
+                ToasttyLog.warning(
+                    "Reducer rejected terminal cwd metadata update from Ghostty",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "panel_id": panelID.uuidString,
+                        "source": source,
+                        "cwd_source": cwdSource,
+                    ]
+                )
+                return false
+            }
+            didApplyImmediateCWD = true
             recordMetadataUpdateDiagnostics(
                 source: source,
                 workspaceID: workspaceID,
                 panelID: panelID,
-                titleChanged: titleChanged,
-                cwdChanged: cwdChanged,
+                titleChanged: false,
+                cwdChanged: true,
                 commandFinished: false,
                 storePublished: true,
-                titleSample: normalizedTitle,
+                titleSample: nil,
                 cwdSample: normalizedCWD,
                 exitCode: nil
             )
             ToasttyLog.debug(
-                "Applied terminal metadata update from Ghostty",
+                "Applied terminal cwd metadata update from Ghostty",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
                     "source": source,
-                    "title_updated": titleChanged ? "true" : "false",
-                    "cwd_updated": cwdChanged ? "true" : "false",
-                    "title_sample": titleSample,
-                    "cwd_sample": cwdSample,
+                    "cwd_sample": normalizedCWD.map { String($0.prefix(80)) } ?? "nil",
                     "cwd_source": cwdSource,
                 ]
             )
         } else {
-            ToasttyLog.warning(
-                "Reducer rejected terminal metadata update from Ghostty",
+            didApplyImmediateCWD = false
+        }
+
+        if titleChanged, let normalizedTitle {
+            scheduleTitleMetadataUpdate(
+                workspaceID: workspaceID,
+                panelID: panelID,
+                source: source,
+                title: normalizedTitle
+            )
+            ToasttyLog.debug(
+                "Scheduled coalesced terminal title metadata update from Ghostty",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
                     "source": source,
-                    "title_updated": titleChanged ? "true" : "false",
-                    "cwd_updated": cwdChanged ? "true" : "false",
+                    "title_sample": String(normalizedTitle.prefix(80)),
+                    "cwd_updated_immediately": didApplyImmediateCWD ? "true" : "false",
                 ]
             )
         }
-        return handled
+        return true
     }
 
     private func shouldSuppressBootstrapWorkingDirectory(

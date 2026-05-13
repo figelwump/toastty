@@ -1,11 +1,10 @@
 import AppKit
-import CoreState
 import SwiftUI
 
 struct TerminalPanelHostView: NSViewRepresentable {
     let workspaceID: UUID
     let panelID: UUID
-    let terminalState: TerminalPanelState
+    let hostState: TerminalPanelHostState
     let focused: Bool
     let windowFontPoints: Double
     let runtimeContext: TerminalWindowRuntimeContext
@@ -39,7 +38,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
         let update = { (view: NSView) in
             let scale = effectiveBackingScaleFactor(for: view)
             controller.update(
-                terminalState: terminalState,
+                hostState: hostState,
                 focused: focused,
                 fontPoints: windowFontPoints,
                 viewportSize: view.bounds.size,
