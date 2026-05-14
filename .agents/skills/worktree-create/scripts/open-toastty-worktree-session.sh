@@ -207,8 +207,7 @@ if [[ -f "$handoff_file" ]]; then
   if ! local_document_output="$(
     "$TOASTTY_CLI_PATH" action run panel.create.local-document \
       --workspace "$workspace_id" \
-      "filePath=$handoff_file" \
-      placement=splitRight 2>&1
+      "filePath=$handoff_file" 2>&1
   )"; then
     echo "error: failed to open handoff document for workspace $workspace_id" >&2
     printf '%s\n' "$local_document_output" >&2

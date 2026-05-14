@@ -113,12 +113,12 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(invocationLines.contains("--json query run terminal.state --panel 33333333-3333-3333-3333-333333333333"))
         XCTAssertTrue(invocationLines.contains("--json action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke activate=false"))
         XCTAssertFalse(invocationLines.contains(where: { $0.contains("workspace.snapshot") }))
-        XCTAssertTrue(invocationLines.contains("action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path) placement=splitRight"))
+        XCTAssertTrue(invocationLines.contains("action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path)"))
         XCTAssertTrue(invocationLines.contains("--json query run terminal.state --workspace 44444444-4444-4444-4444-444444444444"))
 
-        let splitIndex = try XCTUnwrap(invocationLines.firstIndex(of: "action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path) placement=splitRight"))
+        let documentIndex = try XCTUnwrap(invocationLines.firstIndex(of: "action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path)"))
         let terminalStateIndex = try XCTUnwrap(invocationLines.lastIndex(of: "--json query run terminal.state --workspace 44444444-4444-4444-4444-444444444444"))
-        XCTAssertLessThan(splitIndex, terminalStateIndex)
+        XCTAssertLessThan(documentIndex, terminalStateIndex)
     }
 
     private func skillScriptURL() -> URL {
