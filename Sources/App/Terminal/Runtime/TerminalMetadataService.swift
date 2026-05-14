@@ -1064,7 +1064,31 @@ final class TerminalMetadataService {
             return .foregroundThrottle
         }
 
+        if panelDrivesVisibleWorkspaceTabTitle(panelID, workspace: workspace) {
+            return .foregroundThrottle
+        }
+
         return .backgroundDebounce
+    }
+
+    private func panelDrivesVisibleWorkspaceTabTitle(_ panelID: UUID, workspace: WorkspaceState) -> Bool {
+        workspace.orderedTabs.contains { tab in
+            workspaceTabTitleSourcePanelID(tab) == panelID
+        }
+    }
+
+    private func workspaceTabTitleSourcePanelID(_ tab: WorkspaceTabState) -> UUID? {
+        guard tab.customTitle == nil else { return nil }
+
+        if let focusedPanelID = tab.resolvedFocusedPanelID {
+            return focusedPanelID
+        }
+
+        for slot in tab.layoutTree.allSlotInfos where tab.panels[slot.panelID] != nil {
+            return slot.panelID
+        }
+
+        return nil
     }
 
     private func workspaceIsSelectedInAnyWindow(_ workspaceID: UUID, state: AppState) -> Bool {

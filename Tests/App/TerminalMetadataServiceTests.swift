@@ -1682,7 +1682,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testBackgroundTitleMetadataStreamKeepsDebouncingUntilQuietPeriod() async throws {
+    func testInactiveWorkspaceTabTitleMetadataStreamUsesForegroundThrottle() async throws {
         let state = try makeTwoTabState()
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -1727,7 +1727,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         }
 
         let delayCallCount = await titleDelay.callCount()
-        XCTAssertEqual(delayCallCount, 3)
+        XCTAssertEqual(delayCallCount, 1)
         XCTAssertEqual(try terminalState(panelID: backgroundPanelID, state: store.state).title, "Terminal 1")
         XCTAssertEqual(metadataPublishCount, 0)
 
@@ -1738,6 +1738,66 @@ final class TerminalMetadataServiceTests: XCTestCase {
         let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(updatedWorkspace.selectedTabID, selectedTabID)
         XCTAssertEqual(terminalState.title, "background frame 3")
+        XCTAssertEqual(metadataPublishCount, 1)
+        try StateValidator.validate(store.state)
+    }
+
+    func testNonSelectedWorkspaceTitleMetadataStreamKeepsDebouncingUntilQuietPeriod() async throws {
+        let state = try makeTwoWorkspaceState()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let selection = try XCTUnwrap(store.state.selectedWorkspaceSelection())
+        let backgroundWorkspaceID = try XCTUnwrap(
+            selection.window.workspaceIDs.first { $0 != selection.workspaceID }
+        )
+        let backgroundWorkspace = try XCTUnwrap(store.state.workspacesByID[backgroundWorkspaceID])
+        let backgroundPanelID = try XCTUnwrap(backgroundWorkspace.focusedPanelID)
+        let originalTitle = try terminalState(panelID: backgroundPanelID, state: store.state).title
+        let titleDelay = DelayRecorder()
+        defer { Task { await titleDelay.open() } }
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await titleDelay.wait()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        for frame in 1...3 {
+            XCTAssertTrue(
+                service.handleRuntimeMetadataAction(
+                    .setTerminalTitle("background workspace frame \(frame)"),
+                    workspaceID: backgroundWorkspaceID,
+                    panelID: backgroundPanelID,
+                    state: store.state
+                )
+            )
+            await settleMetadataTasks()
+        }
+
+        let delayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(delayCallCount, 3)
+        XCTAssertEqual(try terminalState(panelID: backgroundPanelID, state: store.state).title, originalTitle)
+        XCTAssertEqual(metadataPublishCount, 0)
+
+        await titleDelay.open()
+        await settleMetadataTasks()
+
+        XCTAssertEqual(
+            try terminalState(panelID: backgroundPanelID, state: store.state).title,
+            "background workspace frame 3"
+        )
         XCTAssertEqual(metadataPublishCount, 1)
         try StateValidator.validate(store.state)
     }
