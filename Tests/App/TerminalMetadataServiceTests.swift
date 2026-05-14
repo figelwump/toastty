@@ -1345,6 +1345,121 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testForegroundTitleMetadataStreamPublishesLatestWithoutQuietPeriod() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let titleDelay = DelayRecorder()
+        defer { Task { await titleDelay.open() } }
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await titleDelay.wait()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("spinner frame 1"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        await settleMetadataTasks()
+        let initialDelayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(initialDelayCallCount, 1)
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("spinner frame 2"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("spinner frame 3"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        await settleMetadataTasks()
+
+        let updatedDelayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(updatedDelayCallCount, 1)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(metadataPublishCount, 0)
+
+        await titleDelay.open()
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "spinner frame 3")
+        XCTAssertEqual(metadataPublishCount, 1)
+        try StateValidator.validate(store.state)
+    }
+
+    func testTitleMetadataStreamInVisibleNonSelectedWindowUsesForegroundThrottle() async throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        XCTAssertTrue(reducer.send(.createWindow(seed: nil, initialFrame: nil), state: &state))
+        XCTAssertNotEqual(state.selectedWorkspaceSelection()?.workspaceID, workspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let titleDelay = DelayRecorder()
+        defer { Task { await titleDelay.open() } }
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await titleDelay.wait()
+            }
+        )
+
+        for frame in 1...3 {
+            XCTAssertTrue(
+                service.handleRuntimeMetadataAction(
+                    .setTerminalTitle("visible window frame \(frame)"),
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    state: store.state
+                )
+            )
+            await settleMetadataTasks()
+        }
+
+        let delayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(delayCallCount, 1)
+
+        await titleDelay.open()
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "visible window frame 3")
+        try StateValidator.validate(store.state)
+    }
+
     func testIsolatedTitleMetadataPublishesAfterQuietPeriod() async throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -1564,6 +1679,117 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
         XCTAssertEqual(metadataPublishCount, 0)
+        try StateValidator.validate(store.state)
+    }
+
+    func testBackgroundTitleMetadataStreamKeepsDebouncingUntilQuietPeriod() async throws {
+        let state = try makeTwoTabState()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let backgroundTabID = try XCTUnwrap(workspace.tabIDs.first)
+        let backgroundTab = try XCTUnwrap(workspace.tab(id: backgroundTabID))
+        let backgroundPanelID = try XCTUnwrap(backgroundTab.focusedPanelID)
+        let selectedTabID = try XCTUnwrap(workspace.selectedTabID)
+        XCTAssertNotEqual(selectedTabID, backgroundTabID)
+        let titleDelay = DelayRecorder()
+        defer { Task { await titleDelay.open() } }
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await titleDelay.wait()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        for frame in 1...3 {
+            XCTAssertTrue(
+                service.handleRuntimeMetadataAction(
+                    .setTerminalTitle("background frame \(frame)"),
+                    workspaceID: workspaceID,
+                    panelID: backgroundPanelID,
+                    state: store.state
+                )
+            )
+            await settleMetadataTasks()
+        }
+
+        let delayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(delayCallCount, 3)
+        XCTAssertEqual(try terminalState(panelID: backgroundPanelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(metadataPublishCount, 0)
+
+        await titleDelay.open()
+        await settleMetadataTasks()
+
+        let terminalState = try terminalState(panelID: backgroundPanelID, state: store.state)
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(updatedWorkspace.selectedTabID, selectedTabID)
+        XCTAssertEqual(terminalState.title, "background frame 3")
+        XCTAssertEqual(metadataPublishCount, 1)
+        try StateValidator.validate(store.state)
+    }
+
+    func testFocusModeHiddenTitleMetadataStreamKeepsDebouncingUntilQuietPeriod() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let focusedPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let previousPanelIDs = Set(try XCTUnwrap(store.state.workspacesByID[workspaceID]?.panels.keys))
+        XCTAssertTrue(store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal)))
+        let splitWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let hiddenPanelID = try XCTUnwrap(Set(splitWorkspace.panels.keys).subtracting(previousPanelIDs).first)
+        XCTAssertTrue(store.send(.focusPanel(workspaceID: workspaceID, panelID: focusedPanelID)))
+        XCTAssertTrue(store.send(.toggleFocusedPanelMode(workspaceID: workspaceID)))
+        let focusedModeWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertFalse(focusedModeWorkspace.panelIsVisibleInFocusMode(hiddenPanelID))
+        let originalHiddenTitle = try terminalState(panelID: hiddenPanelID, state: store.state).title
+        let titleDelay = DelayRecorder()
+        defer { Task { await titleDelay.open() } }
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await titleDelay.wait()
+            }
+        )
+
+        for frame in 1...3 {
+            XCTAssertTrue(
+                service.handleRuntimeMetadataAction(
+                    .setTerminalTitle("hidden focus frame \(frame)"),
+                    workspaceID: workspaceID,
+                    panelID: hiddenPanelID,
+                    state: store.state
+                )
+            )
+            await settleMetadataTasks()
+        }
+
+        let delayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(delayCallCount, 3)
+        XCTAssertEqual(try terminalState(panelID: hiddenPanelID, state: store.state).title, originalHiddenTitle)
+
+        await titleDelay.open()
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: hiddenPanelID, state: store.state).title, "hidden focus frame 3")
         try StateValidator.validate(store.state)
     }
 
@@ -1884,6 +2110,37 @@ actor AsyncGate {
         await withCheckedContinuation { continuation in
             waiters.append(continuation)
         }
+    }
+
+    func open() {
+        guard isOpen == false else { return }
+        isOpen = true
+        let continuations = waiters
+        waiters.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+}
+
+actor DelayRecorder {
+    private var recordedCallCount = 0
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        recordedCallCount += 1
+        if isOpen {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func callCount() -> Int {
+        recordedCallCount
     }
 
     func open() {

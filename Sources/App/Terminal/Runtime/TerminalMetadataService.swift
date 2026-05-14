@@ -17,6 +17,12 @@ final class TerminalMetadataService {
         let panelID: UUID
         let source: String
         let title: String
+        let deliveryMode: TitleMetadataDeliveryMode
+    }
+
+    private enum TitleMetadataDeliveryMode {
+        case foregroundThrottle
+        case backgroundDebounce
     }
 
     private struct MetadataUpdateDiagnostics {
@@ -927,16 +933,24 @@ final class TerminalMetadataService {
         workspaceID: UUID,
         panelID: UUID,
         source: String,
-        title: String
+        title: String,
+        deliveryMode: TitleMetadataDeliveryMode
     ) {
-        let token = UUID()
+        let existingUpdate = pendingTitleMetadataUpdateByPanelID[panelID]
+        let shouldReuseExistingTimer = titleCoalescingTaskByPanelID[panelID] != nil &&
+            existingUpdate?.deliveryMode == .foregroundThrottle &&
+            deliveryMode == .foregroundThrottle
+        let token = shouldReuseExistingTimer ? existingUpdate?.token ?? UUID() : UUID()
         pendingTitleMetadataUpdateByPanelID[panelID] = PendingTitleMetadataUpdate(
             token: token,
             workspaceID: workspaceID,
             panelID: panelID,
             source: source,
-            title: title
+            title: title,
+            deliveryMode: deliveryMode
         )
+        guard shouldReuseExistingTimer == false else { return }
+
         titleCoalescingTaskByPanelID.removeValue(forKey: panelID)?.cancel()
         let titleCoalescingDelay = titleCoalescingDelay
         titleCoalescingTaskByPanelID[panelID] = Task { @MainActor [weak self, titleCoalescingDelay] in
@@ -1025,6 +1039,37 @@ final class TerminalMetadataService {
                     "source": pendingUpdate.source,
                 ]
             )
+        }
+    }
+
+    private func titleMetadataDeliveryMode(
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState
+    ) -> TitleMetadataDeliveryMode {
+        guard let workspace = state.workspacesByID[workspaceID],
+              workspaceIsSelectedInAnyWindow(workspaceID, state: state),
+              let selectedTab = workspace.selectedTab else {
+            return .backgroundDebounce
+        }
+
+        if selectedTab.panels[panelID] != nil,
+           selectedTab.layoutTree.slotContaining(panelID: panelID) != nil,
+           workspace.panelIsVisibleInFocusMode(panelID) {
+            return .foregroundThrottle
+        }
+
+        if selectedTab.rightAuxPanel.isVisible,
+           selectedTab.rightAuxPanel.activePanelID == panelID {
+            return .foregroundThrottle
+        }
+
+        return .backgroundDebounce
+    }
+
+    private func workspaceIsSelectedInAnyWindow(_ workspaceID: UUID, state: AppState) -> Bool {
+        state.windows.contains { window in
+            state.selectedWorkspaceID(in: window.id) == workspaceID
         }
     }
 
@@ -1211,7 +1256,12 @@ final class TerminalMetadataService {
                 workspaceID: workspaceID,
                 panelID: panelID,
                 source: source,
-                title: normalizedTitle
+                title: normalizedTitle,
+                deliveryMode: titleMetadataDeliveryMode(
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    state: state
+                )
             )
             ToasttyLog.debug(
                 "Scheduled coalesced terminal title metadata update from Ghostty",
