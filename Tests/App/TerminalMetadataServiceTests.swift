@@ -1294,6 +1294,178 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testFirstGhosttyTitleForPanelPublishesImmediatelyBypassingThrottle() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let titleDelay = DelayRecorder()
+        defer { Task { await titleDelay.open() } }
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await titleDelay.wait()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("first ever title"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "first ever title")
+        XCTAssertEqual(metadataPublishCount, 1)
+        let delayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(delayCallCount, 0, "first title should not arm the coalescer")
+        try StateValidator.validate(store.state)
+    }
+
+    func testSubsequentGhosttyTitlesForPanelCoalesceAfterFirstImmediatePublish() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let titleDelay = DelayRecorder()
+        defer { Task { await titleDelay.open() } }
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await titleDelay.wait()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("first ever title"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "first ever title")
+        XCTAssertEqual(metadataPublishCount, 1)
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("spinner frame A"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("spinner frame B"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "first ever title")
+        XCTAssertEqual(metadataPublishCount, 1)
+        let armedDelayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(armedDelayCallCount, 1, "second and third titles should share one coalescer arming")
+
+        await titleDelay.open()
+        await settleMetadataTasks()
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "spinner frame B")
+        XCTAssertEqual(metadataPublishCount, 2)
+        try StateValidator.validate(store.state)
+    }
+
+    func testFirstGhosttyTitleForBackgroundPanelStaysThrottled() async throws {
+        let state = try makeTwoWorkspaceState()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let selection = try XCTUnwrap(store.state.selectedWorkspaceSelection())
+        let backgroundWorkspaceID = try XCTUnwrap(
+            selection.window.workspaceIDs.first { $0 != selection.workspaceID }
+        )
+        let backgroundWorkspace = try XCTUnwrap(store.state.workspacesByID[backgroundWorkspaceID])
+        let backgroundPanelID = try XCTUnwrap(backgroundWorkspace.focusedPanelID)
+        let originalTitle = try terminalState(panelID: backgroundPanelID, state: store.state).title
+        let titleDelay = DelayRecorder()
+        defer { Task { await titleDelay.open() } }
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await titleDelay.wait()
+            }
+        )
+        var metadataPublishCount = 0
+        let observerToken = store.addActionAppliedObserver { action, _, _ in
+            if case .updateTerminalPanelMetadata = action {
+                metadataPublishCount += 1
+            }
+        }
+        defer { store.removeActionAppliedObserver(observerToken) }
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("background first title"),
+                workspaceID: backgroundWorkspaceID,
+                panelID: backgroundPanelID,
+                state: store.state
+            )
+        )
+        await settleMetadataTasks()
+
+        XCTAssertEqual(
+            try terminalState(panelID: backgroundPanelID, state: store.state).title,
+            originalTitle,
+            "background first title should not publish immediately"
+        )
+        XCTAssertEqual(metadataPublishCount, 0)
+        let armedDelayCallCount = await titleDelay.callCount()
+        XCTAssertEqual(armedDelayCallCount, 1, "background first title should arm the coalescer")
+
+        await titleDelay.open()
+        await settleMetadataTasks()
+
+        XCTAssertEqual(
+            try terminalState(panelID: backgroundPanelID, state: store.state).title,
+            "background first title"
+        )
+        XCTAssertEqual(metadataPublishCount, 1)
+        try StateValidator.validate(store.state)
+    }
+
     func testTitleMetadataBurstPublishesOnlyLatestAfterQuietPeriod() async throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -1310,6 +1482,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await Task.yield()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1363,6 +1536,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await titleDelay.wait()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1437,6 +1611,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await titleDelay.wait()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
 
         for frame in 1...3 {
             XCTAssertTrue(
@@ -1476,6 +1651,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await Task.yield()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1519,6 +1695,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await Task.yield()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1567,6 +1744,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await Task.yield()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1610,6 +1788,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await Task.yield()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1657,6 +1836,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await Task.yield()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1728,7 +1908,11 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         let delayCallCount = await titleDelay.callCount()
         XCTAssertEqual(delayCallCount, 1)
-        XCTAssertEqual(try terminalState(panelID: backgroundPanelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(
+            try terminalState(panelID: backgroundPanelID, state: store.state).title,
+            "Terminal 1",
+            "inactive tab title-source panels should not publish their first title immediately"
+        )
         XCTAssertEqual(metadataPublishCount, 0)
 
         await titleDelay.open()
@@ -1766,6 +1950,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await titleDelay.wait()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: backgroundPanelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1829,6 +2014,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await titleDelay.wait()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: hiddenPanelID)
 
         for frame in 1...3 {
             XCTAssertTrue(
@@ -1873,6 +2059,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await Task.yield()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: firstPanelID)
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: secondPanelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
@@ -1922,6 +2110,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 await Task.yield()
             }
         )
+        service._markPanelPastFirstGhosttyTitleForTesting(panelID: panelID)
         var metadataPublishCount = 0
         let observerToken = store.addActionAppliedObserver { action, _, _ in
             if case .updateTerminalPanelMetadata = action {
