@@ -42,6 +42,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var closeTransitionViewportReplayTask: Task<Void, Never>?
     private var focusModeResizeTrace: FocusModeResizeTrace?
     private var diagnostics = SurfaceDiagnostics()
+    private var lastCompletedHostUpdateSignature: CompletedHostUpdateSignature?
 
     private let minimumSurfaceHostDimension = 48
     private let requiredStableSurfaceCreationPasses = 2
@@ -79,11 +80,21 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     }
 
     private struct PendingViewportUpdate {
-        let terminalState: TerminalPanelState
+        let hostState: TerminalPanelHostState
         let focused: Bool
         let fontPoints: Double
         let viewportSize: CGSize
         let backingScaleFactor: CGFloat
+        let attachment: PanelHostAttachmentToken
+    }
+
+    private struct CompletedHostUpdateSignature: Equatable {
+        let hostState: TerminalPanelHostState
+        let focused: Bool
+        let fontPoints: Double
+        let viewportSize: CGSize
+        let backingScaleFactor: CGFloat
+        let sourceContainerID: ObjectIdentifier
         let attachment: PanelHostAttachmentToken
     }
 
@@ -113,6 +124,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private struct SurfaceDiagnostics {
         var attachCount = 0
         var updateCount = 0
+        var skippedUnchangedUpdateCount = 0
         var surfaceAttemptCount = 0
         var surfaceSuccessCount = 0
         var surfaceFailureCount = 0
@@ -351,6 +363,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             self.pendingDetachAttachment = nil
             self.activeAttachment = nil
             self.activeSourceContainer = nil
+            #if TOASTTY_HAS_GHOSTTY_KIT
+            self.lastCompletedHostUpdateSignature = nil
+            #endif
             self.hostedView.removeFromSuperview()
             self.fallbackView.removeFromSuperview()
             ToasttyLog.debug(
@@ -365,7 +380,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     }
 
     func update(
-        terminalState: TerminalPanelState,
+        hostState: TerminalPanelHostState,
         focused: Bool,
         fontPoints: Double,
         viewportSize: CGSize,
@@ -384,8 +399,22 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         }
 
         #if TOASTTY_HAS_GHOSTTY_KIT
+        let updateSignature = CompletedHostUpdateSignature(
+            hostState: hostState,
+            focused: focused,
+            fontPoints: fontPoints,
+            viewportSize: viewportSize,
+            backingScaleFactor: backingScaleFactor,
+            sourceContainerID: ObjectIdentifier(sourceContainer),
+            attachment: attachment
+        )
+        if updateSignature == lastCompletedHostUpdateSignature {
+            diagnostics.skippedUnchangedUpdateCount += 1
+            return
+        }
+
         recordLatestViewportUpdate(
-            terminalState: terminalState,
+            hostState: hostState,
             focused: focused,
             fontPoints: fontPoints,
             viewportSize: viewportSize,
@@ -410,7 +439,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             return
         }
 
-        ensureGhosttySurface(terminalState: terminalState, fontPoints: fontPoints)
+        ensureGhosttySurface(hostState: hostState, fontPoints: fontPoints)
         guard let ghosttySurface else {
             // Keep the host visible while retrying Ghostty surface creation.
             if hostedView.isHidden { hostedView.isHidden = false }
@@ -418,7 +447,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             resetViewportResumeStability()
             lastPresentationSignature = nil
             terminalHostView.setGhosttySurface(nil)
-            fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty surface unavailable")
+            fallbackView.update(hostState: hostState, unavailableReason: "Ghostty surface unavailable")
             swapToFallbackIfNeeded()
             return
         }
@@ -633,8 +662,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
             requestImmediateSurfaceRefresh(ghosttySurface)
         }
+        lastCompletedHostUpdateSignature = updateSignature
         #else
-        fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
+        fallbackView.update(hostState: hostState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
         #endif
     }
 
@@ -672,6 +702,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastViewportDeferralReason = nil
         temporarilyHiddenForViewportDeferral = false
         lastAttachmentTransitionAt = nil
+        lastCompletedHostUpdateSignature = nil
         resetViewportResumeStability()
         lastPresentationSignature = nil
         latestViewportSourceContainer = nil
@@ -1058,7 +1089,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     #endif
 
     #if TOASTTY_HAS_GHOSTTY_KIT
-    private func ensureGhosttySurface(terminalState: TerminalPanelState, fontPoints: Double) {
+    private func ensureGhosttySurface(hostState: TerminalPanelHostState, fontPoints: Double) {
         guard ghosttySurface == nil else { return }
         guard let delegate else { return }
 
@@ -1126,9 +1157,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         // Launch the shell from a separate seed instead of the live cwd field.
         // Restored panes intentionally start with blank live cwd and wait for
         // runtime metadata to repopulate it authoritatively.
-        let requestedWorkingDirectory = terminalState.workingDirectorySeed
-        let isRestoredLaunch = terminalState.expectedProcessWorkingDirectory == nil &&
-            TerminalRuntimeRegistry.normalizedCWDValue(terminalState.launchWorkingDirectory) != nil
+        let requestedWorkingDirectory = hostState.workingDirectorySeed
+        let isRestoredLaunch = hostState.expectedProcessWorkingDirectory == nil &&
+            TerminalRuntimeRegistry.normalizedCWDValue(hostState.launchWorkingDirectory) != nil
         ToasttyLog.debug(
             "Determined terminal surface launch classification",
             category: .terminal,
@@ -1137,14 +1168,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 "is_restored_launch": isRestoredLaunch ? "true" : "false",
                 "requested_working_directory_sample": String(requestedWorkingDirectory.prefix(120)),
                 "launch_working_directory_present": TerminalRuntimeRegistry
-                    .normalizedCWDValue(terminalState.launchWorkingDirectory) == nil ? "false" : "true",
-                "launch_working_directory_sample": terminalState.launchWorkingDirectory.map {
+                    .normalizedCWDValue(hostState.launchWorkingDirectory) == nil ? "false" : "true",
+                "launch_working_directory_sample": hostState.launchWorkingDirectory.map {
                     String($0.prefix(120))
                 } ?? "none",
-                "expected_process_working_directory_present": terminalState.expectedProcessWorkingDirectory == nil
+                "expected_process_working_directory_present": hostState.expectedProcessWorkingDirectory == nil
                     ? "false"
                     : "true",
-                "expected_process_working_directory_sample": terminalState.expectedProcessWorkingDirectory.map {
+                "expected_process_working_directory_sample": hostState.expectedProcessWorkingDirectory.map {
                     String($0.prefix(120))
                 } ?? "none",
             ]
@@ -1358,6 +1389,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             "surface_factory_failed": diagnostics.surfaceFailureCount > 0 ? "true" : "false",
             "attach_count": String(diagnostics.attachCount),
             "update_count": String(diagnostics.updateCount),
+            "skipped_unchanged_update_count": String(diagnostics.skippedUnchangedUpdateCount),
             "surface_attempt_count": String(diagnostics.surfaceAttemptCount),
             "surface_success_count": String(diagnostics.surfaceSuccessCount),
             "surface_failure_count": String(diagnostics.surfaceFailureCount),
@@ -1775,7 +1807,7 @@ extension TerminalSurfaceController {
     }
 
     private func recordLatestViewportUpdate(
-        terminalState: TerminalPanelState,
+        hostState: TerminalPanelHostState,
         focused: Bool,
         fontPoints: Double,
         viewportSize: CGSize,
@@ -1785,7 +1817,7 @@ extension TerminalSurfaceController {
     ) {
         latestViewportSourceContainer = sourceContainer
         latestViewportUpdate = PendingViewportUpdate(
-            terminalState: terminalState,
+            hostState: hostState,
             focused: focused,
             fontPoints: fontPoints,
             viewportSize: viewportSize,
@@ -1866,7 +1898,7 @@ extension TerminalSurfaceController {
             ]
         )
         update(
-            terminalState: pendingViewportUpdate.terminalState,
+            hostState: pendingViewportUpdate.hostState,
             focused: pendingViewportUpdate.focused,
             fontPoints: pendingViewportUpdate.fontPoints,
             viewportSize: pendingViewportUpdate.viewportSize,
@@ -1936,8 +1968,8 @@ private final class TerminalFallbackView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(terminalState: TerminalPanelState, unavailableReason: String) {
-        subtitleLabel.stringValue = terminalState.cwd
+    func update(hostState: TerminalPanelHostState, unavailableReason: String) {
+        subtitleLabel.stringValue = hostState.cwd
         reasonLabel.stringValue = unavailableReason
     }
 }
