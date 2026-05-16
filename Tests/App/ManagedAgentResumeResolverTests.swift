@@ -75,6 +75,37 @@ struct ManagedAgentResumeResolverTests {
     }
 
     @Test
+    func resolveReturnsPiSessionLaunchForValidRestoredRecord() throws {
+        let fixture = try makeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let record = ManagedAgentResumeRecord(
+            agent: .pi,
+            nativeSessionID: "019e31af-e0ed-718b-a695-37afddc7e494",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let resolution = ManagedAgentResumeResolver.resolve(
+            panelID: UUID(),
+            terminalState: TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "",
+                resumeRecord: record
+            ),
+            launchReason: .restore
+        )
+
+        guard case .launch(let configuration) = resolution else {
+            Issue.record("expected resume launch configuration")
+            return
+        }
+        #expect(configuration.initialInput == "pi --session \(fixture.sessionFileURL.path)")
+        #expect(configuration.workingDirectoryOverride == fixture.cwdURL.path)
+    }
+
+    @Test
     func resolveUsesConfiguredAgentProfileWrapperForResumeCommand() throws {
         let fixture = try makeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -113,6 +144,49 @@ struct ManagedAgentResumeResolverTests {
         #expect(
             configuration.initialInput ==
                 "agent-safehouse --workdir=/tmp/repo /opt/homebrew/bin/codex resume 019e2823-f520-7690-91b6-cd84eb52dd8a --dangerously-bypass-approvals-and-sandbox"
+        )
+    }
+
+    @Test
+    func resolveUsesConfiguredPiProfileWrapperForSessionLaunch() throws {
+        let fixture = try makeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let record = ManagedAgentResumeRecord(
+            agent: .pi,
+            nativeSessionID: "019e31af-e0ed-718b-a695-37afddc7e494",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let resolution = ManagedAgentResumeResolver.resolve(
+            panelID: UUID(),
+            terminalState: TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "", resumeRecord: record),
+            launchReason: .restore,
+            agentCatalog: AgentCatalog(
+                profiles: [
+                    AgentProfile(
+                        id: "pi",
+                        displayName: "Pi",
+                        argv: [
+                            "agent-safehouse",
+                            "--workdir=/tmp/repo",
+                            "pi",
+                            "--thinking",
+                            "high",
+                        ]
+                    ),
+                ]
+            )
+        )
+
+        guard case .launch(let configuration) = resolution else {
+            Issue.record("expected resume launch configuration")
+            return
+        }
+        #expect(
+            configuration.initialInput ==
+                "agent-safehouse --workdir=/tmp/repo pi --session \(fixture.sessionFileURL.path) --thinking high"
         )
     }
 
@@ -184,8 +258,8 @@ struct ManagedAgentResumeResolverTests {
         let fixture = try makeResumeFixture(createSessionFile: false, createCWD: false)
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let record = ManagedAgentResumeRecord(
-            agent: .pi,
-            nativeSessionID: "pi-session",
+            agent: AgentKind(rawValue: "custom")!,
+            nativeSessionID: "custom-session",
             sessionFilePath: fixture.sessionFileURL.path,
             cwd: fixture.cwdURL.path,
             capturedAt: Date(timeIntervalSince1970: 1_700_000_000)

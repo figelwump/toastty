@@ -20,7 +20,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Saved workspace and window layout snapshots, including window-local sidebar
     widths, window-local terminal font overrides, window-local local-document
     text-size overrides, per-browser page zoom overrides, and managed agent
-    native-resume metadata for restored Codex and Claude panels. Native-resume
+    native-resume metadata for restored Codex, Claude, and Pi panels. Native-resume
     metadata can include the provider, provider-native session ID, provider
     session file path, working directory, and capture timestamp.
 - `~/.toastty/scratchpad-documents/`

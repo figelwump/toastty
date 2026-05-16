@@ -55,6 +55,60 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_TERMINAL_PROFILE_ID"])
     }
 
+    func testSurfaceLaunchConfigurationUsesValidPiResumeRecordForRestoredPanel() throws {
+        let fixture = try makeRuntimeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let record = ManagedAgentResumeRecord(
+            agent: .pi,
+            nativeSessionID: "019e31af-e0ed-718b-a695-37afddc7e494",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let store = AppStore(
+            state: makeRuntimeResumeState(
+                windowID: windowID,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                resumeRecord: record,
+                profileBinding: TerminalProfileBinding(profileID: "zmx")
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let profileProvider = makeRuntimeResumeProfileProvider()
+        let agentCatalogProvider = TestAgentCatalogProvider(
+            profiles: [
+                AgentProfile(
+                    id: "pi",
+                    displayName: "Pi",
+                    argv: ["agent-safehouse", "--workdir=/tmp/repo", "pi"]
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
+        registry.setAgentCatalogProvider(agentCatalogProvider)
+        registry.bind(store: store)
+
+        let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
+
+        XCTAssertEqual(
+            launchConfiguration.initialInput,
+            "agent-safehouse --workdir=/tmp/repo pi --session \(fixture.sessionFileURL.path)"
+        )
+        XCTAssertEqual(launchConfiguration.workingDirectoryOverride, fixture.cwdURL.path)
+        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_LAUNCH_REASON"], "restore")
+        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"], "pi")
+        XCTAssertEqual(
+            launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"],
+            "019e31af-e0ed-718b-a695-37afddc7e494"
+        )
+        XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_TERMINAL_PROFILE_ID"])
+    }
+
     func testSurfaceLaunchConfigurationClearsMissingSessionFileAndFallsBackToProfileStartup() throws {
         let fixture = try makeRuntimeResumeFixture(createSessionFile: false)
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }

@@ -303,6 +303,58 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func piNativeSessionEventMapsToResumeRecordUpdate() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"native_session","nativeSessionID":"019e31af-e0ed-718b-a695-37afddc7e494","sessionFilePath":"/tmp/pi sessions/session.jsonl","cwd":"/tmp/repo with spaces"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionUpdateResumeRecord(
+                sessionID: "sess-123",
+                panelID: panelID,
+                agent: .pi,
+                nativeSessionID: "019e31af-e0ed-718b-a695-37afddc7e494",
+                sessionFilePath: "/tmp/pi sessions/session.jsonl",
+                cwd: "/tmp/repo with spaces"
+            ),
+        ])
+    }
+
+    @Test
+    func piNativeSessionEventIgnoresIncompleteMetadata() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"native_session","nativeSessionID":"019e31af-e0ed-718b-a695-37afddc7e494","cwd":"/tmp/repo"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func piNativeSessionEventRequiresPanelID() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .piExtension,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"source":"pi-extension","version":1,"toasttySessionID":"sess-123","event":"native_session","nativeSessionID":"019e31af-e0ed-718b-a695-37afddc7e494","sessionFilePath":"/tmp/session.jsonl","cwd":"/tmp/repo"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
     func piAgentStartMapsToWorkingStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .piExtension,

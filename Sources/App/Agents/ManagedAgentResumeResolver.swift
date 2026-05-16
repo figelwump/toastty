@@ -64,6 +64,8 @@ private extension ManagedAgentResumeResolver {
             resumeArguments = ["resume", record.nativeSessionID]
         case .claude:
             resumeArguments = ["--resume", record.nativeSessionID]
+        case .pi:
+            resumeArguments = ["--session", record.sessionFilePath]
         default:
             return nil
         }

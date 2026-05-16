@@ -179,7 +179,8 @@ When the profile ID is `pi`, Toastty:
 2. **Preserves user extensions**. User-provided `--extension` / `-e` arguments remain in `argv`; Pi treats extensions as additive, so Toastty adds its extension alongside them.
 3. **Respects Pi extension opt-out flags**. If `--no-extensions` or `-ne` appears before `--`, Toastty does not inject its Pi extension for that launch.
 4. **Reports compact telemetry** through `toastty session ingest-agent-event --source pi-extension`, covering the submitted prompt, final assistant summary, semantic tool-call progress, tool errors, and changed-file paths when Pi exposes them. Successful tool results update changed-file metadata without replacing the sidebar with generic `Finished ...` messages.
-5. **Avoids prompt and tool-output forwarding**. The extension records bounded metadata only and is a no-op outside Toastty when required `TOASTTY_*` environment variables are absent.
+5. **Captures native resume metadata** from Pi's extension context, including the native session ID, session file path, and working directory.
+6. **Avoids prompt and tool-output forwarding**. The extension records bounded metadata only and is a no-op outside Toastty when required `TOASTTY_*` environment variables are absent.
 
 ## Launch flow
 
@@ -197,11 +198,13 @@ When the agent process exits and the session is stopped, Toastty cleans up Codex
 
 ### Restore and native resume
 
-For managed Codex and Claude launches, Toastty also watches for the provider's
-native session file and records the native session ID, session file path, working
-directory, and capture time in the workspace layout. When a restored terminal
+For managed Codex, Claude, and Pi launches, Toastty also records the provider's
+native session ID, session file path, working directory, and capture time in the
+workspace layout. Codex and Claude records are discovered from provider session
+files; Pi records come from the bundled Pi extension. When a restored terminal
 panel has a valid record, Toastty runs the provider resume command for that
-native session instead of starting a fresh profile command.
+native session instead of starting a fresh profile command. Pi resumes with
+`pi --session <session-file-path>`.
 
 Before resuming, Toastty validates that both the recorded session file and
 working directory still exist. If either is missing, Toastty clears the stale
