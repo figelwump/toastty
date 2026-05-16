@@ -18,6 +18,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let socketPathProvider: @Sendable () -> String
     private let readVisibleText: @MainActor (UUID) -> String?
     private let promptState: @MainActor (UUID) -> TerminalPromptState
+    private let nativeSessionObserverRegistry: any ManagedAgentNativeSessionObserving
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
 
@@ -29,7 +30,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         cliExecutablePathProvider: @escaping @Sendable () -> String?,
         socketPathProvider: @escaping @Sendable () -> String,
         readVisibleText: @escaping @MainActor (UUID) -> String?,
-        promptState: @escaping @MainActor (UUID) -> TerminalPromptState
+        promptState: @escaping @MainActor (UUID) -> TerminalPromptState,
+        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -39,6 +41,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.socketPathProvider = socketPathProvider
         self.readVisibleText = readVisibleText
         self.promptState = promptState
+        self.nativeSessionObserverRegistry = nativeSessionObserverRegistry
+            ?? ManagedAgentNativeSessionObserverRegistry(
+                store: store,
+                fileManager: fileManager,
+                nowProvider: nowProvider
+            )
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
@@ -63,7 +71,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             sessionID: sessionID,
             workingDirectory: resolvedCWD
         )
-        let now = nowProvider()
+        let launchStart = nowProvider()
 
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
@@ -74,14 +82,25 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             usesSessionStatusNotifications: true,
             cwd: resolvedCWD,
             repoRoot: repoRoot,
-            at: now
+            at: launchStart
         )
         sessionRuntimeStore.updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
-            at: now
+            at: launchStart
         )
         registerManagedArtifacts(preparedLaunch.artifacts, sessionID: sessionID)
+        if let resolvedCWD {
+            nativeSessionObserverRegistry.startObservation(
+                ManagedAgentNativeSessionObservationContext(
+                    managedSessionID: sessionID,
+                    agent: request.agent,
+                    panelID: target.panelID,
+                    cwd: resolvedCWD,
+                    launchStart: launchStart
+                )
+            )
+        }
 
         var environment = AgentLaunchInstrumentation.baselineEnvironment(for: request.agent)
         for (key, value) in preparedLaunch.environment {
@@ -115,6 +134,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         guard let sessionRuntimeStore else {
             return
         }
+        nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
         sessionRuntimeStore.stopSession(sessionID: sessionID, at: nowProvider())
         Task { @MainActor in
             await cleanupManagedArtifacts(for: sessionID)
@@ -270,6 +290,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             registry.activeSession(sessionID: sessionID) == nil
         }
         for sessionID in inactiveSessionIDs {
+            nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
             await cleanupManagedArtifacts(for: sessionID)
         }
     }

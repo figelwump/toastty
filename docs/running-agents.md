@@ -195,6 +195,21 @@ When you trigger an agent launch (menu click, top-bar button, command palette su
 
 When the agent process exits and the session is stopped, Toastty cleans up Codex and Pi launch artifacts immediately. Claude hook artifacts can remain after session stop so late hook invocations do not fail at the shell layer before they turn into no-op telemetry delivery.
 
+### Restore and native resume
+
+For managed Codex and Claude launches, Toastty also watches for the provider's
+native session file and records the native session ID, session file path, working
+directory, and capture time in the workspace layout. When a restored terminal
+panel has a valid record, Toastty runs the provider resume command for that
+native session instead of starting a fresh profile command.
+
+Before resuming, Toastty validates that both the recorded session file and
+working directory still exist. If either is missing, Toastty clears the stale
+record and falls back to normal terminal startup. If observation of a later
+launch times out or cannot safely disambiguate simultaneous same-agent,
+same-directory launches, Toastty leaves any existing record unchanged rather
+than replacing it with an uncertain session.
+
 ## Manual command shims
 
 Outside the Agent menu, Toastty can also track manual `codex`, `claude`, and `pi`

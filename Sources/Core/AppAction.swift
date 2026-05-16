@@ -92,6 +92,7 @@ public enum AppAction: Equatable, Sendable {
     case equalizeLayoutSplits(workspaceID: UUID)
     case createTerminalPanel(workspaceID: UUID, slotID: UUID)
     case updateTerminalPanelMetadata(panelID: UUID, title: String?, cwd: String?)
+    case updateTerminalPanelResumeRecord(panelID: UUID, resumeRecord: ManagedAgentResumeRecord?)
     case updateWebPanelMetadata(panelID: UUID, title: String?, url: String?)
     case updateScratchpadPanelState(panelID: UUID, scratchpad: ScratchpadState, title: String?)
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
@@ -213,6 +214,8 @@ public extension AppAction {
             return "createTerminalPanel"
         case .updateTerminalPanelMetadata:
             return "updateTerminalPanelMetadata"
+        case .updateTerminalPanelResumeRecord:
+            return "updateTerminalPanelResumeRecord"
         case .updateWebPanelMetadata:
             return "updateWebPanelMetadata"
         case .updateScratchpadPanelState:

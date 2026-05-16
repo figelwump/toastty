@@ -8,13 +8,16 @@ enum TerminalLaunchReason: String, Equatable, Sendable {
 struct TerminalSurfaceLaunchConfiguration: Equatable, Sendable {
     var environmentVariables: [String: String]
     var initialInput: String?
+    var workingDirectoryOverride: String?
 
     init(
         environmentVariables: [String: String] = [:],
-        initialInput: String? = nil
+        initialInput: String? = nil,
+        workingDirectoryOverride: String? = nil
     ) {
         self.environmentVariables = environmentVariables
         self.initialInput = initialInput
+        self.workingDirectoryOverride = workingDirectoryOverride
     }
 
     var normalizedInitialInput: String? {
@@ -25,7 +28,17 @@ struct TerminalSurfaceLaunchConfiguration: Equatable, Sendable {
     }
 
     var isEmpty: Bool {
-        environmentVariables.isEmpty && normalizedInitialInput == nil
+        environmentVariables.isEmpty && normalizedInitialInput == nil && normalizedWorkingDirectoryOverride == nil
+    }
+
+    var normalizedWorkingDirectoryOverride: String? {
+        guard let workingDirectoryOverride else { return nil }
+        let trimmed = workingDirectoryOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        let normalized = (expanded as NSString).standardizingPath
+        guard normalized.isEmpty == false else { return nil }
+        return normalized
     }
 
     static let empty = TerminalSurfaceLaunchConfiguration()

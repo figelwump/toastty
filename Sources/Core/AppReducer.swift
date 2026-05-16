@@ -470,7 +470,7 @@ public struct AppReducer {
                     id: sourceTabID,
                     customTitle: closedRecord.sourceTabCustomTitle,
                     layoutTree: .slot(slotID: closedRecord.sourceSlotID, panelID: panelID),
-                    panels: [panelID: closedRecord.panelState],
+                    panels: [panelID: panelStateForNewLivePanel(from: closedRecord.panelState)],
                     focusedPanelID: panelID
                 )
                 let insertionIndex = Self.reopenedTabInsertionIndex(for: closedRecord, in: workspace)
@@ -492,7 +492,7 @@ public struct AppReducer {
                 return false
             }
 
-            targetTab.panels[panelID] = closedRecord.panelState
+            targetTab.panels[panelID] = panelStateForNewLivePanel(from: closedRecord.panelState)
             guard splitLeaf(
                 slotID: targetSlotID,
                 in: &targetTab.layoutTree,
@@ -825,6 +825,20 @@ public struct AppReducer {
             }
 
             guard didMutate else { return false }
+            _ = workspace.updateTab(id: tabID) { tab in
+                tab.panels[panelID] = .terminal(terminalState)
+            }
+            commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
+            return true
+
+        case .updateTerminalPanelResumeRecord(let panelID, let resumeRecord):
+            guard let location = locatePanel(panelID, in: state) else { return false }
+            guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
+            guard let tabID = workspace.tabID(containingPanelID: panelID),
+                  case .terminal(var terminalState) = workspace.tab(id: tabID)?.panels[panelID] else { return false }
+            guard terminalState.resumeRecord != resumeRecord else { return false }
+
+            terminalState.resumeRecord = resumeRecord
             _ = workspace.updateTab(id: tabID) { tab in
                 tab.panels[panelID] = .terminal(terminalState)
             }
@@ -2002,6 +2016,16 @@ public struct AppReducer {
             merged.removeFirst(merged.count - 10)
         }
         return merged
+    }
+
+    private static func panelStateForNewLivePanel(from panelState: PanelState) -> PanelState {
+        switch panelState {
+        case .terminal(var terminalState):
+            terminalState.resumeRecord = nil
+            return .terminal(terminalState)
+        case .web:
+            return panelState
+        }
     }
 
     @discardableResult

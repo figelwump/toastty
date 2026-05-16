@@ -485,6 +485,13 @@ struct WorkspaceLayoutSnapshotTests {
         let panelID = UUID()
         let slotID = UUID()
         let binding = TerminalProfileBinding(profileID: "zmx")
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .claude,
+            nativeSessionID: "db4f311b-12d0-4f61-ba81-0ae44ed10492",
+            sessionFilePath: "/tmp/claude-session.jsonl",
+            cwd: "/tmp/profiled",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_001)
+        )
         let workspace = WorkspaceState(
             id: workspaceID,
             title: "Profiled",
@@ -495,7 +502,8 @@ struct WorkspaceLayoutSnapshotTests {
                         title: "Terminal 1",
                         shell: "zsh",
                         cwd: "/tmp/profiled",
-                        profileBinding: binding
+                        profileBinding: binding,
+                        resumeRecord: resumeRecord
                     )
                 ),
             ],
@@ -525,6 +533,7 @@ struct WorkspaceLayoutSnapshotTests {
             return
         }
         #expect(restoredTerminalState.profileBinding == binding)
+        #expect(restoredTerminalState.resumeRecord == resumeRecord)
         #expect(restoredWorkspace.focusedPanelID == panelID)
     }
 
@@ -761,6 +770,28 @@ struct WorkspaceLayoutSnapshotTests {
         let binding = try #require(json["profileBinding"] as? [String: String])
 
         #expect(binding["profileID"] == "zmx")
+    }
+
+    @Test
+    func terminalSnapshotEncodesResumeRecordWhenPresent() throws {
+        let snapshot = WorkspaceLayoutTerminalPanelSnapshot(
+            shell: "zsh",
+            launchWorkingDirectory: "/tmp/compat",
+            resumeRecord: ManagedAgentResumeRecord(
+                agent: .codex,
+                nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+                sessionFilePath: "/tmp/codex-session.jsonl",
+                cwd: "/tmp/compat",
+                capturedAt: Date(timeIntervalSince1970: 1_700_000_002)
+            )
+        )
+
+        let encoded = try JSONEncoder().encode(snapshot)
+        let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let record = try #require(json["resumeRecord"] as? [String: Any])
+
+        #expect(record["agent"] as? String == "codex")
+        #expect(record["nativeSessionID"] as? String == "019e2823-f520-7690-91b6-cd84eb52dd8a")
     }
 
     @Test

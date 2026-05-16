@@ -68,6 +68,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     private weak var terminalProfileProvider: (any TerminalProfileProviding)?
+    private weak var agentCatalogProvider: (any AgentCatalogProviding)?
     private var stateObservation: AnyCancellable?
     private var observedWindowFontPointsByID: [UUID: Double] = [:]
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
@@ -175,6 +176,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
         self.terminalProfileProvider = terminalProfileProvider
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDs
         profiledTerminalPanelIDsAwaitingStartupTitleCleanup = restoredTerminalPanelIDs
+    }
+
+    func setAgentCatalogProvider(_ agentCatalogProvider: any AgentCatalogProviding) {
+        self.agentCatalogProvider = agentCatalogProvider
     }
 
     func setBaseLaunchEnvironmentProvider(
@@ -1418,6 +1423,39 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
               let workspace = store.state.workspacesByID[workspaceID],
               case .terminal(let terminalState)? = workspace.panelState(for: panelID) else {
             return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
+        }
+
+        let launchReason = launchReason(for: panelID)
+        switch ManagedAgentResumeResolver.resolve(
+            panelID: panelID,
+            terminalState: terminalState,
+            launchReason: launchReason,
+            baseEnvironmentVariables: baseEnvironmentVariables,
+            agentCatalog: agentCatalogProvider?.catalog ?? .empty
+        ) {
+        case .none:
+            break
+        case .clearRecord(let reason):
+            ToasttyLog.warning(
+                "Launching restored pane without managed agent resume because the stored record is invalid",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "reason": reason.rawValue,
+                    "agent": terminalState.resumeRecord?.agent.rawValue ?? "none",
+                ]
+            )
+            _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
+        case .launch(let configuration):
+            ToasttyLog.info(
+                "Launching restored pane with managed agent native resume",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "agent": terminalState.resumeRecord?.agent.rawValue ?? "none",
+                ]
+            )
+            return configuration
         }
 
         let catalog = terminalProfileProvider?.catalog ?? .empty
