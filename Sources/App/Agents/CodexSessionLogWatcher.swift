@@ -3,6 +3,7 @@ import Foundation
 
 struct CodexSessionLogEvent: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
+        case sessionConfigured
         case turnStarted
         case historyUpdated
         case approvalNeeded
@@ -14,17 +15,23 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     let detail: String
     let rootInputFingerprint: String?
     let rootThreadID: String?
+    let nativeSessionID: String?
+    let nativeSessionFilePath: String?
 
     init(
         kind: Kind,
         detail: String,
         rootInputFingerprint: String? = nil,
-        rootThreadID: String? = nil
+        rootThreadID: String? = nil,
+        nativeSessionID: String? = nil,
+        nativeSessionFilePath: String? = nil
     ) {
         self.kind = kind
         self.detail = detail
         self.rootInputFingerprint = rootInputFingerprint
         self.rootThreadID = rootThreadID
+        self.nativeSessionID = nativeSessionID
+        self.nativeSessionFilePath = nativeSessionFilePath
     }
 }
 
@@ -265,6 +272,23 @@ private extension CodexSessionLogWatcher {
         }
 
         switch type {
+        case "session_configured":
+            guard let sessionID = normalizedString(message["session_id"]),
+                  let threadID = normalizedString(message["thread_id"]) ?? normalizedString(message["session_id"]),
+                  sessionID == threadID else {
+                return nil
+            }
+
+            let rolloutPath = nonEmptyString(message["rollout_path"])
+            let dedupeKey = "session_configured:\(fallbackLine)"
+            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            return CodexSessionLogEvent(
+                kind: .sessionConfigured,
+                detail: "Codex session configured",
+                nativeSessionID: threadID,
+                nativeSessionFilePath: rolloutPath
+            )
+
         case "user_message":
             let dedupeKey = "user_message:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }

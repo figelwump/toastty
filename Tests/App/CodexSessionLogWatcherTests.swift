@@ -188,6 +188,53 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertTrue(events.isEmpty)
     }
 
+    func testWatcherParsesSessionConfiguredEventsAsNativeSessionUpdates() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"019e316e-9f7f-7a33-aad9-33fe27b0f2cd","thread_id":"019e316e-9f7f-7a33-aad9-33fe27b0f2cd","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-019e316e-9f7f-7a33-aad9-33fe27b0f2cd.jsonl"}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .sessionConfigured,
+                detail: "Codex session configured",
+                nativeSessionID: "019e316e-9f7f-7a33-aad9-33fe27b0f2cd",
+                nativeSessionFilePath: "/tmp/codex-sessions/rollout-019e316e-9f7f-7a33-aad9-33fe27b0f2cd.jsonl"
+            )
+        ])
+    }
+
+    func testWatcherIgnoresSessionConfiguredEventsForInheritedSubagentSessions() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"019e316e-9f7f-7a33-aad9-33fe27b0f2cd","thread_id":"019e316f-175b-7157-a634-765b1580294f","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-019e316f-175b-7157-a634-765b1580294f.jsonl"}}}
+                """,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherAllowsRepeatedSessionConfiguredEventsForSameThreadAcrossResumeSwitches() async throws {
+        let threadB = "019e316e-9f7f-7a33-aad9-33fe27b0f2cd"
+        let threadC = "019e316f-175b-7157-a634-765b1580294f"
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-05-16T10:00:00.000Z","dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadB)","thread_id":"\(threadB)","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-\(threadB).jsonl"}}}
+                {"ts":"2026-05-16T10:01:00.000Z","dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadC)","thread_id":"\(threadC)","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-\(threadC).jsonl"}}}
+                {"ts":"2026-05-16T10:02:00.000Z","dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadB)","thread_id":"\(threadB)","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-\(threadB).jsonl"}}}
+                """,
+            expectedCount: 3
+        )
+
+        XCTAssertEqual(events.map(\.nativeSessionID), [threadB, threadC, threadB])
+    }
+
     func testWatcherFlushesFinalBufferedLineOnStop() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
