@@ -82,7 +82,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         nowProvider: @escaping @Sendable () -> Date = Date.init
     ) {
         self.init(
-            scanner: ManagedAgentNativeSessionFileScanner(),
+            scanner: ManagedAgentNativeSessionFileScanner(nowProvider: nowProvider),
             nowProvider: nowProvider,
             recordHandler: { [weak store] panelID, record in
                 _ = store?.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: record))
@@ -261,25 +261,39 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
 
 actor ManagedAgentNativeSessionFileScanner: ManagedAgentNativeSessionScanning {
     private let codexSessionsDirectory: URL
+    private let codexShellSnapshotsDirectory: URL
     private let claudeProjectsDirectory: URL
+    private let nowProvider: @Sendable () -> Date
 
     init(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        nowProvider: @escaping @Sendable () -> Date = Date.init
     ) {
         codexSessionsDirectory = homeDirectory
             .appendingPathComponent(".codex", isDirectory: true)
             .appendingPathComponent("sessions", isDirectory: true)
+        codexShellSnapshotsDirectory = homeDirectory
+            .appendingPathComponent(".codex", isDirectory: true)
+            .appendingPathComponent("shell_snapshots", isDirectory: true)
         claudeProjectsDirectory = homeDirectory
             .appendingPathComponent(".claude", isDirectory: true)
             .appendingPathComponent("projects", isDirectory: true)
+        self.nowProvider = nowProvider
     }
 
     init(
         codexSessionsDirectory: URL,
-        claudeProjectsDirectory: URL
+        claudeProjectsDirectory: URL,
+        codexShellSnapshotsDirectory: URL? = nil,
+        nowProvider: @escaping @Sendable () -> Date = Date.init
     ) {
         self.codexSessionsDirectory = codexSessionsDirectory
+        self.codexShellSnapshotsDirectory = codexShellSnapshotsDirectory
+            ?? codexSessionsDirectory
+                .deletingLastPathComponent()
+                .appendingPathComponent("shell_snapshots", isDirectory: true)
         self.claudeProjectsDirectory = claudeProjectsDirectory
+        self.nowProvider = nowProvider
     }
 
     func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate] {
@@ -295,11 +309,26 @@ actor ManagedAgentNativeSessionFileScanner: ManagedAgentNativeSessionScanning {
 }
 
 private extension ManagedAgentNativeSessionFileScanner {
+    static let codexSnapshotLaunchTolerance: TimeInterval = 2
+    static let codexSnapshotCaptureWindow: TimeInterval = 30
+    static let codexNativeSessionIDPattern = try! NSRegularExpression(
+        pattern: #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#
+    )
+
     func codexCandidates(for observation: ManagedAgentNativeSessionObservationContext) -> [ManagedAgentNativeSessionCandidate] {
-        jsonlFiles(
+        let snapshotCandidates = codexShellSnapshotCandidates(for: observation)
+        if snapshotCandidates.isEmpty == false {
+            return deduplicatedCandidates(snapshotCandidates)
+        }
+
+        guard nowProvider() >= observation.launchStart.addingTimeInterval(Self.codexSnapshotCaptureWindow) else {
+            return []
+        }
+
+        let sessionCandidates = jsonlFiles(
             under: codexSessionsDirectory,
             modifiedAtOrAfter: observation.launchStart
-        ).compactMap { fileURL in
+        ).compactMap { fileURL -> ManagedAgentNativeSessionCandidate? in
             guard let metadata = codexSessionMetadata(from: fileURL),
                   metadata.cwd == observation.cwd else {
                 return nil
@@ -312,6 +341,7 @@ private extension ManagedAgentNativeSessionFileScanner {
                 updatedAt: metadata.updatedAt
             )
         }
+        return deduplicatedCandidates(sessionCandidates)
     }
 
     func claudeCandidates(for observation: ManagedAgentNativeSessionObservationContext) -> [ManagedAgentNativeSessionCandidate] {
@@ -320,7 +350,7 @@ private extension ManagedAgentNativeSessionFileScanner {
         return jsonlFiles(
             under: projectDirectoryURL,
             modifiedAtOrAfter: observation.launchStart
-        ).compactMap { fileURL in
+        ).compactMap { fileURL -> ManagedAgentNativeSessionCandidate? in
             guard let metadata = claudeSessionMetadata(from: fileURL, cwd: observation.cwd) else {
                 return nil
             }
@@ -334,24 +364,176 @@ private extension ManagedAgentNativeSessionFileScanner {
         }
     }
 
+    func codexShellSnapshotCandidates(
+        for observation: ManagedAgentNativeSessionObservationContext
+    ) -> [ManagedAgentNativeSessionCandidate] {
+        codexShellSnapshotFiles(for: observation).flatMap { snapshotURL -> [ManagedAgentNativeSessionCandidate] in
+            guard let nativeSessionID = codexNativeSessionID(fromShellSnapshotURL: snapshotURL),
+                  codexShellSnapshot(snapshotURL, matches: observation),
+                  let updatedAt = contentUpdatedAt(snapshotURL) else {
+                return []
+            }
+            return codexSessionMetadataMatching(sessionID: nativeSessionID).map { metadata in
+                ManagedAgentNativeSessionCandidate(
+                    agent: .codex,
+                    nativeSessionID: metadata.sessionID,
+                    sessionFilePath: metadata.sessionFilePath,
+                    cwd: observation.cwd,
+                    updatedAt: updatedAt
+                )
+            }
+        }
+    }
+
+    func codexShellSnapshotFiles(for observation: ManagedAgentNativeSessionObservationContext) -> [URL] {
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: codexShellSnapshotsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        )) ?? []
+        guard urls.isEmpty == false else {
+            return []
+        }
+
+        let lowerBound = observation.launchStart.addingTimeInterval(-Self.codexSnapshotLaunchTolerance)
+        let upperBound = observation.launchStart.addingTimeInterval(Self.codexSnapshotCaptureWindow)
+
+        return urls
+            .filter { fileURL in
+                guard fileURL.pathExtension == "sh",
+                      codexNativeSessionID(fromShellSnapshotURL: fileURL) != nil,
+                      let updatedAt = contentUpdatedAt(fileURL),
+                      updatedAt >= lowerBound,
+                      updatedAt <= upperBound else {
+                    return false
+                }
+                return true
+            }
+            .sorted { lhs, rhs in
+                (contentUpdatedAt(lhs) ?? .distantPast) < (contentUpdatedAt(rhs) ?? .distantPast)
+            }
+    }
+
+    func codexNativeSessionID(fromShellSnapshotURL fileURL: URL) -> String? {
+        let filename = fileURL.lastPathComponent
+        guard filename.hasSuffix(".sh") else { return nil }
+
+        let stem = String(filename.dropLast(3))
+        let parts = stem.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              parts[1].isEmpty == false,
+              parts[1].allSatisfy(\.isNumber) else {
+            return nil
+        }
+
+        let sessionID = String(parts[0])
+        let range = NSRange(sessionID.startIndex..<sessionID.endIndex, in: sessionID)
+        guard Self.codexNativeSessionIDPattern.firstMatch(in: sessionID, options: [], range: range) != nil else {
+            return nil
+        }
+        return sessionID.lowercased()
+    }
+
+    func codexShellSnapshot(_ fileURL: URL, matches observation: ManagedAgentNativeSessionObservationContext) -> Bool {
+        guard let snapshotSessionID = shellSnapshotExportValue("TOASTTY_SESSION_ID", from: fileURL),
+              snapshotSessionID == observation.managedSessionID,
+              let snapshotPanelID = shellSnapshotExportValue("TOASTTY_PANEL_ID", from: fileURL),
+              snapshotPanelID.caseInsensitiveCompare(observation.panelID.uuidString) == .orderedSame else {
+            return false
+        }
+        return true
+    }
+
+    func shellSnapshotExportValue(_ key: String, from fileURL: URL) -> String? {
+        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            return nil
+        }
+        let prefix = "export \(key)="
+        for line in content.split(separator: "\n", omittingEmptySubsequences: false) {
+            guard line.hasPrefix(prefix) else { continue }
+            return String(line.dropFirst(prefix.count))
+        }
+        return nil
+    }
+
+    func codexSessionMetadataMatching(sessionID: String) -> [(sessionID: String, sessionFilePath: String, cwd: String)] {
+        guard let normalizedSessionID = normalizedNonEmpty(sessionID)?.lowercased() else {
+            return []
+        }
+        return jsonlFiles(under: codexSessionsDirectory, filenameContaining: normalizedSessionID)
+            .compactMap { fileURL -> (sessionID: String, sessionFilePath: String, cwd: String)? in
+                guard let metadata = codexSessionMetadata(from: fileURL),
+                      metadata.sessionID.lowercased() == normalizedSessionID else {
+                    return nil
+                }
+                return (
+                    sessionID: metadata.sessionID,
+                    sessionFilePath: fileURL.path,
+                    cwd: metadata.cwd
+                )
+            }
+    }
+
+    func deduplicatedCandidates(
+        _ candidates: [ManagedAgentNativeSessionCandidate]
+    ) -> [ManagedAgentNativeSessionCandidate] {
+        var seenClaimKeys = Set<String>()
+        var result: [ManagedAgentNativeSessionCandidate] = []
+        for candidate in candidates.sorted(by: { lhs, rhs in
+            if lhs.updatedAt == rhs.updatedAt {
+                return lhs.sessionFilePath < rhs.sessionFilePath
+            }
+            return lhs.updatedAt < rhs.updatedAt
+        }) {
+            guard seenClaimKeys.insert(candidate.claimKey).inserted else { continue }
+            result.append(candidate)
+        }
+        return result
+    }
+
     func jsonlFiles(under directoryURL: URL, modifiedAtOrAfter launchStart: Date) -> [URL] {
+        jsonlFiles(under: directoryURL).filter { fileURL in
+            guard let updatedAt = contentUpdatedAt(fileURL) else {
+                return false
+            }
+            return updatedAt >= launchStart
+        }
+    }
+
+    func jsonlFiles(under directoryURL: URL) -> [URL] {
         guard let enumerator = FileManager.default.enumerator(atPath: directoryURL.path) else {
             return []
         }
 
         var urls: [URL] = []
         for case let relativePath as String in enumerator {
-            guard relativePath.hasSuffix(".jsonl") else { continue }
-            let fileURL = directoryURL.appendingPathComponent(relativePath, isDirectory: false)
-            guard let updatedAt = contentUpdatedAt(fileURL),
-                  updatedAt >= launchStart else {
+            guard relativePath.hasSuffix(".jsonl") else {
                 continue
             }
-            urls.append(fileURL)
+            urls.append(directoryURL.appendingPathComponent(relativePath, isDirectory: false))
         }
         return urls.sorted { lhs, rhs in
             (contentUpdatedAt(lhs) ?? .distantPast) < (contentUpdatedAt(rhs) ?? .distantPast)
         }
+    }
+
+    func jsonlFiles(under directoryURL: URL, filenameContaining needle: String) -> [URL] {
+        let normalizedNeedle = needle.lowercased()
+        guard normalizedNeedle.isEmpty == false,
+              let enumerator = FileManager.default.enumerator(atPath: directoryURL.path) else {
+            return []
+        }
+
+        var urls: [URL] = []
+        for case let relativePath as String in enumerator {
+            let filename = (relativePath as NSString).lastPathComponent.lowercased()
+            guard filename.hasSuffix(".jsonl"),
+                  filename.contains(normalizedNeedle) else {
+                continue
+            }
+            urls.append(directoryURL.appendingPathComponent(relativePath, isDirectory: false))
+        }
+        return urls.sorted { $0.path < $1.path }
     }
 
     func codexSessionMetadata(from fileURL: URL) -> (sessionID: String, cwd: String, updatedAt: Date)? {
