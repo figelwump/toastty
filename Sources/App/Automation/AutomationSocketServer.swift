@@ -1299,6 +1299,50 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.update_resume_record":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try event.requiredPanelID()
+            let activeSession = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            guard let agentRaw = normalizedOptionalText(event.payload.string("agent")),
+                  let agent = AgentKind(rawValue: agentRaw) else {
+                throw AutomationSocketError.invalidPayload("agent must be a lowercase agent ID")
+            }
+            guard agent == activeSession.agent else {
+                throw AutomationSocketError.invalidPayload("agent does not match active session")
+            }
+            guard let nativeSessionID = normalizedOptionalText(event.payload.string("nativeSessionID")) else {
+                throw AutomationSocketError.invalidPayload("nativeSessionID is required")
+            }
+            guard let sessionFilePath = normalizedOptionalText(event.payload.string("sessionFilePath")) else {
+                throw AutomationSocketError.invalidPayload("sessionFilePath is required")
+            }
+            guard let cwd = normalizedOptionalText(event.payload.string("cwd")) else {
+                throw AutomationSocketError.invalidPayload("cwd is required")
+            }
+
+            let didMutate = store.send(.updateTerminalPanelResumeRecord(
+                panelID: activeSession.panelID,
+                resumeRecord: ManagedAgentResumeRecord(
+                    agent: agent,
+                    nativeSessionID: nativeSessionID,
+                    sessionFilePath: sessionFilePath,
+                    cwd: cwd,
+                    capturedAt: now
+                )
+            ))
+            if didMutate {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.stop":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")

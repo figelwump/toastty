@@ -1579,6 +1579,10 @@ final class TerminalMetadataService {
             exitCode: exitCode,
             at: now
         )
+        // Ghostty's command-finished signal is emitted when the shell's
+        // foreground command returns. For managed launches, that foreground
+        // command is the agent process itself, not the agent's internal tools.
+        clearManagedAgentResumeRecordIfNeeded(panelID: panelID)
 
         guard prefersNativeCWDSignal(panelID: panelID) == false else {
             return true
@@ -1593,6 +1597,34 @@ final class TerminalMetadataService {
             return true
         }
         return true
+    }
+
+    private func clearManagedAgentResumeRecordIfNeeded(panelID: UUID) {
+        let state = store.state
+        guard let workspaceID = state.workspacesByID.first(where: { entry in
+            entry.value.panelState(for: panelID) != nil
+        })?.key else {
+            return
+        }
+        guard let workspace = state.workspacesByID[workspaceID],
+              let panelState = workspace.panelState(for: panelID),
+              case .terminal(let terminalState) = panelState,
+              terminalState.resumeRecord != nil else {
+            return
+        }
+
+        let didClear = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
+        if didClear {
+            ToasttyLog.info(
+                "Cleared managed agent native resume record because terminal command finished",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "agent": terminalState.resumeRecord?.agent.rawValue ?? "unknown",
+                ]
+            )
+        }
     }
 
     private func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {

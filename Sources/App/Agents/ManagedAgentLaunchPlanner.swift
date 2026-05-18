@@ -18,6 +18,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let socketPathProvider: @Sendable () -> String
     private let readVisibleText: @MainActor (UUID) -> String?
     private let promptState: @MainActor (UUID) -> TerminalPromptState
+    private let nativeSessionObserverRegistry: any ManagedAgentNativeSessionObserving
+    private let codexResumeResolver: any CodexManagedSessionResolving
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
 
@@ -29,7 +31,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         cliExecutablePathProvider: @escaping @Sendable () -> String?,
         socketPathProvider: @escaping @Sendable () -> String,
         readVisibleText: @escaping @MainActor (UUID) -> String?,
-        promptState: @escaping @MainActor (UUID) -> TerminalPromptState
+        promptState: @escaping @MainActor (UUID) -> TerminalPromptState,
+        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
+        codexResumeResolver: (any CodexManagedSessionResolving)? = nil
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -39,6 +43,13 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.socketPathProvider = socketPathProvider
         self.readVisibleText = readVisibleText
         self.promptState = promptState
+        self.nativeSessionObserverRegistry = nativeSessionObserverRegistry
+            ?? ManagedAgentNativeSessionObserverRegistry(
+                store: store,
+                fileManager: fileManager,
+                nowProvider: nowProvider
+            )
+        self.codexResumeResolver = codexResumeResolver ?? CodexManagedSessionResolver()
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
@@ -63,7 +74,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             sessionID: sessionID,
             workingDirectory: resolvedCWD
         )
-        let now = nowProvider()
+        let launchStart = nowProvider()
 
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
@@ -74,14 +85,25 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             usesSessionStatusNotifications: true,
             cwd: resolvedCWD,
             repoRoot: repoRoot,
-            at: now
+            at: launchStart
         )
         sessionRuntimeStore.updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
-            at: now
+            at: launchStart
         )
         registerManagedArtifacts(preparedLaunch.artifacts, sessionID: sessionID)
+        if let resolvedCWD {
+            nativeSessionObserverRegistry.startObservation(
+                ManagedAgentNativeSessionObservationContext(
+                    managedSessionID: sessionID,
+                    agent: request.agent,
+                    panelID: target.panelID,
+                    cwd: resolvedCWD,
+                    launchStart: launchStart
+                )
+            )
+        }
 
         var environment = AgentLaunchInstrumentation.baselineEnvironment(for: request.agent)
         for (key, value) in preparedLaunch.environment {
@@ -115,6 +137,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         guard let sessionRuntimeStore else {
             return
         }
+        nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
         sessionRuntimeStore.stopSession(sessionID: sessionID, at: nowProvider())
         Task { @MainActor in
             await cleanupManagedArtifacts(for: sessionID)
@@ -133,7 +156,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         guard let workspace = state.workspacesByID[location.workspaceID] else {
             throw AgentLaunchError.workspaceDoesNotExist
         }
-        guard case .terminal(let terminalState)? = workspace.panels[panelID] else {
+        guard case .terminal(let terminalState)? = workspace.panelState(for: panelID) else {
             throw AgentLaunchError.panelIsNotTerminal
         }
         return ManagedLaunchTarget(
@@ -209,60 +232,122 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private func makeCodexSessionLogWatcher(sessionID: String, logURL: URL) -> CodexSessionLogWatcher {
         // TODO: Remove this watcher once Codex exposes stable start/approval hooks.
         CodexSessionLogWatcher(logURL: logURL) { [weak self] event in
-            await MainActor.run {
-                guard let self, let sessionRuntimeStore = self.sessionRuntimeStore else {
-                    return
-                }
+            guard let self else { return }
+            if event.kind == .sessionConfigured {
+                await self.handleCodexSessionConfiguredEvent(event, sessionID: sessionID)
+                return
+            }
+            await self.handleCodexSessionStatusEvent(event, sessionID: sessionID)
+        }
+    }
 
-                let status: SessionStatus
-                switch event.kind {
-                case .turnStarted:
-                    if let rootInputFingerprint = event.rootInputFingerprint {
-                        sessionRuntimeStore.recordCodexRootTurnInput(
-                            sessionID: sessionID,
-                            fingerprint: rootInputFingerprint,
-                            threadID: event.rootThreadID
-                        )
-                    }
-                    status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
-                case .historyUpdated:
-                    guard let panelID = sessionRuntimeStore
-                        .sessionRegistry
-                        .activeSession(sessionID: sessionID)?
-                        .panelID,
-                          let visibleText = self.readVisibleText(panelID) else {
-                        return
-                    }
-                    _ = sessionRuntimeStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
-                        panelID: panelID,
-                        visibleText: visibleText,
-                        promptState: self.promptState(panelID),
-                        at: self.nowProvider()
-                    )
-                    return
-                case .approvalNeeded:
-                    status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: event.detail)
-                case .taskCompleted:
-                    status = SessionStatus(kind: .ready, summary: "Ready", detail: event.detail)
-                case .turnAborted:
-                    guard let currentKind = sessionRuntimeStore
-                        .sessionRegistry
-                        .activeSession(sessionID: sessionID)?
-                        .status?
-                        .kind,
-                          currentKind == .working || currentKind == .needsApproval else {
-                        return
-                    }
-                    status = SessionStatus(kind: .idle, summary: "Waiting", detail: event.detail)
-                }
+    private func handleCodexSessionConfiguredEvent(
+        _ event: CodexSessionLogEvent,
+        sessionID: String
+    ) async {
+        guard let store,
+              let sessionRuntimeStore,
+              let nativeSessionID = event.nativeSessionID,
+              let activeSession = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID),
+              let cwd = normalizedNonEmpty(activeSession.cwd) else {
+            return
+        }
 
-                sessionRuntimeStore.updateStatus(
+        guard let record = await codexResumeResolver.resumeRecord(
+            threadID: nativeSessionID,
+            rolloutPath: event.nativeSessionFilePath,
+            expectedCWD: cwd,
+            capturedAt: nowProvider()
+        ) else {
+            ToasttyLog.debug(
+                "Codex session_configured event did not match a resumable native session",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "native_session_id": nativeSessionID,
+                    "native_session_file": event.nativeSessionFilePath ?? "none",
+                ]
+            )
+            return
+        }
+        guard let currentActiveSession = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID),
+              normalizedNonEmpty(currentActiveSession.cwd) == cwd else {
+            return
+        }
+
+        nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
+        let didUpdate = store.send(
+            .updateTerminalPanelResumeRecord(panelID: currentActiveSession.panelID, resumeRecord: record)
+        )
+        guard didUpdate else { return }
+        ToasttyLog.info(
+            "Captured Codex native resume record from session log",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "panel_id": currentActiveSession.panelID.uuidString,
+                "native_session_id": record.nativeSessionID,
+            ]
+        )
+    }
+
+    private func handleCodexSessionStatusEvent(
+        _ event: CodexSessionLogEvent,
+        sessionID: String
+    ) {
+        guard let sessionRuntimeStore else {
+            return
+        }
+
+        let status: SessionStatus
+        switch event.kind {
+        case .sessionConfigured:
+            return
+        case .turnStarted:
+            if let rootInputFingerprint = event.rootInputFingerprint {
+                sessionRuntimeStore.recordCodexRootTurnInput(
                     sessionID: sessionID,
-                    status: status,
-                    at: self.nowProvider()
+                    fingerprint: rootInputFingerprint,
+                    threadID: event.rootThreadID
                 )
             }
+            status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
+        case .historyUpdated:
+            guard let panelID = sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .panelID,
+                  let visibleText = readVisibleText(panelID) else {
+                return
+            }
+            _ = sessionRuntimeStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+                panelID: panelID,
+                visibleText: visibleText,
+                promptState: promptState(panelID),
+                at: nowProvider()
+            )
+            return
+        case .approvalNeeded:
+            status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: event.detail)
+        case .taskCompleted:
+            status = SessionStatus(kind: .ready, summary: "Ready", detail: event.detail)
+        case .turnAborted:
+            guard let currentKind = sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .status?
+                .kind,
+                  currentKind == .working || currentKind == .needsApproval else {
+                return
+            }
+            status = SessionStatus(kind: .idle, summary: "Waiting", detail: event.detail)
         }
+
+        sessionRuntimeStore.updateStatus(
+            sessionID: sessionID,
+            status: status,
+            at: nowProvider()
+        )
     }
 
     private func cleanupManagedArtifacts(forInactiveSessionsIn registry: SessionRegistry) async {
@@ -270,6 +355,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             registry.activeSession(sessionID: sessionID) == nil
         }
         for sessionID in inactiveSessionIDs {
+            nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
             await cleanupManagedArtifacts(for: sessionID)
         }
     }
@@ -299,7 +385,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                if workspace.panels[panelID] != nil {
+                if workspace.panelState(for: panelID) != nil {
                     return (window.id, workspaceID)
                 }
             }

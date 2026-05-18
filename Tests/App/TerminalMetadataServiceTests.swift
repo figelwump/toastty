@@ -2176,6 +2176,57 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testCommandFinishedClearsManagedAgentResumeRecord() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .pi,
+            nativeSessionID: "pi-session-id",
+            sessionFilePath: "/tmp/toastty/pi-session.jsonl",
+            cwd: "/tmp/toastty",
+            capturedAt: Date(timeIntervalSince1970: 1_234)
+        )
+        XCTAssertTrue(
+            store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord))
+        )
+        let tracker = SessionLifecycleTrackerSpy()
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            sessionLifecycleTracker: tracker,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            },
+            titleCoalescingDelay: {
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .commandFinished(exitCode: 0),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        XCTAssertNil(try terminalState(panelID: panelID, state: store.state).resumeRecord)
+        XCTAssertEqual(
+            tracker.stopActiveCalls,
+            [
+                .init(
+                    panelID: panelID,
+                    reason: .ghosttyCommandFinished(exitCode: 0)
+                ),
+            ]
+        )
+        try StateValidator.validate(store.state)
+    }
+
     func testDesktopNotificationIsSuppressedForManagedSessionPanel() throws {
         let state = try makeTwoWorkspaceState()
         let store = AppStore(state: state, persistTerminalFontPreference: false)

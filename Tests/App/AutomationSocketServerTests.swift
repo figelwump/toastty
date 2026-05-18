@@ -253,6 +253,155 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func sessionUpdateResumeRecordUpdatesTerminalPanelState() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-resume-record"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.pi.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let capturedAt = "2026-05-16T12:34:56Z"
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.update_resume_record",
+                sessionID: sessionID,
+                timestamp: capturedAt,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.pi.rawValue),
+                    "nativeSessionID": .string("019e31af-e0ed-718b-a695-37afddc7e494"),
+                    "sessionFilePath": .string("/tmp/pi sessions/session.jsonl"),
+                    "cwd": .string("/tmp/repo with spaces"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.string("eventType") == "session.update_resume_record")
+
+        let resumeRecord = await terminalPanelResumeRecord(in: server.store, panelID: server.panelID)
+        #expect(resumeRecord?.agent == .pi)
+        #expect(resumeRecord?.nativeSessionID == "019e31af-e0ed-718b-a695-37afddc7e494")
+        #expect(resumeRecord?.sessionFilePath == "/tmp/pi sessions/session.jsonl")
+        #expect(resumeRecord?.cwd == "/tmp/repo with spaces")
+        #expect(resumeRecord?.capturedAt == ISO8601DateFormatter().date(from: capturedAt))
+    }
+
+    @Test
+    func sessionUpdateResumeRecordRejectsMismatchedAgent() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-resume-record-mismatch"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.update_resume_record",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.pi.rawValue),
+                    "nativeSessionID": .string("019e31af-e0ed-718b-a695-37afddc7e494"),
+                    "sessionFilePath": .string("/tmp/session.jsonl"),
+                    "cwd": .string("/tmp/repo"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "INVALID_PAYLOAD")
+        #expect(response.error?.message == "agent does not match active session")
+    }
+
+    @Test
+    func sessionUpdateResumeRecordRequiresPanelID() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-resume-record-requires-panel"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.pi.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.update_resume_record",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.pi.rawValue),
+                    "nativeSessionID": .string("019e31af-e0ed-718b-a695-37afddc7e494"),
+                    "sessionFilePath": .string("/tmp/session.jsonl"),
+                    "cwd": .string("/tmp/repo"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "INVALID_PAYLOAD")
+        #expect(response.error?.message == "panelID must be a UUID")
+    }
+
+    @Test
     func sessionStopCanResolveActiveSessionWithoutPanelID() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
@@ -907,6 +1056,15 @@ struct AutomationSocketServerTests {
             }
             Thread.sleep(forTimeInterval: 0.01)
         }
+    }
+
+    @MainActor
+    private func terminalPanelResumeRecord(in store: AppStore, panelID: UUID) -> ManagedAgentResumeRecord? {
+        guard let workspace = store.selectedWorkspace,
+              case .terminal(let terminalState) = workspace.panels[panelID] else {
+            return nil
+        }
+        return terminalState.resumeRecord
     }
 
     @MainActor

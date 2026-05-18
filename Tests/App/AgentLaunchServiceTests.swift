@@ -208,6 +208,40 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func launchCancelsNativeSessionObservationWhenSendTextFails() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        terminalRouter.sendSucceeds = false
+        let observerRegistry = SpyNativeSessionObserverRegistry()
+        let agentCatalogProvider = TestAgentCatalogProvider()
+
+        let workspace = try #require(store.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        _ = store.send(.updateTerminalPanelMetadata(panelID: panelID, title: nil, cwd: "/tmp/repo"))
+
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            nativeSessionObserverRegistry: observerRegistry
+        )
+
+        #expect(throws: AgentLaunchError.terminalUnavailable(panelID: panelID)) {
+            try service.launch(profileID: "codex")
+        }
+
+        let startedSessionID = try #require(observerRegistry.startedObservations.first?.managedSessionID)
+        #expect(observerRegistry.cancelledSessionIDs == [startedSessionID])
+        #expect(sessionRuntimeStore.sessionRegistry.activeSession(sessionID: startedSessionID) == nil)
+    }
+
+    @Test
     func prepareManagedLaunchSkipsBusyPanelValidationForTypedLaunches() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -459,9 +493,23 @@ struct AgentLaunchServiceTests {
 
     private func makeExecutableFile(at url: URL) throws {
         try makeFile(at: url, executable: true)
+}
+
+@MainActor
+private final class SpyNativeSessionObserverRegistry: ManagedAgentNativeSessionObserving {
+    private(set) var startedObservations: [ManagedAgentNativeSessionObservationContext] = []
+    private(set) var cancelledSessionIDs: [String] = []
+
+    func startObservation(_ observation: ManagedAgentNativeSessionObservationContext) {
+        startedObservations.append(observation)
     }
 
-    private func makeFile(at url: URL, executable: Bool) throws {
+    func cancelObservation(sessionID: String) {
+        cancelledSessionIDs.append(sessionID)
+    }
+}
+
+private func makeFile(at url: URL, executable: Bool) throws {
         let contents = Data("#!/bin/sh\nexit 0\n".utf8)
         FileManager.default.createFile(atPath: url.path, contents: contents)
         let permissions: NSNumber = executable ? 0o755 : 0o644

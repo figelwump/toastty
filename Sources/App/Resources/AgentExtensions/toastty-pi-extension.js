@@ -12,6 +12,13 @@ function cleanString(value, limit = MAX_FIELD_LENGTH) {
   return collapsed.length > limit ? `${collapsed.slice(0, Math.max(0, limit - 3))}...` : collapsed;
 }
 
+function cleanPath(value, limit = 1000) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > limit ? trimmed.slice(0, limit) : trimmed;
+}
+
 function lastPathComponent(path) {
   const cleaned = cleanString(path, 160);
   if (!cleaned) return undefined;
@@ -247,7 +254,32 @@ module.exports = function toasttyPiExtension(pi) {
     enqueueIngest(line);
   }
 
-  pi.on("session_start", (event) => {
+  function emitNativeSession(event, context) {
+    const sessionManager = context && context.sessionManager;
+    if (!sessionManager) return;
+
+    const nativeSessionID = cleanString(
+      typeof sessionManager.getSessionId === "function" ? sessionManager.getSessionId() : undefined,
+      160
+    );
+    const sessionFilePath = cleanPath(
+      typeof sessionManager.getSessionFile === "function" ? sessionManager.getSessionFile() : undefined
+    );
+    const cwd = cleanPath(
+      typeof sessionManager.getCwd === "function" ? sessionManager.getCwd() : undefined
+    );
+
+    if (!nativeSessionID || !sessionFilePath || !cwd) return;
+    emit("native_session", {
+      nativeSessionID,
+      sessionFilePath,
+      cwd,
+      reason: cleanString(event && event.reason, 80),
+    });
+  }
+
+  pi.on("session_start", (event, context) => {
+    emitNativeSession(event, context);
     emit("session_start", { reason: cleanString(event && event.reason) });
   });
 

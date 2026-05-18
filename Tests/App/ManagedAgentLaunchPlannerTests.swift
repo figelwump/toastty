@@ -92,6 +92,61 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testCodexSessionConfiguredEventPersistsResumeRecordAndCancelsLaunchScanner() async throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-codex-session-configured-\(UUID().uuidString)", isDirectory: true)
+        let cwdURL = rootURL.appendingPathComponent("repo", isDirectory: true)
+        let codexSessionsURL = rootURL.appendingPathComponent("codex-sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: cwdURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexSessionsURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let observer = StubManagedAgentNativeSessionObserver()
+        let resolver = CodexManagedSessionResolver(codexSessionsDirectory: codexSessionsURL)
+        let fixture = try makePlannerFixture(
+            nativeSessionObserverRegistry: observer,
+            codexResumeResolver: resolver
+        )
+        let threadID = "019e316e-9f7f-7a33-aad9-33fe27b0f2cd"
+        let rolloutURL = codexSessionsURL.appendingPathComponent("rollout-\(threadID).jsonl", isDirectory: false)
+        try Data(
+            #"{"type":"session_meta","payload":{"id":"\#(threadID)","cwd":"\#(cwdURL.path)"}}"#.utf8
+        ).write(to: rolloutURL)
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: cwdURL.path
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+        let logURL = try codexSessionLogURL(from: plan)
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadID)","thread_id":"\(threadID)","cwd":"\(cwdURL.path)","rollout_path":"\(rolloutURL.path)"}}}
+            """,
+            to: logURL
+        )
+
+        await waitUntil {
+            (try? terminalState(panelID: fixture.panelID, state: fixture.store.state).resumeRecord?.nativeSessionID) == threadID
+        }
+
+        let resumeRecord = try XCTUnwrap(terminalState(panelID: fixture.panelID, state: fixture.store.state).resumeRecord)
+        XCTAssertEqual(resumeRecord.agent, .codex)
+        XCTAssertEqual(resumeRecord.nativeSessionID, threadID)
+        XCTAssertEqual(resumeRecord.sessionFilePath, rolloutURL.path)
+        XCTAssertEqual(resumeRecord.cwd, cwdURL.path)
+        XCTAssertTrue(observer.cancelledSessionIDs.contains(plan.sessionID))
+    }
+
     func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let plan = try fixture.planner.prepareManagedLaunch(
@@ -114,7 +169,11 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
 }
 
 @MainActor
-private func makePlannerFixture(fileManager: FileManager = .default) throws -> (
+private func makePlannerFixture(
+    fileManager: FileManager = .default,
+    nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
+    codexResumeResolver: (any CodexManagedSessionResolving)? = nil
+) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
     sessionRuntimeStore: SessionRuntimeStore,
@@ -133,7 +192,9 @@ private func makePlannerFixture(fileManager: FileManager = .default) throws -> (
         cliExecutablePathProvider: { "/bin/sh" },
         socketPathProvider: { "/tmp/toastty-tests.sock" },
         readVisibleText: { _ in nil },
-        promptState: { _ in .unavailable }
+        promptState: { _ in .unavailable },
+        nativeSessionObserverRegistry: nativeSessionObserverRegistry,
+        codexResumeResolver: codexResumeResolver
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
@@ -158,6 +219,31 @@ private func codexArtifactsDirectory(from plan: ManagedAgentLaunchPlan) throws -
     let endIndex = configValue.index(configValue.endIndex, offsetBy: -suffix.count)
     let notifyScriptPath = String(configValue[startIndex..<endIndex])
     return URL(fileURLWithPath: notifyScriptPath).deletingLastPathComponent()
+}
+
+private func codexSessionLogURL(from plan: ManagedAgentLaunchPlan) throws -> URL {
+    let path = try XCTUnwrap(plan.environment["CODEX_TUI_SESSION_LOG_PATH"])
+    return URL(fileURLWithPath: path)
+}
+
+private func appendCodexSessionLogLine(_ line: String, to url: URL) throws {
+    if FileManager.default.fileExists(atPath: url.path) == false {
+        FileManager.default.createFile(atPath: url.path, contents: Data())
+    }
+    let handle = try FileHandle(forWritingTo: url)
+    defer { try? handle.close() }
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data((line.hasSuffix("\n") ? line : line + "\n").utf8))
+}
+
+@MainActor
+private func terminalState(panelID: UUID, state: AppState) throws -> TerminalPanelState {
+    let workspace = try XCTUnwrap(state.workspacesByID.values.first { $0.panelState(for: panelID) != nil })
+    guard case .terminal(let terminalState) = workspace.panelState(for: panelID) else {
+        XCTFail("expected terminal panel state")
+        throw ManagedAgentLaunchPlannerTestError.expectedTerminalPanel
+    }
+    return terminalState
 }
 
 @MainActor
@@ -185,5 +271,23 @@ private final class ThrowingCreateDirectoryFileManager: FileManager {
         attributes: [FileAttributeKey: Any]? = nil
     ) throws {
         throw CocoaError(.fileWriteNoPermission)
+    }
+}
+
+private enum ManagedAgentLaunchPlannerTestError: Error {
+    case expectedTerminalPanel
+}
+
+@MainActor
+private final class StubManagedAgentNativeSessionObserver: ManagedAgentNativeSessionObserving {
+    private(set) var observations: [ManagedAgentNativeSessionObservationContext] = []
+    private(set) var cancelledSessionIDs: [String] = []
+
+    func startObservation(_ observation: ManagedAgentNativeSessionObservationContext) {
+        observations.append(observation)
+    }
+
+    func cancelObservation(sessionID: String) {
+        cancelledSessionIDs.append(sessionID)
     }
 }

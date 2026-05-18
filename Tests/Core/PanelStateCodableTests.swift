@@ -13,13 +13,21 @@ struct PanelStateCodableTests {
 
     @Test
     func panelStateRoundTripsCodable() throws {
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/project",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
         let panels: [PanelState] = [
             .terminal(
                 TerminalPanelState(
                     title: "T",
                     shell: "zsh",
                     cwd: "/tmp",
-                    profileBinding: TerminalProfileBinding(profileID: "zmx")
+                    profileBinding: TerminalProfileBinding(profileID: "zmx"),
+                    resumeRecord: resumeRecord
                 )
             ),
             .web(
@@ -46,5 +54,27 @@ struct PanelStateCodableTests {
             let decoded = try decoder.decode(PanelState.self, from: encoded)
             #expect(decoded == panel)
         }
+    }
+
+    @Test
+    func terminalPanelStateDecodesWhenResumeRecordIsAbsent() throws {
+        let data = Data(
+            """
+            {
+              "title": "T",
+              "shell": "zsh",
+              "cwd": "/tmp",
+              "profileBinding": {
+                "profileID": "zmx"
+              }
+            }
+            """.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(TerminalPanelState.self, from: data)
+
+        #expect(decoded.title == "T")
+        #expect(decoded.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+        #expect(decoded.resumeRecord == nil)
     }
 }

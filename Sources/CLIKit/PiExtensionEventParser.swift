@@ -24,6 +24,24 @@ enum PiExtensionEventParser {
 
         var commands: [CLICommand] = []
         switch event {
+        case "native_session":
+            guard let panelID,
+                  let nativeSessionID = normalizedString(object["nativeSessionID"], limit: 160),
+                  let sessionFilePath = normalizedPathString(object["sessionFilePath"]),
+                  let cwd = normalizedPathString(object["cwd"]) else {
+                return []
+            }
+            commands.append(
+                .sessionUpdateResumeRecord(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    agent: .pi,
+                    nativeSessionID: nativeSessionID,
+                    sessionFilePath: sessionFilePath,
+                    cwd: cwd
+                )
+            )
+
         case "session_start":
             commands.append(
                 .sessionStatus(
@@ -154,6 +172,15 @@ private extension PiExtensionEventParser {
         guard collapsed.count > limit else { return collapsed }
         let endIndex = collapsed.index(collapsed.startIndex, offsetBy: limit - 3)
         return String(collapsed[..<endIndex]) + "..."
+    }
+
+    static func normalizedPathString(_ value: Any?, limit: Int = 1000) -> String? {
+        guard let string = value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        guard trimmed.count > limit else { return trimmed }
+        let endIndex = trimmed.index(trimmed.startIndex, offsetBy: limit)
+        return String(trimmed[..<endIndex])
     }
 
     static func normalizedStringArray(_ value: Any?) -> [String] {

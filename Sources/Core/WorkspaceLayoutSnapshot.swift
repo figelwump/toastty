@@ -41,21 +41,25 @@ public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable
     public var shell: String
     public var launchWorkingDirectory: String
     public var profileBinding: TerminalProfileBinding?
+    public var resumeRecord: ManagedAgentResumeRecord?
 
     public init(
         shell: String,
         launchWorkingDirectory: String,
-        profileBinding: TerminalProfileBinding? = nil
+        profileBinding: TerminalProfileBinding? = nil,
+        resumeRecord: ManagedAgentResumeRecord? = nil
     ) {
         self.shell = shell
         self.launchWorkingDirectory = launchWorkingDirectory
         self.profileBinding = profileBinding
+        self.resumeRecord = resumeRecord
     }
 
     init(terminalState: TerminalPanelState) {
         shell = terminalState.shell
         launchWorkingDirectory = terminalState.workingDirectorySeed
         profileBinding = terminalState.profileBinding
+        resumeRecord = terminalState.resumeRecord
     }
 }
 
@@ -64,6 +68,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         case shell
         case launchWorkingDirectory
         case profileBinding
+        case resumeRecord
         case cwd
     }
 
@@ -76,6 +81,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
             self.launchWorkingDirectory = try container.decode(String.self, forKey: .cwd)
         }
         profileBinding = try container.decodeIfPresent(TerminalProfileBinding.self, forKey: .profileBinding)
+        resumeRecord = try container.decodeIfPresent(ManagedAgentResumeRecord.self, forKey: .resumeRecord)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -83,6 +89,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         try container.encode(shell, forKey: .shell)
         try container.encode(launchWorkingDirectory, forKey: .launchWorkingDirectory)
         try container.encodeIfPresent(profileBinding, forKey: .profileBinding)
+        try container.encodeIfPresent(resumeRecord, forKey: .resumeRecord)
         // Preserve downgrade compatibility while older builds still decode the
         // legacy terminal snapshot schema from `cwd`.
         try container.encode(launchWorkingDirectory, forKey: .cwd)
@@ -382,7 +389,8 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
                         // the live shell cwd shown in the UI.
                         cwd: "",
                         launchWorkingDirectory: terminalSnapshot.launchWorkingDirectory,
-                        profileBinding: terminalSnapshot.profileBinding
+                        profileBinding: terminalSnapshot.profileBinding,
+                        resumeRecord: terminalSnapshot.resumeRecord
                     )
                 )
             case .web(let webState):

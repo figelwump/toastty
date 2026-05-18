@@ -1154,10 +1154,13 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             )
         }
 
+        let launchConfiguration = delegate.surfaceLaunchConfiguration(for: panelID)
+
         // Launch the shell from a separate seed instead of the live cwd field.
         // Restored panes intentionally start with blank live cwd and wait for
         // runtime metadata to repopulate it authoritatively.
-        let requestedWorkingDirectory = hostState.workingDirectorySeed
+        let requestedWorkingDirectory = launchConfiguration.normalizedWorkingDirectoryOverride
+            ?? hostState.workingDirectorySeed
         let isRestoredLaunch = hostState.expectedProcessWorkingDirectory == nil &&
             TerminalRuntimeRegistry.normalizedCWDValue(hostState.launchWorkingDirectory) != nil
         ToasttyLog.debug(
@@ -1184,7 +1187,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         // Snapshot child PIDs before surface creation so we can diff after
         // to find the newly spawned login/shell process for CWD tracking.
         let previousChildPIDs = delegate.surfaceCreationChildPIDSnapshot()
-        let launchConfiguration = delegate.surfaceLaunchConfiguration(for: panelID)
 
         diagnostics.surfaceAttemptCount += 1
         if diagnostics.surfaceAttemptCount <= 3 || diagnostics.surfaceAttemptCount.isMultiple(of: 20) {

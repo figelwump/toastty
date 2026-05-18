@@ -57,6 +57,72 @@ struct AppReducerTests {
     }
 
     @Test
+    func splitFocusedSlotDoesNotInheritResumeRecord() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(workspace.focusedPanelID)
+        let resumeRecord = makeTestResumeRecord(cwd: "/tmp/toastty/split-cwd")
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelResumeRecord(panelID: focusedPanelID, resumeRecord: resumeRecord),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let newFocusedPanelID = try #require(workspaceAfter.focusedPanelID)
+        guard case .terminal(let splitTerminalState) = workspaceAfter.panels[newFocusedPanelID] else {
+            Issue.record("expected split-created panel to be terminal")
+            return
+        }
+        guard case .terminal(let sourceTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            Issue.record("expected source panel to remain terminal")
+            return
+        }
+
+        #expect(splitTerminalState.resumeRecord == nil)
+        #expect(sourceTerminalState.resumeRecord == resumeRecord)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func reopenLastClosedTerminalPanelDoesNotRestoreResumeRecord() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(workspace.focusedPanelID)
+        let resumeRecord = makeTestResumeRecord(cwd: "/tmp/toastty/reopen-cwd")
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelResumeRecord(panelID: focusedPanelID, resumeRecord: resumeRecord),
+                state: &state
+            )
+        )
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        #expect(reducer.send(.closePanel(panelID: focusedPanelID), state: &state))
+        #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let reopenedPanelID = try #require(workspaceAfter.focusedPanelID)
+        guard case .terminal(let reopenedTerminalState) = workspaceAfter.panels[reopenedPanelID] else {
+            Issue.record("expected reopened panel to be terminal")
+            return
+        }
+
+        #expect(reopenedPanelID != focusedPanelID)
+        #expect(reopenedTerminalState.resumeRecord == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func splitFocusedSlotInDirectionWithWorkingDirectorySeedsNewPanelFromExplicitDirectory() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -4722,4 +4788,14 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+}
+
+private func makeTestResumeRecord(cwd: String) -> ManagedAgentResumeRecord {
+    ManagedAgentResumeRecord(
+        agent: .codex,
+        nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+        sessionFilePath: "/tmp/codex-session.jsonl",
+        cwd: cwd,
+        capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
 }

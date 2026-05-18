@@ -53,6 +53,10 @@ If the file fails to parse at startup, Toastty logs a warning and continues with
 ## Launch and restore behavior
 
 - Toastty sends `startupCommand` when the pane is created and again when a profiled pane is restored from persisted workspace state.
+- A restored managed Codex, Claude, or Pi panel with a valid native resume record
+  runs the provider resume command instead of the profile `startupCommand`. Pi
+  uses its recorded session file path with `pi --session`. If the record is
+  missing or fails pre-launch validation, normal profile startup applies.
 - Profile bindings are persisted with workspace layouts, so the same profile comes back after relaunch.
 - If the referenced profile no longer exists, Toastty falls back to a degraded badge based on the stored profile ID instead of silently pretending the pane was unprofiled.
 - `default-terminal-profile` in `~/.toastty/config` applies only to new terminals Toastty creates automatically, including the standard `Cmd+D` and `Cmd+Shift+D` split shortcuts. It does not rewrite existing pane bindings.

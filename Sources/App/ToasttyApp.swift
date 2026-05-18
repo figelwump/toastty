@@ -2025,6 +2025,7 @@ struct ToasttyApp: App {
             terminalProfileStore,
             restoredTerminalPanelIDs: bootstrap.restoredTerminalPanelIDs
         )
+        terminalRuntimeRegistry.setAgentCatalogProvider(agentCatalogStore)
         terminalRuntimeRegistry.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
         terminalRuntimeRegistry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
@@ -2085,6 +2086,7 @@ struct ToasttyApp: App {
             cliExecutablePathProvider: { cliExecutablePath },
             socketPathProvider: { socketPath }
         )
+        terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
