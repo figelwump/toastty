@@ -284,6 +284,7 @@ struct AutomationSocketServerTests {
             AutomationEventEnvelope(
                 eventType: "session.update_resume_record",
                 sessionID: sessionID,
+                panelID: server.panelID.uuidString,
                 timestamp: capturedAt,
                 requestID: UUID().uuidString,
                 payload: [
@@ -338,6 +339,7 @@ struct AutomationSocketServerTests {
             AutomationEventEnvelope(
                 eventType: "session.update_resume_record",
                 sessionID: sessionID,
+                panelID: server.panelID.uuidString,
                 requestID: UUID().uuidString,
                 payload: [
                     "agent": .string(AgentKind.pi.rawValue),
