@@ -1953,11 +1953,6 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         return true
     }
 
-    func markSessionResumedLaunch(sessionID: String, at now: Date) {
-        _ = sessionID
-        _ = now
-    }
-
     func stopSessionForPanelIfActive(
         panelID: UUID,
         reason: ManagedSessionStopReason,

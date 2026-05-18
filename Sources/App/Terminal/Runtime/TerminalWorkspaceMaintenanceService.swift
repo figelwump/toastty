@@ -17,6 +17,7 @@ final class TerminalWorkspaceMaintenanceService {
     private let metadataService: TerminalMetadataService
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     private let controllerForPanelID: (UUID) -> TerminalSurfaceController?
+    private let restoredManagedLaunchPendingProvider: (UUID) -> Bool
     private let visibilityPulseScheduler: VisibilityPulseScheduler
     private var previousVisibleWorkspaceSelection: VisibleWorkspaceSelection?
     private var visibilityPulseTask: Task<Void, Never>?
@@ -27,6 +28,7 @@ final class TerminalWorkspaceMaintenanceService {
         metadataService: TerminalMetadataService,
         sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)? = nil,
         controllerForPanelID: @escaping (UUID) -> TerminalSurfaceController?,
+        restoredManagedLaunchPendingProvider: @escaping (UUID) -> Bool = { _ in false },
         visibilityPulseScheduler: @escaping VisibilityPulseScheduler = { pulse in
             Task { @MainActor in
                 // Defer pulses so SwiftUI/NSViewRepresentable attachment and layout can settle.
@@ -44,6 +46,7 @@ final class TerminalWorkspaceMaintenanceService {
         self.metadataService = metadataService
         self.sessionLifecycleTracker = sessionLifecycleTracker
         self.controllerForPanelID = controllerForPanelID
+        self.restoredManagedLaunchPendingProvider = restoredManagedLaunchPendingProvider
         self.visibilityPulseScheduler = visibilityPulseScheduler
     }
 
@@ -165,6 +168,9 @@ final class TerminalWorkspaceMaintenanceService {
         }
 
         guard promptState == .idleAtPrompt else {
+            return
+        }
+        guard restoredManagedLaunchPendingProvider(panelID) == false else {
             return
         }
 

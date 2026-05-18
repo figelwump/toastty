@@ -156,7 +156,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         guard let workspace = state.workspacesByID[location.workspaceID] else {
             throw AgentLaunchError.workspaceDoesNotExist
         }
-        guard case .terminal(let terminalState)? = workspace.panels[panelID] else {
+        guard case .terminal(let terminalState)? = workspace.panelState(for: panelID) else {
             throw AgentLaunchError.panelIsNotTerminal
         }
         return ManagedLaunchTarget(
@@ -385,7 +385,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                if workspace.panels[panelID] != nil {
+                if workspace.panelState(for: panelID) != nil {
                     return (window.id, workspaceID)
                 }
             }

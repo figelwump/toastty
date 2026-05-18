@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
-    func testSurfaceLaunchConfigurationUsesValidManagedAgentResumeRecordForRestoredPanel() throws {
+    func testSurfaceLaunchConfigurationUsesValidManagedAgentResumeRecordForRestoredPanel() async throws {
         let fixture = try makeRuntimeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let panelID = UUID()
@@ -51,20 +51,40 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
         registry.bind(store: store)
 
+        var submittedCommand: String?
+        registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
+            XCTAssertTrue(submit)
+            XCTAssertEqual(submittedPanelID, panelID)
+            submittedCommand = command
+            return true
+        }
+
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
 
-        XCTAssertTrue(try XCTUnwrap(launchConfiguration.initialInput).contains("TOASTTY_SESSION_ID="))
-        XCTAssertTrue(try XCTUnwrap(launchConfiguration.initialInput).contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
-        XCTAssertTrue(try XCTUnwrap(launchConfiguration.initialInput).contains("codex -c "))
-        XCTAssertTrue(try XCTUnwrap(launchConfiguration.initialInput).contains("resume 019e2823-f520-7690-91b6-cd84eb52dd8a"))
+        XCTAssertNil(launchConfiguration.initialInput)
         XCTAssertEqual(launchConfiguration.workingDirectoryOverride, fixture.cwdURL.path)
         XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_LAUNCH_REASON"], "restore")
         XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"], "codex")
+        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"], record.nativeSessionID)
+        XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_SHIM_BYPASS"])
+        XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_SESSION_ID"])
         XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_TERMINAL_PROFILE_ID"])
         let activeSession = try XCTUnwrap(sessionRuntimeStore.sessionRegistry.activeSession(for: panelID))
         XCTAssertEqual(activeSession.agent, .codex)
-        XCTAssertEqual(activeSession.status, SessionStatus(kind: .idle, summary: "Waiting", detail: "Resumed"))
-        XCTAssertTrue(activeSession.showsResumedBadge)
+        XCTAssertEqual(activeSession.status, SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
+
+        registry.markInitialSurfaceLaunchCompleted(for: panelID)
+        await Task.yield()
+        await Task.yield()
+        let command = try XCTUnwrap(submittedCommand)
+        XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="))
+        XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
+        XCTAssertTrue(command.contains("codex -c "))
+        XCTAssertTrue(command.contains("resume 019e2823-f520-7690-91b6-cd84eb52dd8a"))
+
+        let pendingConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
+        XCTAssertEqual(pendingConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"], "codex")
+        XCTAssertEqual(pendingConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"], record.nativeSessionID)
     }
 
     func testSurfaceLaunchConfigurationUsesValidClaudeResumeRecordForRestoredPanel() throws {
@@ -105,15 +125,15 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
 
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
 
-        let initialInput = try XCTUnwrap(launchConfiguration.initialInput)
-        XCTAssertTrue(initialInput.contains("TOASTTY_SESSION_ID="))
-        XCTAssertTrue(initialInput.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
-        XCTAssertTrue(initialInput.contains("claude --settings "))
-        XCTAssertTrue(initialInput.contains("--resume db4f311b-12d0-4f61-ba81-0ae44ed10492"))
+        XCTAssertNil(launchConfiguration.initialInput)
+        XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_SHIM_BYPASS"])
+        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"], "claude")
+        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"], record.nativeSessionID)
+        XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_SESSION_ID"])
         XCTAssertEqual(launchConfiguration.workingDirectoryOverride, fixture.cwdURL.path)
         let activeSession = try XCTUnwrap(sessionRuntimeStore.sessionRegistry.activeSession(for: panelID))
         XCTAssertEqual(activeSession.agent, .claude)
-        XCTAssertTrue(activeSession.showsResumedBadge)
+        XCTAssertEqual(activeSession.status, SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
     }
 
     func testSurfaceLaunchConfigurationUsesValidPiResumeRecordForRestoredPanel() throws {
@@ -166,10 +186,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
 
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
 
-        let initialInput = try XCTUnwrap(launchConfiguration.initialInput)
-        XCTAssertTrue(initialInput.contains("TOASTTY_SESSION_ID="))
-        XCTAssertTrue(initialInput.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
-        XCTAssertTrue(initialInput.contains("pi --extension /toastty/pi-extension.js --session \(fixture.sessionFileURL.path)"))
+        XCTAssertNil(launchConfiguration.initialInput)
         XCTAssertEqual(launchConfiguration.workingDirectoryOverride, fixture.cwdURL.path)
         XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_LAUNCH_REASON"], "restore")
         XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"], "pi")
@@ -177,10 +194,12 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
             launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"],
             "019e31af-e0ed-718b-a695-37afddc7e494"
         )
+        XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_SHIM_BYPASS"])
+        XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_SESSION_ID"])
         XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_TERMINAL_PROFILE_ID"])
         let activeSession = try XCTUnwrap(sessionRuntimeStore.sessionRegistry.activeSession(for: panelID))
         XCTAssertEqual(activeSession.agent, .pi)
-        XCTAssertTrue(activeSession.showsResumedBadge)
+        XCTAssertEqual(activeSession.status, SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
     }
 
     func testSurfaceLaunchConfigurationReusesPendingRestoredManagedLaunchForPanel() throws {
@@ -227,6 +246,44 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertEqual(sessionRuntimeStore.sessionRegistry.sessionOrder, [firstSessionID])
     }
 
+    func testSurfaceLaunchConfigurationStripsResumeCommandWhenManagedLaunchPlannerUnavailable() throws {
+        let fixture = try makeRuntimeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let record = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let store = AppStore(
+            state: makeRuntimeResumeState(
+                windowID: windowID,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                resumeRecord: record,
+                profileBinding: TerminalProfileBinding(profileID: "zmx")
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let profileProvider = makeRuntimeResumeProfileProvider()
+        registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
+        registry.bind(store: store)
+
+        let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
+
+        XCTAssertNil(launchConfiguration.initialInput)
+        XCTAssertEqual(launchConfiguration.workingDirectoryOverride, fixture.cwdURL.path)
+        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_LAUNCH_REASON"], "restore")
+        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"], "codex")
+        XCTAssertEqual(launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"], record.nativeSessionID)
+        XCTAssertNil(launchConfiguration.environmentVariables["TOASTTY_TERMINAL_PROFILE_ID"])
+    }
+
     func testSurfaceLaunchConfigurationDiscardsPendingRestoredManagedLaunchWhenRecordBecomesInvalid() throws {
         let fixture = try makeRuntimeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -268,7 +325,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         try FileManager.default.removeItem(at: fixture.sessionFileURL)
         let fallbackConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
 
-        XCTAssertTrue(try XCTUnwrap(restoredConfiguration.initialInput).contains("TOASTTY_SESSION_ID="))
+        XCTAssertNil(restoredConfiguration.initialInput)
         XCTAssertEqual(fallbackConfiguration.initialInput, "zmx attach toastty.$TOASTTY_PANEL_ID")
         XCTAssertNil(sessionRuntimeStore.sessionRegistry.activeSession(for: panelID))
         XCTAssertFalse(try XCTUnwrap(sessionRuntimeStore.sessionRegistry.sessionsByID[restoredSessionID]).isActive)

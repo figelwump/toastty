@@ -54,7 +54,10 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 private struct RestoredManagedLaunch {
     let sessionID: String
+    let commandLine: String
     let configuration: TerminalSurfaceLaunchConfiguration
+    var surfaceLaunchCompleted: Bool
+    var commandSubmittedAt: Date?
 }
 
 @MainActor
@@ -64,6 +67,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
         URL,
         LocalFileLinkResolver.UnresolvedLocalDocumentIssue
     ) -> Void
+
+    private static let restoredManagedLaunchSubmitTimeout: TimeInterval = 5.0
+    private static let restoredManagedLaunchSubmitRetryDelayNanoseconds: UInt64 = 100_000_000
+    private static let restoredManagedLaunchPostSubmitGraceInterval: TimeInterval = 2.0
 
     private let focusCoordinator: TerminalFocusCoordinator
     private let activateApp: @MainActor () -> Void
@@ -79,6 +86,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var observedWindowFontPointsByID: [UUID: Double] = [:]
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
     private var restoredManagedLaunchesByPanelID: [UUID: RestoredManagedLaunch] = [:]
+    private var restoredManagedLaunchSubmitTasksByPanelID: [UUID: Task<Void, Never>] = [:]
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
     private var exitedTerminalPanelIDs: Set<UUID> = []
@@ -89,6 +97,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
     private var searchDispatchTaskByPanelID: [UUID: Task<Void, Never>] = [:]
     private var searchDispatchTokenByPanelID: [UUID: UUID] = [:]
+    private var restoredManagedLaunchSubmitterForTesting: ((String, Bool, UUID) -> Bool)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -98,6 +107,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     deinit {
         for task in searchDispatchTaskByPanelID.values {
+            task.cancel()
+        }
+        for task in restoredManagedLaunchSubmitTasksByPanelID.values {
             task.cancel()
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
@@ -156,6 +168,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
             sessionLifecycleTracker: sessionLifecycleTracker,
             controllerForPanelID: { [weak self] panelID in
                 self?.runtimeStore.existingController(for: panelID)
+            },
+            restoredManagedLaunchPendingProvider: { [weak self] panelID in
+                self?.restoredManagedLaunchesByPanelID[panelID] != nil
             }
         )
         workspaceMaintenanceService?.startProcessWorkingDirectoryRefreshLoopIfNeeded()
@@ -178,6 +193,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func setRestoredManagedLaunchPlanner(_ planner: any ManagedAgentLaunchPlanning) {
         restoredManagedLaunchPlanner = planner
+    }
+
+    func setRestoredManagedLaunchSubmitterForTesting(_ submitter: ((String, Bool, UUID) -> Bool)?) {
+        restoredManagedLaunchSubmitterForTesting = submitter
     }
 
     func setTerminalProfileProvider(
@@ -382,10 +401,18 @@ final class TerminalRuntimeRegistry: ObservableObject {
         launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
         for (panelID, launch) in restoredManagedLaunchesByPanelID where livePanelIDs.contains(panelID) == false {
+            restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)?.cancel()
             restoredManagedLaunchPlanner?.discardManagedLaunch(sessionID: launch.sessionID)
         }
         restoredManagedLaunchesByPanelID = restoredManagedLaunchesByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
+        }
+        restoredManagedLaunchSubmitTasksByPanelID = restoredManagedLaunchSubmitTasksByPanelID.filter { panelID, task in
+            if livePanelIDs.contains(panelID) {
+                return true
+            }
+            task.cancel()
+            return false
         }
         profiledTerminalPanelIDsAwaitingStartupTitleCleanup = profiledTerminalPanelIDsAwaitingStartupTitleCleanup
             .intersection(livePanelIDs)
@@ -1432,6 +1459,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         let baseEnvironmentVariables = launchContextEnvironment(for: panelID)
         logSurfaceLaunchEnvironmentIfNeeded(panelID: panelID, environment: baseEnvironmentVariables)
 
+        if let restoredManagedLaunch = restoredManagedLaunchesByPanelID[panelID],
+           restoredManagedLaunch.surfaceLaunchCompleted {
+            return restoredManagedLaunch.configuration
+        }
+
         guard launchedProfiledPanelIDs.contains(panelID) == false else {
             discardPendingRestoredManagedLaunch(for: panelID)
             return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
@@ -1475,15 +1507,18 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             ) {
                 return restoredManagedLaunch
             }
-            ToasttyLog.info(
-                "Launching restored pane with managed agent native resume",
+            ToasttyLog.warning(
+                "Launching restored pane without managed agent resume command because sidebar session preparation failed",
                 category: .terminal,
                 metadata: [
                     "panel_id": panelID.uuidString,
                     "agent": terminalState.resumeRecord?.agent.rawValue ?? "none",
                 ]
             )
-            return configuration
+            return TerminalSurfaceLaunchConfiguration(
+                environmentVariables: configuration.environmentVariables,
+                workingDirectoryOverride: configuration.workingDirectoryOverride
+            )
         }
 
         let catalog = terminalProfileProvider?.catalog ?? .empty
@@ -1522,6 +1557,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         guard let launch = restoredManagedLaunchesByPanelID.removeValue(forKey: panelID) else {
             return
         }
+        restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)?.cancel()
         restoredManagedLaunchPlanner?.discardManagedLaunch(sessionID: launch.sessionID)
     }
 
@@ -1552,7 +1588,6 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     cwd: record.cwd
                 )
             )
-            sessionLifecycleTracker?.markSessionResumedLaunch(sessionID: plan.sessionID, at: Date())
 
             var commandEnvironment = plan.environment
             commandEnvironment[ToasttyLaunchContextEnvironment.launchReasonKey] = TerminalLaunchReason.restore.rawValue
@@ -1560,17 +1595,21 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             commandEnvironment["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"] = record.agent.rawValue
             commandEnvironment["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"] = record.nativeSessionID
 
+            let commandLine = ShellCommandRenderer.render(
+                argv: plan.argv,
+                environment: commandEnvironment
+            )
+
             let configuration = TerminalSurfaceLaunchConfiguration(
                 environmentVariables: fallbackConfiguration.environmentVariables,
-                initialInput: ShellCommandRenderer.render(
-                    argv: plan.argv,
-                    environment: commandEnvironment
-                ),
                 workingDirectoryOverride: fallbackConfiguration.workingDirectoryOverride
             )
             restoredManagedLaunchesByPanelID[panelID] = RestoredManagedLaunch(
                 sessionID: plan.sessionID,
-                configuration: configuration
+                commandLine: commandLine,
+                configuration: configuration,
+                surfaceLaunchCompleted: false,
+                commandSubmittedAt: nil
             )
             ToasttyLog.info(
                 "Launching restored pane with managed agent native resume and session sidebar tracking",
@@ -1585,7 +1624,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             return configuration
         } catch {
             ToasttyLog.warning(
-                "Falling back to unmanaged restored agent resume after sidebar session preparation failed",
+                "Could not prepare restored managed agent resume with sidebar session tracking",
                 category: .terminal,
                 metadata: [
                     "panel_id": panelID.uuidString,
@@ -1628,7 +1667,10 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
     func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
         restoredTerminalPanelIDsAwaitingLaunch.remove(panelID)
-        restoredManagedLaunchesByPanelID.removeValue(forKey: panelID)
+        if restoredManagedLaunchesByPanelID[panelID] != nil {
+            restoredManagedLaunchesByPanelID[panelID]?.surfaceLaunchCompleted = true
+            scheduleRestoredManagedLaunchSubmission(for: panelID)
+        }
         guard let store,
               let workspaceID = workspaceID(containing: panelID, state: store.state),
               let workspace = store.state.workspacesByID[workspaceID],
@@ -1637,6 +1679,100 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             return
         }
         launchedProfiledPanelIDs.insert(panelID)
+    }
+
+    private func scheduleRestoredManagedLaunchSubmission(for panelID: UUID) {
+        guard restoredManagedLaunchSubmitTasksByPanelID[panelID] == nil,
+              let launch = restoredManagedLaunchesByPanelID[panelID] else {
+            return
+        }
+        let sessionID = launch.sessionID
+        let deadline = Date().addingTimeInterval(Self.restoredManagedLaunchSubmitTimeout)
+        restoredManagedLaunchSubmitTasksByPanelID[panelID] = Task { @MainActor [weak self] in
+            await self?.submitRestoredManagedLaunchCommand(
+                panelID: panelID,
+                sessionID: sessionID,
+                deadline: deadline
+            )
+        }
+    }
+
+    private func submitRestoredManagedLaunchCommand(
+        panelID: UUID,
+        sessionID: String,
+        deadline: Date
+    ) async {
+        while Task.isCancelled == false {
+            guard let launch = restoredManagedLaunchesByPanelID[panelID],
+                  launch.sessionID == sessionID else {
+                restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)
+                return
+            }
+            let now = Date()
+
+            if let commandSubmittedAt = launch.commandSubmittedAt {
+                let currentPromptState = promptState(panelID: panelID)
+                let commandHasLeftPrompt = currentPromptState == .busy || currentPromptState == .exited
+                let postSubmitGraceElapsed = now.timeIntervalSince(commandSubmittedAt)
+                    >= Self.restoredManagedLaunchPostSubmitGraceInterval
+                if commandHasLeftPrompt || postSubmitGraceElapsed {
+                    restoredManagedLaunchesByPanelID.removeValue(forKey: panelID)
+                    restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)
+                    ToasttyLog.info(
+                        "Completed restored managed agent resume command handoff",
+                        category: .terminal,
+                        metadata: [
+                            "panel_id": panelID.uuidString,
+                            "session_id": launch.sessionID,
+                            "prompt_state": String(describing: currentPromptState),
+                        ]
+                    )
+                    return
+                }
+
+                try? await Task.sleep(nanoseconds: Self.restoredManagedLaunchSubmitRetryDelayNanoseconds)
+                continue
+            }
+
+            if sendRestoredManagedLaunchCommand(launch.commandLine, panelID: panelID) {
+                var submittedLaunch = launch
+                submittedLaunch.commandSubmittedAt = now
+                restoredManagedLaunchesByPanelID[panelID] = submittedLaunch
+                ToasttyLog.info(
+                    "Submitted restored managed agent resume command",
+                    category: .terminal,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "session_id": launch.sessionID,
+                    ]
+                )
+                continue
+            }
+
+            guard now < deadline else {
+                restoredManagedLaunchesByPanelID.removeValue(forKey: panelID)
+                restoredManagedLaunchSubmitTasksByPanelID.removeValue(forKey: panelID)
+                restoredManagedLaunchPlanner?.discardManagedLaunch(sessionID: launch.sessionID)
+                ToasttyLog.warning(
+                    "Discarded restored managed agent resume after command submission timed out",
+                    category: .terminal,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "session_id": launch.sessionID,
+                    ]
+                )
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: Self.restoredManagedLaunchSubmitRetryDelayNanoseconds)
+        }
+    }
+
+    private func sendRestoredManagedLaunchCommand(_ commandLine: String, panelID: UUID) -> Bool {
+        if let restoredManagedLaunchSubmitterForTesting {
+            return restoredManagedLaunchSubmitterForTesting(commandLine, true, panelID)
+        }
+        return automationSendText(commandLine, submit: true, panelID: panelID)
     }
 
     func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {

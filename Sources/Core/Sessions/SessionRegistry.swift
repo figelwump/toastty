@@ -26,7 +26,6 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         workspaceID: UUID,
         usesSessionStatusNotifications: Bool = false,
         displayTitleOverride: String? = nil,
-        showsResumedBadge: Bool = false,
         cwd: String?,
         repoRoot: String?,
         at now: Date
@@ -50,7 +49,6 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
-            showsResumedBadge: showsResumedBadge,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
             displayTitleOverride: displayTitleOverride,
             repoRoot: repoRoot,
@@ -98,28 +96,6 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         guard var record = sessionsByID[sessionID], record.isActive else { return }
         record.status = status
         record.updatedAt = now
-        sessionsByID[sessionID] = record
-    }
-
-    public mutating func markSessionResumedLaunch(
-        sessionID: String,
-        status: SessionStatus,
-        at now: Date
-    ) {
-        guard var record = sessionsByID[sessionID], record.isActive else { return }
-        record.status = status
-        record.showsResumedBadge = true
-        record.updatedAt = now
-        sessionsByID[sessionID] = record
-    }
-
-    public mutating func clearResumedBadge(sessionID: String) {
-        guard var record = sessionsByID[sessionID],
-              record.isActive,
-              record.showsResumedBadge else {
-            return
-        }
-        record.showsResumedBadge = false
         sessionsByID[sessionID] = record
     }
 
@@ -263,7 +239,6 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             agent: record.agent,
             status: status,
             displayTitleOverride: record.displayTitleOverride,
-            showsResumedBadge: record.showsResumedBadge,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
             isActive: record.isActive
