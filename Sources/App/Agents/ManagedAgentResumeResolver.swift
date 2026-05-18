@@ -51,9 +51,7 @@ enum ManagedAgentResumeResolver {
             )
         )
     }
-}
 
-private extension ManagedAgentResumeResolver {
     static func resumeArgv(
         for record: ManagedAgentResumeRecord,
         agentCatalog: AgentCatalog
@@ -84,7 +82,9 @@ private extension ManagedAgentResumeResolver {
             + resumeArguments
             + Array(profile.argv.dropFirst(insertionIndex + 1))
     }
+}
 
+private extension ManagedAgentResumeResolver {
     static func normalizedExistingDirectory(_ path: String, fileManager: FileManager) -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }

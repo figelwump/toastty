@@ -23,6 +23,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var windowID: UUID
     public var workspaceID: UUID
     public var isFlaggedForLater: Bool
+    public var showsResumedBadge: Bool
     public var usesSessionStatusNotifications: Bool
     public var status: SessionStatus?
     public var displayTitleOverride: String?
@@ -41,6 +42,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         windowID: UUID,
         workspaceID: UUID,
         isFlaggedForLater: Bool = false,
+        showsResumedBadge: Bool = false,
         usesSessionStatusNotifications: Bool = false,
         status: SessionStatus? = nil,
         displayTitleOverride: String? = nil,
@@ -58,6 +60,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.windowID = windowID
         self.workspaceID = workspaceID
         self.isFlaggedForLater = isFlaggedForLater
+        self.showsResumedBadge = showsResumedBadge
         self.usesSessionStatusNotifications = usesSessionStatusNotifications
         self.status = status
         self.displayTitleOverride = Self.normalizedOptionalText(displayTitleOverride)
@@ -82,6 +85,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         windowID = try container.decode(UUID.self, forKey: .windowID)
         workspaceID = try container.decode(UUID.self, forKey: .workspaceID)
         isFlaggedForLater = try container.decodeIfPresent(Bool.self, forKey: .isFlaggedForLater) ?? false
+        showsResumedBadge = try container.decodeIfPresent(Bool.self, forKey: .showsResumedBadge) ?? false
         usesSessionStatusNotifications = try container.decodeIfPresent(
             Bool.self,
             forKey: .usesSessionStatusNotifications
@@ -107,6 +111,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         try container.encode(windowID, forKey: .windowID)
         try container.encode(workspaceID, forKey: .workspaceID)
         try container.encode(isFlaggedForLater, forKey: .isFlaggedForLater)
+        try container.encode(showsResumedBadge, forKey: .showsResumedBadge)
         try container.encode(usesSessionStatusNotifications, forKey: .usesSessionStatusNotifications)
         try container.encodeIfPresent(status, forKey: .status)
         try container.encodeIfPresent(displayTitleOverride, forKey: .displayTitleOverride)
@@ -128,6 +133,7 @@ private extension SessionRecord {
         case windowID
         case workspaceID
         case isFlaggedForLater
+        case showsResumedBadge
         case usesSessionStatusNotifications
         case status
         case displayTitleOverride

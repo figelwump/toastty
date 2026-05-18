@@ -2086,6 +2086,7 @@ struct ToasttyApp: App {
             cliExecutablePathProvider: { cliExecutablePath },
             socketPathProvider: { socketPath }
         )
+        terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }

@@ -52,6 +52,11 @@ struct TerminalPanelRenderAttachmentSnapshot {
     }
 }
 
+private struct RestoredManagedLaunch {
+    let sessionID: String
+    let configuration: TerminalSurfaceLaunchConfiguration
+}
+
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
     typealias LocalDocumentLinkAlertPresenter = @MainActor (
@@ -67,11 +72,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
+    private weak var restoredManagedLaunchPlanner: (any ManagedAgentLaunchPlanning)?
     private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private weak var agentCatalogProvider: (any AgentCatalogProviding)?
     private var stateObservation: AnyCancellable?
     private var observedWindowFontPointsByID: [UUID: Double] = [:]
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
+    private var restoredManagedLaunchesByPanelID: [UUID: RestoredManagedLaunch] = [:]
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
     private var exitedTerminalPanelIDs: Set<UUID> = []
@@ -167,6 +174,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
         metadataService?.bind(sessionLifecycleTracker: sessionLifecycleTracker)
         workspaceMaintenanceService?.bind(sessionLifecycleTracker: sessionLifecycleTracker)
         #endif
+    }
+
+    func setRestoredManagedLaunchPlanner(_ planner: any ManagedAgentLaunchPlanning) {
+        restoredManagedLaunchPlanner = planner
     }
 
     func setTerminalProfileProvider(
@@ -370,6 +381,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
         let livePanelIDs = liveTerminalPanelIDs(in: state)
         launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
+        for (panelID, launch) in restoredManagedLaunchesByPanelID where livePanelIDs.contains(panelID) == false {
+            restoredManagedLaunchPlanner?.discardManagedLaunch(sessionID: launch.sessionID)
+        }
+        restoredManagedLaunchesByPanelID = restoredManagedLaunchesByPanelID.filter { panelID, _ in
+            livePanelIDs.contains(panelID)
+        }
         profiledTerminalPanelIDsAwaitingStartupTitleCleanup = profiledTerminalPanelIDsAwaitingStartupTitleCleanup
             .intersection(livePanelIDs)
         exitedTerminalPanelIDs = exitedTerminalPanelIDs.intersection(livePanelIDs)
@@ -1416,12 +1433,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         logSurfaceLaunchEnvironmentIfNeeded(panelID: panelID, environment: baseEnvironmentVariables)
 
         guard launchedProfiledPanelIDs.contains(panelID) == false else {
+            discardPendingRestoredManagedLaunch(for: panelID)
             return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
         }
         guard let store,
               let workspaceID = workspaceID(containing: panelID, state: store.state),
               let workspace = store.state.workspacesByID[workspaceID],
               case .terminal(let terminalState)? = workspace.panelState(for: panelID) else {
+            discardPendingRestoredManagedLaunch(for: panelID)
             return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
         }
 
@@ -1434,8 +1453,10 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             agentCatalog: agentCatalogProvider?.catalog ?? .empty
         ) {
         case .none:
+            discardPendingRestoredManagedLaunch(for: panelID)
             break
         case .clearRecord(let reason):
+            discardPendingRestoredManagedLaunch(for: panelID)
             ToasttyLog.warning(
                 "Launching restored pane without managed agent resume because the stored record is invalid",
                 category: .terminal,
@@ -1447,6 +1468,13 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
             _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
         case .launch(let configuration):
+            if let restoredManagedLaunch = restoredManagedLaunchConfiguration(
+                panelID: panelID,
+                terminalState: terminalState,
+                fallbackConfiguration: configuration
+            ) {
+                return restoredManagedLaunch
+            }
             ToasttyLog.info(
                 "Launching restored pane with managed agent native resume",
                 category: .terminal,
@@ -1490,6 +1518,86 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         }
     }
 
+    private func discardPendingRestoredManagedLaunch(for panelID: UUID) {
+        guard let launch = restoredManagedLaunchesByPanelID.removeValue(forKey: panelID) else {
+            return
+        }
+        restoredManagedLaunchPlanner?.discardManagedLaunch(sessionID: launch.sessionID)
+    }
+
+    private func restoredManagedLaunchConfiguration(
+        panelID: UUID,
+        terminalState: TerminalPanelState,
+        fallbackConfiguration: TerminalSurfaceLaunchConfiguration
+    ) -> TerminalSurfaceLaunchConfiguration? {
+        if let existingLaunch = restoredManagedLaunchesByPanelID[panelID] {
+            return existingLaunch.configuration
+        }
+
+        guard let restoredManagedLaunchPlanner,
+              let record = terminalState.resumeRecord,
+              let argv = ManagedAgentResumeResolver.resumeArgv(
+                  for: record,
+                  agentCatalog: agentCatalogProvider?.catalog ?? .empty
+              ) else {
+            return nil
+        }
+
+        do {
+            let plan = try restoredManagedLaunchPlanner.prepareManagedLaunch(
+                ManagedAgentLaunchRequest(
+                    agent: record.agent,
+                    panelID: panelID,
+                    argv: argv,
+                    cwd: record.cwd
+                )
+            )
+            sessionLifecycleTracker?.markSessionResumedLaunch(sessionID: plan.sessionID, at: Date())
+
+            var commandEnvironment = plan.environment
+            commandEnvironment[ToasttyLaunchContextEnvironment.launchReasonKey] = TerminalLaunchReason.restore.rawValue
+            commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
+            commandEnvironment["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"] = record.agent.rawValue
+            commandEnvironment["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"] = record.nativeSessionID
+
+            let configuration = TerminalSurfaceLaunchConfiguration(
+                environmentVariables: fallbackConfiguration.environmentVariables,
+                initialInput: ShellCommandRenderer.render(
+                    argv: plan.argv,
+                    environment: commandEnvironment
+                ),
+                workingDirectoryOverride: fallbackConfiguration.workingDirectoryOverride
+            )
+            restoredManagedLaunchesByPanelID[panelID] = RestoredManagedLaunch(
+                sessionID: plan.sessionID,
+                configuration: configuration
+            )
+            ToasttyLog.info(
+                "Launching restored pane with managed agent native resume and session sidebar tracking",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "session_id": plan.sessionID,
+                    "agent": record.agent.rawValue,
+                    "native_session_id": record.nativeSessionID,
+                ]
+            )
+            return configuration
+        } catch {
+            ToasttyLog.warning(
+                "Falling back to unmanaged restored agent resume after sidebar session preparation failed",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "agent": record.agent.rawValue,
+                    "native_session_id": record.nativeSessionID,
+                    "error": error.localizedDescription,
+                ]
+            )
+            return nil
+        }
+    }
+
     private func launchContextEnvironment(for panelID: UUID) -> [String: String] {
         let baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
         return baseEnvironmentVariables.merging([
@@ -1520,6 +1628,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
     func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
         restoredTerminalPanelIDsAwaitingLaunch.remove(panelID)
+        restoredManagedLaunchesByPanelID.removeValue(forKey: panelID)
         guard let store,
               let workspaceID = workspaceID(containing: panelID, state: store.state),
               let workspace = store.state.workspacesByID[workspaceID],

@@ -74,7 +74,7 @@ enum AgentLaunchError: LocalizedError, Equatable {
 }
 
 @MainActor
-final class AgentLaunchService {
+final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private weak var store: AppStore?
     private weak var terminalCommandRouter: (any TerminalCommandRouting)?
     private let agentCatalogProvider: any AgentCatalogProviding
@@ -179,6 +179,10 @@ final class AgentLaunchService {
 
     func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan {
         try managedLaunchPlanner.prepareManagedLaunch(request)
+    }
+
+    func discardManagedLaunch(sessionID: String) {
+        managedLaunchPlanner.discardManagedLaunch(sessionID: sessionID)
     }
 
     private func resolveLaunchTarget(

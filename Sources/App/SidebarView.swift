@@ -602,6 +602,7 @@ struct SidebarView: View {
                 for: status,
                 showsUnreadSessionAccent: showsUnreadSessionAccent
             ),
+            showsResumedBadge: workspaceSessionStatus.showsResumedBadge,
             detailText: normalizedSessionDetail(status.detail),
             cwd: Self.abbreviatedPathLabel(workspaceSessionStatus.cwd),
             isLaterFlagged: isLaterFlagged
@@ -717,6 +718,10 @@ struct SidebarView: View {
 
                 if let chipKind {
                     sessionStatusChip(kind: chipKind)
+                }
+
+                if workspaceSessionStatus.showsResumedBadge {
+                    resumedSessionChip()
                 }
 
                 Spacer(minLength: 0)
@@ -1119,6 +1124,18 @@ struct SidebarView: View {
             )
     }
 
+    private func resumedSessionChip() -> some View {
+        Text("resumed")
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: .idle))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                ToastyTheme.sessionStatusBackgroundColor(for: .idle).opacity(0.72),
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+    }
+
     @ViewBuilder
     private func sessionDetailLabel(
         _ text: String,
@@ -1339,6 +1356,7 @@ struct SidebarView: View {
     static func sessionAccessibilityLabel(
         agentName: String,
         chipKind: SessionStatusKind?,
+        showsResumedBadge: Bool,
         detailText: String?,
         cwd: String?,
         isLaterFlagged: Bool
@@ -1346,6 +1364,9 @@ struct SidebarView: View {
         var components = [agentName]
         if let chipKind {
             components.append(sessionStatusChipLabel(for: chipKind))
+        }
+        if showsResumedBadge {
+            components.append("resumed")
         }
         if let detailText {
             components.append(detailText)

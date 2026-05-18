@@ -59,6 +59,7 @@ final class SessionRuntimeStore: ObservableObject {
         workspaceID: UUID,
         usesSessionStatusNotifications: Bool = false,
         displayTitleOverride: String? = nil,
+        showsResumedBadge: Bool = false,
         cwd: String?,
         repoRoot: String?,
         at now: Date
@@ -74,6 +75,7 @@ final class SessionRuntimeStore: ObservableObject {
             workspaceID: workspaceID,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
             displayTitleOverride: displayTitleOverride,
+            showsResumedBadge: showsResumedBadge,
             cwd: cwd,
             repoRoot: repoRoot,
             at: now
@@ -131,6 +133,7 @@ final class SessionRuntimeStore: ObservableObject {
         repoRoot: String?,
         at now: Date
     ) {
+        let shouldClearResumedBadge = sessionRegistry.activeSession(sessionID: sessionID)?.showsResumedBadge == true
         var nextRegistry = sessionRegistry
         nextRegistry.updateFiles(
             sessionID: sessionID,
@@ -139,6 +142,9 @@ final class SessionRuntimeStore: ObservableObject {
             repoRoot: repoRoot,
             at: now
         )
+        if shouldClearResumedBadge {
+            nextRegistry.clearResumedBadge(sessionID: sessionID)
+        }
         publish(nextRegistry)
     }
 
@@ -166,6 +172,9 @@ final class SessionRuntimeStore: ObservableObject {
             nextStatus: storedStatus,
             registry: &nextRegistry
         )
+        if shouldClearResumedBadge(previousRecord: previousRecord, nextStatus: storedStatus) {
+            nextRegistry.clearResumedBadge(sessionID: sessionID)
+        }
         if let currentRecord = nextRegistry.sessionsByID[sessionID] {
             ToasttyLog.debug(
                 "Updated managed session status",
@@ -525,6 +534,20 @@ final class SessionRuntimeStore: ObservableObject {
                 metadata: metadata
             )
         }
+    }
+
+    func markSessionResumedLaunch(sessionID: String, at now: Date) {
+        guard sessionRegistry.activeSession(sessionID: sessionID) != nil else {
+            return
+        }
+        store?.recordSessionStatusSidebarExpansionEligibility()
+        var nextRegistry = sessionRegistry
+        nextRegistry.markSessionResumedLaunch(
+            sessionID: sessionID,
+            status: Self.resumedIdleStatus,
+            at: now
+        )
+        publish(nextRegistry)
     }
 
     private func sessionStopMetadata(
@@ -889,6 +912,22 @@ final class SessionRuntimeStore: ObservableObject {
         return false
     }
 
+    private func shouldClearResumedBadge(
+        previousRecord: SessionRecord?,
+        nextStatus: SessionStatus
+    ) -> Bool {
+        guard previousRecord?.showsResumedBadge == true else {
+            return false
+        }
+
+        switch nextStatus.kind {
+        case .working, .needsApproval, .error:
+            return true
+        case .idle, .ready:
+            return false
+        }
+    }
+
     private func panelIsUnread(panelID: UUID, in workspace: WorkspaceState?) -> Bool {
         guard let workspace,
               let tabID = workspace.tabID(containingPanelID: panelID) else {
@@ -915,6 +954,12 @@ final class SessionRuntimeStore: ObservableObject {
         kind: .idle,
         summary: "Waiting",
         detail: "Ready for prompt"
+    )
+
+    private static let resumedIdleStatus = SessionStatus(
+        kind: .idle,
+        summary: "Waiting",
+        detail: "Resumed"
     )
 
     private static let processWatchWorkingStatus = SessionStatus(
