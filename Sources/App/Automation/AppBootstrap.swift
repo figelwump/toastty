@@ -32,6 +32,7 @@ enum AppBootstrap {
                 state = restored.state
                 state.defaultTerminalProfileID = AppState.normalizedTerminalProfileID(defaultTerminalProfileID)
                 restoredTerminalPanelIDs = state.allTerminalPanelIDs
+                let restoredStateLayout = WorkspaceLayoutSnapshot(state: state)
                 ToasttyLog.info(
                     "Restored workspace layout state",
                     category: .bootstrap,
@@ -39,6 +40,10 @@ enum AppBootstrap {
                         "requested_profile_id": layoutPersistenceContext.profileID,
                         "resolved_profile_id": restored.resolvedProfileID,
                         "path": layoutPersistenceContext.fileURL.path,
+                        "persisted_managed_agent_resume_record_count": String(restored.layout.managedAgentResumeRecordCount),
+                        "persisted_managed_agent_resume_records": restored.layout.managedAgentResumeRecordSummary(),
+                        "restored_managed_agent_resume_record_count": String(restoredStateLayout.managedAgentResumeRecordCount),
+                        "restored_managed_agent_resume_records": restoredStateLayout.managedAgentResumeRecordSummary(),
                     ]
                 )
             } else {

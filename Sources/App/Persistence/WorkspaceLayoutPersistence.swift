@@ -16,7 +16,7 @@ struct WorkspaceLayoutPersistenceContext {
         )
     }
 
-    func loadState() -> (state: AppState, resolvedProfileID: String)? {
+    func loadState() -> (state: AppState, layout: WorkspaceLayoutSnapshot, resolvedProfileID: String)? {
         migrateLegacyStoreIfNeeded()
         let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
         guard let loadResult = store.loadLayout(
@@ -25,7 +25,7 @@ struct WorkspaceLayoutPersistenceContext {
         ) else {
             return nil
         }
-        return (loadResult.layout.makeAppState(), loadResult.resolvedProfileID)
+        return (loadResult.layout.makeAppState(), loadResult.layout, loadResult.resolvedProfileID)
     }
 
     private func migrateLegacyStoreIfNeeded() {
@@ -97,6 +97,11 @@ final class WorkspaceLayoutPersistenceCoordinator {
         let previousLayout = WorkspaceLayoutSnapshot(state: previousState)
         let nextLayout = WorkspaceLayoutSnapshot(state: nextState)
         guard previousLayout != nextLayout else { return }
+        logResumeRecordMutationIfNeeded(
+            action,
+            previousLayout: previousLayout,
+            nextLayout: nextLayout
+        )
         schedulePersist(
             layout: nextLayout,
             reason: "action_\(action.logName)",
@@ -185,6 +190,12 @@ final class WorkspaceLayoutPersistenceCoordinator {
         }
         let effectiveDropMetadata = baselineDropMetadata ?? lastPersistedDropMetadata
 
+        let previousResumeRecordSummary = (
+            baselineLayout ?? lastPersistedLayout
+        )?.managedAgentResumeRecordSummary() ?? "none"
+        let nextResumeRecordSummary = layout.managedAgentResumeRecordSummary()
+        let nextResumeRecordCount = layout.managedAgentResumeRecordCount
+
         guard store.persistLayout(layout, for: context.profileID) else {
             return
         }
@@ -197,7 +208,16 @@ final class WorkspaceLayoutPersistenceCoordinator {
                 "profile_id": context.profileID,
                 "reason": reason,
                 "path": context.fileURL.path,
+                "managed_agent_resume_record_count": String(nextResumeRecordCount),
+                "managed_agent_resume_records": nextResumeRecordSummary,
             ]
+        )
+
+        logResumeRecordPersistenceIfNeeded(
+            reason: reason,
+            previousSummary: previousResumeRecordSummary,
+            nextSummary: nextResumeRecordSummary,
+            nextCount: nextResumeRecordCount
         )
 
         if let effectiveDropMetadata {
@@ -208,6 +228,69 @@ final class WorkspaceLayoutPersistenceCoordinator {
             metadata["mutation"] = "persist_layout_drop"
             persistDropAuditLogger(metadata)
         }
+    }
+
+    private func logResumeRecordMutationIfNeeded(
+        _ action: AppAction,
+        previousLayout: WorkspaceLayoutSnapshot,
+        nextLayout: WorkspaceLayoutSnapshot
+    ) {
+        let previousSummary = previousLayout.managedAgentResumeRecordSummary()
+        let nextSummary = nextLayout.managedAgentResumeRecordSummary()
+        let explicitResumeRecordAction: (panelID: UUID, resumeRecord: ManagedAgentResumeRecord?)?
+        if case .updateTerminalPanelResumeRecord(let panelID, let resumeRecord) = action {
+            explicitResumeRecordAction = (panelID, resumeRecord)
+        } else {
+            explicitResumeRecordAction = nil
+        }
+
+        guard explicitResumeRecordAction != nil || previousSummary != nextSummary else {
+            return
+        }
+        let hasRecord = explicitResumeRecordAction.map {
+            $0.resumeRecord == nil ? "false" : "true"
+        } ?? "unknown"
+
+        ToasttyLog.info(
+            "Workspace layout managed agent resume record state changed",
+            category: .state,
+            metadata: [
+                "action": action.logName,
+                "panel_id": explicitResumeRecordAction?.panelID.uuidString ?? "none",
+                "agent": explicitResumeRecordAction?.resumeRecord?.agent.rawValue ?? "none",
+                "has_record": hasRecord,
+                "previous_count": String(previousLayout.managedAgentResumeRecordCount),
+                "next_count": String(nextLayout.managedAgentResumeRecordCount),
+                "previous_records": previousSummary,
+                "next_records": nextSummary,
+            ]
+        )
+    }
+
+    private func logResumeRecordPersistenceIfNeeded(
+        reason: String,
+        previousSummary: String,
+        nextSummary: String,
+        nextCount: Int
+    ) {
+        guard reason == "application_will_terminate"
+            || reason == "action_updateTerminalPanelResumeRecord"
+            || previousSummary != nextSummary else {
+            return
+        }
+
+        ToasttyLog.info(
+            "Persisted workspace layout managed agent resume record state",
+            category: .state,
+            metadata: [
+                "profile_id": context.profileID,
+                "reason": reason,
+                "path": context.fileURL.path,
+                "previous_records": previousSummary,
+                "next_records": nextSummary,
+                "next_count": String(nextCount),
+            ]
+        )
     }
 
     private func persistDropMetadata(
