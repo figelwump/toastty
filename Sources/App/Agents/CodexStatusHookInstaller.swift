@@ -53,13 +53,14 @@ final class CodexStatusHookInstaller {
         "UserPromptSubmit",
         "PermissionRequest",
         "PreToolUse",
-        "PostToolUse",
         "Stop",
+    ]
+    private static let legacyHookEventNames = [
+        "PostToolUse",
     ]
     private static let matcherByEventName: [String: String] = [
         "PermissionRequest": "*",
         "PreToolUse": "*",
-        "PostToolUse": "*",
     ]
 
     private let homeDirectoryPath: String
@@ -85,7 +86,9 @@ final class CodexStatusHookInstaller {
         var state: CodexStatusHookInstallState = .notInstalled
         if fileManager.fileExists(atPath: hooksFileURL.path) {
             let object = try readHooksJSONObject(from: hooksFileURL)
-            state = Self.hooksAreInstalled(in: object, expectedCommand: expectedCommand) ? .installed : .needsUpdate
+            let hasCurrentHooks = Self.hooksAreInstalled(in: object, expectedCommand: expectedCommand)
+            let hasLegacyHooks = Self.containsLegacyToasttyHooks(in: object, expectedCommand: expectedCommand)
+            state = hasCurrentHooks && !hasLegacyHooks ? .installed : .needsUpdate
         }
 
         if state == .installed {
@@ -254,6 +257,29 @@ private extension CodexStatusHookInstaller {
         }
     }
 
+    static func containsLegacyToasttyHooks(
+        in object: [String: Any],
+        expectedCommand: String
+    ) -> Bool {
+        guard let hooks = object["hooks"] as? [String: Any] else {
+            return false
+        }
+
+        return legacyHookEventNames.contains { eventName in
+            guard let groups = hooks[eventName] as? [[String: Any]] else {
+                return false
+            }
+            return groups.contains { group in
+                guard let hookEntries = group["hooks"] as? [[String: Any]] else {
+                    return false
+                }
+                return hookEntries.contains {
+                    isOwnedToasttyHook($0, expectedCommand: expectedCommand)
+                }
+            }
+        }
+    }
+
     static func installingToasttyHooks(
         in object: [String: Any],
         expectedCommand: String
@@ -278,7 +304,7 @@ private extension CodexStatusHookInstaller {
             return nextObject
         }
 
-        for eventName in hookEventNames {
+        for eventName in hookEventNames + legacyHookEventNames {
             guard let groups = hooks[eventName] as? [[String: Any]] else {
                 continue
             }

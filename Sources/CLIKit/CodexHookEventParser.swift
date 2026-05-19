@@ -11,6 +11,9 @@ enum CodexHookEventParser {
         guard let eventName = normalizedString(object["hook_event_name"]) else {
             return []
         }
+        guard ["PostToolUse", "PostToolUseFailure"].contains(eventName) == false else {
+            return []
+        }
 
         var commands: [CLICommand] = []
         let source = normalizedString(object["source"])
@@ -53,14 +56,7 @@ private extension CodexHookEventParser {
             return SessionStatus(
                 kind: .working,
                 summary: "Working",
-                detail: toolProgressDetail(from: object, didRun: false) ?? "Working inside Codex"
-            )
-
-        case "PostToolUse":
-            return SessionStatus(
-                kind: .working,
-                summary: "Working",
-                detail: toolProgressDetail(from: object, didRun: true) ?? "Working inside Codex"
+                detail: toolProgressDetail(from: object) ?? "Working inside Codex"
             )
 
         case "PermissionRequest":
@@ -99,7 +95,7 @@ private extension CodexHookEventParser {
         return nil
     }
 
-    static func toolProgressDetail(from object: [String: Any], didRun: Bool) -> String? {
+    static func toolProgressDetail(from object: [String: Any]) -> String? {
         guard let toolName = normalizedString(object["tool_name"]) else {
             return nil
         }
@@ -108,15 +104,15 @@ private extension CodexHookEventParser {
         switch toolName {
         case "Bash":
             if let command = normalizedSummaryText(commandPreview(from: input), limit: 100) {
-                return didRun ? "Ran \(command)" : "Running \(command)"
+                return "Running \(command)"
             }
-            return didRun ? "Ran a shell command" : "Running a shell command"
+            return "Running a shell command"
 
         case "apply_patch":
             if let path = firstPathValue(in: input) {
-                return didRun ? "Edited \(path)" : "Editing \(path)"
+                return "Editing \(path)"
             }
-            return didRun ? "Edited files" : "Editing files"
+            return "Editing files"
 
         default:
             return "Using \(displayToolName(toolName))"

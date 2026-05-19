@@ -7,7 +7,6 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         "UserPromptSubmit",
         "PermissionRequest",
         "PreToolUse",
-        "PostToolUse",
         "Stop",
     ]
 
@@ -27,6 +26,7 @@ final class CodexStatusHookInstallerTests: XCTestCase {
             let entries = try toasttyHookEntries(for: eventName, in: object, homeURL: homeURL)
             XCTAssertEqual(entries.count, 1, eventName)
         }
+        XCTAssertNil((object["hooks"] as? [String: Any])?["PostToolUse"])
 
         let forwarder = try String(contentsOf: result.status.forwarderScriptURL, encoding: .utf8)
         XCTAssertTrue(forwarder.contains("session ingest-agent-event --source codex-hooks"))
@@ -92,6 +92,44 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         let stopHooks = try hookEntries(for: "Stop", in: object)
         XCTAssertFalse(stopHooks.contains { ($0["command"] as? String)?.contains("old-toastty-forwarder") == true })
         XCTAssertEqual(try toasttyHookEntries(for: "Stop", in: object, homeURL: homeURL).count, 1)
+    }
+
+    func testInstallRemovesLegacyToasttyPostToolUseHook() throws {
+        let homeURL = try makeTemporaryHome()
+        let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        let legacyCommand = "/bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
+        try writeHooksObject(
+            [
+                "hooks": [
+                    "PostToolUse": [
+                        [
+                            "matcher": "*",
+                            "hooks": [
+                                [
+                                    "type": "command",
+                                    "command": legacyCommand,
+                                    "timeout": 5,
+                                    "statusMessage": "Toastty Agent Status",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            to: hooksFileURL
+        )
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+
+        XCTAssertEqual(try installer.installationStatus().state, .needsUpdate)
+
+        _ = try installer.install()
+
+        let object = try hooksJSONObject(homeURL: homeURL)
+        XCTAssertNil((object["hooks"] as? [String: Any])?["PostToolUse"])
+        for eventName in eventNames {
+            let entries = try toasttyHookEntries(for: eventName, in: object, homeURL: homeURL)
+            XCTAssertEqual(entries.count, 1, eventName)
+        }
     }
 
     func testUninstallRemovesOnlyToasttyHooks() throws {

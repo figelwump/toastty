@@ -34,7 +34,7 @@ enum ClaudeHookEventParser {
                 )
             ]
 
-        case "PostToolUse":
+        case "PreToolUse":
             return [
                 .sessionStatus(
                     sessionID: sessionID,
@@ -45,16 +45,8 @@ enum ClaudeHookEventParser {
                 )
             ]
 
-        case "PostToolUseFailure":
-            return [
-                .sessionStatus(
-                    sessionID: sessionID,
-                    panelID: panelID,
-                    kind: .working,
-                    summary: "Working",
-                    detail: toolFailureDetail(from: object) ?? "Retrying after a tool error"
-                )
-            ]
+        case "PostToolUse", "PostToolUseFailure":
+            return []
 
         case "Stop":
             return [
@@ -135,13 +127,6 @@ enum ClaudeHookEventParser {
 
     private static func toolProgressDetail(from object: [String: Any]) -> String? {
         toolDescription(from: object)
-    }
-
-    private static func toolFailureDetail(from object: [String: Any]) -> String? {
-        guard let toolName = normalizedString(object["tool_name"]) else {
-            return nil
-        }
-        return "Retrying after \(displayToolName(toolName)) failed"
     }
 
     private static func submittedPromptDetail(from object: [String: Any]) -> String? {

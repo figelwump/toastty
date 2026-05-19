@@ -145,7 +145,7 @@ typing shell functions directly.
 When the profile ID is `codex`, Toastty:
 
 1. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default.
-2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, `PostToolUse`, and `Stop`. These events drive **Working**, **Needs approval**, **Ready**, and native resume metadata for managed Codex sessions.
+2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, and `Stop`. These events drive **Working**, **Needs approval**, **Ready**, and native resume metadata for managed Codex sessions.
 3. **Creates a notification script** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
 4. **Injects Codex config** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 5. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit.
@@ -165,8 +165,7 @@ When the profile ID is `claude`, Toastty:
 3. **Injects lifecycle hooks** into the merged Claude settings JSON under `hooks`:
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
-   - `PostToolUse` (wildcard matcher) — fires after any tool use
-   - `PostToolUseFailure` (wildcard matcher) — fires after a failed tool use
+   - `PreToolUse` (wildcard matcher) — fires before any tool use
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
    - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
 4. **Writes a temporary settings file** and passes `--settings <path>` to Claude

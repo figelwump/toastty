@@ -89,13 +89,13 @@ struct AgentEventParsersTests {
     }
 
     @Test
-    func claudePostToolUseFailureMapsToWorkingRetryStatus() throws {
+    func claudePreToolUseMapsToWorkingToolStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,
             sessionID: "sess-123",
             panelID: nil,
             payload: Data(
-                #"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash"}"#.utf8
+                #"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"}}"#.utf8
             )
         )
 
@@ -105,9 +105,28 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 kind: .working,
                 summary: "Working",
-                detail: "Retrying after Bash failed"
+                detail: "Running npm test"
             )
         ])
+    }
+
+    @Test
+    func claudePostToolUseHooksAreIgnored() throws {
+        let postCommands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"PostToolUse","tool_name":"Bash"}"#.utf8)
+        )
+        let failureCommands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash"}"#.utf8)
+        )
+
+        #expect(postCommands.isEmpty)
+        #expect(failureCommands.isEmpty)
     }
 
     @Test
@@ -358,6 +377,58 @@ struct AgentEventParsersTests {
                 )
             ),
         ])
+    }
+
+    @Test
+    func codexPreToolUseHookMapsToWorkingToolStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PreToolUse","session_id":"thread-root","tool_name":"Bash","tool_input":{"command":"git status --short"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCodexHookEvent(
+                sessionID: "sess-123",
+                panelID: nil,
+                event: CodexHookEvent(
+                    hookEventName: "PreToolUse",
+                    threadID: "thread-root",
+                    turnID: nil,
+                    promptFingerprint: nil,
+                    status: SessionStatus(kind: .working, summary: "Working", detail: "Running git status --short"),
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil
+                )
+            ),
+        ])
+    }
+
+    @Test
+    func codexPostToolUseHookIsIgnored() throws {
+        let postCommands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUse","session_id":"thread-root","tool_name":"Bash","tool_input":{"command":"git status --short"}}"#.utf8
+            )
+        )
+        let failureCommands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUseFailure","session_id":"thread-root","tool_name":"Bash","tool_input":{"command":"git status --short"}}"#.utf8
+            )
+        )
+
+        #expect(postCommands.isEmpty)
+        #expect(failureCommands.isEmpty)
     }
 
     @Test

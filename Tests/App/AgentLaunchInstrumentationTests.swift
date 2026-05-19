@@ -40,8 +40,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let hooks = try XCTUnwrap(object["hooks"] as? [String: Any])
         XCTAssertNotNil(hooks["UserPromptSubmit"])
         XCTAssertNotNil(hooks["Stop"])
-        XCTAssertNotNil(hooks["PostToolUse"])
-        XCTAssertNotNil(hooks["PostToolUseFailure"])
+        XCTAssertNotNil(hooks["PreToolUse"])
+        XCTAssertNil(hooks["PostToolUse"])
+        XCTAssertNil(hooks["PostToolUseFailure"])
         XCTAssertNotNil(hooks["PermissionRequest"])
         XCTAssertNotNil(hooks["Notification"])
 
