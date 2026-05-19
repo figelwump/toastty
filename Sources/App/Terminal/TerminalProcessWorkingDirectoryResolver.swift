@@ -57,6 +57,10 @@ final class TerminalProcessWorkingDirectoryResolver {
         150_000_000,
         300_000_000,
     ]
+    private static let launchContextProbeTimeout: TimeInterval = 0.5
+    private static let launchContextProbeEnabled = truthyEnvironmentValue(
+        ProcessInfo.processInfo.environment["TOASTTY_DEBUG_RESTORED_LAUNCH_CONTEXT"]
+    )
     private var cachedProcessByPanelID: [UUID: CachedProcessEntry] = [:]
     /// Panels that failed initial PID snapshot diff (child not visible yet).
     /// The poll loop will attempt deferred registration by scanning app children.
@@ -249,7 +253,7 @@ final class TerminalProcessWorkingDirectoryResolver {
                     "restored_launch_probe_expected": shouldProbeObservedLaunchContext ? "true" : "false",
                 ]
             )
-            if shouldProbeObservedLaunchContext {
+            if shouldProbeObservedLaunchContext, Self.launchContextProbeEnabled {
                 ToasttyLog.debug(
                     "Scheduling restored shell launch context probe",
                     category: .terminal,
@@ -766,20 +770,52 @@ final class TerminalProcessWorkingDirectoryResolver {
             "-o", "command=",
         ]
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        let probeDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "toastty-launch-context-probe-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: probeDirectory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: probeDirectory)
+        }
+
+        let stdoutURL = probeDirectory.appendingPathComponent("stdout.txt")
+        let stderrURL = probeDirectory.appendingPathComponent("stderr.txt")
+        FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+
+        let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+        let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+        defer {
+            try? stdoutHandle.close()
+            try? stderrHandle.close()
+        }
+        process.standardOutput = stdoutHandle
+        process.standardError = stderrHandle
 
         try process.run()
+        if waitForProcessExit(process, timeout: launchContextProbeTimeout) == false {
+            process.terminate()
+            if waitForProcessExit(process, timeout: 0.1) == false {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+                _ = waitForProcessExit(process, timeout: 0.1)
+            }
+            if process.isRunning == false {
+                process.waitUntilExit()
+            }
+            throw LaunchContextProbeError.timedOut(timeout: launchContextProbeTimeout)
+        }
+
         process.waitUntilExit()
+        try? stdoutHandle.close()
+        try? stderrHandle.close()
 
         let stdout = String(
-            data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+            data: (try? Data(contentsOf: stdoutURL)) ?? Data(),
             encoding: .utf8
         ) ?? ""
         let stderr = String(
-            data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+            data: (try? Data(contentsOf: stderrURL)) ?? Data(),
             encoding: .utf8
         ) ?? ""
 
@@ -791,6 +827,21 @@ final class TerminalProcessWorkingDirectoryResolver {
         }
 
         return stdout
+    }
+
+    private static func waitForProcessExit(_ process: Process, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return process.isRunning == false
+    }
+
+    private static func truthyEnvironmentValue(_ value: String?) -> Bool {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
     }
 
     private static func launchContextValue(
@@ -824,6 +875,7 @@ final class TerminalProcessWorkingDirectoryResolver {
 
     private enum LaunchContextProbeError: LocalizedError {
         case commandFailed(status: Int32, stderr: String)
+        case timedOut(timeout: TimeInterval)
 
         var errorDescription: String? {
             switch self {
@@ -832,6 +884,8 @@ final class TerminalProcessWorkingDirectoryResolver {
                     return "ps exited with status \(status)"
                 }
                 return "ps exited with status \(status): \(stderr)"
+            case .timedOut(let timeout):
+                return "ps timed out after \(timeout)s"
             }
         }
     }
