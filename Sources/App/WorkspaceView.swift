@@ -2349,6 +2349,14 @@ struct WorkspaceView: View {
         abs(translation.width) >= workspaceTabDragActivationDistance
     }
 
+    nonisolated static func workspaceTabDragUpdateShouldProceed(
+        activeTabID: UUID?,
+        tabID: UUID,
+        translation: CGSize
+    ) -> Bool {
+        activeTabID == tabID || workspaceTabDragActivationExceeded(translation: translation)
+    }
+
     nonisolated static func pointerMovementWithinTapTolerance(translation: CGSize) -> Bool {
         let distanceSquared = (translation.width * translation.width) + (translation.height * translation.height)
         return distanceSquared < (workspaceTabDragActivationDistance * workspaceTabDragActivationDistance)
@@ -2383,12 +2391,14 @@ struct WorkspaceView: View {
             )
             return
         }
-        guard Self.workspaceTabDragActivationExceeded(translation: value.translation) else {
+        guard Self.workspaceTabDragUpdateShouldProceed(
+            activeTabID: activeTabDrag?.tabID,
+            tabID: tabID,
+            translation: value.translation
+        ) else {
             let activeDragIsForCurrentTab = activeTabDrag?.tabID == tabID
             ToasttyLog.info(
-                activeDragIsForCurrentTab
-                    ? "workspace tab active drag blocked by activation threshold"
-                    : "workspace tab drag below activation threshold",
+                "workspace tab drag below activation threshold",
                 category: .input,
                 metadata: baseMetadata.merging(
                     [

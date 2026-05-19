@@ -841,6 +841,38 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceTabDragUpdateContinuesForActiveTabBelowActivationThreshold() {
+        let tabID = UUID()
+
+        XCTAssertTrue(
+            WorkspaceView.workspaceTabDragUpdateShouldProceed(
+                activeTabID: tabID,
+                tabID: tabID,
+                translation: CGSize(width: 0.5, height: 20)
+            )
+        )
+    }
+
+    func testWorkspaceTabDragUpdateRequiresActivationForInactiveTab() {
+        let activeTabID = UUID()
+        let tabID = UUID()
+
+        XCTAssertFalse(
+            WorkspaceView.workspaceTabDragUpdateShouldProceed(
+                activeTabID: activeTabID,
+                tabID: tabID,
+                translation: CGSize(width: 3.9, height: 20)
+            )
+        )
+        XCTAssertTrue(
+            WorkspaceView.workspaceTabDragUpdateShouldProceed(
+                activeTabID: activeTabID,
+                tabID: tabID,
+                translation: CGSize(width: -4, height: 0)
+            )
+        )
+    }
+
     func testWorkspaceTabTapToleranceUsesTotalPointerDistance() {
         XCTAssertTrue(
             WorkspaceView.pointerMovementWithinTapTolerance(translation: CGSize(width: 2, height: 2))
