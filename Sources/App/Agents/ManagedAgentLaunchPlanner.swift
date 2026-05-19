@@ -103,6 +103,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     launchStart: launchStart
                 )
             )
+        } else {
+            ToasttyLog.warning(
+                "Skipping managed agent native session observation because launch cwd is unavailable",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "agent": request.agent.rawValue,
+                    "panel_id": target.panelID.uuidString,
+                ]
+            )
         }
 
         var environment = AgentLaunchInstrumentation.baselineEnvironment(for: request.agent)
@@ -163,7 +173,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             windowID: location.windowID,
             workspaceID: location.workspaceID,
             panelID: panelID,
-            cwd: normalizedNonEmpty(terminalState.cwd)
+            cwd: terminalState.agentLaunchWorkingDirectory
         )
     }
 

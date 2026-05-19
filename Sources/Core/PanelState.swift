@@ -34,6 +34,14 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
             ?? Self.homeDirectory
     }
 
+    /// Best known directory for launching commands inside this terminal.
+    /// Restored panes intentionally start with an empty live cwd until runtime
+    /// metadata arrives, so use the persisted launch seed in that window.
+    public var agentLaunchWorkingDirectory: String? {
+        Self.normalizedWorkingDirectoryValue(cwd)
+            ?? Self.normalizedWorkingDirectoryValue(launchWorkingDirectory)
+    }
+
     /// Only treat the live cwd field as a high-confidence process tracking hint.
     /// Restored launch seeds are intentionally excluded so startup restore does
     /// not bind panels to the wrong shell and overwrite live metadata later.

@@ -184,6 +184,52 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func launchUsesRestoredLaunchWorkingDirectoryWhenLiveCWDIsEmpty() throws {
+        let restoredCWD = try makeProjectRoot().path
+        let restoredState = try makeStateWithFocusedTerminal(
+            TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "",
+                launchWorkingDirectory: restoredCWD
+            )
+        )
+        let store = AppStore(state: restoredState.state, persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let observerRegistry = SpyNativeSessionObserverRegistry()
+        let agentCatalogProvider = TestAgentCatalogProvider()
+
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) },
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            nativeSessionObserverRegistry: observerRegistry
+        )
+
+        let result = try service.launch(profileID: "codex")
+        let activeSession = try #require(sessionRuntimeStore.sessionRegistry.activeSession(sessionID: result.sessionID))
+        let observation = try #require(observerRegistry.startedObservations.first)
+        let injectedCommand = try #require(terminalRouter.sentTextByPanelID[restoredState.panelID])
+
+        #expect(result.panelID == restoredState.panelID)
+        #expect(result.cwd == restoredCWD)
+        #expect(result.repoRoot == restoredCWD)
+        #expect(activeSession.cwd == restoredCWD)
+        #expect(activeSession.repoRoot == restoredCWD)
+        #expect(observation.cwd == restoredCWD)
+        #expect(observation.panelID == restoredState.panelID)
+        #expect(injectedCommand.contains("TOASTTY_CWD=\(restoredCWD)"))
+        #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=\(restoredCWD)"))
+    }
+
+    @Test
     func launchRejectsBusyPanels() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -440,6 +486,21 @@ struct AgentLaunchServiceTests {
             contents: Data("gitdir: /tmp/fake-worktree".utf8)
         )
         return projectRoot
+    }
+
+    private func makeStateWithFocusedTerminal(
+        _ terminalState: TerminalPanelState
+    ) throws -> (state: AppState, panelID: UUID) {
+        var state = AppState.bootstrap()
+        let window = try #require(state.windows.first)
+        let workspaceID = try #require(window.selectedWorkspaceID ?? window.workspaceIDs.first)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let panelID = try #require(workspace.focusedPanelID)
+        _ = workspace.updateSelectedTab { tab in
+            tab.panels[panelID] = .terminal(terminalState)
+        }
+        state.workspacesByID[workspaceID] = workspace
+        return (state, panelID)
     }
 
     private func makeCLIResolutionFixture() throws -> (

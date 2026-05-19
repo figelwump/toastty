@@ -92,6 +92,43 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testLaunchPlanUsesRestoredLaunchWorkingDirectoryWhenLiveCWDIsEmpty() throws {
+        let restoredCWD = "/tmp/restored-agent-pane"
+        let observer = StubManagedAgentNativeSessionObserver()
+        let fixture = try makePlannerFixture(
+            terminalState: TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "",
+                launchWorkingDirectory: restoredCWD
+            ),
+            nativeSessionObserverRegistry: observer
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: nil
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertEqual(plan.cwd, restoredCWD)
+        XCTAssertEqual(plan.environment["TOASTTY_CWD"], restoredCWD)
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.cwd,
+            restoredCWD
+        )
+        XCTAssertEqual(observer.observations.first?.cwd, restoredCWD)
+        XCTAssertEqual(observer.observations.first?.panelID, fixture.panelID)
+    }
+
     func testCodexSessionConfiguredEventPersistsResumeRecordAndCancelsLaunchScanner() async throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-codex-session-configured-\(UUID().uuidString)", isDirectory: true)
@@ -170,6 +207,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
 
 @MainActor
 private func makePlannerFixture(
+    terminalState: TerminalPanelState? = nil,
     fileManager: FileManager = .default,
     nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
     codexResumeResolver: (any CodexManagedSessionResolving)? = nil
@@ -180,10 +218,21 @@ private func makePlannerFixture(
     panelID: UUID,
     fileManager: FileManager
 ) {
-    let store = AppStore(persistTerminalFontPreference: false)
+    var state = AppState.bootstrap()
+    let window = try XCTUnwrap(state.windows.first)
+    let workspaceID = try XCTUnwrap(window.selectedWorkspaceID ?? window.workspaceIDs.first)
+    var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+    let panelID = try XCTUnwrap(workspace.focusedPanelID)
+    if let terminalState {
+        _ = workspace.updateSelectedTab { tab in
+            tab.panels[panelID] = .terminal(terminalState)
+        }
+        state.workspacesByID[workspaceID] = workspace
+    }
+
+    let store = AppStore(state: state, persistTerminalFontPreference: false)
     let sessionRuntimeStore = SessionRuntimeStore()
     sessionRuntimeStore.bind(store: store)
-    let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
 
     let planner = ManagedAgentLaunchPlanner(
         store: store,

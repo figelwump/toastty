@@ -212,7 +212,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 windowID: location.windowID,
                 workspaceID: location.workspaceID,
                 panelID: panelID,
-                cwd: normalizedNonEmpty(terminalState.cwd)
+                cwd: terminalState.agentLaunchWorkingDirectory
             )
         }
 
@@ -238,7 +238,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 windowID: windowID,
                 workspaceID: resolvedWorkspaceID,
                 panelID: focusedPanelID,
-                cwd: normalizedNonEmpty(terminalState.cwd)
+                cwd: terminalState.agentLaunchWorkingDirectory
             )
         }
 
@@ -251,7 +251,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 windowID: windowID,
                 workspaceID: resolvedWorkspaceID,
                 panelID: panelID,
-                cwd: normalizedNonEmpty(terminalState.cwd)
+                cwd: terminalState.agentLaunchWorkingDirectory
             )
         }
 
@@ -318,12 +318,4 @@ private struct LaunchTarget {
     let workspaceID: UUID
     let panelID: UUID
     let cwd: String?
-}
-
-private func normalizedNonEmpty(_ value: String?) -> String? {
-    guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-          trimmed.isEmpty == false else {
-        return nil
-    }
-    return trimmed
 }
