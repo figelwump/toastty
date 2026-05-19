@@ -11,9 +11,15 @@ enum CodexStatusHookLaunchPreflightState: Equatable {
 enum CodexStatusHookLaunchPreflightResolver {
     static func state(
         profileID: String,
+        launchReason: TerminalLaunchReason = .create,
         installationStatus: CodexStatusHookInstallStatus
     ) -> CodexStatusHookLaunchPreflightState {
         guard profileID == AgentKind.codex.rawValue else {
+            return .ready
+        }
+        // Restored panes already have persisted native resume metadata. Hook setup
+        // should not interrupt workspace recovery.
+        guard launchReason != .restore else {
             return .ready
         }
         return installationStatus.isInstalled ? .ready : .needsSetup(installationStatus)

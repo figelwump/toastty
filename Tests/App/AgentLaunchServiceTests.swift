@@ -162,6 +162,19 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func codexStatusHookPreflightAllowsRestoredCodexLaunches() {
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+
+        #expect(
+            CodexStatusHookLaunchPreflightResolver.state(
+                profileID: "codex",
+                launchReason: .restore,
+                installationStatus: missingStatus
+            ) == .ready
+        )
+    }
+
+    @Test
     func agentLaunchUICancelCodexHooksWarningDoesNotLaunch() throws {
         let fixture = try makeLaunchUITestFixture()
         let missingStatus = codexHookInstallStatus(state: .notInstalled)
