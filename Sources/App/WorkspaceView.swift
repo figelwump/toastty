@@ -2384,10 +2384,20 @@ struct WorkspaceView: View {
             return
         }
         guard Self.workspaceTabDragActivationExceeded(translation: value.translation) else {
+            let activeDragIsForCurrentTab = activeTabDrag?.tabID == tabID
             ToasttyLog.info(
-                "workspace tab drag below activation threshold",
+                activeDragIsForCurrentTab
+                    ? "workspace tab active drag blocked by activation threshold"
+                    : "workspace tab drag below activation threshold",
                 category: .input,
-                metadata: baseMetadata
+                metadata: baseMetadata.merging(
+                    [
+                        "activeDragIsForCurrentTab": "\(activeDragIsForCurrentTab)",
+                        "activationDistance": "\(Self.workspaceTabDragActivationDistance)",
+                        "translationWidthMagnitude": "\(abs(value.translation.width))",
+                    ],
+                    uniquingKeysWith: { _, new in new }
+                )
             )
             return
         }

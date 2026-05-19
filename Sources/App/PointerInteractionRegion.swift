@@ -78,6 +78,8 @@ final class PointerInteractionView: NSView {
     private var hoverTrackingArea: NSTrackingArea?
     private var isPointerInside = false
     private var isSequenceSuppressingWindowMovement = false
+    private var startWindowFrame: CGRect?
+    private var startScreenLocation: CGPoint?
     private var startWindowLocation: CGPoint?
     private var startLocation: CGPoint?
     private var dragEventCount = 0
@@ -186,6 +188,9 @@ final class PointerInteractionView: NSView {
     }
 
     private func beginPointerSequence(with event: NSEvent) {
+        let sequenceWindow = event.window ?? window
+        startWindowFrame = sequenceWindow?.frame
+        startScreenLocation = sequenceWindow?.convertPoint(toScreen: event.locationInWindow)
         startWindowLocation = event.locationInWindow
         startLocation = convert(event.locationInWindow, from: nil)
         dragEventCount = 0
@@ -218,6 +223,8 @@ final class PointerInteractionView: NSView {
             return
         }
         logInteraction("mouseUp", event: event, value: value)
+        startWindowFrame = nil
+        startScreenLocation = nil
         startWindowLocation = nil
         startLocation = nil
         dragEventCount = 0
@@ -269,6 +276,8 @@ final class PointerInteractionView: NSView {
     }
 
     private func cancelPointerSequence(reason: String) {
+        startWindowFrame = nil
+        startScreenLocation = nil
         startWindowLocation = nil
         startLocation = nil
         dragEventCount = 0
@@ -335,6 +344,26 @@ final class PointerInteractionView: NSView {
         if let window {
             metadata["windowIsMovable"] = "\(window.isMovable)"
             metadata["windowIsMovableByWindowBackground"] = "\(window.isMovableByWindowBackground)"
+            metadata["windowFrame"] = DraggableInteractionLog.rectDescription(window.frame)
+            let eventScreenLocation = window.convertPoint(toScreen: event.locationInWindow)
+            metadata["eventScreenLocation"] = DraggableInteractionLog.pointDescription(eventScreenLocation)
+            if let startScreenLocation {
+                metadata["screenTranslation"] = DraggableInteractionLog.sizeDescription(
+                    CGSize(
+                        width: eventScreenLocation.x - startScreenLocation.x,
+                        height: eventScreenLocation.y - startScreenLocation.y
+                    )
+                )
+            }
+            if let startWindowFrame {
+                metadata["startWindowFrame"] = DraggableInteractionLog.rectDescription(startWindowFrame)
+                metadata["windowFrameDelta"] = DraggableInteractionLog.sizeDescription(
+                    CGSize(
+                        width: window.frame.minX - startWindowFrame.minX,
+                        height: window.frame.minY - startWindowFrame.minY
+                    )
+                )
+            }
         }
         if let value {
             metadata["startLocation"] = DraggableInteractionLog.pointDescription(value.startLocation)
@@ -362,6 +391,7 @@ final class PointerInteractionView: NSView {
         if let window = event.window ?? window {
             metadata["windowIsMovable"] = "\(window.isMovable)"
             metadata["windowIsMovableByWindowBackground"] = "\(window.isMovableByWindowBackground)"
+            metadata["windowFrame"] = DraggableInteractionLog.rectDescription(window.frame)
         }
         ToasttyLog.info("draggable pointer tracking loop", category: .input, metadata: metadata)
     }
@@ -375,6 +405,17 @@ final class PointerInteractionView: NSView {
         metadata["reason"] = reason
         metadata["windowNumber"] = "\(window.windowNumber)"
         metadata["windowIsMovable"] = "\(window.isMovable)"
+        metadata["windowIsMovableByWindowBackground"] = "\(window.isMovableByWindowBackground)"
+        metadata["windowFrame"] = DraggableInteractionLog.rectDescription(window.frame)
+        if let startWindowFrame {
+            metadata["startWindowFrame"] = DraggableInteractionLog.rectDescription(startWindowFrame)
+            metadata["windowFrameDelta"] = DraggableInteractionLog.sizeDescription(
+                CGSize(
+                    width: window.frame.minX - startWindowFrame.minX,
+                    height: window.frame.minY - startWindowFrame.minY
+                )
+            )
+        }
         metadata["sequenceSuppressionActive"] = "\(isSequenceSuppressingWindowMovement)"
         ToasttyLog.info("draggable pointer window movement suppression", category: .input, metadata: metadata)
     }
