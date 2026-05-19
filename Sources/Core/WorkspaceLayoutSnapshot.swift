@@ -28,12 +28,14 @@ public struct WorkspaceLayoutSnapshot: Codable, Equatable, Sendable {
             partialResult[entry.key] = entry.value.makeWorkspaceState()
         }
 
-        return AppState(
+        var state = AppState(
             windows: windows,
             workspacesByID: restoredWorkspaces,
             selectedWindowID: selectedWindowID,
             configuredTerminalFontPoints: nil
         )
+        state.pruneDuplicateManagedAgentResumeRecords()
+        return state
     }
 }
 

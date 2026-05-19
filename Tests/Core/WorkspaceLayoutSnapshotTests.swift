@@ -538,6 +538,166 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func makeAppStatePrunesDuplicateNativeSessionResumeRecords() throws {
+        let workspaceID = UUID()
+        let firstPanelID = UUID()
+        let secondPanelID = UUID()
+        let firstSlotID = UUID()
+        let secondSlotID = UUID()
+        let nativeSessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+        let olderRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: nativeSessionID,
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/first",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let newerRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: nativeSessionID,
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/second",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_010)
+        )
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Restore",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: firstSlotID, panelID: firstPanelID),
+                second: .slot(slotID: secondSlotID, panelID: secondPanelID)
+            ),
+            panels: [
+                firstPanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: "/tmp/first",
+                        resumeRecord: olderRecord
+                    )
+                ),
+                secondPanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 2",
+                        shell: "zsh",
+                        cwd: "/tmp/second",
+                        resumeRecord: newerRecord
+                    )
+                ),
+            ],
+            focusedPanelID: secondPanelID
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+
+        guard case .terminal(let firstTerminalState) = restoredWorkspace.panels[firstPanelID] else {
+            Issue.record("Expected first panel to remain terminal")
+            return
+        }
+        guard case .terminal(let secondTerminalState) = restoredWorkspace.panels[secondPanelID] else {
+            Issue.record("Expected second panel to remain terminal")
+            return
+        }
+
+        #expect(firstTerminalState.resumeRecord == nil)
+        #expect(secondTerminalState.resumeRecord == newerRecord)
+        try StateValidator.validate(restoredState)
+    }
+
+    @Test
+    func makeAppStatePrunesClonedNativeSessionResumeRecords() throws {
+        let workspaceID = UUID()
+        let firstPanelID = UUID()
+        let secondPanelID = UUID()
+        let firstSlotID = UUID()
+        let secondSlotID = UUID()
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/duplicated",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Restore",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: firstSlotID, panelID: firstPanelID),
+                second: .slot(slotID: secondSlotID, panelID: secondPanelID)
+            ),
+            panels: [
+                firstPanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: "/tmp/duplicated",
+                        resumeRecord: resumeRecord
+                    )
+                ),
+                secondPanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 2",
+                        shell: "zsh",
+                        cwd: "/tmp/duplicated",
+                        resumeRecord: resumeRecord
+                    )
+                ),
+            ],
+            focusedPanelID: firstPanelID
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+
+        guard case .terminal(let firstTerminalState) = restoredWorkspace.panels[firstPanelID] else {
+            Issue.record("Expected first panel to remain terminal")
+            return
+        }
+        guard case .terminal(let secondTerminalState) = restoredWorkspace.panels[secondPanelID] else {
+            Issue.record("Expected second panel to remain terminal")
+            return
+        }
+
+        #expect(firstTerminalState.resumeRecord == resumeRecord)
+        #expect(secondTerminalState.resumeRecord == nil)
+        try StateValidator.validate(restoredState)
+    }
+
+    @Test
     func makeAppStatePreservesWebPanels() throws {
         let workspaceID = UUID()
         let panelID = UUID()

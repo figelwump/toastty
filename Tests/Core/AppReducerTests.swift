@@ -123,6 +123,56 @@ struct AppReducerTests {
     }
 
     @Test
+    func updateTerminalPanelResumeRecordKeepsNativeSessionOnOnePanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBeforeSplit = try #require(state.workspacesByID[workspaceID])
+        let sourcePanelID = try #require(workspaceBeforeSplit.focusedPanelID)
+        let olderRecord = makeTestResumeRecord(
+            cwd: "/tmp/toastty/source",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let newerRecord = makeTestResumeRecord(
+            cwd: "/tmp/toastty/split",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_010)
+        )
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        let workspaceAfterSplit = try #require(state.workspacesByID[workspaceID])
+        let splitPanelID = try #require(workspaceAfterSplit.focusedPanelID)
+        #expect(splitPanelID != sourcePanelID)
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelResumeRecord(panelID: sourcePanelID, resumeRecord: olderRecord),
+                state: &state
+            )
+        )
+        #expect(
+            reducer.send(
+                .updateTerminalPanelResumeRecord(panelID: splitPanelID, resumeRecord: newerRecord),
+                state: &state
+            )
+        )
+
+        let workspaceAfterResumeUpdate = try #require(state.workspacesByID[workspaceID])
+        guard case .terminal(let sourceTerminalState) = workspaceAfterResumeUpdate.panels[sourcePanelID] else {
+            Issue.record("expected source panel to remain terminal")
+            return
+        }
+        guard case .terminal(let splitTerminalState) = workspaceAfterResumeUpdate.panels[splitPanelID] else {
+            Issue.record("expected split-created panel to remain terminal")
+            return
+        }
+
+        #expect(sourceTerminalState.resumeRecord == nil)
+        #expect(splitTerminalState.resumeRecord == newerRecord)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func splitFocusedSlotInDirectionWithWorkingDirectorySeedsNewPanelFromExplicitDirectory() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -4790,12 +4840,17 @@ struct AppReducerTests {
     }
 }
 
-private func makeTestResumeRecord(cwd: String) -> ManagedAgentResumeRecord {
+private func makeTestResumeRecord(
+    cwd: String,
+    nativeSessionID: String = "019e2823-f520-7690-91b6-cd84eb52dd8a",
+    sessionFilePath: String = "/tmp/codex-session.jsonl",
+    capturedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+) -> ManagedAgentResumeRecord {
     ManagedAgentResumeRecord(
         agent: .codex,
-        nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
-        sessionFilePath: "/tmp/codex-session.jsonl",
+        nativeSessionID: nativeSessionID,
+        sessionFilePath: sessionFilePath,
         cwd: cwd,
-        capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        capturedAt: capturedAt
     )
 }

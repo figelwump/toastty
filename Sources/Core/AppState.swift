@@ -51,6 +51,12 @@ public struct AppState: Codable, Equatable, Sendable {
     public var configuredTerminalFontPoints: Double?
     public var defaultTerminalProfileID: String?
 
+    private struct ManagedAgentResumeRecordOwner {
+        let panelID: UUID
+        let record: ManagedAgentResumeRecord
+        let traversalIndex: Int
+    }
+
     public init(
         windows: [WindowState],
         workspacesByID: [UUID: WorkspaceState],
@@ -64,6 +70,157 @@ public struct AppState: Codable, Equatable, Sendable {
         self.configuredTerminalFontPoints = configuredTerminalFontPoints.map(Self.clampedTerminalFontPoints)
         self.defaultTerminalProfileID = Self.normalizedTerminalProfileID(defaultTerminalProfileID)
         normalizeVisitedWorkspacesForVisibleSelections()
+    }
+
+    @discardableResult
+    mutating func pruneDuplicateManagedAgentResumeRecords(preferredPanelID: UUID? = nil) -> Bool {
+        var ownerByClaimKey: [String: ManagedAgentResumeRecordOwner] = [:]
+        var panelIDsToClear = Set<UUID>()
+        var traversalIndex = 0
+
+        for workspaceID in orderedWorkspaceIDsForManagedAgentResumeRecords() {
+            guard let workspace = workspacesByID[workspaceID] else { continue }
+            for tabID in Self.orderedTabIDs(in: workspace) {
+                guard let tab = workspace.tabsByID[tabID] else { continue }
+                for panelID in Self.orderedPanelIDs(in: tab) {
+                    guard case .terminal(let terminalState) = tab.panels[panelID],
+                          let record = terminalState.resumeRecord,
+                          let claimKey = record.resumeClaimKey else {
+                        continue
+                    }
+
+                    let owner = ManagedAgentResumeRecordOwner(
+                        panelID: panelID,
+                        record: record,
+                        traversalIndex: traversalIndex
+                    )
+                    traversalIndex += 1
+
+                    guard let incumbent = ownerByClaimKey[claimKey] else {
+                        ownerByClaimKey[claimKey] = owner
+                        continue
+                    }
+
+                    if Self.shouldPreferManagedAgentResumeRecordOwner(
+                        owner,
+                        over: incumbent,
+                        preferredPanelID: preferredPanelID
+                    ) {
+                        panelIDsToClear.insert(incumbent.panelID)
+                        panelIDsToClear.remove(owner.panelID)
+                        ownerByClaimKey[claimKey] = owner
+                    } else {
+                        panelIDsToClear.insert(owner.panelID)
+                    }
+                }
+            }
+        }
+
+        guard panelIDsToClear.isEmpty == false else { return false }
+        var didMutate = false
+
+        for workspaceID in orderedWorkspaceIDsForManagedAgentResumeRecords() {
+            guard var workspace = workspacesByID[workspaceID] else { continue }
+            var workspaceDidMutate = false
+
+            for tabID in Self.orderedTabIDs(in: workspace) {
+                guard var tab = workspace.tabsByID[tabID] else { continue }
+                var tabDidMutate = false
+
+                for panelID in Self.orderedPanelIDs(in: tab) where panelIDsToClear.contains(panelID) {
+                    guard case .terminal(var terminalState) = tab.panels[panelID],
+                          terminalState.resumeRecord != nil else {
+                        continue
+                    }
+
+                    terminalState.resumeRecord = nil
+                    tab.panels[panelID] = .terminal(terminalState)
+                    tabDidMutate = true
+                }
+
+                if tabDidMutate {
+                    workspace.tabsByID[tabID] = tab
+                    workspaceDidMutate = true
+                }
+            }
+
+            if workspaceDidMutate {
+                workspacesByID[workspaceID] = workspace
+                didMutate = true
+            }
+        }
+
+        return didMutate
+    }
+
+    private func orderedWorkspaceIDsForManagedAgentResumeRecords() -> [UUID] {
+        var orderedWorkspaceIDs: [UUID] = []
+        var seenWorkspaceIDs = Set<UUID>()
+
+        for window in windows {
+            for workspaceID in window.workspaceIDs where workspacesByID[workspaceID] != nil {
+                guard seenWorkspaceIDs.insert(workspaceID).inserted else { continue }
+                orderedWorkspaceIDs.append(workspaceID)
+            }
+        }
+
+        for workspaceID in workspacesByID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard seenWorkspaceIDs.insert(workspaceID).inserted else { continue }
+            orderedWorkspaceIDs.append(workspaceID)
+        }
+
+        return orderedWorkspaceIDs
+    }
+
+    private static func orderedTabIDs(in workspace: WorkspaceState) -> [UUID] {
+        var orderedTabIDs: [UUID] = []
+        var seenTabIDs = Set<UUID>()
+
+        for tabID in workspace.tabIDs where workspace.tabsByID[tabID] != nil {
+            guard seenTabIDs.insert(tabID).inserted else { continue }
+            orderedTabIDs.append(tabID)
+        }
+
+        for tabID in workspace.tabsByID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard seenTabIDs.insert(tabID).inserted else { continue }
+            orderedTabIDs.append(tabID)
+        }
+
+        return orderedTabIDs
+    }
+
+    private static func orderedPanelIDs(in tab: WorkspaceTabState) -> [UUID] {
+        var orderedPanelIDs: [UUID] = []
+        var seenPanelIDs = Set<UUID>()
+
+        for slotInfo in tab.layoutTree.allSlotInfos where tab.panels[slotInfo.panelID] != nil {
+            guard seenPanelIDs.insert(slotInfo.panelID).inserted else { continue }
+            orderedPanelIDs.append(slotInfo.panelID)
+        }
+
+        for panelID in tab.panels.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard seenPanelIDs.insert(panelID).inserted else { continue }
+            orderedPanelIDs.append(panelID)
+        }
+
+        return orderedPanelIDs
+    }
+
+    private static func shouldPreferManagedAgentResumeRecordOwner(
+        _ candidate: ManagedAgentResumeRecordOwner,
+        over incumbent: ManagedAgentResumeRecordOwner,
+        preferredPanelID: UUID?
+    ) -> Bool {
+        if candidate.panelID == preferredPanelID {
+            return true
+        }
+        if incumbent.panelID == preferredPanelID {
+            return false
+        }
+        if candidate.record.capturedAt != incumbent.record.capturedAt {
+            return candidate.record.capturedAt > incumbent.record.capturedAt
+        }
+        return candidate.traversalIndex < incumbent.traversalIndex
     }
 
     public static func clampedTerminalFontPoints(_ points: Double) -> Double {

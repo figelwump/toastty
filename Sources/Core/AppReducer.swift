@@ -836,13 +836,20 @@ public struct AppReducer {
             guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
             guard let tabID = workspace.tabID(containingPanelID: panelID),
                   case .terminal(var terminalState) = workspace.tab(id: tabID)?.panels[panelID] else { return false }
-            guard terminalState.resumeRecord != resumeRecord else { return false }
+
+            if terminalState.resumeRecord == resumeRecord {
+                guard resumeRecord != nil else { return false }
+                return state.pruneDuplicateManagedAgentResumeRecords(preferredPanelID: panelID)
+            }
 
             terminalState.resumeRecord = resumeRecord
             _ = workspace.updateTab(id: tabID) { tab in
                 tab.panels[panelID] = .terminal(terminalState)
             }
             commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
+            if resumeRecord != nil {
+                state.pruneDuplicateManagedAgentResumeRecords(preferredPanelID: panelID)
+            }
             return true
 
         case .updateWebPanelMetadata(let panelID, let title, let url):
