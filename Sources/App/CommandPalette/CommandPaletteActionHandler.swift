@@ -63,6 +63,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func manageTerminalProfiles(originWindowID: UUID) -> Bool
     func canManageAgents(originWindowID: UUID) -> Bool
     func manageAgents(originWindowID: UUID) -> Bool
+    func canSetUpAgentStatusHooks(originWindowID: UUID) -> Bool
+    func setUpAgentStatusHooks(originWindowID: UUID) -> Bool
     func canReloadConfiguration() -> Bool
     func reloadConfiguration() -> Bool
     func openFileResult(
@@ -523,6 +525,21 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return openAgentProfilesConfigurationAction(originWindowID)
     }
 
+    func canSetUpAgentStatusHooks(originWindowID: UUID) -> Bool {
+        store?.window(id: originWindowID) != nil
+    }
+
+    func setUpAgentStatusHooks(originWindowID: UUID) -> Bool {
+        guard canSetUpAgentStatusHooks(originWindowID: originWindowID) else {
+            return false
+        }
+        NotificationCenter.default.post(
+            name: .toasttyShowAgentGetStartedFlow,
+            object: AgentGetStartedPresentationRequest(windowID: originWindowID, initialStep: .agentStatusHooks)
+        )
+        return true
+    }
+
     func canReloadConfiguration() -> Bool {
         supportsConfigurationReload()
     }
@@ -668,6 +685,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return manageTerminalProfiles(originWindowID: originWindowID)
         case .manageAgents:
             return manageAgents(originWindowID: originWindowID)
+        case .setUpAgentStatusHooks:
+            return setUpAgentStatusHooks(originWindowID: originWindowID)
         case .reloadConfiguration:
             return reloadConfiguration()
         }

@@ -1268,6 +1268,42 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.codex_hook_event":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let activeSession = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            let hookEvent = try codexHookEvent(from: event.payload)
+            let accepted = sessionRuntimeStore.handleCodexHookEvent(
+                sessionID: sessionID,
+                event: hookEvent,
+                at: now
+            )
+            if accepted {
+                stateVersion += 1
+                if let resumeRecord = codexHookResumeRecord(
+                    from: hookEvent,
+                    activeSession: activeSession,
+                    capturedAt: now
+                ) {
+                    let didMutate = store.send(.updateTerminalPanelResumeRecord(
+                        panelID: activeSession.panelID,
+                        resumeRecord: resumeRecord
+                    ))
+                    if didMutate {
+                        stateVersion += 1
+                    }
+                }
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(accepted ? "accepted" : "ignored"),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.update_files":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
@@ -2251,6 +2287,69 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             lastInputMessageFingerprint: normalizedOptionalText(payload.string("lastInputMessageFingerprint")),
             inputMessageCount: payload.int("inputMessageCount") ?? 0,
             detail: detail
+        )
+    }
+
+    private func codexHookEvent(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> CodexHookEvent {
+        guard let hookEventName = normalizedOptionalText(payload.string("hookEventName")) else {
+            throw AutomationSocketError.invalidPayload("hookEventName is required")
+        }
+
+        let status: SessionStatus?
+        if payload["kind"] != nil || payload["summary"] != nil || payload["detail"] != nil {
+            guard let kindRaw = payload.string("kind"),
+                  let kind = SessionStatusKind(rawValue: kindRaw) else {
+                throw AutomationSocketError.invalidPayload(
+                    "kind must be one of: idle, working, needs_approval, ready, error"
+                )
+            }
+            guard let summary = normalizedOptionalText(payload.string("summary")) else {
+                throw AutomationSocketError.invalidPayload("summary is required when kind is present")
+            }
+            status = SessionStatus(
+                kind: kind,
+                summary: summary,
+                detail: normalizedOptionalText(payload.string("detail"))
+            )
+        } else {
+            status = nil
+        }
+
+        return CodexHookEvent(
+            hookEventName: hookEventName,
+            source: normalizedOptionalText(payload.string("source")),
+            threadID: normalizedOptionalText(payload.string("threadID")),
+            turnID: normalizedOptionalText(payload.string("turnID")),
+            promptFingerprint: normalizedOptionalText(payload.string("promptFingerprint")),
+            status: status,
+            nativeSessionID: normalizedOptionalText(payload.string("nativeSessionID")),
+            sessionFilePath: normalizedOptionalText(payload.string("sessionFilePath")),
+            cwd: normalizedOptionalText(payload.string("cwd"))
+        )
+    }
+
+    private func codexHookResumeRecord(
+        from event: CodexHookEvent,
+        activeSession: SessionRecord,
+        capturedAt: Date
+    ) -> ManagedAgentResumeRecord? {
+        guard event.hookEventName == "SessionStart",
+              activeSession.agent == .codex,
+              let nativeSessionID = normalizedOptionalText(event.nativeSessionID)
+                ?? normalizedOptionalText(event.threadID),
+              let sessionFilePath = normalizedOptionalText(event.sessionFilePath),
+              let cwd = normalizedOptionalText(event.cwd) else {
+            return nil
+        }
+
+        return ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: nativeSessionID,
+            sessionFilePath: sessionFilePath,
+            cwd: cwd,
+            capturedAt: capturedAt
         )
     }
 

@@ -316,6 +316,81 @@ final class SessionRuntimeStore: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func handleCodexHookEvent(
+        sessionID: String,
+        event: CodexHookEvent,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.sessionsByID[sessionID],
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            return false
+        }
+
+        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        var stateChanged = false
+
+        if let threadID = event.threadID {
+            if let rootThreadID = state.rootThreadID {
+                if threadID != rootThreadID {
+                    guard event.isClearSessionStart else {
+                        codexNotifyStateBySessionID[sessionID] = state
+                        logIgnoredCodexHookEvent(
+                            sessionID: sessionID,
+                            record: record,
+                            state: state,
+                            event: event,
+                            reason: "thread_mismatch"
+                        )
+                        return false
+                    }
+                    state.rootThreadID = threadID
+                    state.pendingRootInputFingerprint = nil
+                    stateChanged = true
+                    ToasttyLog.debug(
+                        "Reset Codex root hook thread after clear",
+                        category: .terminal,
+                        metadata: codexHookMetadata(
+                            sessionID: sessionID,
+                            record: record,
+                            state: state,
+                            event: event
+                        )
+                    )
+                }
+            } else {
+                state.rootThreadID = threadID
+                stateChanged = true
+                ToasttyLog.debug(
+                    "Latched Codex root hook thread",
+                    category: .terminal,
+                    metadata: codexHookMetadata(
+                        sessionID: sessionID,
+                        record: record,
+                        state: state,
+                        event: event
+                    )
+                )
+            }
+        }
+
+        if let promptFingerprint = event.promptFingerprint,
+           state.pendingRootInputFingerprint != promptFingerprint {
+            state.pendingRootInputFingerprint = promptFingerprint
+            stateChanged = true
+        }
+
+        codexNotifyStateBySessionID[sessionID] = state
+
+        guard let status = event.status else {
+            return stateChanged
+        }
+
+        updateStatus(sessionID: sessionID, status: status, at: now)
+        return true
+    }
+
     func stopSession(
         sessionID: String,
         reason: ManagedSessionStopReason = .explicit,
@@ -612,6 +687,58 @@ final class SessionRuntimeStore: ObservableObject {
                 ]
             )
         )
+    }
+
+    private func logIgnoredCodexHookEvent(
+        sessionID: String,
+        record: SessionRecord,
+        state: CodexNotifySessionState,
+        event: CodexHookEvent,
+        reason: String
+    ) {
+        ToasttyLog.debug(
+            "Ignored Codex hook event",
+            category: .terminal,
+            metadata: codexHookMetadata(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: event,
+                additional: [
+                    "reason": reason,
+                ]
+            )
+        )
+    }
+
+    private func codexHookMetadata(
+        sessionID: String,
+        record: SessionRecord,
+        state: CodexNotifySessionState,
+        event: CodexHookEvent,
+        additional: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "session_id": sessionID,
+            "panel_id": record.panelID.uuidString,
+            "hook_event_name": event.hookEventName,
+            "hook_source": event.source ?? "none",
+            "root_thread_id": state.rootThreadID ?? "none",
+            "hook_thread_id": event.threadID ?? "none",
+            "hook_turn_id": event.turnID ?? "none",
+            "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
+            "hook_input_fingerprint": truncatedFingerprint(event.promptFingerprint),
+        ]
+
+        if let status = event.status {
+            metadata["hook_status_kind"] = status.kind.rawValue
+        }
+
+        for (key, value) in additional {
+            metadata[key] = value
+        }
+
+        return metadata
     }
 
     private func codexNotifyMetadata(
@@ -1189,6 +1316,12 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         stopSessionForPanel(panelID: panelID, reason: reason, at: now)
         return true
+    }
+}
+
+private extension CodexHookEvent {
+    var isClearSessionStart: Bool {
+        hookEventName == "SessionStart" && source == "clear"
     }
 }
 

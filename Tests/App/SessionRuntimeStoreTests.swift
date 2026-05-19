@@ -390,6 +390,174 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexHookEventUpdatesStatusAndLatchesRootThread() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-hook",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-hook",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-1",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Set up hooks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Set up hooks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(accepted)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-hook")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Set up hooks")
+    }
+
+    @Test
+    func codexHookEventIgnoresDifferentThreadAfterRootThreadIsLatched() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-hook-latched",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-hook-latched",
+            event: CodexHookEvent(
+                hookEventName: "SessionStart",
+                threadID: "thread-root",
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: "thread-root",
+                sessionFilePath: "/tmp/session.jsonl",
+                cwd: "/repo"
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-hook-latched",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Root still running"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-hook-latched",
+            event: CodexHookEvent(
+                hookEventName: "Stop",
+                threadID: "thread-child",
+                turnID: "turn-child",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: "Child finished"),
+                nativeSessionID: "thread-child",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(accepted == false)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-hook-latched")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Root still running")
+    }
+
+    @Test
+    func codexHookClearSessionStartReplacesLatchedRootThread() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-hook-clear",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-hook-clear",
+            event: CodexHookEvent(
+                hookEventName: "SessionStart",
+                threadID: "thread-root",
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: "thread-root",
+                sessionFilePath: "/tmp/root.jsonl",
+                cwd: "/repo"
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let acceptedClear = store.handleCodexHookEvent(
+            sessionID: "sess-codex-hook-clear",
+            event: CodexHookEvent(
+                hookEventName: "SessionStart",
+                source: "clear",
+                threadID: "thread-clear",
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: "thread-clear",
+                sessionFilePath: "/tmp/clear.jsonl",
+                cwd: "/repo"
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(acceptedClear)
+
+        let acceptedNewThread = store.handleCodexHookEvent(
+            sessionID: "sess-codex-hook-clear",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-clear",
+                turnID: "turn-clear",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Continue after clear"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Continue after clear"),
+                nativeSessionID: "thread-clear",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(acceptedNewThread)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-hook-clear")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Continue after clear")
+    }
+
+    @Test
     func bindStopsActiveSessionWhenPanelCloses() throws {
         let appStore = AppStore(persistTerminalFontPreference: false)
         let sessionStore = SessionRuntimeStore()

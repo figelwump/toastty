@@ -303,6 +303,151 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func codexUserPromptSubmitHookMapsToThreadedWorkingEvent() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"UserPromptSubmit","session_id":"thread-root","turn_id":"turn-1","prompt":"Fix Codex hooks"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCodexHookEvent(
+                sessionID: "sess-123",
+                panelID: nil,
+                event: CodexHookEvent(
+                    hookEventName: "UserPromptSubmit",
+                    threadID: "thread-root",
+                    turnID: "turn-1",
+                    promptFingerprint: CodexInputFingerprint.fingerprint(for: "Fix Codex hooks"),
+                    status: SessionStatus(kind: .working, summary: "Working", detail: "Fix Codex hooks"),
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil
+                )
+            ),
+        ])
+    }
+
+    @Test
+    func codexPermissionRequestHookMapsToApprovalStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PermissionRequest","session_id":"thread-root","tool_name":"Bash","tool_input":{"command":"git status --short"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCodexHookEvent(
+                sessionID: "sess-123",
+                panelID: nil,
+                event: CodexHookEvent(
+                    hookEventName: "PermissionRequest",
+                    threadID: "thread-root",
+                    turnID: nil,
+                    promptFingerprint: nil,
+                    status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve git status --short"),
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil
+                )
+            ),
+        ])
+    }
+
+    @Test
+    func codexStopHookMapsToReadyStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","session_id":"thread-root","last_assistant_message":"Updated the hook installer."}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCodexHookEvent(
+                sessionID: "sess-123",
+                panelID: nil,
+                event: CodexHookEvent(
+                    hookEventName: "Stop",
+                    threadID: "thread-root",
+                    turnID: nil,
+                    promptFingerprint: nil,
+                    status: SessionStatus(kind: .ready, summary: "Ready", detail: "Updated the hook installer."),
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil
+                )
+            ),
+        ])
+    }
+
+    @Test
+    func codexSessionStartHookMapsToHookEvent() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hook_event_name":"SessionStart","source":"startup","session_id":"thread-root","transcript_path":"/tmp/codex/session.jsonl","cwd":"/tmp/repo"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCodexHookEvent(
+                sessionID: "sess-123",
+                panelID: panelID,
+                event: CodexHookEvent(
+                    hookEventName: "SessionStart",
+                    source: "startup",
+                    threadID: "thread-root",
+                    turnID: nil,
+                    promptFingerprint: nil,
+                    status: nil,
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: "/tmp/codex/session.jsonl",
+                    cwd: "/tmp/repo"
+                )
+            ),
+        ])
+    }
+
+    @Test
+    func codexHookParserAcceptsLargePayloads() throws {
+        let prompt = String(repeating: "x", count: 70 * 1024)
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "thread-root",
+            "prompt": prompt,
+        ])
+
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-large-hook",
+            panelID: nil,
+            payload: payload
+        )
+
+        let command = try #require(commands.first)
+        guard case .sessionCodexHookEvent(_, _, let event) = command else {
+            #expect(Bool(false))
+            return
+        }
+        #expect(commands.count == 1)
+        #expect(event.threadID == "thread-root")
+        #expect(event.promptFingerprint == CodexInputFingerprint.fingerprint(for: prompt))
+        #expect(event.status?.detail?.hasSuffix("...") == true)
+    }
+
+    @Test
     func piNativeSessionEventMapsToResumeRecordUpdate() throws {
         let panelID = UUID()
         let commands = try AgentEventIngestor.commands(

@@ -20,6 +20,7 @@ struct AppWindowView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
+    @State private var agentGetStartedInitialStep: AgentGetStartedStep = .chooser
     @State private var appIsActive = true
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -65,7 +66,7 @@ struct AppWindowView: View {
                     profileShortcutRegistry: profileShortcutRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
                     agentLaunchService: agentLaunchService,
-                    showAgentGetStartedFlow: presentAgentGetStartedFlow,
+                    showAgentGetStartedFlow: { presentAgentGetStartedFlow() },
                     toggleCommandPalette: toggleCommandPalette,
                     presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
@@ -159,11 +160,11 @@ struct AppWindowView: View {
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
-            guard Self.shouldPresentAgentGetStartedFlow(
+            guard let request = Self.agentGetStartedPresentationRequest(
                 windowID: windowID,
                 notificationObject: notification.object
             ) else { return }
-            presentAgentGetStartedFlow()
+            presentAgentGetStartedFlow(initialStep: request.initialStep)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
@@ -227,10 +228,23 @@ struct AppWindowView: View {
     }
 
     static func shouldPresentAgentGetStartedFlow(windowID: UUID, notificationObject: Any?) -> Bool {
-        guard let targetWindowID = notificationObject as? UUID else {
-            return false
+        agentGetStartedPresentationRequest(
+            windowID: windowID,
+            notificationObject: notificationObject
+        ) != nil
+    }
+
+    static func agentGetStartedPresentationRequest(
+        windowID: UUID,
+        notificationObject: Any?
+    ) -> AgentGetStartedPresentationRequest? {
+        if let request = notificationObject as? AgentGetStartedPresentationRequest {
+            return request.windowID == windowID ? request : nil
         }
-        return targetWindowID == windowID
+        if let targetWindowID = notificationObject as? UUID, targetWindowID == windowID {
+            return AgentGetStartedPresentationRequest(windowID: windowID)
+        }
+        return nil
     }
 
     private var sidebarToggleButton: some View {
@@ -263,6 +277,7 @@ struct AppWindowView: View {
 
     private var agentGetStartedSheet: some View {
         AgentGetStartedSheet(
+            initialStep: agentGetStartedInitialStep,
             openAgentProfilesConfiguration: openAgentProfilesConfigurationResult,
             openKeyboardShortcutsReference: openKeyboardShortcutsReferenceResult,
             resolveShellIntegrationPreferredShellPath: resolveShellIntegrationPreferredShellPath
@@ -297,7 +312,8 @@ struct AppWindowView: View {
     }
 
     @MainActor
-    private func presentAgentGetStartedFlow() {
+    private func presentAgentGetStartedFlow(initialStep: AgentGetStartedStep = .chooser) {
+        agentGetStartedInitialStep = initialStep
         showsAgentGetStartedSheet = true
     }
 

@@ -36,6 +36,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canManageConfigValue = true
     var canManageTerminalProfilesValue = true
     var canManageAgentsValue = true
+    var canSetUpAgentStatusHooksValue = true
     var canReloadValue = true
 
     var createWindowResult = true
@@ -65,6 +66,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var manageConfigResult = true
     var manageTerminalProfilesResult = true
     var manageAgentsResult = true
+    var setUpAgentStatusHooksResult = true
     var reloadConfigurationResult = true
 
     var sidebarTitleValue = ToasttyBuiltInCommand.toggleSidebar.title
@@ -100,6 +102,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var managedConfigWindowIDs: [UUID] = []
     var managedTerminalProfilesWindowIDs: [UUID] = []
     var managedAgentsWindowIDs: [UUID] = []
+    var setUpAgentStatusHooksWindowIDs: [UUID] = []
     var reloadConfigurationCount = 0
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -446,6 +449,16 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return manageAgentsResult
     }
 
+    func canSetUpAgentStatusHooks(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canSetUpAgentStatusHooksValue
+    }
+
+    func setUpAgentStatusHooks(originWindowID: UUID) -> Bool {
+        setUpAgentStatusHooksWindowIDs.append(originWindowID)
+        return setUpAgentStatusHooksResult
+    }
+
     func canReloadConfiguration() -> Bool {
         canReloadValue
     }
@@ -558,6 +571,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return manageTerminalProfiles(originWindowID: originWindowID)
             case .manageAgents:
                 return manageAgents(originWindowID: originWindowID)
+            case .setUpAgentStatusHooks:
+                return setUpAgentStatusHooks(originWindowID: originWindowID)
             case .reloadConfiguration:
                 return reloadConfiguration()
             }

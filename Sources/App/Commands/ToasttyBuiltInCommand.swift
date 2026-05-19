@@ -46,6 +46,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case manageConfig
     case manageTerminalProfiles
     case manageAgents
+    case setUpAgentStatusHooks
     case reloadConfiguration
 
     private static let showSidebarTitle = "Show Sidebar"
@@ -142,6 +143,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "terminal.profiles.manage"
         case .manageAgents:
             return "agent.profiles.manage"
+        case .setUpAgentStatusHooks:
+            return "agent.status-hooks.setup"
         case .reloadConfiguration:
             return "app.reload-configuration"
         }
@@ -233,6 +236,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Manage Terminal Profiles"
         case .manageAgents:
             return "Manage Agents"
+        case .setUpAgentStatusHooks:
+            return "Set Up Agent Status Hooks"
         case .reloadConfiguration:
             return "Reload Configuration"
         }
@@ -323,6 +328,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .manageTerminalProfiles:
             return nil
         case .manageAgents:
+            return nil
+        case .setUpAgentStatusHooks:
             return nil
         case .reloadConfiguration:
             return nil
@@ -422,6 +429,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["manage", "open", "terminal", "profiles", "config", "toml"]
         case .manageAgents:
             return ["manage", "open", "agents", "agent", "profiles", "config", "toml"]
+        case .setUpAgentStatusHooks:
+            return ["agent", "status", "hooks", "setup", "codex", "claude", "telemetry"]
         case .reloadConfiguration:
             return ["reload", "configuration", "config", "preferences"]
         }

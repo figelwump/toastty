@@ -19,6 +19,7 @@ enum CLICommand: Equatable {
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
+    case sessionCodexHookEvent(sessionID: String, panelID: UUID?, event: CodexHookEvent)
     case sessionCodexNotifyCompletion(sessionID: String, panelID: UUID?, completion: CodexNotifyCompletion)
     case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
     case sessionUpdateResumeRecord(sessionID: String, panelID: UUID?, agent: AgentKind, nativeSessionID: String, sessionFilePath: String, cwd: String)
@@ -27,7 +28,7 @@ enum CLICommand: Equatable {
 
     func makeRequestEnvelope(requestID: String = UUID().uuidString) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .notify, .sessionStart, .sessionStatus, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -95,6 +96,46 @@ enum CLICommand: Equatable {
             }
             return AutomationEventEnvelope(
                 eventType: "session.status",
+                sessionID: sessionID,
+                panelID: panelID?.uuidString,
+                requestID: requestID,
+                payload: payload
+            )
+
+        case .sessionCodexHookEvent(let sessionID, let panelID, let event):
+            var payload: [String: AutomationJSONValue] = [
+                "hookEventName": .string(event.hookEventName),
+            ]
+            if let source = event.source {
+                payload["source"] = .string(source)
+            }
+            if let threadID = event.threadID {
+                payload["threadID"] = .string(threadID)
+            }
+            if let turnID = event.turnID {
+                payload["turnID"] = .string(turnID)
+            }
+            if let promptFingerprint = event.promptFingerprint {
+                payload["promptFingerprint"] = .string(promptFingerprint)
+            }
+            if let status = event.status {
+                payload["kind"] = .string(status.kind.rawValue)
+                payload["summary"] = .string(status.summary)
+                if let detail = status.detail {
+                    payload["detail"] = .string(detail)
+                }
+            }
+            if let nativeSessionID = event.nativeSessionID {
+                payload["nativeSessionID"] = .string(nativeSessionID)
+            }
+            if let sessionFilePath = event.sessionFilePath {
+                payload["sessionFilePath"] = .string(sessionFilePath)
+            }
+            if let cwd = event.cwd {
+                payload["cwd"] = .string(cwd)
+            }
+            return AutomationEventEnvelope(
+                eventType: "session.codex_hook_event",
                 sessionID: sessionID,
                 panelID: panelID?.uuidString,
                 requestID: requestID,
@@ -193,6 +234,8 @@ enum CLICommand: Equatable {
             return resolvedSessionID
         case .sessionStatus(let sessionID, _, let kind, let summary, _):
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
+        case .sessionCodexHookEvent(let sessionID, _, let event):
+            return "processed Codex hook \(event.hookEventName) for \(sessionID)"
         case .sessionCodexNotifyCompletion(let sessionID, _, _):
             return "processed Codex notify completion for \(sessionID)"
         case .sessionUpdateFiles(let sessionID, _, let files, _, _):
@@ -342,7 +385,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
-      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-notify|pi-extension [--session <id>] [--panel <id>]
+      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|pi-extension [--session <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
@@ -661,7 +704,7 @@ public enum ToasttyCLI {
 
             let sourceValue = try requireValue("--source", in: parsed)
             guard let source = AgentEventSource(rawValue: sourceValue) else {
-                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-notify, pi-extension")
+                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-hooks, codex-notify, pi-extension")
             }
 
             return .sessionIngestAgentEvent(
@@ -1033,6 +1076,13 @@ public enum ToasttyCLI {
             if let notificationType = normalizedEventField(object["notification_type"]) {
                 components.append("notification_type=\(notificationType)")
             }
+            if let toolName = normalizedEventField(object["tool_name"]) {
+                components.append("tool_name=\(toolName)")
+            }
+            return components.joined(separator: " ")
+
+        case .codexHooks:
+            var components = ["hook_event_name=\(normalizedEventField(object["hook_event_name"]) ?? "unknown")"]
             if let toolName = normalizedEventField(object["tool_name"]) {
                 components.append("tool_name=\(toolName)")
             }

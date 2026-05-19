@@ -14,6 +14,12 @@ enum AgentEventIngestor {
                 panelID: panelID,
                 payload: payload
             )
+        case .codexHooks:
+            try CodexHookEventParser.parse(
+                sessionID: sessionID,
+                panelID: panelID,
+                payload: payload
+            )
         case .codexNotify:
             try CodexNotifyEventParser.parse(
                 sessionID: sessionID,

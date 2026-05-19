@@ -27,6 +27,10 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
+- `~/.toastty/codex-hooks/` (created by `Toastty > Set Up Agent Status Hooks…`)
+  - A stable Codex hook forwarder script plus `telemetry-failures.log` when the forwarder cannot deliver hook events back to Toastty.
+- `~/.codex/hooks.json` (updated by `Toastty > Set Up Agent Status Hooks…`)
+  - Toastty adds or updates its own Codex hook entries while preserving unrelated hooks.
 - `~/.toastty/history/pane-journals/`
   - Toastty-owned per-pane restore journals used by `zsh`, `bash`, and `fish` shell integration. These are imported into in-memory shell history on restore, but Toastty does not replace the shell's primary shared history file. For fish, Toastty skips pane-journal import and writes when `fish_history=''`.
 - By default, `~/Library/Logs/Toastty/toastty.log`

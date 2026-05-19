@@ -128,6 +128,23 @@ final class AppWindowViewTests: XCTestCase {
         )
     }
 
+    func testAgentGetStartedPresentationRequestPreservesInitialStep() throws {
+        let windowID = UUID()
+        let request = AgentGetStartedPresentationRequest(
+            windowID: windowID,
+            initialStep: .agentStatusHooks
+        )
+
+        let resolvedRequest = try XCTUnwrap(
+            AppWindowView.agentGetStartedPresentationRequest(
+                windowID: windowID,
+                notificationObject: request
+            )
+        )
+
+        XCTAssertEqual(resolvedRequest, request)
+    }
+
     func testShouldPresentAgentGetStartedFlowIgnoresMismatchedOrMissingWindowIDs() {
         let windowID = UUID()
 

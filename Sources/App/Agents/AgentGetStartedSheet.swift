@@ -43,18 +43,72 @@ enum AgentGetStartedShellIntegrationStepResolver {
     }
 }
 
+enum AgentStatusHooksStepState: Equatable {
+    case loading
+    case installable(CodexStatusHookInstallStatus)
+    case alreadyInstalled(CodexStatusHookInstallStatus)
+    case installing(CodexStatusHookInstallStatus)
+    case installSucceeded(CodexStatusHookInstallResult)
+    case unavailable(String)
+    case installFailed(CodexStatusHookInstallStatus, String)
+
+    var blocksNavigation: Bool {
+        if case .installing = self {
+            return true
+        }
+        return false
+    }
+}
+
+enum AgentStatusHooksStepResolver {
+    static func loadedState(
+        from status: CodexStatusHookInstallStatus
+    ) -> AgentStatusHooksStepState {
+        if status.isInstalled {
+            return .alreadyInstalled(status)
+        }
+        return .installable(status)
+    }
+
+    static func installFailureState(
+        for status: CodexStatusHookInstallStatus,
+        message: String
+    ) -> AgentStatusHooksStepState {
+        .installFailed(status, message)
+    }
+}
+
 enum AgentGetStartedStep: Equatable {
     case chooser
     case shellIntegration
+    case agentStatusHooks
     case keyboardShortcuts
+}
+
+struct AgentGetStartedPresentationRequest: Equatable {
+    let windowID: UUID
+    let initialStep: AgentGetStartedStep
+
+    init(windowID: UUID, initialStep: AgentGetStartedStep = .chooser) {
+        self.windowID = windowID
+        self.initialStep = initialStep
+    }
 }
 
 enum AgentGetStartedSheetBehavior {
     static func dismissDisabled(
         step: AgentGetStartedStep,
-        shellIntegrationState: AgentGetStartedShellIntegrationStepState
+        shellIntegrationState: AgentGetStartedShellIntegrationStepState,
+        agentStatusHooksState: AgentStatusHooksStepState = .loading
     ) -> Bool {
-        step == .shellIntegration && shellIntegrationState.blocksNavigation
+        switch step {
+        case .shellIntegration:
+            return shellIntegrationState.blocksNavigation
+        case .agentStatusHooks:
+            return agentStatusHooksState.blocksNavigation
+        case .chooser, .keyboardShortcuts:
+            return false
+        }
     }
 
     static func actionErrorMessage(
@@ -75,17 +129,21 @@ struct AgentGetStartedSheet: View {
     let resolveShellIntegrationPreferredShellPath: @MainActor () -> String?
 
     @Environment(\.dismiss) private var dismiss
-    @State private var step: AgentGetStartedStep = .chooser
+    @State private var step: AgentGetStartedStep
     @State private var shellIntegrationState: AgentGetStartedShellIntegrationStepState = .loading
+    @State private var agentStatusHooksState: AgentStatusHooksStepState = .loading
     @State private var openAgentProfilesErrorMessage: String?
     @State private var openKeyboardShortcutsReferenceErrorMessage: String?
     @State private var shellIntegrationTask: Task<Void, Never>?
+    @State private var agentStatusHooksTask: Task<Void, Never>?
 
     init(
+        initialStep: AgentGetStartedStep = .chooser,
         openAgentProfilesConfiguration: @escaping @MainActor () -> Result<Void, AgentGetStartedActionError>,
         openKeyboardShortcutsReference: @escaping @MainActor () -> Result<Void, AgentGetStartedActionError>,
         resolveShellIntegrationPreferredShellPath: @escaping @MainActor () -> String? = { nil }
     ) {
+        _step = State(initialValue: initialStep)
         self.openAgentProfilesConfiguration = openAgentProfilesConfiguration
         self.openKeyboardShortcutsReference = openKeyboardShortcutsReference
         self.resolveShellIntegrationPreferredShellPath = resolveShellIntegrationPreferredShellPath
@@ -108,14 +166,22 @@ struct AgentGetStartedSheet: View {
         .interactiveDismissDisabled(
             AgentGetStartedSheetBehavior.dismissDisabled(
                 step: step,
-                shellIntegrationState: shellIntegrationState
+                shellIntegrationState: shellIntegrationState,
+                agentStatusHooksState: agentStatusHooksState
             )
         )
+        .onAppear {
+            loadInitialStepIfNeeded()
+        }
         .onDisappear {
             if shellIntegrationState.blocksNavigation == false {
                 shellIntegrationTask?.cancel()
             }
+            if agentStatusHooksState.blocksNavigation == false {
+                agentStatusHooksTask?.cancel()
+            }
             shellIntegrationTask = nil
+            agentStatusHooksTask = nil
         }
     }
 
@@ -137,6 +203,8 @@ struct AgentGetStartedSheet: View {
             chooserContent
         case .shellIntegration:
             shellIntegrationContent
+        case .agentStatusHooks:
+            agentStatusHooksContent
         case .keyboardShortcuts:
             keyboardShortcutsContent
         }
@@ -154,6 +222,18 @@ struct AgentGetStartedSheet: View {
                     showShellIntegrationStep()
                 }
                 .accessibilityIdentifier("sheet.agent.get-started.typed-commands")
+            }
+
+            sectionCard(
+                title: "Agent Status Hooks",
+                body: """
+                Install stable status hooks so Toastty can track agent progress, approval requests, and turn completion without relying on fragile terminal logs.
+                """
+            ) {
+                Button("Set Up Agent Status Hooks") {
+                    showAgentStatusHooksStep()
+                }
+                .accessibilityIdentifier("sheet.agent.get-started.status-hooks")
             }
 
             quickLaunchButtonsCard
@@ -174,6 +254,31 @@ struct AgentGetStartedSheet: View {
 
             quickLaunchButtonsCard
             keyboardShortcutsCard(isDisabled: shellIntegrationState.blocksNavigation)
+        }
+        .padding(24)
+    }
+
+    @ViewBuilder
+    private var agentStatusHooksContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionCard(
+                title: "Codex Status Hooks",
+                body: "Toastty installs one stable Codex hook forwarder and adds it to ~/.codex/hooks.json. Codex may ask you to review and trust the hook once."
+            ) {
+                agentStatusHooksStateContent
+            }
+
+            sectionCard(
+                title: "Claude Code Status Hooks",
+                body: "Toastty-managed Claude Code sessions already receive status hooks at launch time, so no global setup is required for Claude Code."
+            ) {
+                inlineMessage(
+                    "Automatic for Toastty launches.",
+                    textColor: ToastyTheme.sessionReadyText,
+                    backgroundColor: ToastyTheme.sessionReadyBackground,
+                    identifier: "sheet.agent.get-started.claude-hooks-ready"
+                )
+            }
         }
         .padding(24)
     }
@@ -304,6 +409,23 @@ struct AgentGetStartedSheet: View {
                 .disabled(shellIntegrationState.blocksNavigation)
                 .accessibilityIdentifier("sheet.agent.get-started.done")
 
+            case .agentStatusHooks:
+                Button("Back") {
+                    agentStatusHooksTask?.cancel()
+                    agentStatusHooksTask = nil
+                    step = .chooser
+                }
+                .disabled(agentStatusHooksState.blocksNavigation)
+                .accessibilityIdentifier("sheet.agent.get-started.back")
+
+                Spacer(minLength: 0)
+
+                Button("Done") {
+                    dismiss()
+                }
+                .disabled(agentStatusHooksState.blocksNavigation)
+                .accessibilityIdentifier("sheet.agent.get-started.done")
+
             case .keyboardShortcuts:
                 Button("Back") {
                     openKeyboardShortcutsReferenceErrorMessage = nil
@@ -330,8 +452,73 @@ struct AgentGetStartedSheet: View {
             return "Get started with Toastty"
         case .shellIntegration:
             return "Set Up Typed Commands"
+        case .agentStatusHooks:
+            return "Agent Status Hooks"
         case .keyboardShortcuts:
             return "Keyboard Shortcuts"
+        }
+    }
+
+    @ViewBuilder
+    private var agentStatusHooksStateContent: some View {
+        switch agentStatusHooksState {
+        case .loading:
+            loadingContent(message: "Checking Codex hook setup.")
+
+        case .installable(let status):
+            codexStatusHooksDetails(status: status)
+            Button(status.state == .needsUpdate ? "Update Codex Hooks" : "Install Codex Hooks") {
+                installAgentStatusHooks(status: status)
+            }
+            .keyboardShortcut(.defaultAction)
+            .accessibilityIdentifier("sheet.agent.get-started.install-status-hooks")
+
+        case .alreadyInstalled(let status):
+            inlineMessage(
+                "Codex status hooks are installed.",
+                textColor: ToastyTheme.sessionReadyText,
+                backgroundColor: ToastyTheme.sessionReadyBackground,
+                identifier: "sheet.agent.get-started.status-hooks-ready"
+            )
+            codexStatusHooksDetails(status: status)
+
+        case .installing(let status):
+            codexStatusHooksDetails(status: status)
+            loadingContent(message: "Installing Codex status hooks.")
+            Button("Installing…") {}
+                .disabled(true)
+                .accessibilityIdentifier("sheet.agent.get-started.installing-status-hooks")
+
+        case .installSucceeded(let result):
+            inlineMessage(
+                codexStatusHooksInstallMessage(result),
+                textColor: ToastyTheme.sessionReadyText,
+                backgroundColor: ToastyTheme.sessionReadyBackground,
+                identifier: "sheet.agent.get-started.status-hooks-installed"
+            )
+            codexStatusHooksDetails(status: result.status)
+
+        case .unavailable(let message):
+            inlineMessage(
+                message,
+                textColor: ToastyTheme.sessionErrorText,
+                backgroundColor: ToastyTheme.sessionErrorBackground,
+                identifier: "sheet.agent.get-started.status-hooks-unavailable"
+            )
+
+        case .installFailed(let status, let message):
+            codexStatusHooksDetails(status: status)
+            inlineMessage(
+                message,
+                textColor: ToastyTheme.sessionErrorText,
+                backgroundColor: ToastyTheme.sessionErrorBackground,
+                identifier: "sheet.agent.get-started.error.status-hooks-install"
+            )
+            Button(status.state == .needsUpdate ? "Update Codex Hooks" : "Install Codex Hooks") {
+                installAgentStatusHooks(status: status)
+            }
+            .keyboardShortcut(.defaultAction)
+            .accessibilityIdentifier("sheet.agent.get-started.install-status-hooks")
         }
     }
 
@@ -410,6 +597,26 @@ struct AgentGetStartedSheet: View {
             .keyboardShortcut(.defaultAction)
             .accessibilityIdentifier("sheet.agent.get-started.install-integration")
         }
+    }
+
+    private func codexStatusHooksDetails(
+        status: CodexStatusHookInstallStatus
+    ) -> some View {
+        shellIntegrationDetails(
+            leadingText: "Codex hooks file",
+            leadingValue: status.hooksFileURL.path,
+            trailingText: "Toastty forwarder",
+            trailingValue: status.forwarderScriptURL.path
+        )
+    }
+
+    private func codexStatusHooksInstallMessage(
+        _ result: CodexStatusHookInstallResult
+    ) -> String {
+        if result.hooksFileChanged || result.forwarderScriptChanged {
+            return "Codex status hooks are installed."
+        }
+        return "Codex status hooks were already current."
     }
 
     private func sectionCard<Content: View>(
@@ -537,11 +744,29 @@ struct AgentGetStartedSheet: View {
         }
     }
 
+    private func loadInitialStepIfNeeded() {
+        switch step {
+        case .shellIntegration:
+            loadShellIntegrationStatus()
+        case .agentStatusHooks:
+            loadAgentStatusHooksStatus()
+        case .chooser, .keyboardShortcuts:
+            break
+        }
+    }
+
     private func showShellIntegrationStep() {
         openAgentProfilesErrorMessage = nil
         openKeyboardShortcutsReferenceErrorMessage = nil
         step = .shellIntegration
         loadShellIntegrationStatus()
+    }
+
+    private func showAgentStatusHooksStep() {
+        openAgentProfilesErrorMessage = nil
+        openKeyboardShortcutsReferenceErrorMessage = nil
+        step = .agentStatusHooks
+        loadAgentStatusHooksStatus()
     }
 
     private func showKeyboardShortcutsStep() {
@@ -590,6 +815,65 @@ struct AgentGetStartedSheet: View {
                     shellIntegrationState = AgentGetStartedShellIntegrationStepResolver.loadedState(from: status)
                 case .failure(let error):
                     shellIntegrationState = .unavailable(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func loadAgentStatusHooksStatus() {
+        agentStatusHooksTask?.cancel()
+        agentStatusHooksTask = Task(priority: .userInitiated) {
+            await MainActor.run {
+                agentStatusHooksState = .loading
+            }
+            let result: Result<CodexStatusHookInstallStatus, AgentGetStartedActionError>
+            do {
+                let status = try CodexStatusHookInstaller().installationStatus()
+                result = .success(status)
+            } catch {
+                result = .failure(AgentGetStartedActionError(message: error.localizedDescription))
+            }
+
+            guard Task.isCancelled == false else { return }
+
+            await MainActor.run {
+                switch result {
+                case .success(let status):
+                    agentStatusHooksState = AgentStatusHooksStepResolver.loadedState(from: status)
+                case .failure(let error):
+                    agentStatusHooksState = .unavailable(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func installAgentStatusHooks(
+        status: CodexStatusHookInstallStatus
+    ) {
+        agentStatusHooksTask?.cancel()
+        agentStatusHooksTask = Task(priority: .userInitiated) {
+            await MainActor.run {
+                agentStatusHooksState = .installing(status)
+            }
+            let result: Result<CodexStatusHookInstallResult, AgentGetStartedActionError>
+            do {
+                let installResult = try CodexStatusHookInstaller().install()
+                result = .success(installResult)
+            } catch {
+                result = .failure(AgentGetStartedActionError(message: error.localizedDescription))
+            }
+
+            guard Task.isCancelled == false else { return }
+
+            await MainActor.run {
+                switch result {
+                case .success(let installResult):
+                    agentStatusHooksState = .installSucceeded(installResult)
+                case .failure(let error):
+                    agentStatusHooksState = AgentStatusHooksStepResolver.installFailureState(
+                        for: status,
+                        message: error.localizedDescription
+                    )
                 }
             }
         }

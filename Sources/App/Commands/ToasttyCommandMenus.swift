@@ -369,6 +369,11 @@ struct ToasttyCommandMenus: Commands {
             }
             Divider()
 
+            Button("Set Up Agent Status Hooks…") {
+                showAgentStatusHooksSetup()
+            }
+            .disabled(agentGetStartedTargetWindowID == nil)
+
             Button("Get Started with Toastty…") {
                 showAgentGetStartedFlow()
             }
@@ -841,7 +846,18 @@ struct ToasttyCommandMenus: Commands {
 
     private func showAgentGetStartedFlow() {
         guard let windowID = agentGetStartedTargetWindowID else { return }
-        NotificationCenter.default.post(name: .toasttyShowAgentGetStartedFlow, object: windowID)
+        NotificationCenter.default.post(
+            name: .toasttyShowAgentGetStartedFlow,
+            object: AgentGetStartedPresentationRequest(windowID: windowID)
+        )
+    }
+
+    private func showAgentStatusHooksSetup() {
+        guard let windowID = agentGetStartedTargetWindowID else { return }
+        NotificationCenter.default.post(
+            name: .toasttyShowAgentGetStartedFlow,
+            object: AgentGetStartedPresentationRequest(windowID: windowID, initialStep: .agentStatusHooks)
+        )
     }
 
     @ViewBuilder

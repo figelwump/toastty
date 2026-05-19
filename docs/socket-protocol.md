@@ -1,6 +1,6 @@
 # toastty socket protocol (v1)
 
-Date: 2026-04-20
+Date: 2026-05-19
 
 This document describes the current socket protocol implemented by
 `Sources/App/Automation/AutomationSocketServer.swift`.
@@ -18,10 +18,11 @@ CLI note:
 - The repo ships a `toastty` CLI wrapper for app control (`action` / `query`), notifications, and the `session` subcommands.
 - Toastty-managed Claude, Codex, and Pi launches primarily use
   `session ingest-agent-event` to translate provider events into session
-  events. Most provider events become `session.status` updates. Codex notify
-  completions become `session.codex_notify_completion` so Toastty can preserve
-  thread metadata and ignore child-thread completions. That ingest command is
-  handled locally inside the CLI; it is not a socket event type.
+  events. Most provider events become `session.status` updates. Codex status
+  hooks become `session.codex_hook_event`, and Codex notify completions become
+  `session.codex_notify_completion`, so Toastty can preserve thread metadata
+  and ignore child-thread completions. That ingest command is handled locally
+  inside the CLI; it is not a socket event type.
 - Manual wrappers should generally use:
   - `toastty action list` / `toastty query list` for discovery
   - `toastty action run` / `toastty query run` for live app control
@@ -590,11 +591,11 @@ Behavior:
 Launches a configured agent profile into a resolved terminal panel. Toastty
 records the baseline session in-app before injecting the provider command and
 passes `TOASTTY_*` launch context with the command. For first-party Claude and
-Codex launches, Toastty also generates helper scripts that call
-`toastty session ingest-agent-event` so provider events become `session.status`
-updates automatically. If the agent does not emit `session.stop`, Toastty falls
-back to stopping the session when the panel returns to an interactive shell
-prompt or the panel closes.
+Codex launches, Toastty also generates or uses helper scripts that call
+`toastty session ingest-agent-event` so provider events become session updates
+automatically. If the agent does not emit `session.stop`, Toastty falls back to
+stopping the session when the panel returns to an interactive shell prompt or
+the panel closes.
 
 Launch context environment:
 
@@ -923,6 +924,53 @@ Behavior:
 Result:
 
 - `eventType`
+- `stateVersion`
+
+### `session.codex_hook_event`
+
+Internal event used by Toastty's installed Codex status hook forwarder. Manual
+wrappers should generally use `session.status` instead.
+
+Required:
+
+- top-level `sessionID`
+- payload `hookEventName`
+
+Optional top-level fields:
+
+- `panelID?: UUID string`
+
+Accepted payload keys:
+
+- `hookEventName: String`
+- `source?: String`
+- `threadID?: String`
+- `turnID?: String`
+- `promptFingerprint?: String`
+- `kind?: "idle" | "working" | "needs_approval" | "ready" | "error"`
+- `summary?: String`
+- `detail?: String`
+- `nativeSessionID?: String`
+- `sessionFilePath?: String`
+- `cwd?: String`
+
+Behavior:
+
+- `sessionID` must identify an active session
+- `panelID` is optional; when present it must match the active session
+- When `kind` is present, `summary` is required and Toastty updates the session
+  status
+- For first-party Codex sessions that use Toastty status notifications, Toastty
+  latches the first Codex `threadID` as the root thread and ignores later hook
+  events from different threads. `SessionStart` events with `source: "clear"`
+  replace the latched root thread.
+- Accepted `SessionStart` hook events also update Codex native resume metadata
+  when `nativeSessionID`, `sessionFilePath`, and `cwd` are present.
+
+Result:
+
+- `eventType`
+- `status: "accepted" | "ignored"`
 - `stateVersion`
 
 ### `session.codex_notify_completion`

@@ -5,10 +5,11 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 ## Quick start
 
 1. If you want to type `codex`, `claude`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
-2. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
-3. Uncomment or add a profile in `~/.toastty/agents.toml`
-4. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
-5. Click the agent name in the `Agent` menu, top bar, or command palette, or press its keyboard shortcut
+2. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…` or open `Get Started…` and choose `Set Up Agent Status Hooks`
+3. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
+4. Uncomment or add a profile in `~/.toastty/agents.toml`
+5. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
+6. Click the agent name in the `Agent` menu, top bar, or command palette, or press its keyboard shortcut
 
 Toastty sends the configured command into the focused terminal panel and starts tracking the session automatically.
 
@@ -143,15 +144,14 @@ typing shell functions directly.
 
 When the profile ID is `codex`, Toastty:
 
-1. **Creates a notification script** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify`
-2. **Injects Codex config** with `-c notify=["/bin/sh", "<script-path>"]` to route lifecycle events through that script
-3. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit
-4. **Starts a compatibility log watcher** that polls the session log file (every 250 ms) and maps supported Codex recording events to sidebar status updates. Current Codex CLI recordings drive start-of-turn **Working**, interrupt-driven **Idle**, and coalesce repeated `insert_history_cell` records observed in a poll into immediate refresh nudges, while legacy `codex_event` recordings continue to cover **Needs approval** and older completion/abort paths
-5. **Samples rendered terminal text** on Toastty's existing workspace-maintenance pulse and on watcher nudges, upgrading active Codex `Working` rows with best-effort tool progress such as `Running ...`, `Ran ...`, or `Executing shell commands` when visible terminal text is available
-6. **Uses the Codex notify hook** to map supported root-turn completion notifications to **Ready**. Thread-aware Codex notifications are matched against the recorded root prompt so spawned subagent completions do not clear the parent session's **Working** state. Current Codex documents `notify` as a turn-finished hook, not a tool-progress stream
-7. **Logs helper-script delivery failures** to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active, so socket or CLI errors are inspectable without breaking the Codex process
-
-The log watcher and rendered-text fallback are temporary bridges; they can go away once Codex exposes stable start, progress, and approval hooks.
+1. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default.
+2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, `PostToolUse`, and `Stop`. These events drive **Working**, **Needs approval**, **Ready**, and native resume metadata for managed Codex sessions.
+3. **Creates a notification script** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
+4. **Injects Codex config** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
+5. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit.
+6. **Starts a compatibility log watcher** that polls the session log file (every 250 ms) for the subset of Codex recording events still available in current Codex releases. The watcher and rendered-terminal-text sampling are fallbacks for launches where hooks are not installed or cannot deliver.
+7. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state.
+8. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; per-session notify helper failures still go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
 ### What `claude` enables
 
@@ -192,7 +192,7 @@ When you trigger an agent launch (menu click, top-bar button, command palette su
 4. **Render shell command** — Toastty builds a single shell command line with all `TOASTTY_*` context variables inline, the instrumentation environment, and the profile's `argv`
 5. **Start session** — A session record is created in the session runtime store with initial status "Idle / Ready for prompt"
 6. **Send to terminal** — The rendered command line is sent to the target terminal panel and submitted
-7. **Begin monitoring** — For Codex, the log watcher starts polling; for Claude, hooks report events back through the CLI; for Pi, the bundled extension reports events back through the CLI
+7. **Begin monitoring** — For Codex, installed hooks report primary status while notify and the log watcher provide compatibility fallback; for Claude, hooks report events back through the CLI; for Pi, the bundled extension reports events back through the CLI
 
 When the agent process exits and the session is stopped, Toastty cleans up Codex and Pi launch artifacts immediately. Claude hook artifacts can remain after session stop so late hook invocations do not fail at the shell layer before they turn into no-op telemetry delivery.
 
@@ -412,4 +412,4 @@ If the user confirms, you can create or update `~/.toastty/agents.toml` with the
 
 **Claude settings conflict** — If your Claude profile includes `--settings` pointing to a file, Toastty merges its hooks into those settings. If the settings argument is malformed or the file cannot be read, Toastty logs a warning and launches without instrumentation.
 
-**Telemetry helper failures** — Inspect `telemetry-failures.log` inside the managed session's temporary launch artifacts directory if the sidebar stops updating. For Codex, do that while the session is still active. Claude can retain its hook artifacts briefly after session stop, so the same log may still be available for late-hook failures. Pi also writes compact JSONL telemetry to `pi-telemetry.jsonl` while the session is active. The helper scripts keep the agent process running, but they preserve socket and CLI stderr there instead of discarding it.
+**Telemetry helper failures** — For installed Codex hooks, inspect `~/.toastty/codex-hooks/telemetry-failures.log`. For per-session helpers, inspect `telemetry-failures.log` inside the managed session's temporary launch artifacts directory if the sidebar stops updating. Codex per-session artifacts exist only while the session is active. Claude can retain hook artifacts briefly after session stop, so the same log may still be available for late-hook failures. Pi also writes compact JSONL telemetry to `pi-telemetry.jsonl` while the session is active. The helper scripts keep the agent process running, but they preserve socket and CLI stderr instead of discarding it.

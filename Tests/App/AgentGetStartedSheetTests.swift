@@ -41,6 +41,30 @@ final class AgentGetStartedSheetTests: XCTestCase {
         XCTAssertEqual(state, .installFailed(status, "Unable to write ~/.zshrc"))
     }
 
+    func testAgentStatusHooksLoadedStateUsesInstallableWhenCodexHooksNeedSetup() {
+        let status = CodexStatusHookInstallStatus(
+            hooksFileURL: URL(filePath: "/tmp/home/.codex/hooks.json"),
+            forwarderScriptURL: URL(filePath: "/tmp/home/.toastty/codex-hooks/forwarder.sh"),
+            state: .needsUpdate
+        )
+
+        let state = AgentStatusHooksStepResolver.loadedState(from: status)
+
+        XCTAssertEqual(state, .installable(status))
+    }
+
+    func testAgentStatusHooksLoadedStateUsesAlreadyInstalledWhenCodexHooksAreCurrent() {
+        let status = CodexStatusHookInstallStatus(
+            hooksFileURL: URL(filePath: "/tmp/home/.codex/hooks.json"),
+            forwarderScriptURL: URL(filePath: "/tmp/home/.toastty/codex-hooks/forwarder.sh"),
+            state: .installed
+        )
+
+        let state = AgentStatusHooksStepResolver.loadedState(from: status)
+
+        XCTAssertEqual(state, .alreadyInstalled(status))
+    }
+
     func testBlocksNavigationOnlyWhileInstalling() {
         let status = makeStatus(
             needsManagedSnippetWrite: true,
@@ -55,6 +79,21 @@ final class AgentGetStartedSheetTests: XCTestCase {
         XCTAssertFalse(AgentGetStartedShellIntegrationStepState.installSucceeded(makeInstallResult()).blocksNavigation)
         XCTAssertFalse(AgentGetStartedShellIntegrationStepState.unavailable("No shell available").blocksNavigation)
         XCTAssertFalse(AgentGetStartedShellIntegrationStepState.installFailed(status, "Unable to write ~/.zshrc").blocksNavigation)
+    }
+
+    func testAgentStatusHooksBlocksNavigationOnlyWhileInstalling() {
+        let status = CodexStatusHookInstallStatus(
+            hooksFileURL: URL(filePath: "/tmp/home/.codex/hooks.json"),
+            forwarderScriptURL: URL(filePath: "/tmp/home/.toastty/codex-hooks/forwarder.sh"),
+            state: .needsUpdate
+        )
+
+        XCTAssertTrue(AgentStatusHooksStepState.installing(status).blocksNavigation)
+        XCTAssertFalse(AgentStatusHooksStepState.loading.blocksNavigation)
+        XCTAssertFalse(AgentStatusHooksStepState.installable(status).blocksNavigation)
+        XCTAssertFalse(AgentStatusHooksStepState.alreadyInstalled(status).blocksNavigation)
+        XCTAssertFalse(AgentStatusHooksStepState.unavailable("No Codex home").blocksNavigation)
+        XCTAssertFalse(AgentStatusHooksStepState.installFailed(status, "Unable to write hooks.json").blocksNavigation)
     }
 
     func testDismissIsAllowedFromChooserEvenWhenShellStateIsInstalling() {
@@ -97,6 +136,22 @@ final class AgentGetStartedSheetTests: XCTestCase {
         let dismissDisabled = AgentGetStartedSheetBehavior.dismissDisabled(
             step: .shellIntegration,
             shellIntegrationState: .installing(status)
+        )
+
+        XCTAssertTrue(dismissDisabled)
+    }
+
+    func testDismissIsBlockedWhileAgentStatusHooksInstall() {
+        let status = CodexStatusHookInstallStatus(
+            hooksFileURL: URL(filePath: "/tmp/home/.codex/hooks.json"),
+            forwarderScriptURL: URL(filePath: "/tmp/home/.toastty/codex-hooks/forwarder.sh"),
+            state: .needsUpdate
+        )
+
+        let dismissDisabled = AgentGetStartedSheetBehavior.dismissDisabled(
+            step: .agentStatusHooks,
+            shellIntegrationState: .loading,
+            agentStatusHooksState: .installing(status)
         )
 
         XCTAssertTrue(dismissDisabled)

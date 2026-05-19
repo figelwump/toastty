@@ -166,7 +166,7 @@ Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the c
 
 The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes three well-known IDs that receive first-party instrumentation:
 
-- **`codex`** — Injects Codex session recording, notification hooks, and a log watcher that surfaces live status (working, needs approval, idle) in the sidebar
+- **`codex`** — Uses installed Codex status hooks when set up, with notify and session-recording fallback paths for compatibility
 - **`claude`** — Injects Claude Code lifecycle hooks that report session state back to the sidebar automatically
 - **`pi`** — Injects Toastty's bundled Pi extension for session, tool, and changed-file telemetry while preserving user Pi extensions
 
@@ -184,6 +184,8 @@ argv = ["codex"]              # (ID is "my-codex", not "codex")
 ```
 
 For Pi, Toastty adds its own `--extension <toastty-pi-extension.js>` argument after the actual `pi` executable. User `--extension` arguments remain additive; `pi --no-extensions` or `pi -ne` disables Toastty's injected extension for that launch too. Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
+
+For the most complete Codex progress and approval status, run `Toastty > Set Up Agent Status Hooks…` once. Toastty installs a stable hook forwarder under `~/.toastty/codex-hooks/` and adds it to `~/.codex/hooks.json`, so Codex can ask you to review and trust the same command instead of a new temporary script each session.
 
 ## CLI
 
