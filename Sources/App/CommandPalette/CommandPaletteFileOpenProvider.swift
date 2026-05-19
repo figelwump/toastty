@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 struct CommandPaletteFileIndexSnapshot: Equatable, Sendable {
@@ -32,6 +33,7 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
 
     private struct InFlightIndex {
         let generation: Int
+        let startedAt: Date
         let task: Task<[PaletteFileResult], Never>
     }
 
@@ -126,8 +128,20 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
     }
 
     func cancel() {
-        for entry in entries.values {
-            entry.inFlightIndex?.task.cancel()
+        for (scopePath, entry) in entries {
+            if let inFlightIndex = entry.inFlightIndex {
+                ToasttyLog.info(
+                    "Command palette file index cancellation requested",
+                    category: .state,
+                    metadata: Self.indexLogMetadata(
+                        scopePath: scopePath,
+                        generation: inFlightIndex.generation,
+                        startedAt: inFlightIndex.startedAt,
+                        resultCount: entry.results.count
+                    )
+                )
+                inFlightIndex.task.cancel()
+            }
         }
         entries.removeAll()
     }
@@ -145,11 +159,37 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
     private func startIndex(for normalizedScopePath: String, entry: CacheEntry) -> CacheEntry {
         var updatedEntry = entry
         let nextGeneration = entry.generation + 1
+        let startedAt = Date()
+        ToasttyLog.info(
+            "Command palette file index started",
+            category: .state,
+            metadata: Self.indexLogMetadata(
+                scopePath: normalizedScopePath,
+                generation: nextGeneration,
+                startedAt: startedAt,
+                resultCount: entry.results.count
+            )
+        )
         updatedEntry.generation = nextGeneration
         updatedEntry.inFlightIndex = InFlightIndex(
             generation: nextGeneration,
+            startedAt: startedAt,
             task: Task(priority: .utility) { [scanScope] in
-                await scanScope(normalizedScopePath)
+                let results = await scanScope(normalizedScopePath)
+                let message = Task.isCancelled
+                    ? "Command palette file index cancelled"
+                    : "Command palette file index scan finished"
+                ToasttyLog.info(
+                    message,
+                    category: .state,
+                    metadata: Self.indexLogMetadata(
+                        scopePath: normalizedScopePath,
+                        generation: nextGeneration,
+                        startedAt: startedAt,
+                        resultCount: results.count
+                    )
+                )
+                return results
             }
         )
         return updatedEntry
@@ -158,13 +198,55 @@ actor CommandPaletteFileOpenProvider: CommandPaletteFileIndexing {
     private func commit(results: [PaletteFileResult], for normalizedScopePath: String, generation: Int) {
         guard var entry = entries[normalizedScopePath],
               entry.generation == generation else {
+            ToasttyLog.info(
+                "Command palette file index commit skipped",
+                category: .state,
+                metadata: [
+                    "scope_path": normalizedScopePath,
+                    "generation": String(generation),
+                    "reason": "stale_generation",
+                    "result_count": String(results.count),
+                ]
+            )
             return
         }
 
+        let startedAt = entry.inFlightIndex?.startedAt
         entry.results = results
         entry.lastIndexedAt = Date()
         entry.inFlightIndex = nil
         entries[normalizedScopePath] = entry
+        var metadata = [
+            "scope_path": normalizedScopePath,
+            "generation": String(generation),
+            "result_count": String(results.count),
+        ]
+        if let startedAt {
+            metadata["elapsed_ms"] = String(Self.elapsedMilliseconds(since: startedAt))
+        }
+        ToasttyLog.info(
+            "Command palette file index committed",
+            category: .state,
+            metadata: metadata
+        )
+    }
+
+    private static func indexLogMetadata(
+        scopePath: String,
+        generation: Int,
+        startedAt: Date,
+        resultCount: Int
+    ) -> [String: String] {
+        [
+            "scope_path": scopePath,
+            "generation": String(generation),
+            "elapsed_ms": String(elapsedMilliseconds(since: startedAt)),
+            "result_count": String(resultCount),
+        ]
+    }
+
+    private static func elapsedMilliseconds(since startedAt: Date) -> Int {
+        max(0, Int((Date().timeIntervalSince(startedAt) * 1000).rounded()))
     }
 
     private static func scanScope(rootPath: String) -> [PaletteFileResult] {
