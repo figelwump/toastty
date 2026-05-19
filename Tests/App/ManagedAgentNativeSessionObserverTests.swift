@@ -135,7 +135,7 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
-    func scannerDefersDirectCodexSessionDuringShellSnapshotWindow() async throws {
+    func scannerDefersDirectCodexSessionBeforeFallbackDelay() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let launchStart = Date()
@@ -167,7 +167,7 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
-    func scannerUsesDirectCodexSessionAfterShellSnapshotWindow() async throws {
+    func scannerUsesDirectCodexSessionAfterFallbackDelay() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let launchStart = Date()
@@ -198,6 +198,47 @@ struct ManagedAgentNativeSessionObserverTests {
         #expect(candidates.count == 1)
         #expect(candidates.first?.nativeSessionID == sessionID)
         #expect(candidates.first?.sessionFilePath == sessionURL.path)
+    }
+
+    @Test
+    func scannerFindsCodexShellSnapshotAfterDirectFallbackDelay() async throws {
+        let fixture = try makeNativeSessionScannerFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let launchStart = Date()
+        let sessionID = "019da2ea-82fe-7842-9e86-b15a403e8352"
+        let panelID = UUID()
+        let otherCWDURL = fixture.rootURL.appendingPathComponent("other-repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherCWDURL, withIntermediateDirectories: true)
+        let sessionURL = fixture.codexSessionsURL.appendingPathComponent("rollout-\(sessionID).jsonl")
+        try writeCodexSession(id: sessionID, cwd: otherCWDURL.path, to: sessionURL)
+        try writeCodexShellSnapshot(id: sessionID, managedSessionID: "managed-1", panelID: panelID, to: fixture.codexShellSnapshotsURL)
+        let snapshotURL = fixture.codexShellSnapshotsURL
+            .appendingPathComponent("\(sessionID).1778990848959872000.sh")
+        try FileManager.default.setAttributes(
+            [.modificationDate: launchStart.addingTimeInterval(45)],
+            ofItemAtPath: snapshotURL.path
+        )
+
+        let scanner = ManagedAgentNativeSessionFileScanner(
+            codexSessionsDirectory: fixture.codexSessionsURL,
+            claudeProjectsDirectory: fixture.claudeProjectsURL,
+            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL,
+            nowProvider: { launchStart.addingTimeInterval(45) }
+        )
+        let candidates = await scanner.candidates(
+            for: ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: panelID,
+                cwd: fixture.cwdURL.path,
+                launchStart: launchStart
+            )
+        )
+
+        #expect(candidates.count == 1)
+        #expect(candidates.first?.nativeSessionID == sessionID)
+        #expect(candidates.first?.sessionFilePath == sessionURL.path)
+        #expect(candidates.first?.cwd == fixture.cwdURL.path)
     }
 
     @Test

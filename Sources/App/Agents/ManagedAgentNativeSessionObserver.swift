@@ -25,8 +25,63 @@ struct ManagedAgentNativeSessionCandidate: Equatable, Sendable {
     }
 }
 
+struct ManagedAgentNativeSessionScanResult: Equatable, Sendable {
+    var candidates: [ManagedAgentNativeSessionCandidate]
+    var summary: ManagedAgentNativeSessionScanSummary
+}
+
+struct ManagedAgentNativeSessionScanSummary: Equatable, Sendable {
+    var candidateCount: Int
+    var codexSnapshotFileCount: Int?
+    var codexSnapshotCandidateCount: Int?
+    var codexDirectSessionDeferred: Bool?
+    var codexDirectSessionFileCount: Int?
+    var codexDirectSessionCandidateCount: Int?
+    var claudeSessionFileCount: Int?
+    var claudeSessionCandidateCount: Int?
+
+    var loggingMetadata: [String: String] {
+        var metadata = [
+            "last_candidate_count": String(candidateCount),
+        ]
+        if let codexSnapshotFileCount {
+            metadata["codex_snapshot_file_count"] = String(codexSnapshotFileCount)
+        }
+        if let codexSnapshotCandidateCount {
+            metadata["codex_snapshot_candidate_count"] = String(codexSnapshotCandidateCount)
+        }
+        if let codexDirectSessionDeferred {
+            metadata["codex_direct_session_deferred"] = String(codexDirectSessionDeferred)
+        }
+        if let codexDirectSessionFileCount {
+            metadata["codex_direct_session_file_count"] = String(codexDirectSessionFileCount)
+        }
+        if let codexDirectSessionCandidateCount {
+            metadata["codex_direct_session_candidate_count"] = String(codexDirectSessionCandidateCount)
+        }
+        if let claudeSessionFileCount {
+            metadata["claude_session_file_count"] = String(claudeSessionFileCount)
+        }
+        if let claudeSessionCandidateCount {
+            metadata["claude_session_candidate_count"] = String(claudeSessionCandidateCount)
+        }
+        return metadata
+    }
+}
+
 protocol ManagedAgentNativeSessionScanning: Sendable {
     func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate]
+    func scan(for observation: ManagedAgentNativeSessionObservationContext) async -> ManagedAgentNativeSessionScanResult
+}
+
+extension ManagedAgentNativeSessionScanning {
+    func scan(for observation: ManagedAgentNativeSessionObservationContext) async -> ManagedAgentNativeSessionScanResult {
+        let candidates = await candidates(for: observation)
+        return ManagedAgentNativeSessionScanResult(
+            candidates: candidates,
+            summary: ManagedAgentNativeSessionScanSummary(candidateCount: candidates.count)
+        )
+    }
 }
 
 @MainActor
@@ -42,7 +97,7 @@ struct ManagedAgentNativeSessionObserverTiming {
 
     init(
         pollIntervalNanoseconds: UInt64 = 1_000_000_000,
-        timeout: TimeInterval = 30,
+        timeout: TimeInterval = 90,
         sleep: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
         }
@@ -58,6 +113,8 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
     typealias ResumeRecordHandler = @MainActor (UUID, ManagedAgentResumeRecord) -> Void
 
     private var observationsBySessionID: [String: ManagedAgentNativeSessionObservationContext] = [:]
+    private var scanCountBySessionID: [String: Int] = [:]
+    private var latestScanSummaryBySessionID: [String: ManagedAgentNativeSessionScanSummary] = [:]
     private var observationLoopTask: Task<Void, Never>?
     private let scanner: any ManagedAgentNativeSessionScanning
     private let timing: ManagedAgentNativeSessionObserverTiming
@@ -115,11 +172,29 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         var normalizedObservation = observation
         normalizedObservation.cwd = cwd
         observationsBySessionID[observation.managedSessionID] = normalizedObservation
+        scanCountBySessionID[observation.managedSessionID] = 0
+        latestScanSummaryBySessionID.removeValue(forKey: observation.managedSessionID)
+        ToasttyLog.info(
+            "Started managed agent native session observation",
+            category: .terminal,
+            metadata: [
+                "session_id": observation.managedSessionID,
+                "agent": observation.agent.rawValue,
+                "panel_id": observation.panelID.uuidString,
+                "cwd": cwd,
+                "timeout_seconds": Self.formattedSeconds(timing.timeout),
+                "poll_interval_seconds": Self.formattedSeconds(
+                    TimeInterval(timing.pollIntervalNanoseconds) / 1_000_000_000
+                ),
+            ]
+        )
         scheduleObservationLoopIfNeeded()
     }
 
     func cancelObservation(sessionID: String) {
         observationsBySessionID.removeValue(forKey: sessionID)
+        scanCountBySessionID.removeValue(forKey: sessionID)
+        latestScanSummaryBySessionID.removeValue(forKey: sessionID)
         if observationsBySessionID.isEmpty {
             observationLoopTask?.cancel()
             observationLoopTask = nil
@@ -164,19 +239,26 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
 
         var candidateBySessionID: [String: ManagedAgentNativeSessionCandidate] = [:]
         for observation in observationsBySessionID.values {
-            let candidates = await scanner.candidates(for: observation)
+            let result = await scanner.scan(for: observation)
+            scanCountBySessionID[observation.managedSessionID, default: 0] += 1
+            latestScanSummaryBySessionID[observation.managedSessionID] = result.summary
+            let candidates = result.candidates
             if candidates.count == 1 {
                 candidateBySessionID[observation.managedSessionID] = candidates[0]
             } else if candidates.count > 1 {
+                var metadata = [
+                    "session_id": observation.managedSessionID,
+                    "agent": observation.agent.rawValue,
+                    "panel_id": observation.panelID.uuidString,
+                    "cwd": observation.cwd,
+                    "candidate_count": String(candidates.count),
+                    "scan_count": String(scanCountBySessionID[observation.managedSessionID] ?? 0),
+                ]
+                metadata.merge(result.summary.loggingMetadata) { _, new in new }
                 ToasttyLog.info(
                     "Leaving managed agent resume record unchanged because native session observation is ambiguous",
                     category: .terminal,
-                    metadata: [
-                        "session_id": observation.managedSessionID,
-                        "agent": observation.agent.rawValue,
-                        "panel_id": observation.panelID.uuidString,
-                        "candidate_count": String(candidates.count),
-                    ]
+                    metadata: metadata
                 )
             }
         }
@@ -204,6 +286,8 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             guard let observation = observationsBySessionID.removeValue(forKey: managedSessionID) else {
                 continue
             }
+            scanCountBySessionID.removeValue(forKey: managedSessionID)
+            latestScanSummaryBySessionID.removeValue(forKey: managedSessionID)
             let record = ManagedAgentResumeRecord(
                 agent: candidate.agent,
                 nativeSessionID: candidate.nativeSessionID,
@@ -220,6 +304,8 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
                     "agent": candidate.agent.rawValue,
                     "panel_id": observation.panelID.uuidString,
                     "native_session_id": candidate.nativeSessionID,
+                    "session_file": candidate.sessionFilePath,
+                    "cwd": candidate.cwd,
                 ]
             )
         }
@@ -237,14 +323,25 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             guard let observation = observationsBySessionID.removeValue(forKey: sessionID) else {
                 continue
             }
+            let elapsedSeconds = now.timeIntervalSince(observation.launchStart)
+            var metadata = [
+                "session_id": sessionID,
+                "agent": observation.agent.rawValue,
+                "panel_id": observation.panelID.uuidString,
+                "cwd": observation.cwd,
+                "elapsed_seconds": Self.formattedSeconds(elapsedSeconds),
+                "timeout_seconds": Self.formattedSeconds(timing.timeout),
+                "scan_count": String(scanCountBySessionID[sessionID] ?? 0),
+            ]
+            if let summary = latestScanSummaryBySessionID[sessionID] {
+                metadata.merge(summary.loggingMetadata) { _, new in new }
+            }
+            scanCountBySessionID.removeValue(forKey: sessionID)
+            latestScanSummaryBySessionID.removeValue(forKey: sessionID)
             ToasttyLog.info(
                 "Leaving managed agent resume record unchanged because native session observation timed out",
                 category: .terminal,
-                metadata: [
-                    "session_id": sessionID,
-                    "agent": observation.agent.rawValue,
-                    "panel_id": observation.panelID.uuidString,
-                ]
+                metadata: metadata
             )
         }
     }
@@ -256,6 +353,10 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         let normalized = (expanded as NSString).standardizingPath
         guard normalized.isEmpty == false else { return nil }
         return normalized
+    }
+
+    private static func formattedSeconds(_ seconds: TimeInterval) -> String {
+        String(format: "%.1f", seconds)
     }
 }
 
@@ -297,38 +398,67 @@ actor ManagedAgentNativeSessionFileScanner: ManagedAgentNativeSessionScanning {
     }
 
     func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate] {
+        await scan(for: observation).candidates
+    }
+
+    func scan(for observation: ManagedAgentNativeSessionObservationContext) async -> ManagedAgentNativeSessionScanResult {
         switch observation.agent {
         case .codex:
-            return codexCandidates(for: observation)
+            return codexScanResult(for: observation)
         case .claude:
-            return claudeCandidates(for: observation)
+            return claudeScanResult(for: observation)
         default:
-            return []
+            return ManagedAgentNativeSessionScanResult(
+                candidates: [],
+                summary: ManagedAgentNativeSessionScanSummary(candidateCount: 0)
+            )
         }
     }
 }
 
 private extension ManagedAgentNativeSessionFileScanner {
     static let codexSnapshotLaunchTolerance: TimeInterval = 2
-    static let codexSnapshotCaptureWindow: TimeInterval = 30
+    static let codexDirectSessionFallbackDelay: TimeInterval = 30
+    static let codexSnapshotCaptureWindow: TimeInterval = 90
     static let codexNativeSessionIDPattern = try! NSRegularExpression(
         pattern: #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#
     )
 
-    func codexCandidates(for observation: ManagedAgentNativeSessionObservationContext) -> [ManagedAgentNativeSessionCandidate] {
-        let snapshotCandidates = codexShellSnapshotCandidates(for: observation)
+    func codexScanResult(
+        for observation: ManagedAgentNativeSessionObservationContext
+    ) -> ManagedAgentNativeSessionScanResult {
+        let snapshotFiles = codexShellSnapshotFiles(for: observation)
+        let snapshotCandidates = deduplicatedCandidates(
+            codexShellSnapshotCandidates(from: snapshotFiles, for: observation)
+        )
         if snapshotCandidates.isEmpty == false {
-            return deduplicatedCandidates(snapshotCandidates)
+            return ManagedAgentNativeSessionScanResult(
+                candidates: snapshotCandidates,
+                summary: ManagedAgentNativeSessionScanSummary(
+                    candidateCount: snapshotCandidates.count,
+                    codexSnapshotFileCount: snapshotFiles.count,
+                    codexSnapshotCandidateCount: snapshotCandidates.count
+                )
+            )
         }
 
-        guard nowProvider() >= observation.launchStart.addingTimeInterval(Self.codexSnapshotCaptureWindow) else {
-            return []
+        guard nowProvider() >= observation.launchStart.addingTimeInterval(Self.codexDirectSessionFallbackDelay) else {
+            return ManagedAgentNativeSessionScanResult(
+                candidates: [],
+                summary: ManagedAgentNativeSessionScanSummary(
+                    candidateCount: 0,
+                    codexSnapshotFileCount: snapshotFiles.count,
+                    codexSnapshotCandidateCount: 0,
+                    codexDirectSessionDeferred: true
+                )
+            )
         }
 
-        let sessionCandidates = jsonlFiles(
+        let sessionFiles = jsonlFiles(
             under: codexSessionsDirectory,
             modifiedAtOrAfter: observation.launchStart
-        ).compactMap { fileURL -> ManagedAgentNativeSessionCandidate? in
+        )
+        let sessionCandidates = deduplicatedCandidates(sessionFiles.compactMap { fileURL -> ManagedAgentNativeSessionCandidate? in
             guard let metadata = codexSessionMetadata(from: fileURL),
                   metadata.cwd == observation.cwd else {
                 return nil
@@ -340,17 +470,31 @@ private extension ManagedAgentNativeSessionFileScanner {
                 cwd: metadata.cwd,
                 updatedAt: metadata.updatedAt
             )
-        }
-        return deduplicatedCandidates(sessionCandidates)
+        })
+
+        return ManagedAgentNativeSessionScanResult(
+            candidates: sessionCandidates,
+            summary: ManagedAgentNativeSessionScanSummary(
+                candidateCount: sessionCandidates.count,
+                codexSnapshotFileCount: snapshotFiles.count,
+                codexSnapshotCandidateCount: 0,
+                codexDirectSessionDeferred: false,
+                codexDirectSessionFileCount: sessionFiles.count,
+                codexDirectSessionCandidateCount: sessionCandidates.count
+            )
+        )
     }
 
-    func claudeCandidates(for observation: ManagedAgentNativeSessionObservationContext) -> [ManagedAgentNativeSessionCandidate] {
+    func claudeScanResult(
+        for observation: ManagedAgentNativeSessionObservationContext
+    ) -> ManagedAgentNativeSessionScanResult {
         let projectDirectoryName = claudeProjectDirectoryName(for: observation.cwd)
         let projectDirectoryURL = claudeProjectsDirectory.appendingPathComponent(projectDirectoryName, isDirectory: true)
-        return jsonlFiles(
+        let sessionFiles = jsonlFiles(
             under: projectDirectoryURL,
             modifiedAtOrAfter: observation.launchStart
-        ).compactMap { fileURL -> ManagedAgentNativeSessionCandidate? in
+        )
+        let sessionCandidates = sessionFiles.compactMap { fileURL -> ManagedAgentNativeSessionCandidate? in
             guard let metadata = claudeSessionMetadata(from: fileURL, cwd: observation.cwd) else {
                 return nil
             }
@@ -362,12 +506,27 @@ private extension ManagedAgentNativeSessionFileScanner {
                 updatedAt: metadata.updatedAt
             )
         }
+        return ManagedAgentNativeSessionScanResult(
+            candidates: sessionCandidates,
+            summary: ManagedAgentNativeSessionScanSummary(
+                candidateCount: sessionCandidates.count,
+                claudeSessionFileCount: sessionFiles.count,
+                claudeSessionCandidateCount: sessionCandidates.count
+            )
+        )
     }
 
     func codexShellSnapshotCandidates(
         for observation: ManagedAgentNativeSessionObservationContext
     ) -> [ManagedAgentNativeSessionCandidate] {
-        codexShellSnapshotFiles(for: observation).flatMap { snapshotURL -> [ManagedAgentNativeSessionCandidate] in
+        codexShellSnapshotCandidates(from: codexShellSnapshotFiles(for: observation), for: observation)
+    }
+
+    func codexShellSnapshotCandidates(
+        from snapshotURLs: [URL],
+        for observation: ManagedAgentNativeSessionObservationContext
+    ) -> [ManagedAgentNativeSessionCandidate] {
+        snapshotURLs.flatMap { snapshotURL -> [ManagedAgentNativeSessionCandidate] in
             guard let nativeSessionID = codexNativeSessionID(fromShellSnapshotURL: snapshotURL),
                   codexShellSnapshot(snapshotURL, matches: observation),
                   let updatedAt = contentUpdatedAt(snapshotURL) else {
