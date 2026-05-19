@@ -52,6 +52,12 @@ struct AgentKindTests {
     func managedCommandResolverInfersWrappedBuiltInsFromCommandNameOrPrefixArguments() {
         #expect(
             ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "cdx",
+                argv: ["cdx"]
+            ) == .codex
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
                 commandName: "run-sandboxed.sh",
                 argv: ["run-sandboxed.sh", "--workdir=/tmp/repo", "codex", "--dangerous"]
             ) == .codex
@@ -144,6 +150,16 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("safe-pi"))
         #expect(shimCommandNames.contains("agent-safehouse"))
         #expect(shimCommandNames.contains("sandbox-wrapper") == false)
+    }
+
+    @Test
+    func managedCommandResolverIncludesCdxInDefaultShimNames() {
+        let shimCommandNames = ManagedAgentCommandResolver.shimCommandNames(for: .empty)
+
+        #expect(shimCommandNames.contains("codex"))
+        #expect(shimCommandNames.contains("cdx"))
+        #expect(shimCommandNames.contains("claude"))
+        #expect(shimCommandNames.contains("pi"))
     }
 
     @Test

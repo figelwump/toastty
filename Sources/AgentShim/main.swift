@@ -104,32 +104,40 @@ private enum AgentCommandShim {
         }
 
         let cwd = normalizedNonEmpty(environment["PWD"]) ?? FileManager.default.currentDirectoryPath
-        guard let plan = prepareManagedLaunchPlan(
+        let launchOutcome = prepareManagedLaunch(
             cliPath: cliPath,
             request: ManagedAgentLaunchRequest(
                 agent: invocation.agent,
                 panelID: panelID,
                 argv: invocation.argv,
-                cwd: cwd
+                cwd: cwd,
+                preflightPolicy: .interactive
             ),
             environment: environment
-        ) else {
+        )
+        let plan: ManagedAgentLaunchPlan
+        switch launchOutcome {
+        case .plan(let preparedPlan):
+            plan = preparedPlan
+        case .cancelled(let exitStatus):
+            return exitStatus
+        case .failed:
             ToasttyLog.warning(
                 "Managed agent shim fell back to unmanaged launch after launch planning failed",
                 category: .terminal,
                 metadata: invocationLogMetadata(
-                commandName: commandName,
-                environment: resolvedLaunchEnvironment,
-                additional: [
-                    "agent": invocation.agent.rawValue,
-                    "panel_id": panelID.uuidString,
-                    "cwd": cwd,
-                    "real_binary_path": realBinaryPath,
-                    "fallback_probe_used": resolvedBinaryPath.fallbackProbeUsed ? "true" : "false",
-                    "direct_executable_probe_used": resolvedBinaryPath.directExecutableProbeUsed ? "true" : "false",
-                    "reason": "prepare_managed_launch_failed",
-                ]
-            )
+                    commandName: commandName,
+                    environment: resolvedLaunchEnvironment,
+                    additional: [
+                        "agent": invocation.agent.rawValue,
+                        "panel_id": panelID.uuidString,
+                        "cwd": cwd,
+                        "real_binary_path": realBinaryPath,
+                        "fallback_probe_used": resolvedBinaryPath.fallbackProbeUsed ? "true" : "false",
+                        "direct_executable_probe_used": resolvedBinaryPath.directExecutableProbeUsed ? "true" : "false",
+                        "reason": "prepare_managed_launch_failed",
+                    ]
+                )
             )
             return spawnAndWait(
                 executablePath: realBinaryPath,
@@ -297,18 +305,88 @@ private enum AgentCommandShim {
         return resolvedEnvironment
     }
 
-    private static func prepareManagedLaunchPlan(
+    private static func prepareManagedLaunch(
         cliPath: String,
         request: ManagedAgentLaunchRequest,
         environment: [String: String]
-    ) -> ManagedAgentLaunchPlan? {
+    ) -> ManagedLaunchPreparationOutcome {
         let arguments = managedLaunchArguments(for: request)
         guard let output = runCLI(cliPath: cliPath, arguments: arguments, environment: environment),
               output.exitCode == 0 else {
-            return nil
+            return .failed
         }
 
-        return try? JSONDecoder().decode(ManagedAgentLaunchPlan.self, from: output.stdout)
+        guard let preparation = decodeManagedLaunchPreparation(from: output.stdout) else {
+            return .failed
+        }
+        switch preparation.kind {
+        case .plan:
+            guard let plan = preparation.plan else {
+                return .failed
+            }
+            return .plan(plan)
+        case .preflightRequired:
+            guard let preflight = preparation.preflight else {
+                return .failed
+            }
+            return resolveManagedLaunchPreflight(
+                cliPath: cliPath,
+                request: request,
+                preflight: preflight,
+                environment: environment
+            )
+        }
+    }
+
+    private static func resolveManagedLaunchPreflight(
+        cliPath: String,
+        request: ManagedAgentLaunchRequest,
+        preflight: ManagedAgentLaunchPreflight,
+        environment: [String: String]
+    ) -> ManagedLaunchPreparationOutcome {
+        let pollIntervalMicroseconds = useconds_t(max(preflight.pollIntervalMilliseconds, 50) * 1_000)
+        let deadline = Date().addingTimeInterval(10 * 60)
+
+        while Date() < deadline {
+            guard let decision = managedLaunchPreflightDecision(
+                cliPath: cliPath,
+                token: preflight.token,
+                environment: environment
+            ) else {
+                return .cancelled(1)
+            }
+
+            switch decision.kind {
+            case .pending:
+                usleep(pollIntervalMicroseconds)
+                continue
+            case .runAnyway:
+                let approvedRequest = ManagedAgentLaunchRequest(
+                    agent: request.agent,
+                    panelID: request.panelID,
+                    argv: request.argv,
+                    cwd: request.cwd,
+                    preflightPolicy: .skip
+                )
+                return prepareManagedLaunch(
+                    cliPath: cliPath,
+                    request: approvedRequest,
+                    environment: environment
+                )
+            case .setUpHooks:
+                fputs("Toastty opened Codex status hook setup. Launch cancelled.\n", stderr)
+                return .cancelled(0)
+            case .cancel:
+                fputs("Codex launch cancelled.\n", stderr)
+                return .cancelled(130)
+            case .expired, .notFound:
+                fputs((decision.message ?? "Codex launch preflight expired.") + "\n", stderr)
+                return .cancelled(1)
+            }
+        }
+
+        fputs("Timed out waiting for Toastty Codex status hook preflight.\n", stderr)
+        return .cancelled(1)
     }
 
     private static func managedLaunchArguments(for request: ManagedAgentLaunchRequest) -> [String] {
@@ -324,11 +402,40 @@ private enum AgentCommandShim {
             arguments.append("--cwd")
             arguments.append(cwd)
         }
+        arguments.append("--preflight-policy")
+        arguments.append(request.preflightPolicy.rawValue)
         for argument in request.argv {
             arguments.append("--arg")
             arguments.append(argument)
         }
         return arguments
+    }
+
+    private static func managedLaunchPreflightDecision(
+        cliPath: String,
+        token: String,
+        environment: [String: String]
+    ) -> ManagedAgentLaunchPreflightDecision? {
+        guard let output = runCLI(
+            cliPath: cliPath,
+            arguments: [
+                "agent",
+                "managed-launch-preflight-decision",
+                "--token",
+                token,
+            ],
+            environment: environment
+        ), output.exitCode == 0 else {
+            return nil
+        }
+        return try? JSONDecoder().decode(ManagedAgentLaunchPreflightDecision.self, from: output.stdout)
+    }
+
+    private static func decodeManagedLaunchPreparation(from data: Data) -> ManagedAgentLaunchPreparation? {
+        if let plan = try? JSONDecoder().decode(ManagedAgentLaunchPlan.self, from: data) {
+            return ManagedAgentLaunchPreparation(plan: plan)
+        }
+        return try? JSONDecoder().decode(ManagedAgentLaunchPreparation.self, from: data)
     }
 
     private static func stopSession(
@@ -587,6 +694,12 @@ private struct CLIOutput {
     let exitCode: Int32
     let stdout: Data
     let stderr: Data
+}
+
+private enum ManagedLaunchPreparationOutcome {
+    case plan(ManagedAgentLaunchPlan)
+    case cancelled(Int32)
+    case failed
 }
 
 private struct ResolvedBinaryPath {

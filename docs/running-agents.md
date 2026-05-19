@@ -4,7 +4,7 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 ## Quick start
 
-1. If you want to type `codex`, `claude`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
+1. If you want to type `codex`, `cdx`, `claude`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
 2. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…` or open `Get Started…` and choose `Set Up Agent Status Hooks`
 3. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
 4. Uncomment or add a profile in `~/.toastty/agents.toml`
@@ -153,6 +153,9 @@ When the profile ID is `codex`, Toastty:
 7. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state.
 8. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; per-session notify helper failures still go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
+Typed `cdx` launches use the same Codex instrumentation path as typed `codex`
+launches when Toastty's managed command shims are enabled.
+
 ### What `claude` enables
 
 When the profile ID is `claude`, Toastty:
@@ -215,10 +218,14 @@ than replacing it with an uncertain session.
 
 ## Manual command shims
 
-Outside the Agent menu, Toastty can also track manual `codex`, `claude`, and `pi`
+Outside the Agent menu, Toastty can also track manual `codex`, `cdx`, `claude`, and `pi`
 invocations typed directly into Toastty terminals. By default, Toastty prepends
 managed wrappers for those commands into the terminal `PATH`, and those wrappers
 prepare the same managed-session context before handing off to the real binary.
+For Codex, the typed shim runs the same status-hook preflight as UI launches:
+if hooks are missing or out of date, Toastty shows the setup warning before the
+real Codex process starts. `manualCommandNames` only controls extra executable
+names Toastty should intercept; it does not control status-hook setup.
 
 If you are setting this up from inside the app, the top-bar `Get Started…`
 button, when visible, routes to the same shell-integration flow as

@@ -28,6 +28,11 @@ enum CodexStatusHookLaunchPreflightResolver {
 
 typealias CodexStatusHooksPreflightProvider = @MainActor (String) -> CodexStatusHookLaunchPreflightState
 typealias CodexStatusHooksWarningPresenter = @MainActor (CodexStatusHookLaunchPreflightState, Bool) -> CodexStatusHookWarningChoice
+typealias CodexStatusHooksAsyncWarningPresenter = @MainActor (
+    CodexStatusHookLaunchPreflightState,
+    UUID?,
+    @escaping @MainActor (CodexStatusHookWarningChoice) -> Void
+) -> Void
 typealias AgentStatusHooksSetupPresenter = @MainActor (UUID?) -> Void
 
 @MainActor
@@ -82,7 +87,7 @@ enum AgentLaunchUI {
         alert.runModal()
     }
 
-    private static func codexStatusHooksPreflightState(
+    static func codexStatusHooksPreflightState(
         profileID: String
     ) -> CodexStatusHookLaunchPreflightState {
         guard profileID == AgentKind.codex.rawValue else {
@@ -99,40 +104,51 @@ enum AgentLaunchUI {
         }
     }
 
-    private static func presentCodexStatusHooksWarning(
+    static func presentCodexStatusHooksWarning(
         _ state: CodexStatusHookLaunchPreflightState,
         canOpenSetup: Bool
     ) -> CodexStatusHookWarningChoice {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = codexStatusHooksWarningTitle(for: state)
-        alert.informativeText = codexStatusHooksWarningDetail(for: state)
+        let alert = codexStatusHooksWarningAlert(for: state)
 
         if canOpenSetup {
             alert.addButton(withTitle: "Set Up Hooks")
             alert.addButton(withTitle: "Run Anyway")
             alert.addButton(withTitle: "Cancel")
-            switch alert.runModal() {
-            case .alertFirstButtonReturn:
-                return .setUpHooks
-            case .alertSecondButtonReturn:
-                return .runAnyway
-            default:
-                return .cancel
-            }
+            return codexStatusHooksWarningChoice(response: alert.runModal(), canOpenSetup: true)
         }
 
         alert.addButton(withTitle: "Run Anyway")
         alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            return .runAnyway
-        default:
-            return .cancel
+        return codexStatusHooksWarningChoice(response: alert.runModal(), canOpenSetup: false)
+    }
+
+    static func presentCodexStatusHooksWarningAsync(
+        _ state: CodexStatusHookLaunchPreflightState,
+        windowID: UUID?,
+        completion: @escaping @MainActor (CodexStatusHookWarningChoice) -> Void
+    ) {
+        guard let windowID,
+              let window = window(for: windowID) else {
+            completion(.cancel)
+            return
+        }
+
+        let alert = codexStatusHooksWarningAlert(for: state)
+        alert.addButton(withTitle: "Set Up Hooks")
+        alert.addButton(withTitle: "Run Anyway")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            Task { @MainActor in
+                let choice = codexStatusHooksWarningChoice(response: response, canOpenSetup: true)
+                if choice == .setUpHooks {
+                    presentAgentStatusHooksSetup(windowID: windowID)
+                }
+                completion(choice)
+            }
         }
     }
 
-    private static func codexStatusHooksWarningTitle(
+    static func codexStatusHooksWarningTitle(
         for state: CodexStatusHookLaunchPreflightState
     ) -> String {
         switch state {
@@ -145,7 +161,7 @@ enum AgentLaunchUI {
         }
     }
 
-    private static func codexStatusHooksWarningDetail(
+    static func codexStatusHooksWarningDetail(
         for state: CodexStatusHookLaunchPreflightState
     ) -> String {
         switch state {
@@ -174,9 +190,47 @@ enum AgentLaunchUI {
             object: AgentGetStartedPresentationRequest(windowID: windowID, initialStep: .agentStatusHooks)
         )
     }
+
+    private static func codexStatusHooksWarningAlert(
+        for state: CodexStatusHookLaunchPreflightState
+    ) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = codexStatusHooksWarningTitle(for: state)
+        alert.informativeText = codexStatusHooksWarningDetail(for: state)
+        return alert
+    }
+
+    private static func codexStatusHooksWarningChoice(
+        response: NSApplication.ModalResponse,
+        canOpenSetup: Bool
+    ) -> CodexStatusHookWarningChoice {
+        if canOpenSetup {
+            switch response {
+            case .alertFirstButtonReturn:
+                return .setUpHooks
+            case .alertSecondButtonReturn:
+                return .runAnyway
+            default:
+                return .cancel
+            }
+        }
+
+        switch response {
+        case .alertFirstButtonReturn:
+            return .runAnyway
+        default:
+            return .cancel
+        }
+    }
+
+    private static func window(for windowID: UUID) -> NSWindow? {
+        let identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        return NSApplication.shared.windows.first { $0.identifier == identifier }
+    }
 }
 
-enum CodexStatusHookWarningChoice {
+enum CodexStatusHookWarningChoice: Equatable {
     case setUpHooks
     case runAnyway
     case cancel

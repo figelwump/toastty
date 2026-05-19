@@ -20,7 +20,7 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         let installation = try XCTUnwrap(syncedInstallation)
 
         XCTAssertEqual(installation.directoryURL.path, runtimePaths.agentShimDirectoryURL.path)
-        for commandName in ["codex", "claude", "pi"] {
+        for commandName in ["codex", "cdx", "claude", "pi"] {
             let linkURL = installation.directoryURL.appendingPathComponent(commandName, isDirectory: false)
             XCTAssertTrue(FileManager.default.fileExists(atPath: linkURL.path))
             XCTAssertEqual(

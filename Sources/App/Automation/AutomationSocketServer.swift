@@ -83,6 +83,8 @@ final class AutomationSocketServer: @unchecked Sendable {
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
         reloadConfigurationAction: (@MainActor () -> Void)? = nil,
+        codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider = AgentLaunchUI.codexStatusHooksPreflightState,
+        codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter = AgentLaunchUI.presentCodexStatusHooksWarningAsync,
         recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
         testHooks: AutomationSocketServerTestHooks = .disabled
     ) throws {
@@ -102,6 +104,8 @@ final class AutomationSocketServer: @unchecked Sendable {
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
             reloadConfigurationAction: reloadConfigurationAction,
+            codexStatusHooksPreflightProvider: codexStatusHooksPreflightProvider,
+            codexStatusHooksWarningPresenter: codexStatusHooksWarningPresenter,
             automationConfig: automationConfig
         )
         try startListening()
@@ -837,13 +841,18 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
     private let reloadConfigurationAction: (@MainActor () -> Void)?
+    private let codexStatusHooksPreflightProvider: CodexStatusHooksPreflightProvider
+    private let codexStatusHooksWarningPresenter: CodexStatusHooksAsyncWarningPresenter
     private let automationConfig: AutomationConfig?
     private let startedAt = Date()
+    private let managedLaunchPreflightPollIntervalMilliseconds = 250
+    private let managedLaunchPreflightLifetime: TimeInterval = 10 * 60
 
     private var stateVersion = 0
     private var currentFixtureName: String
     private var notificationStore = NotificationStore()
     private var sessionUpdateCoalescer = SessionUpdateCoalescer()
+    private var pendingManagedLaunchPreflights: [String: PendingManagedLaunchPreflight] = [:]
     @MainActor
     private lazy var appControlExecutor = AppControlExecutor(
         store: store,
@@ -863,6 +872,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
         reloadConfigurationAction: (@MainActor () -> Void)?,
+        codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider,
+        codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter,
         automationConfig: AutomationConfig?
     ) {
         self.store = store
@@ -872,6 +883,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
         self.reloadConfigurationAction = reloadConfigurationAction
+        self.codexStatusHooksPreflightProvider = codexStatusHooksPreflightProvider
+        self.codexStatusHooksWarningPresenter = codexStatusHooksWarningPresenter
         self.automationConfig = automationConfig
         self.currentFixtureName = automationConfig?.fixtureName ?? "default"
     }
@@ -948,20 +961,33 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard argv.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("argv must be a non-empty string array")
             }
+            let preflightPolicy = try managedLaunchPreflightPolicy(from: payload)
+            let request = ManagedAgentLaunchRequest(
+                agent: agent,
+                panelID: panelID,
+                argv: argv,
+                cwd: normalizedOptionalText(payload.string("cwd")),
+                preflightPolicy: preflightPolicy
+            )
+
+            if let preflight = managedLaunchPreflightIfNeeded(for: request) {
+                return try automationObject(ManagedAgentLaunchPreparation(preflight: preflight))
+            }
 
             let plan = try agentLaunchService.prepareManagedLaunch(
-                ManagedAgentLaunchRequest(
-                    agent: agent,
-                    panelID: panelID,
-                    argv: argv,
-                    cwd: normalizedOptionalText(payload.string("cwd"))
-                )
+                request
             )
             store.recordSuccessfulAgentLaunch()
             stateVersion += 1
             var response = try automationObject(plan)
             response["stateVersion"] = .int(stateVersion)
             return response
+
+        case "agent.managed_launch_preflight_decision":
+            guard let token = normalizedOptionalText(payload.string("token")) else {
+                throw AutomationSocketError.invalidPayload("token is required")
+            }
+            return try automationObject(managedLaunchPreflightDecision(token: token))
 
         case "app_control.list_actions":
             return try automationObject(
@@ -2363,6 +2389,113 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         return [:]
     }
 
+    private func managedLaunchPreflightPolicy(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> ManagedAgentLaunchPreflightPolicy {
+        guard let rawPolicy = normalizedOptionalText(payload.string("preflightPolicy")) else {
+            return .skip
+        }
+        guard let policy = ManagedAgentLaunchPreflightPolicy(rawValue: rawPolicy) else {
+            throw AutomationSocketError.invalidPayload("preflightPolicy must be one of: skip, interactive")
+        }
+        return policy
+    }
+
+    @MainActor
+    private func managedLaunchPreflightIfNeeded(
+        for request: ManagedAgentLaunchRequest
+    ) -> ManagedAgentLaunchPreflight? {
+        cleanupExpiredManagedLaunchPreflights()
+        guard request.preflightPolicy == .interactive,
+              request.agent == .codex,
+              let location = locatePanel(request.panelID) else {
+            return nil
+        }
+
+        let state = codexStatusHooksPreflightProvider(request.agent.rawValue)
+        guard state != .ready else { return nil }
+
+        let token = UUID().uuidString
+        pendingManagedLaunchPreflights[token] = PendingManagedLaunchPreflight(
+            createdAt: Date(),
+            decision: ManagedAgentLaunchPreflightDecision(kind: .pending)
+        )
+
+        codexStatusHooksWarningPresenter(state, location.windowID) { [weak self] choice in
+            self?.completeManagedLaunchPreflight(token: token, choice: choice)
+        }
+
+        return ManagedAgentLaunchPreflight(
+            token: token,
+            agent: request.agent,
+            panelID: request.panelID,
+            windowID: location.windowID,
+            title: AgentLaunchUI.codexStatusHooksWarningTitle(for: state),
+            message: AgentLaunchUI.codexStatusHooksWarningDetail(for: state),
+            canOpenSetup: true,
+            pollIntervalMilliseconds: managedLaunchPreflightPollIntervalMilliseconds
+        )
+    }
+
+    @MainActor
+    private func managedLaunchPreflightDecision(
+        token: String
+    ) -> ManagedAgentLaunchPreflightDecision {
+        cleanupExpiredManagedLaunchPreflights()
+        guard let pending = pendingManagedLaunchPreflights[token] else {
+            return ManagedAgentLaunchPreflightDecision(
+                kind: .notFound,
+                message: "Managed launch preflight was not found."
+            )
+        }
+
+        guard Date().timeIntervalSince(pending.createdAt) < managedLaunchPreflightLifetime else {
+            pendingManagedLaunchPreflights.removeValue(forKey: token)
+            return ManagedAgentLaunchPreflightDecision(
+                kind: .expired,
+                message: "Managed launch preflight expired."
+            )
+        }
+
+        guard pending.decision.kind != .pending else {
+            return pending.decision
+        }
+
+        pendingManagedLaunchPreflights.removeValue(forKey: token)
+        return pending.decision
+    }
+
+    @MainActor
+    private func completeManagedLaunchPreflight(
+        token: String,
+        choice: CodexStatusHookWarningChoice
+    ) {
+        guard var pending = pendingManagedLaunchPreflights[token] else { return }
+        switch choice {
+        case .setUpHooks:
+            pending.decision = ManagedAgentLaunchPreflightDecision(
+                kind: .setUpHooks,
+                message: "Toastty opened Codex status hook setup."
+            )
+        case .runAnyway:
+            pending.decision = ManagedAgentLaunchPreflightDecision(kind: .runAnyway)
+        case .cancel:
+            pending.decision = ManagedAgentLaunchPreflightDecision(
+                kind: .cancel,
+                message: "Codex launch cancelled."
+            )
+        }
+        pendingManagedLaunchPreflights[token] = pending
+    }
+
+    @MainActor
+    private func cleanupExpiredManagedLaunchPreflights() {
+        let now = Date()
+        pendingManagedLaunchPreflights = pendingManagedLaunchPreflights.filter { _, pending in
+            now.timeIntervalSince(pending.createdAt) < managedLaunchPreflightLifetime
+        }
+    }
+
     private static func sha256Hex(_ string: String) -> String {
         SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
     }
@@ -2546,6 +2679,11 @@ private enum AutomationIncomingEnvelope: Sendable {
             return event.requestID
         }
     }
+}
+
+private struct PendingManagedLaunchPreflight {
+    let createdAt: Date
+    var decision: ManagedAgentLaunchPreflightDecision
 }
 
 private extension AutomationEventEnvelope {

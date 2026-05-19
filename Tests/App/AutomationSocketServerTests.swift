@@ -975,6 +975,145 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func prepareManagedLaunchInteractivePreflightReturnsPendingWithoutStartingSession() async throws {
+        let socketPath = temporarySocketPath()
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+        let presentedWindowID = CapturedWindowID()
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
+                codexStatusHooksWarningPresenter: { _, windowID, _ in
+                    presentedWindowID.set(windowID)
+                }
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "preflightPolicy": .string(ManagedAgentLaunchPreflightPolicy.interactive.rawValue),
+                    "argv": .array([.string("codex")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.string("kind") == ManagedAgentLaunchPreparationKind.preflightRequired.rawValue)
+        let preflight = try #require(response.result?.object("preflight"))
+        let token = try #require(preflight.string("token"))
+        #expect(preflight.string("agent") == AgentKind.codex.rawValue)
+        #expect(preflight.string("panelID") == server.panelID.uuidString)
+        let preflightState = await MainActor.run {
+            (
+                presentedWindowID: presentedWindowID.snapshot(),
+                firstWindowID: server.store.state.windows.first?.id,
+                sessionCount: server.sessionRuntimeStore.sessionRegistry.sessionsByID.count,
+                hasEverLaunchedAgent: server.store.hasEverLaunchedAgent
+            )
+        }
+        #expect(preflightState.presentedWindowID == preflightState.firstWindowID)
+        #expect(preflightState.sessionCount == 0)
+        #expect(preflightState.hasEverLaunchedAgent == false)
+
+        let decisionResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.managed_launch_preflight_decision",
+                payload: ["token": .string(token)]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(decisionResponse.ok)
+        #expect(decisionResponse.result?.string("kind") == ManagedAgentLaunchPreflightDecisionKind.pending.rawValue)
+    }
+
+    @Test
+    func prepareManagedLaunchCanProceedAfterInteractivePreflightRunAnyway() async throws {
+        let socketPath = temporarySocketPath()
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
+                codexStatusHooksWarningPresenter: { _, _, completion in
+                    completion(.runAnyway)
+                }
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let preflightResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "preflightPolicy": .string(ManagedAgentLaunchPreflightPolicy.interactive.rawValue),
+                    "argv": .array([.string("codex")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        let preflight = try #require(preflightResponse.result?.object("preflight"))
+        let token = try #require(preflight.string("token"))
+        let decisionResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.managed_launch_preflight_decision",
+                payload: ["token": .string(token)]
+            ),
+            socketPath: socketPath
+        )
+        #expect(decisionResponse.result?.string("kind") == ManagedAgentLaunchPreflightDecisionKind.runAnyway.rawValue)
+
+        let launchResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "preflightPolicy": .string(ManagedAgentLaunchPreflightPolicy.skip.rawValue),
+                    "argv": .array([.string("codex")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(launchResponse.ok)
+        #expect(launchResponse.result?.string("sessionID") != nil)
+        let launchState = await MainActor.run {
+            (
+                sessionCount: server.sessionRuntimeStore.sessionRegistry.sessionsByID.count,
+                hasEverLaunchedAgent: server.store.hasEverLaunchedAgent
+            )
+        }
+        #expect(launchState.sessionCount == 1)
+        #expect(launchState.hasEverLaunchedAgent)
+    }
+
+    @Test
     func secondServerCannotStealALiveSocketPath() async {
         let socketPath = temporarySocketPath()
         let firstServer: (
@@ -1228,7 +1367,11 @@ struct AutomationSocketServerTests {
         automationConfig: AutomationConfig? = nil,
         terminalCommandRouter: (any TerminalCommandRouting)? = nil,
         recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
-        testHooks: AutomationSocketServerTestHooks = .disabled
+        testHooks: AutomationSocketServerTestHooks = .disabled,
+        codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider = { _ in .ready },
+        codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter = { _, _, completion in
+            completion(.cancel)
+        }
     ) throws -> (
         server: AutomationSocketServer,
         store: AppStore,
@@ -1269,6 +1412,8 @@ struct AutomationSocketServerTests {
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
+            codexStatusHooksPreflightProvider: codexStatusHooksPreflightProvider,
+            codexStatusHooksWarningPresenter: codexStatusHooksWarningPresenter,
             recoveryPolicy: recoveryPolicy,
             testHooks: testHooks
         )
@@ -1467,6 +1612,17 @@ struct AutomationSocketServerTests {
         return URL(fileURLWithPath: createdPath, isDirectory: true)
     }
 
+    private func codexHookInstallStatus(
+        state: CodexStatusHookInstallState
+    ) -> CodexStatusHookInstallStatus {
+        let rootURL = URL(fileURLWithPath: "/tmp/toastty-codex-hooks-\(state.rawValue)", isDirectory: true)
+        return CodexStatusHookInstallStatus(
+            hooksFileURL: rootURL.appendingPathComponent("hooks.json", isDirectory: false),
+            forwarderScriptURL: rootURL.appendingPathComponent("forwarder.sh", isDirectory: false),
+            state: state
+        )
+    }
+
     private func waitUntil(
         _ description: String,
         timeout: TimeInterval = 1,
@@ -1541,5 +1697,22 @@ private final class OneShotAcceptOverride: @unchecked Sendable {
         }
         didFire = true
         return .fail(errorNumber)
+    }
+}
+
+private final class CapturedWindowID: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UUID?
+
+    func set(_ value: UUID?) {
+        lock.lock()
+        self.value = value
+        lock.unlock()
+    }
+
+    func snapshot() -> UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }

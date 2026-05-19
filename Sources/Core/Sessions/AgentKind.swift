@@ -90,6 +90,7 @@ public enum ManagedAgentCommandResolver {
     public static func shimCommandNames(for catalog: AgentCatalog) -> Set<String> {
         var commandNames: Set<String> = [
             AgentKind.codex.rawValue,
+            "cdx",
             AgentKind.claude.rawValue,
             AgentKind.pi.rawValue,
         ]
@@ -147,7 +148,7 @@ private extension ManagedAgentCommandResolver {
 
     static func exactBuiltInAgent(for commandBasename: String) -> AgentKind? {
         switch commandBasename {
-        case AgentKind.codex.rawValue:
+        case AgentKind.codex.rawValue, "cdx":
             return .codex
         case AgentKind.claude.rawValue:
             return .claude

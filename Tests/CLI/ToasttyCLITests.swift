@@ -121,6 +121,47 @@ struct ToasttyCLITests {
         #expect(request.panelID == panelID)
         #expect(request.cwd == "/tmp/repo")
         #expect(request.argv == ["codex", "--model", "gpt-5.4"])
+        #expect(request.preflightPolicy == .skip)
+    }
+
+    @Test
+    func agentPrepareManagedLaunchParsesInteractivePreflightPolicy() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "agent", "prepare-managed-launch",
+                "--agent", "codex",
+                "--panel", panelID.uuidString,
+                "--preflight-policy", "interactive",
+                "--arg", "codex",
+            ],
+            environment: [:]
+        )
+
+        guard case .agentPrepareManagedLaunch(let request) = invocation.command else {
+            Issue.record("expected managed launch preparation command")
+            return
+        }
+
+        #expect(request.preflightPolicy == .interactive)
+    }
+
+    @Test
+    func agentManagedLaunchPreflightDecisionParsesToken() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "agent", "managed-launch-preflight-decision",
+                "--token", "preflight-token",
+            ],
+            environment: [:]
+        )
+
+        guard case .agentManagedLaunchPreflightDecision(let token) = invocation.command else {
+            Issue.record("expected managed launch preflight decision command")
+            return
+        }
+
+        #expect(token == "preflight-token")
     }
 
     @Test

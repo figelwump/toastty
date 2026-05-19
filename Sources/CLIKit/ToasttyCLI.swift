@@ -14,6 +14,7 @@ struct CLIInvocation: Equatable {
 
 enum CLICommand: Equatable {
     case agentPrepareManagedLaunch(ManagedAgentLaunchRequest)
+    case agentManagedLaunchPreflightDecision(token: String)
     case appControlList(kind: AppControlCommandKind)
     case appControlRun(kind: AppControlCommandKind, id: String, args: [String: AutomationJSONValue])
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
@@ -28,7 +29,7 @@ enum CLICommand: Equatable {
 
     func makeRequestEnvelope(requestID: String = UUID().uuidString) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -48,7 +49,7 @@ enum CLICommand: Equatable {
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentPrepareManagedLaunch, .appControlList, .appControlRun:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun:
             preconditionFailure("managed launch preparation is handled as a request")
 
         case .notify(let title, let body, let workspaceID, let panelID):
@@ -220,6 +221,8 @@ enum CLICommand: Equatable {
         case .agentPrepareManagedLaunch(let request):
             let resolvedSessionID = response.result?.string("sessionID") ?? request.panelID.uuidString
             return resolvedSessionID
+        case .agentManagedLaunchPreflightDecision:
+            return "resolved managed launch preflight decision"
         case .appControlList:
             return "listed app control commands"
         case .appControlRun(let kind, let id, _):
@@ -272,6 +275,12 @@ public enum ToasttyCLI {
                 return try runManagedAgentPrepareCommand(
                     options: invocation.options,
                     request: request
+                )
+
+            case .agentManagedLaunchPreflightDecision(let token):
+                return try runManagedAgentPreflightDecisionCommand(
+                    options: invocation.options,
+                    token: token
                 )
 
             case .sessionIngestAgentEvent(let sessionID, let panelID, let source):
@@ -378,7 +387,8 @@ public enum ToasttyCLI {
     Usage:
       toastty [--json] [--socket-path <path>] action list
       toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
-      toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>]
+      toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive]
+      toastty [--json] [--socket-path <path>] agent managed-launch-preflight-decision --token <id>
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
@@ -509,7 +519,7 @@ public enum ToasttyCLI {
         case "prepare-managed-launch":
             let parsed = try parseCommandArguments(
                 remainingArguments,
-                valueOptions: ["--agent", "--panel", "--cwd", "--arg"]
+                valueOptions: ["--agent", "--panel", "--cwd", "--arg", "--preflight-policy"]
             )
 
             guard parsed.positionals.isEmpty else {
@@ -533,6 +543,12 @@ public enum ToasttyCLI {
             guard argv.allSatisfy({ $0.isEmpty == false }) else {
                 throw ToasttyCLIError.usage("agent prepare-managed-launch does not allow empty --arg values\n\n\(usage)")
             }
+            let preflightPolicy = try parsed.singleValue("--preflight-policy").map { value in
+                guard let policy = ManagedAgentLaunchPreflightPolicy(rawValue: value) else {
+                    throw ToasttyCLIError.usage("--preflight-policy must be one of: skip, interactive")
+                }
+                return policy
+            } ?? .skip
 
             return .agentPrepareManagedLaunch(
                 ManagedAgentLaunchRequest(
@@ -544,9 +560,21 @@ public enum ToasttyCLI {
                         environment: environment
                     ),
                     argv: argv,
-                    cwd: parsed.singleValue("--cwd")
+                    cwd: parsed.singleValue("--cwd"),
+                    preflightPolicy: preflightPolicy
                 )
             )
+
+        case "managed-launch-preflight-decision":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--token"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("agent managed-launch-preflight-decision does not accept positional arguments\n\n\(usage)")
+            }
+            let token = try requireValue("--token", in: parsed)
+            return .agentManagedLaunchPreflightDecision(token: token)
 
         default:
             throw ToasttyCLIError.usage("unknown agent subcommand: \(subcommand)\n\n\(usage)")
@@ -1047,15 +1075,43 @@ public enum ToasttyCLI {
         options: CLIOptions,
         request: ManagedAgentLaunchRequest
     ) throws -> Int32 {
-        let plan = try ManagedAgentLaunchSocketClient.prepareManagedLaunch(
+        let preparation = try ManagedAgentLaunchSocketClient.prepareManagedLaunch(
             request,
             socketPath: options.socketPath
         )
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let string = String(data: try encoder.encode(plan), encoding: .utf8) else {
-            throw ToasttyCLIError.runtime("failed to encode managed launch plan")
+        let payload: Data
+        switch preparation.kind {
+        case .plan:
+            guard let plan = preparation.plan else {
+                throw ToasttyCLIError.runtime("managed launch preparation did not include a plan")
+            }
+            payload = try encoder.encode(plan)
+        case .preflightRequired:
+            payload = try encoder.encode(preparation)
+        }
+        guard let string = String(data: payload, encoding: .utf8) else {
+            throw ToasttyCLIError.runtime("failed to encode managed launch preparation")
+        }
+        try writeStdout(string)
+        return 0
+    }
+
+    private static func runManagedAgentPreflightDecisionCommand(
+        options: CLIOptions,
+        token: String
+    ) throws -> Int32 {
+        let decision = try ManagedAgentLaunchSocketClient.managedLaunchPreflightDecision(
+            token: token,
+            socketPath: options.socketPath
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let string = String(data: try encoder.encode(decision), encoding: .utf8) else {
+            throw ToasttyCLIError.runtime("failed to encode managed launch preflight decision")
         }
         try writeStdout(string)
         return 0
