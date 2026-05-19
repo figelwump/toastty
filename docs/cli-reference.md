@@ -175,6 +175,28 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 
 `panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 
+### Internal managed-agent commands
+
+These commands are used by Toastty-owned command shims and app integration code.
+They are not intended as third-party agent integration APIs. Custom agents should
+use `session start`, `session status`, `session update-files`, and
+`session stop` directly.
+
+```
+toastty agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive]
+toastty agent managed-launch-preflight-decision --token <id>
+```
+
+`agent prepare-managed-launch` asks the running app to build the managed launch
+plan for a built-in agent command. `--arg` is repeatable and supplies the exact
+agent command argv. `--preflight-policy` defaults to `skip`; `interactive`
+allows the app to pause a Codex launch for status-hook setup or trust warnings.
+
+When interactive preflight is required, the response reports
+`kind: "preflightRequired"` with a token. The shim then calls
+`agent managed-launch-preflight-decision --token <id>` and either continues with
+the returned decision or exits before starting the real agent command.
+
 ### `notify`
 
 Emit a macOS desktop notification.

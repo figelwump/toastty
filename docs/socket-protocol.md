@@ -1046,6 +1046,43 @@ Result:
 - `queuedFiles`
 - `stateVersion`
 
+### `session.update_resume_record`
+
+Internal event used by Toastty's built-in agent instrumentation to persist
+provider-native resume metadata. Manual wrappers should generally use
+`session.status` and the other public session commands instead.
+
+Required:
+
+- top-level `sessionID`
+- top-level `panelID`
+- payload `agent`
+- payload `nativeSessionID`
+- payload `sessionFilePath`
+- payload `cwd`
+
+Accepted payload keys:
+
+- `agent: lowercase agent ID`
+- `nativeSessionID: String`
+- `sessionFilePath: String`
+- `cwd: String`
+
+Behavior:
+
+- `sessionID` must identify an active session
+- `panelID` must match the active session
+- `agent` must match the active session's agent
+- Toastty stores the resume record on the active terminal panel so restored
+  managed Codex, Claude, and Pi panels can resume the provider-native session
+  instead of starting a fresh profile command
+- If the record does not change panel state, `stateVersion` may be unchanged
+
+Result:
+
+- `eventType`
+- `stateVersion`
+
 ### `session.stop`
 
 Required:
