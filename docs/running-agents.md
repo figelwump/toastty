@@ -222,8 +222,10 @@ invocations typed directly into Toastty terminals. By default, Toastty prepends
 managed wrappers for those commands into the terminal `PATH`, and those wrappers
 prepare the same managed-session context before handing off to the real binary.
 For Codex, the typed shim runs the same status-hook preflight as UI launches:
-if hooks are missing or out of date, Toastty shows the setup warning before the
-real Codex process starts. `manualCommandNames` only controls extra executable
+if hooks still need first-time setup or cannot be verified, Toastty shows the
+setup warning before the real Codex process starts. Once Toastty owns the hook
+entries, routine hook maintenance runs automatically in the background.
+`manualCommandNames` only controls extra executable
 names Toastty should intercept; it does not control status-hook setup.
 
 If you are setting this up from inside the app, the top-bar `Get Started…`

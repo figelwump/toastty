@@ -162,6 +162,21 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func codexStatusHookPreflightAllowsAutomaticallyMaintainableCodexHooks() {
+        let maintenanceStatus = codexHookInstallStatus(
+            state: .needsUpdate,
+            setupRequirement: .automaticMaintenance
+        )
+
+        #expect(
+            CodexStatusHookLaunchPreflightResolver.state(
+                profileID: "codex",
+                installationStatus: maintenanceStatus
+            ) == .ready
+        )
+    }
+
+    @Test
     func codexStatusHookPreflightAllowsRestoredCodexLaunches() {
         let missingStatus = codexHookInstallStatus(state: .notInstalled)
 
@@ -685,13 +700,15 @@ struct AgentLaunchServiceTests {
     }
 
     private func codexHookInstallStatus(
-        state: CodexStatusHookInstallState
+        state: CodexStatusHookInstallState,
+        setupRequirement: CodexStatusHookSetupRequirement? = nil
     ) -> CodexStatusHookInstallStatus {
         let rootURL = URL(fileURLWithPath: "/tmp/toastty-codex-hooks-\(state.rawValue)", isDirectory: true)
         return CodexStatusHookInstallStatus(
             hooksFileURL: rootURL.appendingPathComponent("hooks.json", isDirectory: false),
             forwarderScriptURL: rootURL.appendingPathComponent("forwarder.sh", isDirectory: false),
-            state: state
+            state: state,
+            setupRequirement: setupRequirement
         )
     }
 

@@ -22,7 +22,7 @@ enum CodexStatusHookLaunchPreflightResolver {
         guard launchReason != .restore else {
             return .ready
         }
-        return installationStatus.isInstalled ? .ready : .needsSetup(installationStatus)
+        return installationStatus.requiresLaunchPreflightWarning ? .needsSetup(installationStatus) : .ready
     }
 }
 

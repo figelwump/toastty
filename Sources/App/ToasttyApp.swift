@@ -2331,6 +2331,40 @@ struct ToasttyApp: App {
         appLifecycleDelegate.configureStore(store)
         appLifecycleDelegate.configureTerminalRuntimeRegistry(terminalRuntimeRegistry)
         appLifecycleDelegate.configureWebPanelRuntimeRegistry(webPanelRuntimeRegistry)
+        Self.scheduleCodexStatusHookMaintenanceIfNeeded(automationConfig: bootstrap.automationConfig)
+    }
+
+    private static func scheduleCodexStatusHookMaintenanceIfNeeded(
+        automationConfig: AutomationConfig?
+    ) {
+        guard automationConfig == nil else { return }
+
+        Task.detached(priority: .utility) {
+            do {
+                guard let result = try CodexStatusHookInstaller().performAutomaticMaintenanceIfNeeded() else {
+                    return
+                }
+                ToasttyLog.info(
+                    "Automatically maintained Codex status hooks",
+                    category: .bootstrap,
+                    metadata: [
+                        "hooks_file": result.status.hooksFileURL.path,
+                        "forwarder_script": result.status.forwarderScriptURL.path,
+                        "hooks_file_changed": result.hooksFileChanged ? "true" : "false",
+                        "forwarder_script_changed": result.forwarderScriptChanged ? "true" : "false",
+                        "status": result.status.state.rawValue,
+                    ]
+                )
+            } catch {
+                ToasttyLog.warning(
+                    "Failed automatic Codex status hook maintenance",
+                    category: .bootstrap,
+                    metadata: [
+                        "error": error.localizedDescription,
+                    ]
+                )
+            }
+        }
     }
 
     private static func refreshManagedShellIntegrationSnippetIfInstalled(processInfo: ProcessInfo) {

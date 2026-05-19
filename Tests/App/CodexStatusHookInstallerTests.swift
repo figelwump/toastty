@@ -66,6 +66,7 @@ final class CodexStatusHookInstallerTests: XCTestCase {
     func testInstallReplacesStaleToasttyHooks() throws {
         let homeURL = try makeTemporaryHome()
         let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        let staleCommand = "/bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
         try writeHooksObject(
             [
                 "hooks": [
@@ -74,7 +75,7 @@ final class CodexStatusHookInstallerTests: XCTestCase {
                             "hooks": [
                                 [
                                     "type": "command",
-                                    "command": "/bin/sh '/tmp/old-toastty-forwarder.sh'",
+                                    "command": staleCommand,
                                     "timeout": 1,
                                     "statusMessage": "Toastty Agent Status",
                                 ],
@@ -90,7 +91,12 @@ final class CodexStatusHookInstallerTests: XCTestCase {
 
         let object = try hooksJSONObject(homeURL: homeURL)
         let stopHooks = try hookEntries(for: "Stop", in: object)
-        XCTAssertFalse(stopHooks.contains { ($0["command"] as? String)?.contains("old-toastty-forwarder") == true })
+        XCTAssertFalse(
+            stopHooks.contains {
+                ($0["command"] as? String) == staleCommand &&
+                    (($0["timeout"] as? NSNumber)?.intValue == 1 || ($0["timeout"] as? Int) == 1)
+            }
+        )
         XCTAssertEqual(try toasttyHookEntries(for: "Stop", in: object, homeURL: homeURL).count, 1)
     }
 
@@ -132,6 +138,132 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         }
     }
 
+    func testCurrentHooksWithLegacyToasttyHookNeedAutomaticMaintenanceWithoutLaunchWarning() throws {
+        let homeURL = try makeTemporaryHome()
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+        _ = try installer.install()
+        try appendLegacyToasttyHook(homeURL: homeURL)
+
+        let status = try installer.installationStatus()
+
+        XCTAssertEqual(status.state, .needsUpdate)
+        XCTAssertEqual(status.setupRequirement, .automaticMaintenance)
+        XCTAssertTrue(status.needsAutomaticMaintenance)
+        XCTAssertFalse(status.requiresLaunchPreflightWarning)
+    }
+
+    func testCurrentHooksWithExtraStaleCurrentHookNeedAutomaticMaintenanceWithoutLaunchWarning() throws {
+        let homeURL = try makeTemporaryHome()
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+        _ = try installer.install()
+        try appendStaleCurrentToasttyHook(homeURL: homeURL)
+
+        let status = try installer.installationStatus()
+
+        XCTAssertEqual(status.state, .needsUpdate)
+        XCTAssertEqual(status.setupRequirement, .automaticMaintenance)
+        XCTAssertTrue(status.needsAutomaticMaintenance)
+        XCTAssertFalse(status.requiresLaunchPreflightWarning)
+    }
+
+    func testAutomaticMaintenanceRemovesLegacyToasttyHookAndPreservesExistingHooks() throws {
+        let homeURL = try makeTemporaryHome()
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+        _ = try installer.install()
+        try appendLegacyToasttyHook(homeURL: homeURL)
+        try appendExternalStopHook(homeURL: homeURL)
+
+        let result = try XCTUnwrap(installer.performAutomaticMaintenanceIfNeeded())
+
+        XCTAssertTrue(result.hooksFileChanged)
+        XCTAssertEqual(result.status.state, .installed)
+
+        let object = try hooksJSONObject(homeURL: homeURL)
+        XCTAssertNil((object["hooks"] as? [String: Any])?["PostToolUse"])
+        let stopHooks = try hookEntries(for: "Stop", in: object)
+        XCTAssertTrue(stopHooks.contains { ($0["command"] as? String) == "/usr/bin/true" })
+        XCTAssertEqual(try toasttyHookEntries(for: "Stop", in: object, homeURL: homeURL).count, 1)
+    }
+
+    func testAutomaticMaintenancePreservesExternalHookWithToasttyStatusMessage() throws {
+        let homeURL = try makeTemporaryHome()
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+        _ = try installer.install()
+        try appendLegacyToasttyHook(homeURL: homeURL)
+        try appendExternalStopHook(homeURL: homeURL, statusMessage: "Toastty Agent Status")
+
+        let result = try XCTUnwrap(installer.performAutomaticMaintenanceIfNeeded())
+
+        XCTAssertTrue(result.hooksFileChanged)
+        XCTAssertEqual(result.status.state, .installed)
+
+        let object = try hooksJSONObject(homeURL: homeURL)
+        let stopHooks = try hookEntries(for: "Stop", in: object)
+        XCTAssertTrue(
+            stopHooks.contains {
+                ($0["command"] as? String) == "/usr/bin/true" &&
+                    ($0["statusMessage"] as? String) == "Toastty Agent Status"
+            }
+        )
+        XCTAssertEqual(try toasttyHookEntries(for: "Stop", in: object, homeURL: homeURL).count, 1)
+    }
+
+    func testAutomaticMaintenanceRecreatesMissingForwarderForOwnedHooks() throws {
+        let homeURL = try makeTemporaryHome()
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+        let installResult = try installer.install()
+        try FileManager.default.removeItem(at: installResult.status.forwarderScriptURL)
+
+        let status = try installer.installationStatus()
+
+        XCTAssertEqual(status.state, .needsUpdate)
+        XCTAssertEqual(status.setupRequirement, .automaticMaintenance)
+        XCTAssertFalse(status.requiresLaunchPreflightWarning)
+
+        let maintenanceResult = try XCTUnwrap(installer.performAutomaticMaintenanceIfNeeded())
+        XCTAssertFalse(maintenanceResult.hooksFileChanged)
+        XCTAssertTrue(maintenanceResult.forwarderScriptChanged)
+        XCTAssertEqual(maintenanceResult.status.state, .installed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: maintenanceResult.status.forwarderScriptURL.path))
+    }
+
+    func testAutomaticMaintenanceDoesNotInstallWhenNoToasttyHooksExist() throws {
+        let homeURL = try makeTemporaryHome()
+        let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        try writeHooksObject(
+            [
+                "hooks": [
+                    "Stop": [
+                        [
+                            "hooks": [
+                                [
+                                    "type": "command",
+                                    "command": "/usr/bin/true",
+                                    "statusMessage": "Toastty Agent Status",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            to: hooksFileURL
+        )
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+
+        let status = try installer.installationStatus()
+        let result = try installer.performAutomaticMaintenanceIfNeeded()
+
+        XCTAssertEqual(status.state, .notInstalled)
+        XCTAssertEqual(status.setupRequirement, .userSetup)
+        XCTAssertTrue(status.requiresLaunchPreflightWarning)
+        XCTAssertNil(result)
+
+        let object = try hooksJSONObject(homeURL: homeURL)
+        let stopHooks = try hookEntries(for: "Stop", in: object)
+        XCTAssertEqual(stopHooks.count, 1)
+        XCTAssertEqual(stopHooks.first?["command"] as? String, "/usr/bin/true")
+    }
+
     func testUninstallRemovesOnlyToasttyHooks() throws {
         let homeURL = try makeTemporaryHome()
         let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
@@ -158,7 +290,7 @@ final class CodexStatusHookInstallerTests: XCTestCase {
 
         let status = try installer.uninstall()
 
-        XCTAssertEqual(status.state, .needsUpdate)
+        XCTAssertEqual(status.state, .notInstalled)
         let updatedObject = try hooksJSONObject(homeURL: homeURL)
         let stopHooks = try hookEntries(for: "Stop", in: updatedObject)
         XCTAssertTrue(stopHooks.contains { ($0["command"] as? String) == "/usr/bin/true" })
@@ -237,5 +369,74 @@ final class CodexStatusHookInstallerTests: XCTestCase {
             (hook["command"] as? String) == expectedCommand &&
                 (hook["statusMessage"] as? String) == "Toastty Agent Status"
         }
+    }
+
+    private func appendLegacyToasttyHook(homeURL: URL) throws {
+        let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        var object = try hooksJSONObject(homeURL: homeURL)
+        var hooks = try XCTUnwrap(object["hooks"] as? [String: Any])
+        let legacyCommand = "/bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
+        hooks["PostToolUse"] = [
+            [
+                "matcher": "*",
+                "hooks": [
+                    [
+                        "type": "command",
+                        "command": legacyCommand,
+                        "timeout": 5,
+                        "statusMessage": "Toastty Agent Status",
+                    ],
+                ],
+            ],
+        ]
+        object["hooks"] = hooks
+        try writeHooksObject(object, to: hooksFileURL)
+    }
+
+    private func appendStaleCurrentToasttyHook(homeURL: URL) throws {
+        let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        var object = try hooksJSONObject(homeURL: homeURL)
+        var hooks = try XCTUnwrap(object["hooks"] as? [String: Any])
+        var stopGroups = try XCTUnwrap(hooks["Stop"] as? [[String: Any]])
+        let staleCommand = "/bin/sh '\(homeURL.path)/.toastty/codex-hooks/forwarder.sh'"
+        stopGroups.append(
+            [
+                "hooks": [
+                    [
+                        "type": "command",
+                        "command": staleCommand,
+                        "timeout": 1,
+                        "statusMessage": "Toastty Agent Status",
+                    ],
+                ],
+            ]
+        )
+        hooks["Stop"] = stopGroups
+        object["hooks"] = hooks
+        try writeHooksObject(object, to: hooksFileURL)
+    }
+
+    private func appendExternalStopHook(
+        homeURL: URL,
+        statusMessage: String = "Existing Hook"
+    ) throws {
+        let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        var object = try hooksJSONObject(homeURL: homeURL)
+        var hooks = try XCTUnwrap(object["hooks"] as? [String: Any])
+        var stopGroups = try XCTUnwrap(hooks["Stop"] as? [[String: Any]])
+        stopGroups.append(
+            [
+                "hooks": [
+                    [
+                        "type": "command",
+                        "command": "/usr/bin/true",
+                        "statusMessage": statusMessage,
+                    ],
+                ],
+            ]
+        )
+        hooks["Stop"] = stopGroups
+        object["hooks"] = hooks
+        try writeHooksObject(object, to: hooksFileURL)
     }
 }
