@@ -659,6 +659,30 @@ wait_for_finder_layout_persistence() {
   fail "Finder did not persist DMG layout metadata before detach"
 }
 
+remove_dmg_transient_folders() {
+  local transient_path=""
+
+  log "Removing transient DMG folders"
+  [[ -n "$ATTACHED_DEVICE" ]] || fail "cannot remove transient DMG folders without an attached device"
+  [[ -n "$MOUNT_POINT" && -d "$MOUNT_POINT" && "$MOUNT_POINT" == /Volumes/* ]] \
+    || fail "cannot remove transient DMG folders without a mounted volume path"
+  [[ -d "$MOUNT_POINT/$APP_BUNDLE_NAME" && -L "$MOUNT_POINT/Applications" ]] \
+    || fail "mounted DMG contents do not match expected release volume"
+  rm -rf \
+    "$MOUNT_POINT/.fseventsd" \
+    "$MOUNT_POINT/.TemporaryItems" \
+    "$MOUNT_POINT/.Trashes"
+  sync
+  for transient_path in \
+    "$MOUNT_POINT/.fseventsd" \
+    "$MOUNT_POINT/.TemporaryItems" \
+    "$MOUNT_POINT/.Trashes"
+  do
+    [[ ! -e "$transient_path" ]] \
+      || fail "transient DMG folder was recreated before detach: $transient_path"
+  done
+}
+
 detach_writable_dmg() {
   [[ -n "$ATTACHED_DEVICE" ]] || return 0
 
@@ -673,11 +697,40 @@ detach_writable_dmg() {
   DS_STORE_PATH=""
 }
 
+verify_dmg_excludes_transient_folders() {
+  local attach_output=""
+  local verify_device=""
+  local verify_mount_point=""
+  local transient_name=""
+
+  log "Verifying DMG excludes transient folders"
+  attach_output="$(hdiutil attach -readonly -noautoopen -nobrowse "$DMG_PATH")"
+  verify_device="$(printf '%s\n' "$attach_output" | awk 'NR == 1 { print $1; exit }')"
+  verify_mount_point="$(printf '%s\n' "$attach_output" | awk 'match($0, /\/Volumes\/.*/) { print substr($0, RSTART); exit }')"
+
+  if [[ -z "$verify_device" || -z "$verify_mount_point" ]]; then
+    [[ -n "$verify_device" ]] && hdiutil detach "$verify_device" -quiet >/dev/null 2>&1 || true
+    fail "failed to mount compressed DMG for transient folder verification"
+  fi
+
+  for transient_name in .fseventsd .TemporaryItems .Trashes; do
+    if [[ -e "$verify_mount_point/$transient_name" ]]; then
+      hdiutil detach "$verify_device" -quiet >/dev/null 2>&1 || true
+      fail "compressed DMG contains transient folder: $transient_name"
+    fi
+  done
+
+  hdiutil detach "$verify_device" -quiet \
+    || hdiutil detach "$verify_device" -force -quiet \
+    || fail "failed to detach compressed DMG verification mount"
+}
+
 create_dmg() {
   create_writable_dmg
   mount_writable_dmg
   customize_dmg_layout
   wait_for_finder_layout_persistence
+  remove_dmg_transient_folders
   detach_writable_dmg
 
   log "Compressing DMG"
@@ -688,6 +741,7 @@ create_dmg() {
     -ov \
     "$RW_DMG_PATH" \
     -o "$DMG_PATH"
+  verify_dmg_excludes_transient_folders
 }
 
 sign_dmg() {
