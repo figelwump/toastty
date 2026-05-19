@@ -84,9 +84,14 @@ sv exec -- scripts/remote/test.sh -- ...
 
 ## Logging
 
-- Ordinary runs log to `~/Library/Logs/Toastty/toastty.log`.
-- Runtime-isolated runs log to `<runtime-home>/logs/toastty.log` and rotate at 5 MB to `toastty.previous.log`.
-- For a specific dev/Xcode instance, resolve `instance.json` first and read `logFilePath` from there.
+- First identify the target being debugged:
+  - Production/installed Toastty runs log to `~/Library/Logs/Toastty/toastty.log`.
+  - Worktree/Xcode/dev/smoke runs use runtime isolation; resolve `instance.json` in that worktree and read `logFilePath`.
+- If the user names a worktree, use that worktree's `artifacts/dev-runs/worktree-*/runtime-home/instance.json`.
+- If the target is ambiguous, default to the current worktree's runtime-isolated instance. Look under `artifacts/dev-runs/worktree-*/runtime-home/instance.json`, validate the PID is alive, then read `logFilePath`.
+- Only if the current-worktree target is still ambiguous or stale, inspect running Toastty processes with `pgrep -af Toastty` and use `lsof -p <pid>` to find open `toastty.log` paths.
+- Xcode `Release` configuration is still a worktree run when launched from the generated scheme; do not treat it as production logging.
+- Runtime-isolated logs rotate at 5 MB to `<runtime-home>/logs/toastty.previous.log`; production logs rotate under `~/Library/Logs/Toastty/`.
 - Useful env vars: `TOASTTY_LOG_LEVEL`, `TOASTTY_LOG_FILE` (`none` disables), `TOASTTY_LOG_STDERR=1`, `TOASTTY_LOG_DISABLE=1`.
 - Key instrumentation points: `TerminalHostView` (key events), `GhosttyRuntimeManager` (action routing), `TerminalRuntimeRegistry` (dispatch), `AppReducer` (split resize/equalize).
 
