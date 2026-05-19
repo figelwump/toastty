@@ -840,6 +840,7 @@ struct ToasttyCommandMenus: Commands {
         AgentLaunchUI.launch(
             profileID: profileID,
             workspaceID: commandWorkspace?.id,
+            originWindowID: agentGetStartedTargetWindowID,
             agentLaunchService: agentLaunchService
         )
     }

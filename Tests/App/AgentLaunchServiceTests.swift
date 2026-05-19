@@ -124,6 +124,125 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func codexStatusHookPreflightRequiresSetupForMissingOrStaleCodexHooks() {
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+        let staleStatus = codexHookInstallStatus(state: .needsUpdate)
+
+        #expect(
+            CodexStatusHookLaunchPreflightResolver.state(
+                profileID: "codex",
+                installationStatus: missingStatus
+            ) == .needsSetup(missingStatus)
+        )
+        #expect(
+            CodexStatusHookLaunchPreflightResolver.state(
+                profileID: "codex",
+                installationStatus: staleStatus
+            ) == .needsSetup(staleStatus)
+        )
+    }
+
+    @Test
+    func codexStatusHookPreflightAllowsInstalledCodexHooksAndNonCodexLaunches() {
+        let installedStatus = codexHookInstallStatus(state: .installed)
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+
+        #expect(
+            CodexStatusHookLaunchPreflightResolver.state(
+                profileID: "codex",
+                installationStatus: installedStatus
+            ) == .ready
+        )
+        #expect(
+            CodexStatusHookLaunchPreflightResolver.state(
+                profileID: "claude",
+                installationStatus: missingStatus
+            ) == .ready
+        )
+    }
+
+    @Test
+    func agentLaunchUICancelCodexHooksWarningDoesNotLaunch() throws {
+        let fixture = try makeLaunchUITestFixture()
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+        var observedWarningState: CodexStatusHookLaunchPreflightState?
+        var observedCanOpenSetup: Bool?
+        var setupWindowID: UUID?
+
+        let launched = AgentLaunchUI.launch(
+            profileID: "codex",
+            workspaceID: fixture.workspaceID,
+            originWindowID: fixture.windowID,
+            agentLaunchService: fixture.service,
+            codexStatusHooksPreflightProvider: { profileID in
+                #expect(profileID == "codex")
+                return .needsSetup(missingStatus)
+            },
+            codexStatusHooksWarningPresenter: { state, canOpenSetup in
+                observedWarningState = state
+                observedCanOpenSetup = canOpenSetup
+                return .cancel
+            },
+            agentStatusHooksSetupPresenter: { windowID in
+                setupWindowID = windowID
+            }
+        )
+
+        #expect(launched == false)
+        #expect(observedWarningState == .needsSetup(missingStatus))
+        #expect(observedCanOpenSetup == true)
+        #expect(setupWindowID == nil)
+        #expect(fixture.terminalRouter.sentTextByPanelID.isEmpty)
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty)
+    }
+
+    @Test
+    func agentLaunchUISetUpHooksOpensSetupWithoutLaunching() throws {
+        let fixture = try makeLaunchUITestFixture()
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+        var setupWindowID: UUID?
+
+        let launched = AgentLaunchUI.launch(
+            profileID: "codex",
+            workspaceID: fixture.workspaceID,
+            originWindowID: fixture.windowID,
+            agentLaunchService: fixture.service,
+            codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
+            codexStatusHooksWarningPresenter: { _, _ in .setUpHooks },
+            agentStatusHooksSetupPresenter: { windowID in
+                setupWindowID = windowID
+            }
+        )
+
+        #expect(launched == false)
+        #expect(setupWindowID == fixture.windowID)
+        #expect(fixture.terminalRouter.sentTextByPanelID.isEmpty)
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.isEmpty)
+    }
+
+    @Test
+    func agentLaunchUIRunAnywayBypassesCodexHooksWarningAndLaunches() throws {
+        let fixture = try makeLaunchUITestFixture()
+        let missingStatus = codexHookInstallStatus(state: .notInstalled)
+
+        let launched = AgentLaunchUI.launch(
+            profileID: "codex",
+            workspaceID: fixture.workspaceID,
+            originWindowID: fixture.windowID,
+            agentLaunchService: fixture.service,
+            codexStatusHooksPreflightProvider: { _ in .needsSetup(missingStatus) },
+            codexStatusHooksWarningPresenter: { _, _ in .runAnyway },
+            agentStatusHooksSetupPresenter: { _ in
+                Issue.record("Run Anyway should not open setup")
+            }
+        )
+
+        #expect(launched)
+        #expect(fixture.terminalRouter.sentTextByPanelID[fixture.panelID] != nil)
+        #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.count == 1)
+    }
+
+    @Test
     func launchInjectsToasttyContextAndStartsSession() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -550,6 +669,48 @@ struct AgentLaunchServiceTests {
             bundledHelperAgentShimURL,
             siblingAgentShimURL
         )
+    }
+
+    private func codexHookInstallStatus(
+        state: CodexStatusHookInstallState
+    ) -> CodexStatusHookInstallStatus {
+        let rootURL = URL(fileURLWithPath: "/tmp/toastty-codex-hooks-\(state.rawValue)", isDirectory: true)
+        return CodexStatusHookInstallStatus(
+            hooksFileURL: rootURL.appendingPathComponent("hooks.json", isDirectory: false),
+            forwarderScriptURL: rootURL.appendingPathComponent("forwarder.sh", isDirectory: false),
+            state: state
+        )
+    }
+
+    private func makeLaunchUITestFixture() throws -> (
+        store: AppStore,
+        sessionRuntimeStore: SessionRuntimeStore,
+        terminalRouter: TestTerminalCommandRouter,
+        service: AgentLaunchService,
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID
+    ) {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let agentCatalogProvider = TestAgentCatalogProvider()
+        let windowID = try #require(store.state.windows.first?.id)
+        let workspace = try #require(store.selectedWorkspace)
+        let workspaceID = workspace.id
+        let panelID = try #require(workspace.focusedPanelID)
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        return (store, sessionRuntimeStore, terminalRouter, service, windowID, workspaceID, panelID)
     }
 
     private func makeExecutableFile(at url: URL) throws {

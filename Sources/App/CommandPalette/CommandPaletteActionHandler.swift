@@ -470,6 +470,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         AgentLaunchUI.launch(
             profileID: profileID,
             workspaceID: store?.commandSelection(preferredWindowID: originWindowID)?.workspace.id,
+            originWindowID: originWindowID,
             agentLaunchService: agentLaunchService
         )
     }

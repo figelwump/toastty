@@ -840,6 +840,7 @@ struct WorkspaceView: View {
         AgentLaunchUI.launch(
             profileID: profileID,
             workspaceID: selectedWorkspace?.id,
+            originWindowID: windowID,
             agentLaunchService: agentLaunchService
         )
     }
