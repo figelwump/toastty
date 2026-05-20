@@ -740,14 +740,14 @@ struct WorkspaceView: View {
             )
         }
 
-        return NonWindowDraggableRegion {
-            WorkspaceTabStripLayout(
-                spacing: Self.workspaceTabStripSpacing,
-                accessorySpacing: Self.workspaceTabAccessorySpacing
-            ) {
-                ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
-                    let isSelected = workspace.resolvedSelectedTabID == tab.id
-                    let isDragged = activeTabDrag?.tabID == tab.id
+        return WorkspaceTabStripLayout(
+            spacing: Self.workspaceTabStripSpacing,
+            accessorySpacing: Self.workspaceTabAccessorySpacing
+        ) {
+            ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
+                let isSelected = workspace.resolvedSelectedTabID == tab.id
+                let isDragged = activeTabDrag?.tabID == tab.id
+                NonWindowDraggableRegion {
                     workspaceTabRow(
                         workspaceID: workspace.id,
                         orderedTabIDs: workspace.tabIDs,
@@ -757,31 +757,33 @@ struct WorkspaceView: View {
                         allowsManagementAffordances: allowsManagementAffordances,
                         installsContextMenu: installsContextMenu
                     )
-                    .zIndex(
-                        isDragged
-                            ? Double(workspace.orderedTabs.count + 1)
-                            : isSelected ? Double(workspace.orderedTabs.count) : Double(index)
-                    )
                 }
+                .background(workspaceTabFrameMeasurement(tabID: tab.id))
+                .zIndex(
+                    isDragged
+                        ? Double(workspace.orderedTabs.count + 1)
+                        : isSelected ? Double(workspace.orderedTabs.count) : Double(index)
+                )
+            }
 
-                newTabButton
-            }
-            .frame(height: ToastyTheme.workspaceTabHeight, alignment: .bottom)
-            .coordinateSpace(name: WorkspaceTabStripCoordinateSpace.name)
-            .onPreferenceChange(WorkspaceTabFramePreferenceKey.self) { measuredWorkspaceTabFramesByID = $0 }
-            .overlay(alignment: .topLeading) {
-                if let insertionIndicatorX {
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(ToastyTheme.accent)
-                        .frame(width: 2, height: ToastyTheme.workspaceTabHeight - 4)
-                        .offset(x: insertionIndicatorX - 1, y: 2)
-                        .allowsHitTesting(false)
-                }
-            }
-            .clipped()
-            .animation(.easeInOut(duration: 0.18), value: workspace.orderedTabs.map(\.id))
-            .accessibilityIdentifier("workspace.tabs.container")
+            newTabButton
         }
+        .frame(height: ToastyTheme.topBarHeight, alignment: .bottom)
+        .coordinateSpace(name: WorkspaceTabStripCoordinateSpace.name)
+        .onPreferenceChange(WorkspaceTabFramePreferenceKey.self) { measuredWorkspaceTabFramesByID = $0 }
+        .overlay(alignment: .bottomLeading) {
+            if let insertionIndicatorX {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(ToastyTheme.accent)
+                    .frame(width: 2, height: ToastyTheme.workspaceTabHeight - 4)
+                    .offset(x: insertionIndicatorX - 1, y: -2)
+                    .allowsHitTesting(false)
+            }
+        }
+        .clipped()
+        .animation(.easeInOut(duration: 0.18), value: workspace.orderedTabs.map(\.id))
+        .accessibilityIdentifier("workspace.tabs.container")
+        .frame(maxHeight: .infinity, alignment: .bottom)
     }
 
     private var newTabButton: some View {
@@ -1865,7 +1867,7 @@ struct WorkspaceView: View {
             appIsActive: appIsActive
         )
 
-        let row = ZStack(alignment: .trailing) {
+        let row = ZStack(alignment: .bottomTrailing) {
             if isRenaming {
                 workspaceTabRenameRow(
                     workspaceID: workspaceID,
@@ -1900,36 +1902,6 @@ struct WorkspaceView: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .overlay {
-                    PointerInteractionRegion(
-                        name: "workspace-tab",
-                        metadata: [
-                            "workspaceID": workspaceID.uuidString,
-                            "tabID": tab.id.uuidString,
-                            "sourceIndex": "\(index)",
-                        ],
-                        onBegan: { _ in
-                            beginWorkspaceTabInteraction(tabID: tab.id)
-                        },
-                        onChanged: { value in
-                            updateWorkspaceTabDrag(
-                                workspaceID: workspaceID,
-                                orderedTabIDs: orderedTabIDs,
-                                tabID: tab.id,
-                                sourceIndex: index,
-                                value: value
-                            )
-                        },
-                        onEnded: { value in
-                            finishWorkspaceTabInteraction(
-                                workspaceID: workspaceID,
-                                tabID: tab.id,
-                                value: value
-                            )
-                        }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(tab.displayTitle)
@@ -1941,11 +1913,45 @@ struct WorkspaceView: View {
                 .animation(.easeOut(duration: 0.1), value: isHovered)
             }
 
+            if isRenaming == false {
+                PointerInteractionRegion(
+                    name: "workspace-tab",
+                    metadata: [
+                        "workspaceID": workspaceID.uuidString,
+                        "tabID": tab.id.uuidString,
+                        "sourceIndex": "\(index)",
+                    ],
+                    suppressesWindowMovementWhileHovered: true,
+                    onBegan: { _ in
+                        beginWorkspaceTabInteraction(tabID: tab.id)
+                    },
+                    onChanged: { value in
+                        updateWorkspaceTabDrag(
+                            workspaceID: workspaceID,
+                            orderedTabIDs: orderedTabIDs,
+                            tabID: tab.id,
+                            sourceIndex: index,
+                            value: value
+                        )
+                    },
+                    onEnded: { value in
+                        finishWorkspaceTabInteraction(
+                            workspaceID: workspaceID,
+                            tabID: tab.id,
+                            value: value
+                        )
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
             if isHovered && showsManagementAffordances {
                 workspaceTabCloseButton(workspaceID: workspaceID, tab: tab)
                     .padding(.trailing, 10)
+                    .frame(height: ToastyTheme.workspaceTabHeight, alignment: .center)
             }
         }
+        .frame(height: ToastyTheme.topBarHeight, alignment: .bottom)
         .contentShape(Rectangle())
         .onHover { hovering in
             guard isRenaming == false else { return }
@@ -1960,7 +1966,6 @@ struct WorkspaceView: View {
         }
 
         let measuredRow = row
-            .background(workspaceTabFrameMeasurement(tabID: tab.id))
             .offset(x: isDraggedTab ? activeTabDrag?.translationWidth ?? 0 : 0)
             .shadow(
                 color: isDraggedTab ? ToastyTheme.accent.opacity(0.18) : .clear,
@@ -3174,7 +3179,7 @@ private struct WorkspaceHeaderLayout: Layout {
         let titleSize = subviews[0].sizeThatFits(.unspecified)
         let unreadSummarySize = subviews[1].sizeThatFits(.unspecified)
         let tabsSize = subviews[2].sizeThatFits(
-            ProposedViewSize(width: nil, height: ToastyTheme.workspaceTabHeight)
+            ProposedViewSize(width: nil, height: ToastyTheme.topBarHeight)
         )
         // Keep the trailing top-bar controls measured inside the visible bar.
         // Plain buttons in the hidden titlebar region can otherwise report a
@@ -3280,7 +3285,7 @@ private struct WorkspaceHeaderLayout: Layout {
         subviews[2].place(
             at: CGPoint(x: tabsX, y: bounds.maxY),
             anchor: .bottomLeading,
-            proposal: ProposedViewSize(width: tabsWidth, height: ToastyTheme.workspaceTabHeight)
+            proposal: ProposedViewSize(width: tabsWidth, height: ToastyTheme.topBarHeight)
         )
 
         let trailingHeight = min(bounds.height, trailingSize.height)
@@ -3305,7 +3310,7 @@ private struct WorkspaceTabStripLayout: Layout {
     ) -> CGSize {
         guard !subviews.isEmpty else { return .zero }
 
-        let height = ToastyTheme.workspaceTabHeight
+        let height = ToastyTheme.topBarHeight
         let tabCount = max(subviews.count - 1, 0)
         let accessoryWidth = subviews.last?.sizeThatFits(.unspecified).width ?? 0
         let idealWidth = WorkspaceView.workspaceTabIdealTotalWidth(
@@ -3360,7 +3365,9 @@ private struct WorkspaceTabStripLayout: Layout {
         guard let accessorySubview else { return }
 
         let accessoryX = nextX + (tabCount > 0 ? accessorySpacing : 0)
-        let accessoryY = bounds.minY + ((bounds.height - accessorySize.height) / 2)
+        let visibleTabHeight = min(bounds.height, ToastyTheme.workspaceTabHeight)
+        let visibleTabMinY = bounds.maxY - visibleTabHeight
+        let accessoryY = visibleTabMinY + ((visibleTabHeight - accessorySize.height) / 2)
 
         accessorySubview.place(
             at: CGPoint(x: accessoryX, y: accessoryY),

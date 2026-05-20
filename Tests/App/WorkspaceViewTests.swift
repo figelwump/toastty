@@ -1481,28 +1481,79 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testWorkspaceTabStripUsesNonWindowDraggableContainer() throws {
-        let harness = try makeWorkspaceHarness()
+    func testWorkspaceTabPointerRegionCoversTopBarWithoutClaimingBlankTitlebarSpace() throws {
+        let tabCount = 4
+        let harness = try makeWorkspaceHarness(tabCount: tabCount, hostWidth: 560)
         defer { harness.window.orderOut(nil) }
 
         harness.hostingView.layoutSubtreeIfNeeded()
-        let tabStripContainer = try XCTUnwrap(
-            findDescendantView(in: harness.hostingView, ofType: NonWindowDraggableContainerView.self)
+        let tabHitRegions = descendantViews(
+            in: harness.hostingView,
+            ofType: NonWindowDraggableContainerView.self
         )
-        let tabStripHost = try XCTUnwrap(
-            findDescendantView(in: tabStripContainer, ofType: NonWindowDraggableHostingView.self)
-        )
+        XCTAssertEqual(tabHitRegions.count, tabCount)
 
-        XCTAssertFalse(tabStripContainer.mouseDownCanMoveWindow)
+        let orderedTabHitRegions = tabHitRegions
+            .map { region in
+                (region: region, frame: region.convert(region.bounds, to: harness.hostingView))
+            }
+            .sorted { $0.frame.minX < $1.frame.minX }
 
-        XCTAssertFalse(tabStripHost.mouseDownCanMoveWindow)
-        XCTAssertGreaterThan(tabStripContainer.frame.width, 0)
-        XCTAssertEqual(
-            tabStripContainer.frame.width,
-            ToastyTheme.workspaceTabWidth + 30,
-            accuracy: 1
+        for (index, tabHitRegion) in orderedTabHitRegions.enumerated() {
+            let tabHitRegionHost = try XCTUnwrap(
+                findDescendantView(in: tabHitRegion.region, ofType: NonWindowDraggableHostingView.self),
+                "tab \(index) should host its own non-window-draggable bridge"
+            )
+            let tabPointerView = try XCTUnwrap(
+                findDescendantView(in: tabHitRegion.region, ofType: PointerInteractionView.self),
+                "tab \(index) should host its own pointer region"
+            )
+
+            XCTAssertFalse(tabHitRegion.region.mouseDownCanMoveWindow)
+            XCTAssertFalse(tabHitRegionHost.mouseDownCanMoveWindow)
+            XCTAssertFalse(tabPointerView.mouseDownCanMoveWindow)
+            XCTAssertGreaterThan(tabHitRegion.frame.width, 0)
+            XCTAssertLessThan(
+                tabHitRegion.frame.width,
+                ToastyTheme.workspaceTabWidth,
+                "constrained harness should exercise compressed tab widths"
+            )
+            XCTAssertEqual(tabHitRegion.frame.height, ToastyTheme.topBarHeight, accuracy: 0.5)
+            XCTAssertEqual(tabPointerView.frame.width, tabHitRegion.frame.width, accuracy: 1)
+            XCTAssertEqual(tabPointerView.frame.height, ToastyTheme.topBarHeight, accuracy: 0.5)
+            XCTAssertGreaterThan(
+                tabPointerView.frame.height,
+                ToastyTheme.workspaceTabHeight,
+                "tab pointer hit region should cover the titlebar inset above the visible tab"
+            )
+            if index > 0 {
+                XCTAssertGreaterThan(tabHitRegion.frame.minX, orderedTabHitRegions[index - 1].frame.minX)
+            }
+
+            let tabCenterPoint = NSPoint(
+                x: tabHitRegion.region.bounds.midX,
+                y: tabHitRegion.region.bounds.midY
+            )
+            let tabHit = try XCTUnwrap(
+                tabHitRegion.region.hitTest(tabCenterPoint),
+                "tab \(index) should hit-test inside its protected region"
+            )
+            XCTAssertTrue(
+                isView(tabHit, containedIn: tabHitRegion.region),
+                "tab \(index) hit should stay inside its own non-window-draggable region"
+            )
+            XCTAssertFalse(tabHit.mouseDownCanMoveWindow)
+        }
+
+        let lastTabFrame = try XCTUnwrap(orderedTabHitRegions.last?.frame)
+        let blankAccessoryGapPoint = NSPoint(x: lastTabFrame.maxX + 5, y: lastTabFrame.midY)
+        let blankGapHit = harness.hostingView.hitTest(blankAccessoryGapPoint)
+        XCTAssertFalse(blankGapHit is PointerInteractionView)
+        XCTAssertFalse(blankGapHit is NonWindowDraggableContainerView)
+        XCTAssertTrue(
+            blankGapHit?.mouseDownCanMoveWindow ?? true,
+            "blank titlebar space outside tab pointer regions should remain window-draggable"
         )
-        XCTAssertEqual(tabStripContainer.frame.height, ToastyTheme.workspaceTabHeight, accuracy: 0.5)
     }
 
     private func assertColor(
@@ -1541,7 +1592,12 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    private func makeWorkspaceHarness(panelState overridePanelState: PanelState? = nil) throws -> WorkspaceHarness {
+    private func makeWorkspaceHarness(
+        panelState overridePanelState: PanelState? = nil,
+        tabCount: Int = 1,
+        hostWidth: CGFloat = 900
+    ) throws -> WorkspaceHarness {
+        XCTAssertGreaterThanOrEqual(tabCount, 1)
         var state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
         let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
@@ -1551,6 +1607,16 @@ final class WorkspaceViewTests: XCTestCase {
             workspace.layoutTree = .slot(slotID: UUID(), panelID: panelID)
             workspace.panels = [panelID: overridePanelState]
             workspace.focusedPanelID = panelID
+            state.workspacesByID[workspaceID] = workspace
+        }
+        if tabCount > 1 {
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            for index in 2...tabCount {
+                workspace.appendTab(
+                    WorkspaceTabState.bootstrap(terminalTitle: "Terminal \(index)"),
+                    select: false
+                )
+            }
             state.workspacesByID[workspaceID] = workspace
         }
         let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
@@ -1607,9 +1673,9 @@ final class WorkspaceViewTests: XCTestCase {
             ),
             sidebarVisible: true
         )
-        let hostingView = NSHostingView(rootView: workspaceView.frame(width: 900, height: 600))
+        let hostingView = NSHostingView(rootView: workspaceView.frame(width: hostWidth, height: 600))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: hostWidth, height: 600),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
@@ -1718,5 +1784,32 @@ final class WorkspaceViewTests: XCTestCase {
         }
 
         return nil
+    }
+
+    @MainActor
+    private func descendantViews<T: NSView>(in root: NSView, ofType viewType: T.Type) -> [T] {
+        var matches: [T] = []
+        if let matchingView = root as? T {
+            matches.append(matchingView)
+        }
+
+        for subview in root.subviews {
+            matches.append(contentsOf: descendantViews(in: subview, ofType: viewType))
+        }
+
+        return matches
+    }
+
+    @MainActor
+    private func isView(_ view: NSView, containedIn ancestor: NSView) -> Bool {
+        var currentView: NSView? = view
+        while let candidate = currentView {
+            if candidate === ancestor {
+                return true
+            }
+            currentView = candidate.superview
+        }
+
+        return false
     }
 }
