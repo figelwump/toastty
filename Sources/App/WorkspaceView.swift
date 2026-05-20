@@ -747,15 +747,17 @@ struct WorkspaceView: View {
             ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
                 let isSelected = workspace.resolvedSelectedTabID == tab.id
                 let isDragged = activeTabDrag?.tabID == tab.id
-                workspaceTabRow(
-                    workspaceID: workspace.id,
-                    orderedTabIDs: workspace.tabIDs,
-                    tab: tab,
-                    index: index,
-                    isSelected: isSelected,
-                    allowsManagementAffordances: allowsManagementAffordances,
-                    installsContextMenu: installsContextMenu
-                )
+                NonWindowDraggableRegion {
+                    workspaceTabRow(
+                        workspaceID: workspace.id,
+                        orderedTabIDs: workspace.tabIDs,
+                        tab: tab,
+                        index: index,
+                        isSelected: isSelected,
+                        allowsManagementAffordances: allowsManagementAffordances,
+                        installsContextMenu: installsContextMenu
+                    )
+                }
                 .zIndex(
                     isDragged
                         ? Double(workspace.orderedTabs.count + 1)
