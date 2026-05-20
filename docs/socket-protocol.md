@@ -218,6 +218,7 @@ Canonical action IDs are machine-first and parameterized. Common actions include
 - `panel.create.browser`
 - `panel.create.local-document`
 - `panel.scratchpad.set-content`
+- `panel.scratchpad.patch-content`
 - `panel.scratchpad.rebind`
 - `panel.scratchpad.export`
 - `panel.focus-mode.toggle`
@@ -263,6 +264,24 @@ Notable action-specific behavior:
     source terminal after auto-create, and marks unfocused Scratchpads updated.
   - The result includes `windowID`, `workspaceID`, `panelID`, `documentID`,
     `revision`, and `created`.
+- `panel.scratchpad.patch-content`
+  - requires `args.sessionID`, `args.expectedRevision`, and `args.patch`.
+  - `args.patch` is a JSON string. Prefer passing it with CLI `--stdin patch`.
+  - The patch shape is `{"replacements":[{"oldText":"...","newText":"..."}]}`.
+  - The action only updates an existing Scratchpad linked to the active managed
+    session; it does not auto-create one.
+  - `args.expectedRevision` must match the current Scratchpad document revision.
+  - Replacements apply sequentially against the latest intermediate HTML.
+  - Each `oldText` must be non-empty and occur exactly once. Empty replacement
+    arrays, missing text, and duplicate text are rejected without modifying the
+    document.
+  - The final HTML snapshot is stored in the Scratchpad document store and is
+    limited to 1,048,576 UTF-8 bytes.
+  - Successful patches still reload the sandboxed generated iframe from the
+    updated full HTML snapshot.
+  - `panel.scratchpad.patchContent` is accepted as a compatibility alias.
+  - The result includes `windowID`, `workspaceID`, `panelID`, `documentID`,
+    `previousRevision`, `revision`, `appliedEdits`, and `created` (`false`).
 - `panel.scratchpad.rebind`
   - requires `args.sessionID` for an active managed session.
   - Targets an existing Scratchpad panel using `args.panelID`, workspace/window
@@ -470,6 +489,18 @@ Supported action IDs:
   - creates or updates the Scratchpad linked to the active managed session
   - returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and
     `created`
+- `panel.scratchpad.patch-content`
+  - requires `args.sessionID`, `args.expectedRevision`, and `args.patch`
+  - `args.patch` is exact-text replacement JSON:
+    `{"replacements":[{"oldText":"...","newText":"..."}]}`
+  - updates only the existing Scratchpad linked to the active managed session
+  - rejects stale revisions, empty replacement arrays, empty `oldText`, missing
+    `oldText`, duplicate `oldText`, oversized patch JSON, and oversized final
+    HTML without modifying the document
+  - applies multiple replacements sequentially
+  - accepts `panel.scratchpad.patchContent` as a compatibility alias
+  - returns `windowID`, `workspaceID`, `panelID`, `documentID`,
+    `previousRevision`, `revision`, `appliedEdits`, and `created=false`
 - `panel.scratchpad.rebind`
   - requires `args.sessionID`
   - targets an existing Scratchpad panel by `args.panelID`, workspace/window

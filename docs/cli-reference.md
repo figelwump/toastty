@@ -53,7 +53,7 @@ Selectors map directly to the socket request's `windowID`, `workspaceID`, and `p
 
 The CLI sends `key=value` arguments as strings. The app-control executor coerces supported argument types such as booleans (`true`, `false`, `1`, `0`, `yes`, `no`), integers, UUIDs, and string arrays.
 
-`--stdin <key>` reads UTF-8 stdin and sends it as the named argument. Use it for payloads that are awkward to pass as a shell argument, such as Scratchpad HTML content.
+`--stdin <key>` reads UTF-8 stdin and sends it as the named argument. Use it for payloads that are awkward to pass as a shell argument, such as Scratchpad HTML content or Scratchpad patch JSON.
 
 ```bash
 "$TOASTTY_CLI_PATH" action run window.sidebar.toggle --window "$WINDOW_ID"
@@ -91,6 +91,10 @@ printf '%s' "$html" | "$TOASTTY_CLI_PATH" action run panel.scratchpad.set-conten
 printf '%s' "$html" | "$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
   --stdin content \
   sessionID="$TOASTTY_SESSION_ID"
+printf '%s' "$patch" | "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.patch-content \
+  --stdin patch \
+  sessionID="$TOASTTY_SESSION_ID" \
+  expectedRevision=3
 "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
   sessionID="$TOASTTY_SESSION_ID"
 ```
@@ -123,6 +127,7 @@ Prefer `action list --json` to discover the current canonical IDs. Common action
 - `panel.create.browser`
 - `panel.create.local-document`
 - `panel.scratchpad.set-content`
+- `panel.scratchpad.patch-content`
 - `panel.scratchpad.rebind`
 - `panel.scratchpad.export`
 - `panel.focus-mode.toggle`
@@ -136,8 +141,22 @@ Descriptors can also advertise compatibility aliases. Those aliases are accepted
 Scratchpad actions are intended for agent and automation integrations:
 
 - `panel.scratchpad.set-content` creates or updates the Scratchpad linked to an active managed session. It requires `sessionID` plus either `filePath` or `content`, accepts optional `title`, `expectedRevision`, and `createPolicy`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`. `createPolicy` defaults to `reuse`; set `createPolicy=new` to create a fresh session-linked Scratchpad and leave the previous one open but unbound.
+- `panel.scratchpad.patch-content` updates the existing Scratchpad linked to an active managed session without sending a full HTML snapshot. It requires `sessionID`, `expectedRevision`, and `patch` as a JSON string, returns `windowID`, `workspaceID`, `panelID`, `documentID`, `previousRevision`, `revision`, `appliedEdits`, and `created=false`, and does not create a Scratchpad when none is linked. Patch replacements apply sequentially; each `oldText` must be non-empty and occur exactly once in the current intermediate HTML. Successful patches still reload the generated Scratchpad iframe from the updated full HTML snapshot.
 - `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
 - `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
+
+Patch JSON uses exact text replacements:
+
+```json
+{
+  "replacements": [
+    {
+      "oldText": "<section id=\"risk\">Old copy</section>",
+      "newText": "<section id=\"risk\">New copy</section>"
+    }
+  ]
+}
+```
 
 ### `query list`
 

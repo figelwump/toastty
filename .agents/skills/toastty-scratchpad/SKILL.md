@@ -5,7 +5,7 @@ description: Use this skill when an agent should read, inspect, review, summariz
 
 # Toastty Scratchpad
 
-Use Scratchpad when a visual surface will communicate better than terminal prose. If the user asks to read or review an existing Scratchpad, export the current session-linked Scratchpad and answer from that content without replacing it. If the user asks to create or update a visual artifact, open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots as the artifact takes shape, then publish the finished self-contained HTML artifact.
+Use Scratchpad when a visual surface will communicate better than terminal prose. If the user asks to read or review an existing Scratchpad, export the current session-linked Scratchpad and answer from that content without replacing it. If the user asks to create or update a visual artifact, open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots or exact targeted patches as the artifact takes shape, then publish the finished self-contained HTML artifact.
 
 ## Read Existing Scratchpad
 
@@ -132,7 +132,7 @@ If the artifact starts to feel busy, the answer is almost always to remove eleme
 
 ## Progressive Updates
 
-Scratchpad publishing replaces the whole session-linked document each time. To create a progressive-building effect, publish complete valid HTML snapshots at meaningful checkpoints while the artifact is being built, then publish the polished final version.
+Use whole-document publishing for the first Scratchpad update, full redesigns, major structure changes, or any case where you cannot form an exact unique `oldText` from the current HTML. To create a progressive-building effect, publish complete valid HTML snapshots at meaningful checkpoints while the artifact is being built, then publish the polished final version.
 
 - Each update must be a full HTML document or complete renderable HTML snapshot, not a fragment or diff.
 - Publish only at stable points where the content is useful and syntactically valid. Good checkpoints are a finalized layout shell, populated major sections, complete data visualization, and final polish.
@@ -140,6 +140,48 @@ Scratchpad publishing replaces the whole session-linked document each time. To c
 - Keep using the same helper and session. The helper sends the full content through `panel.scratchpad.set-content`, so repeated publishes update the existing Scratchpad instead of creating separate panels.
 - Use `--new` only when the user explicitly asks for a new, separate, or additional Scratchpad, and only on the first publish for that artifact. Passing `--new` again intentionally creates another Scratchpad and unbinds the previous session-linked one.
 - If an intermediate snapshot uses JavaScript, keep the no-blank-state and diagnostics guidance below in place just as you would for the final artifact.
+
+## Targeted Patch Updates
+
+Use `panel.scratchpad.patch-content` only for small, exact edits to an existing session-linked Scratchpad. Before patching, export the current Scratchpad or query its state so you have the current `revision`; export whenever you do not already have the exact current HTML. Do not patch from stale memory.
+
+Patch rules:
+
+- `expectedRevision` is required and must match the current Scratchpad revision.
+- `patch` is a JSON string, best passed with `--stdin patch`.
+- `replacements` must be non-empty.
+- Each `oldText` must be non-empty and occur exactly once in the current intermediate HTML.
+- Replacements apply sequentially, so earlier edits can affect later matches.
+- A successful patch still reloads the generated iframe, so scroll, focus, animation, and JavaScript runtime state are not preserved.
+
+Example:
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+  "sessionID=$TOASTTY_SESSION_ID"
+```
+
+Read the exported `filePath`, choose a unique exact `oldText`, and use the returned `revision`:
+
+```bash
+cat > /tmp/scratchpad-patch.json <<'JSON'
+{
+  "replacements": [
+    {
+      "oldText": "<section id=\"risk\">Old copy</section>",
+      "newText": "<section id=\"risk\">New copy</section>"
+    }
+  ]
+}
+JSON
+
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.patch-content \
+  --stdin patch \
+  "sessionID=$TOASTTY_SESSION_ID" \
+  "expectedRevision=<revision>" < /tmp/scratchpad-patch.json
+```
+
+If `oldText` is missing, duplicated, hard to quote, or spread across unrelated regions, publish a complete replacement document instead.
 
 ## Inline JavaScript
 

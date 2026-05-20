@@ -364,6 +364,8 @@ final class AppControlExecutor {
 
         case .panelScratchpadSetContent:
             return try setScratchpadContent(args: args)
+        case .panelScratchpadPatchContent:
+            return try patchScratchpadContent(args: args)
         case .panelScratchpadRebind:
             return try rebindScratchpad(args: args)
         case .panelScratchpadExport:
@@ -731,6 +733,50 @@ private extension AppControlExecutor {
                 "panelID": .string(outcome.panelID.uuidString),
                 "documentID": .string(outcome.documentID.uuidString),
                 "revision": .int(outcome.revision),
+                "created": .bool(outcome.created),
+            ]
+        )
+    }
+
+    func patchScratchpadContent(args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+        let store = try requiredStore()
+        guard let sessionID = normalizedOptionalText(args.stringValue("sessionID")) else {
+            throw AutomationSocketError.invalidPayload("sessionID is required")
+        }
+        guard let patch = args.stringValue("patch") else {
+            throw AutomationSocketError.invalidPayload("patch is required")
+        }
+        guard let expectedRevision = args.intValue("expectedRevision") else {
+            throw AutomationSocketError.invalidPayload("expectedRevision is required")
+        }
+
+        let outcome: ScratchpadPanelPatchContentOutcome
+        do {
+            outcome = try store.patchScratchpadContentForSession(
+                request: ScratchpadPanelPatchContentRequest(
+                    sessionID: sessionID,
+                    patch: patch,
+                    expectedRevision: expectedRevision
+                ),
+                sessionRuntimeStore: sessionRuntimeStore,
+                documentStore: scratchpadDocumentStore
+            )
+        } catch let error as ScratchpadDocumentStoreError {
+            throw AutomationSocketError.invalidPayload(error.localizedDescription)
+        } catch let error as ScratchpadPanelError {
+            throw AutomationSocketError.invalidPayload(error.localizedDescription)
+        }
+
+        return .init(
+            didMutateState: true,
+            result: [
+                "windowID": .string(outcome.windowID.uuidString),
+                "workspaceID": .string(outcome.workspaceID.uuidString),
+                "panelID": .string(outcome.panelID.uuidString),
+                "documentID": .string(outcome.documentID.uuidString),
+                "previousRevision": .int(outcome.previousRevision),
+                "revision": .int(outcome.revision),
+                "appliedEdits": .int(outcome.appliedEditCount),
                 "created": .bool(outcome.created),
             ]
         )
