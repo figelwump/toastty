@@ -2,6 +2,17 @@ import AppKit
 
 @MainActor
 enum WindowMovementSuppression {
+    struct Options: OptionSet {
+        let rawValue: Int
+
+        static let movable = Options(rawValue: 1 << 0)
+        static let backgroundDragging = Options(rawValue: 1 << 1)
+        static let resizing = Options(rawValue: 1 << 2)
+
+        static let movement: Options = [.movable, .backgroundDragging]
+        static let all: Options = [.movement, .resizing]
+    }
+
     private struct Token: Hashable {
         let owner: ObjectIdentifier
         let reason: String
@@ -12,14 +23,19 @@ enum WindowMovementSuppression {
         let originalIsMovable: Bool
         let originalIsMovableByWindowBackground: Bool
         let originalAllowsResizing: Bool
-        var tokens: Set<Token>
+        var tokens: [Token: Options]
     }
 
     private static var statesByWindowID: [ObjectIdentifier: SuppressedWindowState] = [:]
     private static var windowIDByToken: [Token: ObjectIdentifier] = [:]
 
-    static func suppress(window: NSWindow?, owner: AnyObject, reason: String) {
-        suppress(window: window, ownerID: ObjectIdentifier(owner), reason: reason)
+    static func suppress(
+        window: NSWindow?,
+        owner: AnyObject,
+        reason: String,
+        options: Options = .all
+    ) {
+        suppress(window: window, ownerID: ObjectIdentifier(owner), reason: reason, options: options)
     }
 
     static func restore(owner: AnyObject, reason: String) {
@@ -33,9 +49,12 @@ enum WindowMovementSuppression {
             return
         }
 
-        state.tokens.remove(token)
+        state.tokens.removeValue(forKey: token)
         guard state.tokens.isEmpty else {
             statesByWindowID[windowID] = state
+            if let window = state.window {
+                applySuppression(to: window, state: state)
+            }
             return
         }
 
@@ -55,50 +74,65 @@ enum WindowMovementSuppression {
         windowIDByToken.removeAll()
     }
 
-    private static func suppress(window: NSWindow?, ownerID: ObjectIdentifier, reason: String) {
+    private static func suppress(
+        window: NSWindow?,
+        ownerID: ObjectIdentifier,
+        reason: String,
+        options: Options
+    ) {
         guard let window else { return }
 
         let token = Token(owner: ownerID, reason: reason)
         let windowID = ObjectIdentifier(window)
         if let existingWindowID = windowIDByToken[token], existingWindowID != windowID {
             restore(ownerID: ownerID, reason: reason)
-        } else if windowIDByToken[token] == windowID {
-            return
         }
 
         if var state = statesByWindowID[windowID] {
             guard state.window != nil else {
                 removeState(for: windowID)
-                return suppress(window: window, ownerID: ownerID, reason: reason)
+                return suppress(window: window, ownerID: ownerID, reason: reason, options: options)
             }
-            state.tokens.insert(token)
+            state.tokens[token] = options
             statesByWindowID[windowID] = state
+            windowIDByToken[token] = windowID
+            applySuppression(to: window, state: state)
         } else {
-            statesByWindowID[windowID] = SuppressedWindowState(
+            let state = SuppressedWindowState(
                 window: window,
                 originalIsMovable: window.isMovable,
                 originalIsMovableByWindowBackground: window.isMovableByWindowBackground,
                 originalAllowsResizing: window.styleMask.contains(.resizable),
-                tokens: [token]
+                tokens: [token: options]
             )
-        }
-
-        windowIDByToken[token] = windowID
-        if window.isMovable {
-            window.isMovable = false
-        }
-        if window.isMovableByWindowBackground {
-            window.isMovableByWindowBackground = false
-        }
-        if window.styleMask.contains(.resizable) {
-            window.styleMask.remove(.resizable)
+            statesByWindowID[windowID] = state
+            windowIDByToken[token] = windowID
+            applySuppression(to: window, state: state)
         }
     }
 
     private static func removeState(for windowID: ObjectIdentifier) {
         guard let state = statesByWindowID.removeValue(forKey: windowID) else { return }
-        for token in state.tokens {
+        for token in state.tokens.keys {
             windowIDByToken.removeValue(forKey: token)
+        }
+    }
+
+    private static func applySuppression(to window: NSWindow, state: SuppressedWindowState) {
+        let options = state.tokens.values.reduce(Options()) { partialResult, options in
+            partialResult.union(options)
+        }
+
+        window.isMovable = options.contains(.movable) ? false : state.originalIsMovable
+        window.isMovableByWindowBackground = options.contains(.backgroundDragging)
+            ? false
+            : state.originalIsMovableByWindowBackground
+        if options.contains(.resizing) {
+            window.styleMask.remove(.resizable)
+        } else if state.originalAllowsResizing {
+            window.styleMask.insert(.resizable)
+        } else {
+            window.styleMask.remove(.resizable)
         }
     }
 

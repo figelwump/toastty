@@ -59,8 +59,15 @@ struct PointerInteractionRegion: NSViewRepresentable {
     }
 }
 
+private final class PointerWindowMovementSuppressionOwner: NSObject, @unchecked Sendable {}
+
 final class PointerInteractionView: NSView {
     private static let trackingEventMask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
+
+    private enum WindowMovementRestoreTiming {
+        case immediate
+        case deferred
+    }
 
     var logName = "pointer"
     var logMetadata: [String: String] = [:]
@@ -91,8 +98,11 @@ final class PointerInteractionView: NSView {
     }
 
     private var hoverTrackingArea: NSTrackingArea?
+    private var sequenceWindowMovementSuppressionOwner = PointerWindowMovementSuppressionOwner()
+    private var hoverWindowMovementSuppressionOwner = PointerWindowMovementSuppressionOwner()
     private var isPointerInside = false
     private var isSequenceSuppressingWindowMovement = false
+    private var pointerSequenceGeneration = 0
     private weak var pointerSequenceWindow: NSWindow?
     private var startWindowFrame: CGRect?
     private var startScreenLocation: CGPoint?
@@ -138,12 +148,8 @@ final class PointerInteractionView: NSView {
         super.viewDidMoveToWindow()
         logCursorDiagnostic("view-did-move-to-window")
         if window == nil {
-            let hadHover = isPointerInside
-            isPointerInside = false
-            cancelPointerSequence(reason: "removed-from-window")
-            if hadHover {
-                scheduleHoverWindowMovementRestore()
-            }
+            cancelPointerSequence(reason: "removed-from-window", restoreTiming: .deferred)
+            clearPointerHoverForTeardown()
         } else if suppressesWindowMovementWhileHovered, isPointerInside {
             suppressWindowMovementForHover()
         }
@@ -177,36 +183,22 @@ final class PointerInteractionView: NSView {
     }
 
     deinit {
-        let ownerID = ObjectIdentifier(self)
-        if Thread.isMainThread {
-            MainActor.assumeIsolated {
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-sequence")
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-hover")
-            }
-        } else {
-            Task { @MainActor in
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-sequence")
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-hover")
-            }
-        }
+        let sequenceOwner = sequenceWindowMovementSuppressionOwner
+        let hoverOwner = hoverWindowMovementSuppressionOwner
+        Self.scheduleWindowMovementRestore(owner: sequenceOwner, reason: "pointer-sequence")
+        Self.scheduleWindowMovementRestore(owner: hoverOwner, reason: "pointer-hover")
     }
 
     func invalidate() {
         logLifecycleDiagnostic("invalidate")
-        cancelPointerSequence(reason: "invalidate")
         // SwiftUI calls dismantleNSView → invalidate while it is still walking
         // its view graph. Synchronously mutating window.isMovable /
         // isMovableByWindowBackground / styleMask here triggers KVO observers
         // installed by SwiftUI (LazyPreventsWindowDragFeature) and re-enters
         // the graph on a torn-down node. Defer the restore one runloop turn so
         // dismantle completes first.
-        let hadHover = isPointerInside
-        if hadHover {
-            isPointerInside = false
-            logCursorDiagnostic("pointer-outside-set")
-            onHoverChanged?(false)
-            scheduleHoverWindowMovementRestore()
-        }
+        cancelPointerSequence(reason: "invalidate", restoreTiming: .deferred)
+        clearPointerHoverForTeardown()
         onBegan = nil
         onChanged = nil
         onEnded = nil
@@ -230,6 +222,7 @@ final class PointerInteractionView: NSView {
     }
 
     private func beginPointerSequence(with event: NSEvent) {
+        pointerSequenceGeneration &+= 1
         let sequenceWindow = event.window ?? window
         pointerSequenceWindow = sequenceWindow
         startWindowFrame = sequenceWindow?.frame
@@ -316,10 +309,71 @@ final class PointerInteractionView: NSView {
         cancelPointerSequence(reason: "tracking-ended-without-start")
     }
 
-    private func cancelPointerSequence(reason: String) {
-        restoreSuppressedWindowFrameIfNeeded(reason: reason)
+    private func cancelPointerSequence(
+        reason: String,
+        restoreTiming: WindowMovementRestoreTiming = .immediate
+    ) {
+        switch restoreTiming {
+        case .immediate:
+            restoreSuppressedWindowFrameIfNeeded(reason: reason)
+            clearPointerSequenceState()
+            restoreSequenceWindowMovementIfNeeded(reason: reason)
+
+        case .deferred:
+            schedulePointerSequenceWindowMovementRestore(reason: reason)
+        }
+    }
+
+    private func schedulePointerSequenceWindowMovementRestore(reason: String) {
+        guard isSequenceSuppressingWindowMovement else {
+            clearPointerSequenceState()
+            return
+        }
+
+        let sequenceOwner = sequenceWindowMovementSuppressionOwner
+        let sequenceWindow = pointerSequenceWindow ?? window
+        let sequenceStartWindowFrame = startWindowFrame
+        let sequenceLogName = logName
+        let sequenceLogMetadata = logMetadata
+        let sequenceGeneration = pointerSequenceGeneration
+
+        sequenceWindowMovementSuppressionOwner = PointerWindowMovementSuppressionOwner()
+        isSequenceSuppressingWindowMovement = false
         clearPointerSequenceState()
-        restoreSequenceWindowMovementIfNeeded(reason: reason)
+
+        DispatchQueue.main.async {
+            [
+                weak self,
+                sequenceOwner,
+                sequenceWindow,
+                sequenceStartWindowFrame,
+                sequenceLogName,
+                sequenceLogMetadata,
+                sequenceGeneration,
+            ] in
+            MainActor.assumeIsolated {
+                if self?.pointerSequenceGeneration == sequenceGeneration {
+                    Self.restoreSuppressedWindowFrameIfNeeded(
+                        window: sequenceWindow,
+                        startWindowFrame: sequenceStartWindowFrame,
+                        reason: reason,
+                        logName: sequenceLogName,
+                        logMetadata: sequenceLogMetadata
+                    )
+                }
+                WindowMovementSuppression.restore(owner: sequenceOwner, reason: "pointer-sequence")
+            }
+        }
+    }
+
+    private func clearPointerHoverForTeardown() {
+        guard isPointerInside else { return }
+        isPointerInside = false
+        logCursorDiagnostic("pointer-outside-set")
+        onHoverChanged?(false)
+        if suppressesWindowMovementWhileHovered {
+            scheduleHoverWindowMovementRestore()
+        }
     }
 
     private func clearPointerSequenceState() {
@@ -367,7 +421,11 @@ final class PointerInteractionView: NSView {
 
     private func suppressWindowMovementForCurrentSequence() {
         guard isSequenceSuppressingWindowMovement == false else { return }
-        WindowMovementSuppression.suppress(window: window, owner: self, reason: "pointer-sequence")
+        WindowMovementSuppression.suppress(
+            window: window,
+            owner: sequenceWindowMovementSuppressionOwner,
+            reason: "pointer-sequence"
+        )
         isSequenceSuppressingWindowMovement = true
         if let window {
             logWindowMovementSuppression(reason: "mouse-down", window: window)
@@ -375,32 +433,45 @@ final class PointerInteractionView: NSView {
     }
 
     private func suppressWindowMovementForHover() {
-        WindowMovementSuppression.suppress(window: window, owner: self, reason: "pointer-hover")
+        WindowMovementSuppression.suppress(
+            window: window,
+            owner: hoverWindowMovementSuppressionOwner,
+            reason: "pointer-hover",
+            options: .movement
+        )
         if let window {
             logWindowMovementSuppression(reason: "pointer-hover-enter", window: window)
         }
     }
 
     private func restoreHoverWindowMovementIfNeeded() {
-        WindowMovementSuppression.restore(owner: self, reason: "pointer-hover")
+        WindowMovementSuppression.restore(owner: hoverWindowMovementSuppressionOwner, reason: "pointer-hover")
     }
 
     private func scheduleHoverWindowMovementRestore() {
+        let hoverOwner = hoverWindowMovementSuppressionOwner
+        hoverWindowMovementSuppressionOwner = PointerWindowMovementSuppressionOwner()
+        Self.scheduleWindowMovementRestore(owner: hoverOwner, reason: "pointer-hover")
+    }
+
+    private nonisolated static func scheduleWindowMovementRestore(
+        owner: PointerWindowMovementSuppressionOwner,
+        reason: String
+    ) {
         // Run on the next main-runloop turn so SwiftUI's dismantleNSView is
         // already off the stack before we mutate window properties (KVO from
         // those mutations re-enters SwiftUI's graph and crashes if dismantle
         // is still in progress).
-        let ownerID = ObjectIdentifier(self)
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-hover")
+                WindowMovementSuppression.restore(owner: owner, reason: reason)
             }
         }
     }
 
     private func restoreSequenceWindowMovementIfNeeded(reason: String) {
         guard isSequenceSuppressingWindowMovement else { return }
-        WindowMovementSuppression.restore(owner: self, reason: "pointer-sequence")
+        WindowMovementSuppression.restore(owner: sequenceWindowMovementSuppressionOwner, reason: "pointer-sequence")
         isSequenceSuppressingWindowMovement = false
         if let window = pointerSequenceWindow ?? window {
             logWindowMovementSuppression(reason: reason, window: window)
@@ -408,19 +479,44 @@ final class PointerInteractionView: NSView {
     }
 
     private func restoreSuppressedWindowFrameIfNeeded(reason: String) {
-        guard isSequenceSuppressingWindowMovement,
-              let startWindowFrame,
-              let window = pointerSequenceWindow ?? window,
+        guard isSequenceSuppressingWindowMovement else {
+            return
+        }
+
+        Self.restoreSuppressedWindowFrameIfNeeded(
+            window: pointerSequenceWindow ?? window,
+            startWindowFrame: startWindowFrame,
+            reason: reason,
+            logName: logName,
+            logMetadata: logMetadata
+        )
+    }
+
+    private static func restoreSuppressedWindowFrameIfNeeded(
+        window: NSWindow?,
+        startWindowFrame: CGRect?,
+        reason: String,
+        logName: String,
+        logMetadata: [String: String]
+    ) {
+        guard let startWindowFrame,
+              let window,
               framesEqual(window.frame, startWindowFrame) == false else {
             return
         }
 
         let driftedFrame = window.frame
         window.setFrame(startWindowFrame, display: true)
-        logSuppressedWindowFrameRestore(reason: reason, driftedFrame: driftedFrame, restoredFrame: startWindowFrame)
+        logSuppressedWindowFrameRestore(
+            name: logName,
+            metadata: logMetadata,
+            reason: reason,
+            driftedFrame: driftedFrame,
+            restoredFrame: startWindowFrame
+        )
     }
 
-    private func framesEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+    private static func framesEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
         abs(lhs.origin.x - rhs.origin.x) < 0.5 &&
             abs(lhs.origin.y - rhs.origin.y) < 0.5 &&
             abs(lhs.size.width - rhs.size.width) < 0.5 &&
@@ -517,7 +613,7 @@ final class PointerInteractionView: NSView {
             metadata["windowIsMovableByWindowBackground"] = "\(window.isMovableByWindowBackground)"
             metadata["windowFrame"] = DraggableInteractionLog.rectDescription(window.frame)
         }
-        ToasttyLog.info("draggable pointer lifecycle", category: .input, metadata: metadata)
+        ToasttyLog.debug("draggable pointer lifecycle", category: .input, metadata: metadata)
     }
 
     private func logWindowMovementSuppression(
@@ -541,16 +637,18 @@ final class PointerInteractionView: NSView {
             )
         }
         metadata["sequenceSuppressionActive"] = "\(isSequenceSuppressingWindowMovement)"
-        ToasttyLog.info("draggable pointer window movement suppression", category: .input, metadata: metadata)
+        ToasttyLog.debug("draggable pointer window movement suppression", category: .input, metadata: metadata)
     }
 
-    private func logSuppressedWindowFrameRestore(
+    private static func logSuppressedWindowFrameRestore(
+        name: String,
+        metadata baseMetadata: [String: String],
         reason: String,
         driftedFrame: CGRect,
         restoredFrame: CGRect
     ) {
-        var metadata = logMetadata
-        metadata["name"] = logName
+        var metadata = baseMetadata
+        metadata["name"] = name
         metadata["reason"] = reason
         metadata["driftedFrame"] = DraggableInteractionLog.rectDescription(driftedFrame)
         metadata["restoredFrame"] = DraggableInteractionLog.rectDescription(restoredFrame)
@@ -566,8 +664,7 @@ final class PointerInteractionView: NSView {
                 height: driftedFrame.height - restoredFrame.height
             )
         )
-        metadata["sequenceSuppressionActive"] = "\(isSequenceSuppressingWindowMovement)"
-        ToasttyLog.info("draggable pointer restored suppressed window frame", category: .input, metadata: metadata)
+        ToasttyLog.debug("draggable pointer restored suppressed window frame", category: .input, metadata: metadata)
     }
 
     private func logCursorDiagnostic(
