@@ -206,6 +206,7 @@ final class SessionRuntimeStore: ObservableObject {
         state.pendingRootInputFingerprint = fingerprint
         if let threadID {
             state.rootThreadID = threadID
+            state.rootTurnID = nil
         }
         codexNotifyStateBySessionID[sessionID] = state
 
@@ -346,6 +347,7 @@ final class SessionRuntimeStore: ObservableObject {
                         return false
                     }
                     state.rootThreadID = threadID
+                    state.rootTurnID = nil
                     state.pendingRootInputFingerprint = nil
                     stateChanged = true
                     ToasttyLog.debug(
@@ -359,7 +361,7 @@ final class SessionRuntimeStore: ObservableObject {
                         )
                     )
                 }
-            } else {
+            } else if event.canLatchRootHookThread {
                 state.rootThreadID = threadID
                 stateChanged = true
                 ToasttyLog.debug(
@@ -372,7 +374,40 @@ final class SessionRuntimeStore: ObservableObject {
                         event: event
                     )
                 )
+            } else if event.isStop,
+                      state.rootTurnID == nil || event.turnID != state.rootTurnID {
+                codexNotifyStateBySessionID[sessionID] = state
+                logIgnoredCodexHookEvent(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    event: event,
+                    reason: "missing_root_thread"
+                )
+                return false
             }
+        }
+
+        if event.isStop,
+           event.threadID == nil,
+           let turnID = event.turnID,
+           let rootTurnID = state.rootTurnID,
+           turnID != rootTurnID {
+            codexNotifyStateBySessionID[sessionID] = state
+            logIgnoredCodexHookEvent(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: event,
+                reason: "turn_mismatch"
+            )
+            return false
+        }
+
+        if event.isUserPromptSubmit,
+           state.rootTurnID != event.turnID {
+            state.rootTurnID = event.turnID
+            stateChanged = true
         }
 
         if let promptFingerprint = event.promptFingerprint,
@@ -724,6 +759,7 @@ final class SessionRuntimeStore: ObservableObject {
             "hook_event_name": event.hookEventName,
             "hook_source": event.source ?? "none",
             "root_thread_id": state.rootThreadID ?? "none",
+            "root_turn_id": state.rootTurnID ?? "none",
             "hook_thread_id": event.threadID ?? "none",
             "hook_turn_id": event.turnID ?? "none",
             "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
@@ -752,6 +788,7 @@ final class SessionRuntimeStore: ObservableObject {
             "session_id": sessionID,
             "panel_id": record.panelID.uuidString,
             "root_thread_id": state.rootThreadID ?? "none",
+            "root_turn_id": state.rootTurnID ?? "none",
             "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
         ]
 
@@ -1148,6 +1185,7 @@ final class SessionRuntimeStore: ObservableObject {
 
 private struct CodexNotifySessionState {
     var rootThreadID: String?
+    var rootTurnID: String?
     var pendingRootInputFingerprint: String?
 }
 
@@ -1322,6 +1360,18 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 private extension CodexHookEvent {
     var isClearSessionStart: Bool {
         hookEventName == "SessionStart" && source == "clear"
+    }
+
+    var isStop: Bool {
+        hookEventName == "Stop"
+    }
+
+    var isUserPromptSubmit: Bool {
+        hookEventName == "UserPromptSubmit"
+    }
+
+    var canLatchRootHookThread: Bool {
+        hookEventName == "SessionStart" || hookEventName == "UserPromptSubmit"
     }
 }
 

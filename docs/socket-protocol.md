@@ -961,9 +961,14 @@ Behavior:
 - When `kind` is present, `summary` is required and Toastty updates the session
   status
 - For first-party Codex sessions that use Toastty status notifications, Toastty
-  latches the first Codex `threadID` as the root thread and ignores later hook
-  events from different threads. `SessionStart` events with `source: "clear"`
-  replace the latched root thread.
+  latches root identity from root-starting hooks (`SessionStart` and
+  `UserPromptSubmit`) and ignores later hook events from different threads.
+  `Stop` hooks do not establish root identity by themselves, so a spawned
+  subagent completion cannot mark the parent session **Ready** just because it
+  arrived before a root hook. When `threadID` is unavailable, a `Stop` hook can
+  still match the active root `turnID`; completely unthreaded `Stop` payloads
+  remain accepted for legacy compatibility. `SessionStart` events with
+  `source: "clear"` replace the latched root identity.
 - Accepted `SessionStart` hook events also update Codex native resume metadata
   when `nativeSessionID`, `sessionFilePath`, and `cwd` are present.
 
