@@ -1492,6 +1492,9 @@ final class WorkspaceViewTests: XCTestCase {
         let tabStripHost = try XCTUnwrap(
             findDescendantView(in: tabStripContainer, ofType: NonWindowDraggableHostingView.self)
         )
+        let tabPointerView = try XCTUnwrap(
+            findDescendantView(in: tabStripContainer, ofType: PointerInteractionView.self)
+        )
 
         XCTAssertFalse(tabStripContainer.mouseDownCanMoveWindow)
 
@@ -1502,7 +1505,14 @@ final class WorkspaceViewTests: XCTestCase {
             ToastyTheme.workspaceTabWidth + 30,
             accuracy: 1
         )
-        XCTAssertEqual(tabStripContainer.frame.height, ToastyTheme.workspaceTabHeight, accuracy: 0.5)
+        XCTAssertEqual(tabStripContainer.frame.height, ToastyTheme.topBarHeight, accuracy: 0.5)
+        XCTAssertGreaterThan(
+            tabStripContainer.frame.height,
+            ToastyTheme.workspaceTabHeight,
+            "tab strip hit region should cover the titlebar inset above the visible tabs"
+        )
+        XCTAssertEqual(tabPointerView.frame.height, ToastyTheme.topBarHeight, accuracy: 0.5)
+        XCTAssertTrue(tabPointerView.suppressesWindowMovementWhileHovered)
     }
 
     private func assertColor(
