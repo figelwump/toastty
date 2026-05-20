@@ -231,9 +231,47 @@ final class SessionRuntimeStore: ObservableObject {
         completion: CodexNotifyCompletion,
         at now: Date
     ) -> Bool {
-        guard let record = sessionRegistry.sessionsByID[sessionID],
-              record.agent == .codex,
-              record.usesSessionStatusNotifications else {
+        guard let record = sessionRegistry.sessionsByID[sessionID] else {
+            logCodexNotifyCompletionDecision(
+                sessionID: sessionID,
+                record: nil,
+                state: CodexNotifySessionState(),
+                completion: completion,
+                decision: "accepted",
+                reason: "missing_session_record"
+            )
+            updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: completion.detail),
+                at: now
+            )
+            return true
+        }
+        guard record.agent == .codex else {
+            logCodexNotifyCompletionDecision(
+                sessionID: sessionID,
+                record: record,
+                state: CodexNotifySessionState(),
+                completion: completion,
+                decision: "accepted",
+                reason: "non_codex_session"
+            )
+            updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: completion.detail),
+                at: now
+            )
+            return true
+        }
+        guard record.usesSessionStatusNotifications else {
+            logCodexNotifyCompletionDecision(
+                sessionID: sessionID,
+                record: record,
+                state: CodexNotifySessionState(),
+                completion: completion,
+                decision: "accepted",
+                reason: "status_notifications_disabled"
+            )
             updateStatus(
                 sessionID: sessionID,
                 status: SessionStatus(kind: .ready, summary: "Ready", detail: completion.detail),
@@ -243,24 +281,28 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        var acceptedReason = "unknown"
         if let threadID = completion.threadID {
             if let rootThreadID = state.rootThreadID {
                 guard threadID == rootThreadID else {
                     codexNotifyStateBySessionID[sessionID] = state
-                    logIgnoredCodexNotifyCompletion(
+                    logCodexNotifyCompletionDecision(
                         sessionID: sessionID,
                         record: record,
                         state: state,
                         completion: completion,
+                        decision: "ignored",
                         reason: "thread_mismatch"
                     )
                     return false
                 }
+                acceptedReason = "thread_match"
             } else if let notifyFingerprint = completion.lastInputMessageFingerprint,
                       let pendingFingerprint = state.pendingRootInputFingerprint,
                       notifyFingerprint == pendingFingerprint {
                 state.rootThreadID = threadID
                 codexNotifyStateBySessionID[sessionID] = state
+                acceptedReason = "latched_root_thread_from_input_fingerprint"
                 ToasttyLog.debug(
                     "Latched Codex root notify thread",
                     category: .terminal,
@@ -273,11 +315,12 @@ final class SessionRuntimeStore: ObservableObject {
                 )
             } else if state.pendingRootInputFingerprint == nil {
                 codexNotifyStateBySessionID[sessionID] = state
-                logIgnoredCodexNotifyCompletion(
+                logCodexNotifyCompletionDecision(
                     sessionID: sessionID,
                     record: record,
                     state: state,
                     completion: completion,
+                    decision: "ignored",
                     reason: "missing_root_input_fingerprint"
                 )
                 return false
@@ -286,29 +329,29 @@ final class SessionRuntimeStore: ObservableObject {
                 let reason = completion.lastInputMessageFingerprint == nil
                     ? "missing_notify_input_fingerprint"
                     : "input_fingerprint_mismatch"
-                logIgnoredCodexNotifyCompletion(
+                logCodexNotifyCompletionDecision(
                     sessionID: sessionID,
                     record: record,
                     state: state,
                     completion: completion,
+                    decision: "ignored",
                     reason: reason
                 )
                 return false
             }
         } else {
             codexNotifyStateBySessionID[sessionID] = state
-            ToasttyLog.debug(
-                "Accepted unthreaded Codex notify completion",
-                category: .terminal,
-                metadata: codexNotifyMetadata(
-                    sessionID: sessionID,
-                    record: record,
-                    state: state,
-                    completion: completion
-                )
-            )
+            acceptedReason = "unthreaded_completion"
         }
 
+        logCodexNotifyCompletionDecision(
+            sessionID: sessionID,
+            record: record,
+            state: state,
+            completion: completion,
+            decision: "accepted",
+            reason: acceptedReason
+        )
         updateStatus(
             sessionID: sessionID,
             status: SessionStatus(kind: .ready, summary: "Ready", detail: completion.detail),
@@ -323,9 +366,34 @@ final class SessionRuntimeStore: ObservableObject {
         event: CodexHookEvent,
         at now: Date
     ) -> Bool {
-        guard let record = sessionRegistry.sessionsByID[sessionID],
-              record.agent == .codex,
-              record.usesSessionStatusNotifications else {
+        guard let record = sessionRegistry.sessionsByID[sessionID] else {
+            logIgnoredCodexHookCompletionIfNeeded(
+                sessionID: sessionID,
+                record: nil,
+                state: CodexNotifySessionState(),
+                event: event,
+                reason: "missing_session_record"
+            )
+            return false
+        }
+        guard record.agent == .codex else {
+            logIgnoredCodexHookCompletionIfNeeded(
+                sessionID: sessionID,
+                record: record,
+                state: CodexNotifySessionState(),
+                event: event,
+                reason: "non_codex_session"
+            )
+            return false
+        }
+        guard record.usesSessionStatusNotifications else {
+            logIgnoredCodexHookCompletionIfNeeded(
+                sessionID: sessionID,
+                record: record,
+                state: CodexNotifySessionState(),
+                event: event,
+                reason: "status_notifications_disabled"
+            )
             return false
         }
 
@@ -337,11 +405,12 @@ final class SessionRuntimeStore: ObservableObject {
                 if threadID != rootThreadID {
                     guard event.isClearSessionStart else {
                         codexNotifyStateBySessionID[sessionID] = state
-                        logIgnoredCodexHookEvent(
+                        logCodexHookEventDecision(
                             sessionID: sessionID,
                             record: record,
                             state: state,
                             event: event,
+                            decision: "ignored",
                             reason: "thread_mismatch"
                         )
                         return false
@@ -377,11 +446,12 @@ final class SessionRuntimeStore: ObservableObject {
             } else if event.isStop,
                       state.rootTurnID == nil || event.turnID != state.rootTurnID {
                 codexNotifyStateBySessionID[sessionID] = state
-                logIgnoredCodexHookEvent(
+                logCodexHookEventDecision(
                     sessionID: sessionID,
                     record: record,
                     state: state,
                     event: event,
+                    decision: "ignored",
                     reason: "missing_root_thread"
                 )
                 return false
@@ -394,11 +464,12 @@ final class SessionRuntimeStore: ObservableObject {
            let rootTurnID = state.rootTurnID,
            turnID != rootTurnID {
             codexNotifyStateBySessionID[sessionID] = state
-            logIgnoredCodexHookEvent(
+            logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 event: event,
+                decision: "ignored",
                 reason: "turn_mismatch"
             )
             return false
@@ -422,6 +493,16 @@ final class SessionRuntimeStore: ObservableObject {
             return stateChanged
         }
 
+        if event.isStop {
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: event,
+                decision: "accepted",
+                reason: codexHookCompletionAcceptedReason(event: event, state: state)
+            )
+        }
         updateStatus(sessionID: sessionID, status: status, at: now)
         return true
     }
@@ -702,66 +783,154 @@ final class SessionRuntimeStore: ObservableObject {
         return metadata
     }
 
-    private func logIgnoredCodexNotifyCompletion(
+    private func logCodexNotifyCompletionDecision(
         sessionID: String,
-        record: SessionRecord,
+        record: SessionRecord?,
         state: CodexNotifySessionState,
         completion: CodexNotifyCompletion,
+        decision: String,
         reason: String
     ) {
         ToasttyLog.debug(
-            "Ignored Codex notify completion",
+            "Codex notify completion decision",
             category: .terminal,
             metadata: codexNotifyMetadata(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 completion: completion,
-                additional: [
-                    "reason": reason,
-                ]
+                additional: codexCompletionDecisionMetadata(
+                    decision: decision,
+                    reason: reason,
+                    hasThreadID: completion.threadID != nil,
+                    hasTurnID: completion.turnID != nil,
+                    rootThreadKnown: state.rootThreadID != nil,
+                    rootTurnKnown: state.rootTurnID != nil
+                )
             )
         )
     }
 
-    private func logIgnoredCodexHookEvent(
+    private func logIgnoredCodexHookCompletionIfNeeded(
         sessionID: String,
-        record: SessionRecord,
+        record: SessionRecord?,
         state: CodexNotifySessionState,
         event: CodexHookEvent,
         reason: String
     ) {
+        guard event.isStop else {
+            return
+        }
+        logCodexHookEventDecision(
+            sessionID: sessionID,
+            record: record,
+            state: state,
+            event: event,
+            decision: "ignored",
+            reason: reason
+        )
+    }
+
+    private func logCodexHookEventDecision(
+        sessionID: String,
+        record: SessionRecord?,
+        state: CodexNotifySessionState,
+        event: CodexHookEvent,
+        decision: String,
+        reason: String
+    ) {
         ToasttyLog.debug(
-            "Ignored Codex hook event",
+            event.isStop ? "Codex hook completion decision" : "Codex hook event decision",
             category: .terminal,
             metadata: codexHookMetadata(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 event: event,
-                additional: [
-                    "reason": reason,
-                ]
+                additional: codexCompletionDecisionMetadata(
+                    decision: decision,
+                    reason: reason,
+                    hasThreadID: event.threadID != nil,
+                    hasTurnID: event.turnID != nil,
+                    rootThreadKnown: state.rootThreadID != nil,
+                    rootTurnKnown: state.rootTurnID != nil
+                )
             )
         )
     }
 
+    private func codexHookCompletionAcceptedReason(
+        event: CodexHookEvent,
+        state: CodexNotifySessionState
+    ) -> String {
+        if let threadID = event.threadID,
+           let rootThreadID = state.rootThreadID,
+           threadID == rootThreadID {
+            return "thread_match"
+        }
+        if event.threadID == nil,
+           let turnID = event.turnID,
+           let rootTurnID = state.rootTurnID,
+           turnID == rootTurnID {
+            return "turn_match"
+        }
+        if event.threadID == nil,
+           event.turnID == nil {
+            return "unidentified_legacy_stop"
+        }
+        if event.threadID != nil,
+           state.rootThreadID == nil,
+           event.canLatchRootHookThread == false {
+            return "matching_root_turn_without_latched_thread"
+        }
+        return "status_accepted"
+    }
+
+    private func codexCompletionDecisionMetadata(
+        decision: String,
+        reason: String,
+        hasThreadID: Bool,
+        hasTurnID: Bool,
+        rootThreadKnown: Bool,
+        rootTurnKnown: Bool
+    ) -> [String: String] {
+        [
+            "decision": decision,
+            "decision_reason": reason,
+            "reason": reason,
+            "has_thread_id": boolMetadata(hasThreadID),
+            "has_turn_id": boolMetadata(hasTurnID),
+            "root_thread_known": boolMetadata(rootThreadKnown),
+            "root_turn_known": boolMetadata(rootTurnKnown),
+        ]
+    }
+
     private func codexHookMetadata(
         sessionID: String,
-        record: SessionRecord,
+        record: SessionRecord?,
         state: CodexNotifySessionState,
         event: CodexHookEvent,
         additional: [String: String] = [:]
     ) -> [String: String] {
         var metadata: [String: String] = [
             "session_id": sessionID,
-            "panel_id": record.panelID.uuidString,
+            "agent": record?.agent.rawValue ?? "none",
+            "panel_id": record?.panelID.uuidString ?? "none",
+            "window_id": record?.windowID.uuidString ?? "none",
+            "workspace_id": record?.workspaceID.uuidString ?? "none",
+            "completion_source": "codex-hooks",
+            "event_name": event.hookEventName,
             "hook_event_name": event.hookEventName,
             "hook_source": event.source ?? "none",
+            "previous_status_kind": record?.status?.kind.rawValue ?? "none",
             "root_thread_id": state.rootThreadID ?? "none",
             "root_turn_id": state.rootTurnID ?? "none",
             "hook_thread_id": event.threadID ?? "none",
             "hook_turn_id": event.turnID ?? "none",
+            "has_thread_id": boolMetadata(event.threadID != nil),
+            "has_turn_id": boolMetadata(event.turnID != nil),
+            "root_thread_known": boolMetadata(state.rootThreadID != nil),
+            "root_turn_known": boolMetadata(state.rootTurnID != nil),
             "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
             "hook_input_fingerprint": truncatedFingerprint(event.promptFingerprint),
         ]
@@ -779,16 +948,24 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func codexNotifyMetadata(
         sessionID: String,
-        record: SessionRecord,
+        record: SessionRecord?,
         state: CodexNotifySessionState,
         completion: CodexNotifyCompletion? = nil,
         additional: [String: String] = [:]
     ) -> [String: String] {
         var metadata: [String: String] = [
             "session_id": sessionID,
-            "panel_id": record.panelID.uuidString,
+            "agent": record?.agent.rawValue ?? "none",
+            "panel_id": record?.panelID.uuidString ?? "none",
+            "window_id": record?.windowID.uuidString ?? "none",
+            "workspace_id": record?.workspaceID.uuidString ?? "none",
+            "completion_source": "codex-notify",
+            "event_name": "notify_completion",
+            "previous_status_kind": record?.status?.kind.rawValue ?? "none",
             "root_thread_id": state.rootThreadID ?? "none",
             "root_turn_id": state.rootTurnID ?? "none",
+            "root_thread_known": boolMetadata(state.rootThreadID != nil),
+            "root_turn_known": boolMetadata(state.rootTurnID != nil),
             "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
         ]
 
@@ -796,6 +973,8 @@ final class SessionRuntimeStore: ObservableObject {
             metadata["notify_type"] = completion.notificationType
             metadata["notify_thread_id"] = completion.threadID ?? "none"
             metadata["notify_turn_id"] = completion.turnID ?? "none"
+            metadata["has_thread_id"] = boolMetadata(completion.threadID != nil)
+            metadata["has_turn_id"] = boolMetadata(completion.turnID != nil)
             metadata["notify_input_fingerprint"] = truncatedFingerprint(completion.lastInputMessageFingerprint)
             metadata["notify_input_message_count"] = String(completion.inputMessageCount)
         }
@@ -805,6 +984,10 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         return metadata
+    }
+
+    private func boolMetadata(_ value: Bool) -> String {
+        value ? "true" : "false"
     }
 
     private func truncatedFingerprint(_ fingerprint: String?) -> String {
