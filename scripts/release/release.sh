@@ -135,6 +135,10 @@ detach_disk_image_with_retries() {
   return 1
 }
 
+parse_attached_device() {
+  awk '$1 ~ /^\/dev\// { print $1; exit }'
+}
+
 require_command() {
   local command_name="$1"
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -604,7 +608,7 @@ mount_writable_dmg() {
 
   log "Mounting writable DMG"
   attach_output="$(hdiutil attach -readwrite -noautoopen "$RW_DMG_PATH")"
-  ATTACHED_DEVICE="$(printf '%s\n' "$attach_output" | awk 'NR == 1 { print $1; exit }')"
+  ATTACHED_DEVICE="$(printf '%s\n' "$attach_output" | parse_attached_device)"
   MOUNT_POINT="$(printf '%s\n' "$attach_output" | awk 'match($0, /\/Volumes\/.*/) { print substr($0, RSTART); exit }')"
   MOUNTED_VOLUME_NAME="$(basename "$MOUNT_POINT")"
   DS_STORE_PATH="$MOUNT_POINT/.DS_Store"
@@ -728,7 +732,7 @@ verify_dmg_excludes_transient_folders() {
 
   log "Verifying DMG excludes transient folders"
   attach_output="$(hdiutil attach -readonly -noautoopen -nobrowse "$DMG_PATH")"
-  verify_device="$(printf '%s\n' "$attach_output" | awk 'NR == 1 { print $1; exit }')"
+  verify_device="$(printf '%s\n' "$attach_output" | parse_attached_device)"
   verify_mount_point="$(printf '%s\n' "$attach_output" | awk 'match($0, /\/Volumes\/.*/) { print substr($0, RSTART); exit }')"
 
   if [[ -z "$verify_device" || -z "$verify_mount_point" ]]; then
