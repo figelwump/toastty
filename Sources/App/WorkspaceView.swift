@@ -758,6 +758,7 @@ struct WorkspaceView: View {
                         installsContextMenu: installsContextMenu
                     )
                 }
+                .background(workspaceTabFrameMeasurement(tabID: tab.id))
                 .zIndex(
                     isDragged
                         ? Double(workspace.orderedTabs.count + 1)
@@ -1920,6 +1921,7 @@ struct WorkspaceView: View {
                         "tabID": tab.id.uuidString,
                         "sourceIndex": "\(index)",
                     ],
+                    suppressesWindowMovementWhileHovered: true,
                     onBegan: { _ in
                         beginWorkspaceTabInteraction(tabID: tab.id)
                     },
@@ -1964,7 +1966,6 @@ struct WorkspaceView: View {
         }
 
         let measuredRow = row
-            .background(workspaceTabFrameMeasurement(tabID: tab.id))
             .offset(x: isDraggedTab ? activeTabDrag?.translationWidth ?? 0 : 0)
             .shadow(
                 color: isDraggedTab ? ToastyTheme.accent.opacity(0.18) : .clear,
