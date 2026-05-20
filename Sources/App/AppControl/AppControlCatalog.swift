@@ -265,6 +265,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .content(required: false),
                     .title(required: false),
                     .expectedRevision(required: false),
+                    .scratchpadCreatePolicy(required: false),
                 ],
                 aliases: aliases
             )
@@ -411,6 +412,16 @@ private extension AppControlParameterDescriptor {
 
     static func expectedRevision(required: Bool) -> Self {
         .init(name: "expectedRevision", summary: "Reject the write unless the current document revision matches this value.", valueType: .integer, required: required)
+    }
+
+    static func scratchpadCreatePolicy(required: Bool) -> Self {
+        .init(
+            name: "createPolicy",
+            summary: "Scratchpad creation policy. Defaults to reuse.",
+            valueType: .string,
+            required: required,
+            allowedValues: ScratchpadPanelCreatePolicy.allCases.map(\.rawValue)
+        )
     }
 
     static func files(required: Bool) -> Self {

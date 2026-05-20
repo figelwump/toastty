@@ -252,6 +252,10 @@ Notable action-specific behavior:
   - `args.title` is optional.
   - `args.expectedRevision` is optional. New documents accept `0`; existing
     documents reject stale revisions.
+  - `args.createPolicy` is optional and accepts `reuse` (default) or `new`.
+    `reuse` updates the Scratchpad currently linked to the session. `new`
+    creates a fresh session-linked Scratchpad, leaves the previous Scratchpad
+    open with its content intact, and clears the previous session link.
   - Content is stored as HTML in the Scratchpad document store and is limited to
     1,048,576 UTF-8 bytes.
   - The action creates or updates the Scratchpad linked to the active managed
@@ -461,7 +465,8 @@ Supported action IDs:
 - `panel.scratchpad.set-content`
   - requires `args.sessionID`
   - requires exactly one of `args.filePath` or `args.content`
-  - accepts optional `args.title` and `args.expectedRevision`
+  - accepts optional `args.title`, `args.expectedRevision`, and
+    `args.createPolicy` (`reuse` or `new`)
   - creates or updates the Scratchpad linked to the active managed session
   - returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and
     `created`

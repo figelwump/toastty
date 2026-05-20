@@ -110,6 +110,238 @@ struct ScratchpadAppControlTests {
     }
 
     @Test
+    func createPolicyNewCreatesFreshLinkedScratchpadAndUnbindsPrevious() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>First</p>"),
+                "title": .string("First"),
+            ]
+        )
+        let firstResult = try #require(first.result)
+        let firstPanelIDString = try #require(firstResult.string("panelID"))
+        let firstPanelID = try #require(UUID(uuidString: firstPanelIDString))
+        let firstDocumentIDString = try #require(firstResult.string("documentID"))
+        let firstDocumentID = try #require(UUID(uuidString: firstDocumentIDString))
+
+        let second = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Second</p>"),
+                "title": .string("Second"),
+                "createPolicy": .string("new"),
+            ]
+        )
+        let secondResult = try #require(second.result)
+        let secondPanelIDString = try #require(secondResult.string("panelID"))
+        let secondPanelID = try #require(UUID(uuidString: secondPanelIDString))
+        let secondDocumentIDString = try #require(secondResult.string("documentID"))
+        let secondDocumentID = try #require(UUID(uuidString: secondDocumentIDString))
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let firstPanelState = try #require(workspace.panelState(for: firstPanelID))
+        let secondPanelState = try #require(workspace.panelState(for: secondPanelID))
+        guard case .web(let firstWebState) = firstPanelState,
+              case .web(let secondWebState) = secondPanelState else {
+            Issue.record("scratchpad panels should be web panels")
+            return
+        }
+        let firstDocument = try #require(try fixture.documentStore.load(documentID: firstDocumentID))
+        let secondDocument = try #require(try fixture.documentStore.load(documentID: secondDocumentID))
+
+        #expect(second.didMutateState)
+        #expect(secondResult.bool("created") == true)
+        #expect(secondPanelID != firstPanelID)
+        #expect(secondDocumentID != firstDocumentID)
+        #expect(secondResult.int("revision") == 1)
+        #expect(firstWebState.scratchpad?.sessionLink == nil)
+        #expect(firstDocument.sessionLink == nil)
+        #expect(firstDocument.content == "<p>First</p>")
+        #expect(secondWebState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
+        #expect(secondDocument.sessionLink?.sessionID == fixture.sessionID)
+        #expect(secondDocument.content == "<p>Second</p>")
+
+        let third = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Third</p>"),
+                "expectedRevision": .int(1),
+            ]
+        )
+        let thirdResult = try #require(third.result)
+        let updatedSecondDocument = try #require(try fixture.documentStore.load(documentID: secondDocumentID))
+
+        #expect(thirdResult.string("panelID") == secondPanelIDString)
+        #expect(thirdResult.bool("created") == false)
+        #expect(thirdResult.int("revision") == 2)
+        #expect(updatedSecondDocument.content == "<p>Third</p>")
+    }
+
+    @Test
+    func createPolicyNewWithoutExistingScratchpadCreatesLinkedScratchpad() throws {
+        let fixture = try ScratchpadAppControlFixture()
+
+        let response = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Fresh</p>"),
+                "createPolicy": .string("new"),
+            ]
+        )
+        let result = try #require(response.result)
+        let panelIDString = try #require(result.string("panelID"))
+        let panelID = try #require(UUID(uuidString: panelIDString))
+        let documentIDString = try #require(result.string("documentID"))
+        let documentID = try #require(UUID(uuidString: documentIDString))
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspace.panelState(for: panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should be a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: documentID))
+
+        #expect(result.bool("created") == true)
+        #expect(webState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
+        #expect(document.sessionLink?.sessionID == fixture.sessionID)
+        #expect(document.content == "<p>Fresh</p>")
+    }
+
+    @Test
+    func createPolicyNewRejectsNonzeroExpectedRevisionBeforeUnbindingExistingScratchpad() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linked = try fixture.createLinkedScratchpad()
+        let workspaceBefore = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelCountBefore = workspaceBefore.allPanelsByID.count
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runAction(
+                id: AppControlActionID.panelScratchpadSetContent.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                    "content": .string("<p>Should not publish</p>"),
+                    "expectedRevision": .int(1),
+                    "createPolicy": .string("new"),
+                ]
+            )
+        }
+
+        let workspaceAfter = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspaceAfter.panelState(for: linked.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: linked.documentID))
+
+        #expect(workspaceAfter.allPanelsByID.count == panelCountBefore)
+        #expect(webState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
+        #expect(document.sessionLink?.sessionID == fixture.sessionID)
+        #expect(document.content == "<p>Initial</p>")
+    }
+
+    @Test
+    func createPolicyNewRejectsMissingExistingDocumentBeforeCreatingReplacement() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linked = try fixture.createLinkedScratchpad()
+        let workspaceBefore = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelCountBefore = workspaceBefore.allPanelsByID.count
+        try FileManager.default.removeItem(at: fixture.documentStore.documentURL(for: linked.documentID))
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runAction(
+                id: AppControlActionID.panelScratchpadSetContent.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                    "content": .string("<p>Replacement</p>"),
+                    "createPolicy": .string("new"),
+                ]
+            )
+        }
+
+        let workspaceAfter = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspaceAfter.panelState(for: linked.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+
+        #expect(workspaceAfter.allPanelsByID.count == panelCountBefore)
+        #expect(webState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
+        #expect(try fixture.documentStore.load(documentID: linked.documentID) == nil)
+    }
+
+    @Test
+    func createPolicyNewTwiceMigratesSessionLinkToNewestScratchpad() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let first = try fixture.createLinkedScratchpad()
+        let second = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Second</p>"),
+                "createPolicy": .string("new"),
+            ]
+        )
+        let secondResult = try #require(second.result)
+        let secondPanelIDString = try #require(secondResult.string("panelID"))
+        let secondPanelID = try #require(UUID(uuidString: secondPanelIDString))
+        let secondDocumentIDString = try #require(secondResult.string("documentID"))
+        let secondDocumentID = try #require(UUID(uuidString: secondDocumentIDString))
+
+        let third = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Third</p>"),
+                "createPolicy": .string("new"),
+            ]
+        )
+        let thirdResult = try #require(third.result)
+        let thirdPanelIDString = try #require(thirdResult.string("panelID"))
+        let thirdPanelID = try #require(UUID(uuidString: thirdPanelIDString))
+        let thirdDocumentIDString = try #require(thirdResult.string("documentID"))
+        let thirdDocumentID = try #require(UUID(uuidString: thirdDocumentIDString))
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let firstState = try #require(workspace.panelState(for: first.panelID))
+        let secondState = try #require(workspace.panelState(for: secondPanelID))
+        let thirdState = try #require(workspace.panelState(for: thirdPanelID))
+        guard case .web(let firstWebState) = firstState,
+              case .web(let secondWebState) = secondState,
+              case .web(let thirdWebState) = thirdState else {
+            Issue.record("scratchpad panels should be web panels")
+            return
+        }
+
+        #expect(firstWebState.scratchpad?.sessionLink == nil)
+        #expect(secondWebState.scratchpad?.sessionLink == nil)
+        #expect(thirdWebState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
+        #expect(try fixture.documentStore.load(documentID: first.documentID)?.sessionLink == nil)
+        #expect(try fixture.documentStore.load(documentID: secondDocumentID)?.sessionLink == nil)
+        #expect(try fixture.documentStore.load(documentID: thirdDocumentID)?.sessionLink?.sessionID == fixture.sessionID)
+    }
+
+    @Test
+    func invalidCreatePolicyRejectsSetContent() throws {
+        let fixture = try ScratchpadAppControlFixture()
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runAction(
+                id: AppControlActionID.panelScratchpadSetContent.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                    "content": .string("<p>Invalid</p>"),
+                    "createPolicy": .string("replace"),
+                ]
+            )
+        }
+    }
+
+    @Test
     func staleExpectedRevisionRejectsWrite() throws {
         let fixture = try ScratchpadAppControlFixture()
         _ = try fixture.executor.runAction(

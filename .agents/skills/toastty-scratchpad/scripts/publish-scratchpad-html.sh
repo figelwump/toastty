@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: publish-scratchpad-html.sh [--title <title>] [--file <html-file>] [--expected-revision <revision>]
+usage: publish-scratchpad-html.sh [--title <title>] [--file <html-file>] [--expected-revision <revision>] [--new]
 
 Publishes a complete HTML document to the current Toastty Scratchpad session.
 Reads HTML from stdin unless --file is provided.
@@ -13,6 +13,7 @@ EOF
 title="Scratchpad"
 file_path=""
 expected_revision=""
+create_policy=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +40,10 @@ while [[ $# -gt 0 ]]; do
       fi
       expected_revision="$2"
       shift 2
+      ;;
+    --new)
+      create_policy="new"
+      shift
       ;;
     -h|--help)
       usage
@@ -113,6 +118,9 @@ args=(
 )
 if [[ -n "$expected_revision" ]]; then
   args+=("expectedRevision=${expected_revision}")
+fi
+if [[ -n "$create_policy" ]]; then
+  args+=("createPolicy=${create_policy}")
 fi
 
 response="$("$TOASTTY_CLI_PATH" "${args[@]}" < "$html_file")"

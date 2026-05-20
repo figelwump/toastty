@@ -98,10 +98,13 @@ current `TOASTTY_SESSION_ID`:
 
 - Toastty resolves the active session.
 - Toastty resolves the session's source terminal panel and workspace.
-- If a scratchpad is already linked to that session, Toastty updates it in
-  place.
+- If a scratchpad is already linked to that session and `createPolicy` is
+  omitted or `reuse`, Toastty updates it in place.
 - If no scratchpad is linked to that session, Toastty creates one in the same
   workspace using `rightPanel` placement.
+- If `createPolicy` is `new`, Toastty creates a fresh session-linked
+  scratchpad, then clears the previous session link while leaving that previous
+  scratchpad open with its content intact.
 - Auto-create does not leave focus in the scratchpad. If creation focuses the
   new panel internally, Toastty restores focus to the source terminal.
 - If the scratchpad is not focused when updated, Toastty marks it updated using
@@ -111,7 +114,8 @@ current `TOASTTY_SESSION_ID`:
   succeeds. This is agent guidance, not app policy.
 
 The agent should reuse the same session-linked scratchpad rather than creating a
-new one per turn.
+new one per turn unless the user explicitly asks for a new or separate
+artifact.
 
 ### backup entry point
 
@@ -180,11 +184,14 @@ Inputs:
 - `title`: optional display title
 - `expectedRevision`: optional guard against overwriting newer scratchpad
   content
+- `createPolicy`: optional `reuse` or `new`; defaults to `reuse`
 
 Behavior:
 
 - resolve the active session by `sessionID`
-- create or locate the session-linked scratchpad
+- create or locate the session-linked scratchpad, defaulting to reuse
+- if `createPolicy` is `new`, create a fresh linked scratchpad and unbind the
+  previous one after preflighting the previous document link
 - read content from `filePath` or stdin
 - enforce payload limits before committing
 - serialize mutations per scratchpad document
@@ -230,7 +237,7 @@ Do not use Scratchpad for:
 - content that is better opened as a local document
 
 Agents should update the current session's scratchpad in place unless the user
-explicitly asks for a separate artifact or the topic clearly changes.
+explicitly asks for a separate artifact.
 
 ## state model
 
@@ -289,7 +296,8 @@ than crashing or silently removing the panel.
 
 Retention can stay simple in v1:
 
-- one linked scratchpad per session
+- one linked scratchpad per session; `createPolicy=new` moves the live session
+  link to the newly created scratchpad and leaves the previous one unbound
 - session end does not delete the scratchpad
 - explicit panel close follows normal recently closed panel behavior
 - no archive/library UI
@@ -413,6 +421,8 @@ App-control tests:
 - response includes `windowID`, `workspaceID`, `panelID`, `documentID`,
   `revision`, and `created`
 - repeated calls for the same session update in place
+- `createPolicy=new` creates a new linked scratchpad and unbinds the previous
+  linked scratchpad without deleting its document
 - concurrent calls serialize per scratchpad document
 - `panel.scratchpad.rebind` requires a live managed session in the same
   workspace tab

@@ -44,6 +44,16 @@ Publish the loading screen from the repo root:
   "Architecture Map"
 ```
 
+If the user explicitly asks for a new, separate, or additional Scratchpad rather
+than an update to the current one, pass `--new` on this first loading-screen
+publish only:
+
+```bash
+.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
+  --new \
+  "Architecture Map"
+```
+
 Then do the needed thread/file/prompt analysis and publish updates over the same session-linked Scratchpad.
 
 ## Input Modes
@@ -118,7 +128,7 @@ If the artifact starts to feel busy, the answer is almost always to remove eleme
    - readable at narrow and wide widths
    - no text overlap
    - enough labels that the user can understand the artifact without chat context
-5. Replace the initial loading screen by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact.
+5. Replace the initial loading screen by publishing again. If updating an existing topic in the same managed session, reuse the current Scratchpad instead of creating a separate artifact. If the first loading screen used `--new`, omit `--new` on later publishes so they update that newly linked Scratchpad.
 
 ## Progressive Updates
 
@@ -128,6 +138,7 @@ Scratchpad publishing replaces the whole session-linked document each time. To c
 - Publish only at stable points where the content is useful and syntactically valid. Good checkpoints are a finalized layout shell, populated major sections, complete data visualization, and final polish.
 - Avoid publishing every small edit or token stream. Each update reloads the generated iframe, which can reset scroll, focus, animation, and JavaScript state.
 - Keep using the same helper and session. The helper sends the full content through `panel.scratchpad.set-content`, so repeated publishes update the existing Scratchpad instead of creating separate panels.
+- Use `--new` only when the user explicitly asks for a new, separate, or additional Scratchpad, and only on the first publish for that artifact. Passing `--new` again intentionally creates another Scratchpad and unbinds the previous session-linked one.
 - If an intermediate snapshot uses JavaScript, keep the no-blank-state and diagnostics guidance below in place just as you would for the final artifact.
 
 ## Inline JavaScript
@@ -188,6 +199,15 @@ Or publish an already-generated HTML file:
 
 ```bash
 .agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
+  --title "Data Flow" \
+  --file /tmp/data-flow.html
+```
+
+For an explicit new/separate Scratchpad, add `--new` to the first publish:
+
+```bash
+.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
+  --new \
   --title "Data Flow" \
   --file /tmp/data-flow.html
 ```

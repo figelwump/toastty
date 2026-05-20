@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: publish-scratchpad-outline.sh [title]
+usage: publish-scratchpad-outline.sh [--new] [title]
 
 Publishes a minimal animated loading screen before deeper analysis.
 The loading screen contains only the title and an animated indicator —
@@ -11,12 +11,32 @@ it deliberately does not pre-mock the final artifact's structure.
 EOF
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
+title="Scratchpad Draft"
+title_set=0
+create_policy_args=()
 
-title="${1:-Scratchpad Draft}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --new)
+      create_policy_args=(--new)
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      if [[ "$title_set" == "1" ]]; then
+        echo "error: unexpected argument: $1" >&2
+        usage
+        exit 64
+      fi
+      title="$1"
+      title_set=1
+      shift
+      ;;
+  esac
+done
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "error: python3 is required" >&2
@@ -37,7 +57,7 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-python3 - "$title" <<'PY' | "$script_dir/publish-scratchpad-html.sh" --title "$title"
+python3 - "$title" <<'PY' | "$script_dir/publish-scratchpad-html.sh" --title "$title" "${create_policy_args[@]}"
 import html
 import sys
 

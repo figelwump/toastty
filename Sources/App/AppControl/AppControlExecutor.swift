@@ -711,7 +711,8 @@ private extension AppControlExecutor {
                     sessionID: sessionID,
                     title: normalizedOptionalText(args.stringValue("title")),
                     content: content,
-                    expectedRevision: args.intValue("expectedRevision")
+                    expectedRevision: args.intValue("expectedRevision"),
+                    createPolicy: try scratchpadCreatePolicy(args: args)
                 ),
                 sessionRuntimeStore: sessionRuntimeStore,
                 documentStore: scratchpadDocumentStore
@@ -820,6 +821,17 @@ private extension AppControlExecutor {
         } catch {
             throw AutomationSocketError.invalidPayload("could not read filePath: \(error.localizedDescription)")
         }
+    }
+
+    func scratchpadCreatePolicy(args: [String: AutomationJSONValue]) throws -> ScratchpadPanelCreatePolicy {
+        guard let rawValue = normalizedOptionalText(args.stringValue("createPolicy")) else {
+            return .reuse
+        }
+        let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let policy = ScratchpadPanelCreatePolicy(rawValue: normalized) else {
+            throw AutomationSocketError.invalidPayload("createPolicy must be one of: reuse, new")
+        }
+        return policy
     }
 
     func resolvedScratchpadContentFileURL(_ filePath: String, sessionID: String) -> URL {

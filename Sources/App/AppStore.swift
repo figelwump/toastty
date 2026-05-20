@@ -145,22 +145,30 @@ enum LocalDocumentPanelOpenOutcome: Equatable {
     }
 }
 
+enum ScratchpadPanelCreatePolicy: String, CaseIterable, Equatable, Sendable {
+    case reuse
+    case new
+}
+
 struct ScratchpadPanelSetContentRequest: Equatable, Sendable {
     var sessionID: String
     var title: String?
     var content: String
     var expectedRevision: Int?
+    var createPolicy: ScratchpadPanelCreatePolicy
 
     init(
         sessionID: String,
         title: String? = nil,
         content: String,
-        expectedRevision: Int? = nil
+        expectedRevision: Int? = nil,
+        createPolicy: ScratchpadPanelCreatePolicy = .reuse
     ) {
         self.sessionID = sessionID
         self.title = WebPanelState.normalizedTitle(title)
         self.content = content
         self.expectedRevision = expectedRevision
+        self.createPolicy = createPolicy
     }
 }
 
@@ -836,7 +844,9 @@ final class AppStore: ObservableObject {
             startedAt: session.startedAt
         )
 
-        if let existing = linkedScratchpadPanel(sessionID: session.sessionID) {
+        let existingLinkedScratchpad = linkedScratchpadPanel(sessionID: session.sessionID)
+        if let existing = existingLinkedScratchpad,
+           request.createPolicy == .reuse {
             guard let scratchpad = existing.webState.scratchpad else {
                 throw ScratchpadPanelError.missingScratchpadState(existing.panelID)
             }
@@ -881,6 +891,16 @@ final class AppStore: ObservableObject {
                 expectedRevision: expectedRevision,
                 currentRevision: 0
             )
+        }
+
+        if request.createPolicy == .new,
+           let existing = existingLinkedScratchpad {
+            guard let scratchpad = existing.webState.scratchpad else {
+                throw ScratchpadPanelError.missingScratchpadState(existing.panelID)
+            }
+            guard try documentStore.load(documentID: scratchpad.documentID) != nil else {
+                throw ScratchpadPanelError.missingDocument(scratchpad.documentID)
+            }
         }
 
         let document = try documentStore.createDocument(
@@ -929,6 +949,24 @@ final class AppStore: ObservableObject {
             workspaceID: createdSelection.workspaceID,
             panelID: panelID
         )
+
+        if request.createPolicy == .new,
+           let existing = existingLinkedScratchpad {
+            do {
+                _ = try updateScratchpadPanelSessionLink(
+                    panelID: existing.panelID,
+                    sessionLink: nil,
+                    documentStore: documentStore
+                )
+            } catch {
+                _ = try? updateScratchpadPanelSessionLink(
+                    panelID: panelID,
+                    sessionLink: nil,
+                    documentStore: documentStore
+                )
+                throw error
+            }
+        }
 
         return ScratchpadPanelSetContentOutcome(
             windowID: createdSelection.windowID,

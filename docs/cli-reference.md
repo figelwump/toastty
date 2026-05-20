@@ -85,6 +85,11 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
   title="Review notes"
 printf '%s' "$html" | "$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
   --stdin content \
+  sessionID="$TOASTTY_SESSION_ID" \
+  createPolicy=new \
+  title="Separate artifact"
+printf '%s' "$html" | "$TOASTTY_CLI_PATH" action run panel.scratchpad.set-content \
+  --stdin content \
   sessionID="$TOASTTY_SESSION_ID"
 "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
   sessionID="$TOASTTY_SESSION_ID"
@@ -130,7 +135,7 @@ Descriptors can also advertise compatibility aliases. Those aliases are accepted
 
 Scratchpad actions are intended for agent and automation integrations:
 
-- `panel.scratchpad.set-content` creates or updates the Scratchpad linked to an active managed session. It requires `sessionID` plus either `filePath` or `content`, accepts optional `title` and `expectedRevision`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`.
+- `panel.scratchpad.set-content` creates or updates the Scratchpad linked to an active managed session. It requires `sessionID` plus either `filePath` or `content`, accepts optional `title`, `expectedRevision`, and `createPolicy`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`. `createPolicy` defaults to `reuse`; set `createPolicy=new` to create a fresh session-linked Scratchpad and leave the previous one open but unbound.
 - `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
 - `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
 
