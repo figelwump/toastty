@@ -10,6 +10,8 @@ enum WindowMovementSuppression {
     private struct SuppressedWindowState {
         weak var window: NSWindow?
         let originalIsMovable: Bool
+        let originalIsMovableByWindowBackground: Bool
+        let originalAllowsResizing: Bool
         var tokens: Set<Token>
     }
 
@@ -38,7 +40,7 @@ enum WindowMovementSuppression {
         }
 
         if let window = state.window {
-            window.isMovable = state.originalIsMovable
+            restoreWindow(window, to: state)
         }
         statesByWindowID.removeValue(forKey: windowID)
     }
@@ -46,7 +48,7 @@ enum WindowMovementSuppression {
     static func resetForTesting() {
         for (windowID, state) in statesByWindowID {
             if let window = state.window {
-                window.isMovable = state.originalIsMovable
+                restoreWindow(window, to: state)
             }
             statesByWindowID.removeValue(forKey: windowID)
         }
@@ -75,6 +77,8 @@ enum WindowMovementSuppression {
             statesByWindowID[windowID] = SuppressedWindowState(
                 window: window,
                 originalIsMovable: window.isMovable,
+                originalIsMovableByWindowBackground: window.isMovableByWindowBackground,
+                originalAllowsResizing: window.styleMask.contains(.resizable),
                 tokens: [token]
             )
         }
@@ -83,12 +87,28 @@ enum WindowMovementSuppression {
         if window.isMovable {
             window.isMovable = false
         }
+        if window.isMovableByWindowBackground {
+            window.isMovableByWindowBackground = false
+        }
+        if window.styleMask.contains(.resizable) {
+            window.styleMask.remove(.resizable)
+        }
     }
 
     private static func removeState(for windowID: ObjectIdentifier) {
         guard let state = statesByWindowID.removeValue(forKey: windowID) else { return }
         for token in state.tokens {
             windowIDByToken.removeValue(forKey: token)
+        }
+    }
+
+    private static func restoreWindow(_ window: NSWindow, to state: SuppressedWindowState) {
+        window.isMovable = state.originalIsMovable
+        window.isMovableByWindowBackground = state.originalIsMovableByWindowBackground
+        if state.originalAllowsResizing {
+            window.styleMask.insert(.resizable)
+        } else {
+            window.styleMask.remove(.resizable)
         }
     }
 }

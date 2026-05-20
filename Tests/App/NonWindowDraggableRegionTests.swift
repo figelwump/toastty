@@ -248,32 +248,200 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
-    func testWindowMovementSuppressionRestoresAfterAllReasonsRelease() {
-        defer { WindowMovementSuppression.resetForTesting() }
+    func testPointerInteractionViewUsesScreenSpaceTranslationWhenWindowFrameChanges() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
-            styleMask: [.titled],
+            styleMask: [.titled, .resizable],
             backing: .buffered,
             defer: false
         )
         defer { window.orderOut(nil) }
 
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        view.usesEventTrackingLoop = false
+        container.addSubview(view)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        let originalWindowFrame = window.frame
+
+        var changedValue: PointerInteractionValue?
+        var endedValue: PointerInteractionValue?
+        view.onChanged = { changedValue = $0 }
+        view.onEnded = { endedValue = $0 }
+
+        let startLocation = NSPoint(x: 52, y: 56)
+        let startScreenLocation = window.convertPoint(toScreen: startLocation)
+        let draggedScreenLocation = NSPoint(x: startScreenLocation.x + 34, y: startScreenLocation.y - 13)
+
+        view.mouseDown(
+            with: try pointerMouseEvent(type: .leftMouseDown, location: startLocation, window: window)
+        )
+        XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
+
+        window.setFrame(
+            NSRect(
+                x: originalWindowFrame.minX,
+                y: originalWindowFrame.minY - 80,
+                width: originalWindowFrame.width + 320,
+                height: originalWindowFrame.height + 80
+            ),
+            display: false
+        )
+        XCTAssertFalse(framesEqual(window.frame, originalWindowFrame))
+
+        view.mouseDragged(
+            with: try pointerMouseEvent(
+                type: .leftMouseDragged,
+                location: window.convertPoint(fromScreen: draggedScreenLocation),
+                window: window
+            )
+        )
+
+        XCTAssertTrue(framesEqual(window.frame, originalWindowFrame))
+        let expectedStartLocation = view.convert(startLocation, from: nil)
+        let expectedLocation = CGPoint(x: expectedStartLocation.x + 34, y: expectedStartLocation.y + 13)
+
+        let changed = try XCTUnwrap(changedValue)
+        XCTAssertEqual(changed.startLocation.x, expectedStartLocation.x, accuracy: 0.001)
+        XCTAssertEqual(changed.startLocation.y, expectedStartLocation.y, accuracy: 0.001)
+        XCTAssertEqual(changed.translation.width, 34, accuracy: 0.001)
+        XCTAssertEqual(changed.translation.height, 13, accuracy: 0.001)
+        XCTAssertEqual(changed.location.x, expectedLocation.x, accuracy: 0.001)
+        XCTAssertEqual(changed.location.y, expectedLocation.y, accuracy: 0.001)
+
+        view.mouseUp(
+            with: try pointerMouseEvent(
+                type: .leftMouseUp,
+                location: window.convertPoint(fromScreen: draggedScreenLocation),
+                window: window
+            )
+        )
+
+        XCTAssertTrue(window.isMovable)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+        XCTAssertEqual(endedValue, changedValue)
+    }
+
+    @MainActor
+    func testPointerInteractionViewRestoresWindowFrameWhenSequenceInvalidates() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        view.usesEventTrackingLoop = false
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        let originalWindowFrame = window.frame
+
+        view.mouseDown(
+            with: try pointerMouseEvent(type: .leftMouseDown, location: NSPoint(x: 52, y: 56), window: window)
+        )
+        XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
+
+        window.setFrame(
+            NSRect(
+                x: originalWindowFrame.minX,
+                y: originalWindowFrame.minY - 80,
+                width: originalWindowFrame.width + 320,
+                height: originalWindowFrame.height + 80
+            ),
+            display: false
+        )
+        XCTAssertFalse(framesEqual(window.frame, originalWindowFrame))
+
+        view.invalidate()
+
+        XCTAssertTrue(framesEqual(window.frame, originalWindowFrame))
+        XCTAssertTrue(window.isMovable)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+    }
+
+    @MainActor
+    func testPointerInteractionViewRestoresWindowFrameWhenRemovedDuringSequence() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
+        view.usesEventTrackingLoop = false
+        container.addSubview(view)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        let originalWindowFrame = window.frame
+
+        view.mouseDown(
+            with: try pointerMouseEvent(type: .leftMouseDown, location: NSPoint(x: 52, y: 56), window: window)
+        )
+        XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
+
+        window.setFrame(
+            NSRect(
+                x: originalWindowFrame.minX,
+                y: originalWindowFrame.minY - 80,
+                width: originalWindowFrame.width + 320,
+                height: originalWindowFrame.height + 80
+            ),
+            display: false
+        )
+        XCTAssertFalse(framesEqual(window.frame, originalWindowFrame))
+
+        view.removeFromSuperview()
+
+        XCTAssertTrue(framesEqual(window.frame, originalWindowFrame))
+        XCTAssertTrue(window.isMovable)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+    }
+
+    @MainActor
+    func testWindowMovementSuppressionRestoresAfterAllReasonsRelease() {
+        defer { WindowMovementSuppression.resetForTesting() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        window.isMovableByWindowBackground = true
+
         let owner = NSObject()
         XCTAssertTrue(window.isMovable)
+        XCTAssertTrue(window.isMovableByWindowBackground)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
 
         WindowMovementSuppression.suppress(window: window, owner: owner, reason: "hover")
         XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.isMovableByWindowBackground)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
 
         WindowMovementSuppression.suppress(window: window, owner: owner, reason: "pointer-sequence")
         WindowMovementSuppression.restore(owner: owner, reason: "hover")
         XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.isMovableByWindowBackground)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
 
         WindowMovementSuppression.restore(owner: owner, reason: "pointer-sequence")
         XCTAssertTrue(window.isMovable)
+        XCTAssertTrue(window.isMovableByWindowBackground)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
     }
 
     @MainActor
-    func testWindowMovementSuppressionPreservesInitiallyNonMovableWindow() {
+    func testWindowMovementSuppressionPreservesInitiallyNonInteractiveWindow() {
         defer { WindowMovementSuppression.resetForTesting() }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
@@ -285,12 +453,17 @@ final class NonWindowDraggableRegionTests: XCTestCase {
 
         let owner = NSObject()
         window.isMovable = false
+        window.isMovableByWindowBackground = false
 
         WindowMovementSuppression.suppress(window: window, owner: owner, reason: "hover")
         XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.isMovableByWindowBackground)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
 
         WindowMovementSuppression.restore(owner: owner, reason: "hover")
         XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.isMovableByWindowBackground)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
     }
 
     @MainActor
@@ -298,7 +471,7 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         defer { WindowMovementSuppression.resetForTesting() }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
-            styleMask: [.titled],
+            styleMask: [.titled, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -310,12 +483,15 @@ final class NonWindowDraggableRegionTests: XCTestCase {
         WindowMovementSuppression.suppress(window: window, owner: firstOwner, reason: "hover")
         WindowMovementSuppression.suppress(window: window, owner: secondOwner, reason: "hover")
         XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
 
         WindowMovementSuppression.restore(owner: firstOwner, reason: "hover")
         XCTAssertFalse(window.isMovable)
+        XCTAssertFalse(window.styleMask.contains(.resizable))
 
         WindowMovementSuppression.restore(owner: secondOwner, reason: "hover")
         XCTAssertTrue(window.isMovable)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
     }
 
     @MainActor
@@ -574,6 +750,13 @@ final class NonWindowDraggableRegionTests: XCTestCase {
             throw NSError(domain: "NonWindowDraggableRegionTests", code: 1, userInfo: nil)
         }
         return event
+    }
+
+    private func framesEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) < 0.5 &&
+            abs(lhs.origin.y - rhs.origin.y) < 0.5 &&
+            abs(lhs.size.width - rhs.size.width) < 0.5 &&
+            abs(lhs.size.height - rhs.size.height) < 0.5
     }
 }
 
