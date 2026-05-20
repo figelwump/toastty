@@ -97,9 +97,7 @@ cleanup() {
   local exit_code=$?
 
   if [[ -n "$ATTACHED_DEVICE" ]]; then
-    hdiutil detach "$ATTACHED_DEVICE" -quiet >/dev/null 2>&1 \
-      || hdiutil detach "$ATTACHED_DEVICE" -force -quiet >/dev/null 2>&1 \
-      || true
+    detach_disk_image_with_retries "$ATTACHED_DEVICE" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "$RW_DMG_PATH" && -f "$RW_DMG_PATH" ]]; then
@@ -110,6 +108,32 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+detach_disk_image_with_retries() {
+  local device="$1"
+  local attempts=0
+
+  [[ -n "$device" ]] || return 0
+
+  while (( attempts < 5 )); do
+    if hdiutil detach "$device" -quiet >/dev/null 2>&1; then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+
+  attempts=0
+  while (( attempts < 3 )); do
+    if hdiutil detach "$device" -force -quiet >/dev/null 2>&1; then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+
+  return 1
+}
 
 require_command() {
   local command_name="$1"
@@ -687,8 +711,7 @@ detach_writable_dmg() {
   [[ -n "$ATTACHED_DEVICE" ]] || return 0
 
   log "Detaching writable DMG"
-  hdiutil detach "$ATTACHED_DEVICE" -quiet \
-    || hdiutil detach "$ATTACHED_DEVICE" -force -quiet \
+  detach_disk_image_with_retries "$ATTACHED_DEVICE" \
     || fail "failed to detach writable DMG"
 
   ATTACHED_DEVICE=""
@@ -709,19 +732,18 @@ verify_dmg_excludes_transient_folders() {
   verify_mount_point="$(printf '%s\n' "$attach_output" | awk 'match($0, /\/Volumes\/.*/) { print substr($0, RSTART); exit }')"
 
   if [[ -z "$verify_device" || -z "$verify_mount_point" ]]; then
-    [[ -n "$verify_device" ]] && hdiutil detach "$verify_device" -quiet >/dev/null 2>&1 || true
+    detach_disk_image_with_retries "$verify_device" || true
     fail "failed to mount compressed DMG for transient folder verification"
   fi
 
   for transient_name in .fseventsd .TemporaryItems .Trashes; do
     if [[ -e "$verify_mount_point/$transient_name" ]]; then
-      hdiutil detach "$verify_device" -quiet >/dev/null 2>&1 || true
+      detach_disk_image_with_retries "$verify_device" || true
       fail "compressed DMG contains transient folder: $transient_name"
     fi
   done
 
-  hdiutil detach "$verify_device" -quiet \
-    || hdiutil detach "$verify_device" -force -quiet \
+  detach_disk_image_with_retries "$verify_device" \
     || fail "failed to detach compressed DMG verification mount"
 }
 
