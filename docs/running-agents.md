@@ -163,6 +163,7 @@ When the profile ID is `claude`, Toastty:
 1. **Creates a hook script** that calls `toastty session ingest-agent-event --source claude-hooks`
 2. **Resolves existing Claude settings** — if the profile's `argv` includes `--settings`, Toastty reads and merges with those settings rather than replacing them
 3. **Injects lifecycle hooks** into the merged Claude settings JSON under `hooks`:
+   - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
    - `PreToolUse` (wildcard matcher) — fires before any tool use
@@ -170,7 +171,7 @@ When the profile ID is `claude`, Toastty:
    - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
 4. **Writes a temporary settings file** and passes `--settings <path>` to Claude
 
-These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). Non-actionable notifications such as `auth_success` are ignored.
+These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). `SessionStart` also persists Claude native resume metadata so restored managed Claude panels can run `claude --resume <session-id>` instead of starting a fresh session. Non-actionable notifications such as `auth_success` are ignored.
 When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the temporary launch artifacts directory, but still exits successfully so Claude keeps running. Claude can retain those hook artifacts briefly after session stop so late hook invocations turn into no-op delivery instead of missing-file shell errors.
 
 ### What `pi` enables
@@ -202,10 +203,13 @@ When the agent process exits and the session is stopped, Toastty cleans up Codex
 
 For managed Codex, Claude, and Pi launches, Toastty also records the provider's
 native session ID, session file path, working directory, and capture time in the
-workspace layout. Codex and Claude records are discovered from provider session
-files; Pi records come from the bundled Pi extension. When a restored terminal
-panel has a valid record, Toastty runs the provider resume command for that
-native session instead of starting a fresh profile command. Pi resumes with
+workspace layout. Codex records are reported by hooks when available and can
+fall back to provider session-file discovery; Claude records are reported by
+the per-launch `SessionStart` hook and can fall back to provider session-file
+discovery; Pi records come from the bundled Pi extension. When a restored
+terminal panel has a valid record, Toastty runs the provider resume command for
+that native session instead of starting a fresh profile command. Claude resumes
+with `claude --resume <session-id>` and Pi resumes with
 `pi --session <session-file-path>`.
 
 Before resuming, Toastty validates that both the recorded session file and

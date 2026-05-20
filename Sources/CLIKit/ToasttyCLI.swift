@@ -23,7 +23,7 @@ enum CLICommand: Equatable {
     case sessionCodexHookEvent(sessionID: String, panelID: UUID?, event: CodexHookEvent)
     case sessionCodexNotifyCompletion(sessionID: String, panelID: UUID?, completion: CodexNotifyCompletion)
     case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
-    case sessionUpdateResumeRecord(sessionID: String, panelID: UUID?, agent: AgentKind, nativeSessionID: String, sessionFilePath: String, cwd: String)
+    case sessionUpdateResumeRecord(sessionID: String, panelID: UUID?, agent: AgentKind, nativeSessionID: String, sessionFilePath: String, cwd: String?)
     case sessionIngestAgentEvent(sessionID: String, panelID: UUID?, source: AgentEventSource)
     case sessionStop(sessionID: String, panelID: UUID?, reason: String?)
 
@@ -185,17 +185,20 @@ enum CLICommand: Equatable {
             )
 
         case .sessionUpdateResumeRecord(let sessionID, let panelID, let agent, let nativeSessionID, let sessionFilePath, let cwd):
+            var payload: [String: AutomationJSONValue] = [
+                "agent": .string(agent.rawValue),
+                "nativeSessionID": .string(nativeSessionID),
+                "sessionFilePath": .string(sessionFilePath),
+            ]
+            if let cwd {
+                payload["cwd"] = .string(cwd)
+            }
             return AutomationEventEnvelope(
                 eventType: "session.update_resume_record",
                 sessionID: sessionID,
                 panelID: panelID?.uuidString,
                 requestID: requestID,
-                payload: [
-                    "agent": .string(agent.rawValue),
-                    "nativeSessionID": .string(nativeSessionID),
-                    "sessionFilePath": .string(sessionFilePath),
-                    "cwd": .string(cwd),
-                ]
+                payload: payload
             )
 
         case .sessionIngestAgentEvent:

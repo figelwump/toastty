@@ -20,7 +20,7 @@ enum ClaudeHookEventParser {
                     kind: .working,
                     summary: "Working",
                     detail: submittedPromptDetail(from: object) ?? "Responding to your prompt"
-                )
+                ),
             ]
 
         case "PermissionRequest":
@@ -31,7 +31,7 @@ enum ClaudeHookEventParser {
                     kind: .needsApproval,
                     summary: "Needs approval",
                     detail: approvalDetail(from: object) ?? "Claude Code is waiting for approval"
-                )
+                ),
             ]
 
         case "PreToolUse":
@@ -42,7 +42,7 @@ enum ClaudeHookEventParser {
                     kind: .working,
                     summary: "Working",
                     detail: toolProgressDetail(from: object) ?? "Working inside Claude Code"
-                )
+                ),
             ]
 
         case "PostToolUse", "PostToolUseFailure":
@@ -56,15 +56,45 @@ enum ClaudeHookEventParser {
                     kind: .ready,
                     summary: "Ready",
                     detail: normalizedSummaryText(object["last_assistant_message"]) ?? "Turn complete"
-                )
+                ),
             ]
 
         case "Notification":
             return notificationCommands(sessionID: sessionID, panelID: panelID, from: object)
 
+        case "SessionStart":
+            return resumeRecordCommands(
+                sessionID: sessionID,
+                panelID: panelID,
+                from: object
+            )
+
         default:
             return []
         }
+    }
+
+    private static func resumeRecordCommands(
+        sessionID: String,
+        panelID: UUID?,
+        from object: [String: Any]
+    ) -> [CLICommand] {
+        guard let panelID,
+              let nativeSessionID = normalizedString(object["session_id"]),
+              let sessionFilePath = normalizedPathString(object["transcript_path"]) else {
+            return []
+        }
+
+        return [
+            .sessionUpdateResumeRecord(
+                sessionID: sessionID,
+                panelID: panelID,
+                agent: .claude,
+                nativeSessionID: nativeSessionID,
+                sessionFilePath: sessionFilePath,
+                cwd: normalizedPathString(object["cwd"])
+            ),
+        ]
     }
 
     private static func notificationCommands(
@@ -198,6 +228,12 @@ private extension ClaudeHookEventParser {
     static func normalizedString(_ value: Any?) -> String? {
         guard let string = value as? String else { return nil }
         return normalizeWhitespace(in: string)
+    }
+
+    static func normalizedPathString(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     static func normalizedSummaryText(_ value: Any?, limit: Int = 160) -> String? {

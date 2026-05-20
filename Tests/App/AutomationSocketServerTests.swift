@@ -462,6 +462,57 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func sessionUpdateResumeRecordFallsBackToActiveSessionCwd() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-resume-record-cwd-fallback"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.claude.rawValue),
+                    "cwd": .string("/tmp/active-session-repo"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.update_resume_record",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.claude.rawValue),
+                    "nativeSessionID": .string("db4f311b-12d0-4f61-ba81-0ae44ed10492"),
+                    "sessionFilePath": .string("/tmp/claude/session.jsonl"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        let resumeRecord = await terminalPanelResumeRecord(in: server.store, panelID: server.panelID)
+        #expect(resumeRecord?.agent == .claude)
+        #expect(resumeRecord?.nativeSessionID == "db4f311b-12d0-4f61-ba81-0ae44ed10492")
+        #expect(resumeRecord?.sessionFilePath == "/tmp/claude/session.jsonl")
+        #expect(resumeRecord?.cwd == "/tmp/active-session-repo")
+    }
+
+    @Test
     func sessionUpdateResumeRecordRejectsMismatchedAgent() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {

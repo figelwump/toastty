@@ -1069,20 +1069,23 @@ Required:
 - payload `agent`
 - payload `nativeSessionID`
 - payload `sessionFilePath`
-- payload `cwd`
+- payload `cwd` unless the active session already has a recorded working
+  directory
 
 Accepted payload keys:
 
 - `agent: lowercase agent ID`
 - `nativeSessionID: String`
 - `sessionFilePath: String`
-- `cwd: String`
+- `cwd?: String`
 
 Behavior:
 
 - `sessionID` must identify an active session
 - `panelID` must match the active session
 - `agent` must match the active session's agent
+- When payload `cwd` is omitted, Toastty uses the active session's recorded
+  working directory; if neither is available, the event is rejected
 - Toastty stores the resume record on the active terminal panel so restored
   managed Codex, Claude, and Pi panels can resume the provider-native session
   instead of starting a fresh profile command

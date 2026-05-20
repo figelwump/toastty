@@ -130,6 +130,21 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func claudePostToolUseDoesNotUpdateResumeRecordFromCommonMetadata() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUse","session_id":"claude-root","transcript_path":"/tmp/claude/session.jsonl","cwd":"/tmp/repo","tool_name":"Read"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
     func claudeNotificationIdlePromptMapsToReadyStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,
@@ -261,6 +276,68 @@ struct AgentEventParsersTests {
             panelID: nil,
             payload: Data(
                 #"{"hook_event_name":"Notification","notification_type":"some_other_type","message":"Something happened"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func claudeSessionStartHookMapsToResumeRecordUpdate() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hook_event_name":"SessionStart","session_id":"claude-root","transcript_path":"/tmp/claude/session.jsonl","cwd":"/tmp/repo"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionUpdateResumeRecord(
+                sessionID: "sess-123",
+                panelID: panelID,
+                agent: .claude,
+                nativeSessionID: "claude-root",
+                sessionFilePath: "/tmp/claude/session.jsonl",
+                cwd: "/tmp/repo"
+            ),
+        ])
+    }
+
+    @Test
+    func claudeSessionStartHookAllowsMissingCwdForAppFallback() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hook_event_name":"SessionStart","session_id":"claude-root","transcript_path":"/tmp/claude/session.jsonl"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionUpdateResumeRecord(
+                sessionID: "sess-123",
+                panelID: panelID,
+                agent: .claude,
+                nativeSessionID: "claude-root",
+                sessionFilePath: "/tmp/claude/session.jsonl",
+                cwd: nil
+            ),
+        ])
+    }
+
+    @Test
+    func claudeResumeRecordUpdateRequiresPanelID() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SessionStart","session_id":"claude-root","transcript_path":"/tmp/claude/session.jsonl","cwd":"/tmp/repo"}"#.utf8
             )
         )
 

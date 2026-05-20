@@ -87,7 +87,7 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertEqual(pendingConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"], record.nativeSessionID)
     }
 
-    func testSurfaceLaunchConfigurationUsesValidClaudeResumeRecordForRestoredPanel() throws {
+    func testSurfaceLaunchConfigurationUsesValidClaudeResumeRecordForRestoredPanel() async throws {
         let fixture = try makeRuntimeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let panelID = UUID()
@@ -123,6 +123,14 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
         registry.bind(store: store)
 
+        var submittedCommand: String?
+        registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
+            XCTAssertTrue(submit)
+            XCTAssertEqual(submittedPanelID, panelID)
+            submittedCommand = command
+            return true
+        }
+
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
 
         XCTAssertNil(launchConfiguration.initialInput)
@@ -134,6 +142,15 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         let activeSession = try XCTUnwrap(sessionRuntimeStore.sessionRegistry.activeSession(for: panelID))
         XCTAssertEqual(activeSession.agent, .claude)
         XCTAssertEqual(activeSession.status, SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
+
+        registry.markInitialSurfaceLaunchCompleted(for: panelID)
+        await Task.yield()
+        await Task.yield()
+        let command = try XCTUnwrap(submittedCommand)
+        XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="))
+        XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
+        XCTAssertTrue(command.contains("claude --settings "))
+        XCTAssertTrue(command.contains("--resume db4f311b-12d0-4f61-ba81-0ae44ed10492"))
     }
 
     func testSurfaceLaunchConfigurationUsesValidPiResumeRecordForRestoredPanel() throws {

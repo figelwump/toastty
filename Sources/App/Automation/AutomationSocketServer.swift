@@ -1383,7 +1383,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let sessionFilePath = normalizedOptionalText(event.payload.string("sessionFilePath")) else {
                 throw AutomationSocketError.invalidPayload("sessionFilePath is required")
             }
-            guard let cwd = normalizedOptionalText(event.payload.string("cwd")) else {
+            guard let cwd = normalizedOptionalText(event.payload.string("cwd"))
+                ?? normalizedOptionalText(activeSession.cwd) else {
                 throw AutomationSocketError.invalidPayload("cwd is required")
             }
 

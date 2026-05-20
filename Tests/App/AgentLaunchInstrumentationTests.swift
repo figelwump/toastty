@@ -38,6 +38,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
         XCTAssertEqual(object["model"] as? String, "sonnet")
         let hooks = try XCTUnwrap(object["hooks"] as? [String: Any])
+        XCTAssertNotNil(hooks["SessionStart"])
         XCTAssertNotNil(hooks["UserPromptSubmit"])
         XCTAssertNotNil(hooks["Stop"])
         XCTAssertNotNil(hooks["PreToolUse"])
@@ -321,6 +322,60 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(telemetryLog.contains("stderr: "))
     }
 
+    func testPreparedClaudeHookScriptForwardsHookPayload() throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-claude-hook-forward-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let capturedArgsURL = rootURL.appendingPathComponent("args.txt", isDirectory: false)
+        let capturedPayloadURL = rootURL.appendingPathComponent("payload.json", isDirectory: false)
+        let fakeCLIURL = rootURL.appendingPathComponent("toastty-cli", isDirectory: false)
+        try Data(
+            """
+            #!/bin/sh
+            printf '%s\\n' "$@" > '\(capturedArgsURL.path)'
+            cat > '\(capturedPayloadURL.path)'
+            exit 0
+
+            """.utf8
+        ).write(to: fakeCLIURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCLIURL.path)
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude"],
+            cliExecutablePath: fakeCLIURL.path,
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        let scriptURL = try XCTUnwrap(preparedLaunch.artifacts?.directoryURL.appendingPathComponent("claude-hook.sh"))
+        let payload = #"{"hook_event_name":"SessionStart","session_id":"claude-session","transcript_path":"/tmp/claude.jsonl"}"#
+        let result = try runScript(
+            at: scriptURL,
+            environment: ["TOASTTY_SOCKET_PATH": "/tmp/test-claude-hooks.sock"],
+            standardInput: Data(payload.utf8)
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertEqual(result.stderr, "")
+        XCTAssertEqual(try String(contentsOf: capturedPayloadURL, encoding: .utf8), payload)
+        XCTAssertEqual(
+            try String(contentsOf: capturedArgsURL, encoding: .utf8),
+            "session\ningest-agent-event\n--source\nclaude-hooks\n"
+        )
+    }
+
     func testPreparedCodexNotifyScriptLogsTelemetryFailuresWithoutWritingToStdout() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"
@@ -382,7 +437,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
     private func runScript(
         at scriptURL: URL,
         environment: [String: String],
-        arguments: [String] = []
+        arguments: [String] = [],
+        standardInput: Data? = nil
     ) throws -> (exitCode: Int32, stdout: String, stderr: String) {
         let process = Process()
         process.executableURL = scriptURL
@@ -393,8 +449,16 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        let inputPipe = standardInput.map { _ in Pipe() }
+        if let inputPipe {
+            process.standardInput = inputPipe
+        }
 
         try process.run()
+        if let standardInput, let inputPipe {
+            inputPipe.fileHandleForWriting.write(standardInput)
+            try inputPipe.fileHandleForWriting.close()
+        }
         process.waitUntilExit()
 
         let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""

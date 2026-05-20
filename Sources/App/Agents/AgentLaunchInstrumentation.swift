@@ -94,7 +94,7 @@ enum AgentLaunchInstrumentation {
                     source: "claude-hooks",
                     telemetryErrorLogURL: telemetryErrorLogURL,
                     stderrFallbackURL: artifactsDirectoryURL.appendingPathComponent("claude-hook.stderr", isDirectory: false),
-                    inputMode: .none
+                    inputMode: .stdinOrFirstArgument
                 ),
                 to: hookScriptURL,
                 fileManager: fileManager
@@ -348,6 +348,7 @@ private extension AgentLaunchInstrumentation {
         ]
 
         var hooks = mergedSettings["hooks"] as? [String: Any] ?? [:]
+        appendClaudeHookEntry(commandHook, to: "SessionStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "UserPromptSubmit", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "Stop", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PreToolUse", in: &hooks)
