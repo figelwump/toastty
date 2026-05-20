@@ -12,7 +12,6 @@ struct PointerInteractionRegion: NSViewRepresentable {
     var name: String
     var metadata: [String: String]
     var cursor: NSCursor?
-    var suppressesWindowMovementWhileHovered: Bool
     var onBegan: (PointerInteractionValue) -> Void
     var onChanged: (PointerInteractionValue) -> Void
     var onEnded: (PointerInteractionValue) -> Void
@@ -22,7 +21,6 @@ struct PointerInteractionRegion: NSViewRepresentable {
         name: String,
         metadata: [String: String] = [:],
         cursor: NSCursor? = nil,
-        suppressesWindowMovementWhileHovered: Bool = false,
         onBegan: @escaping (PointerInteractionValue) -> Void = { _ in },
         onChanged: @escaping (PointerInteractionValue) -> Void,
         onEnded: @escaping (PointerInteractionValue) -> Void,
@@ -31,7 +29,6 @@ struct PointerInteractionRegion: NSViewRepresentable {
         self.name = name
         self.metadata = metadata
         self.cursor = cursor
-        self.suppressesWindowMovementWhileHovered = suppressesWindowMovementWhileHovered
         self.onBegan = onBegan
         self.onChanged = onChanged
         self.onEnded = onEnded
@@ -46,7 +43,6 @@ struct PointerInteractionRegion: NSViewRepresentable {
         nsView.logName = name
         nsView.logMetadata = metadata
         nsView.cursor = cursor
-        nsView.suppressesWindowMovementWhileHovered = suppressesWindowMovementWhileHovered
         nsView.onBegan = onBegan
         nsView.onChanged = onChanged
         nsView.onEnded = onEnded
@@ -65,16 +61,6 @@ final class PointerInteractionView: NSView {
     var logName = "pointer"
     var logMetadata: [String: String] = [:]
     var usesEventTrackingLoop = true
-    var suppressesWindowMovementWhileHovered = false {
-        didSet {
-            guard suppressesWindowMovementWhileHovered != oldValue else { return }
-            if suppressesWindowMovementWhileHovered, isPointerInside {
-                suppressWindowMovementForHover()
-            } else if suppressesWindowMovementWhileHovered == false {
-                restoreHoverWindowMovementIfNeeded()
-            }
-        }
-    }
     var onBegan: ((PointerInteractionValue) -> Void)?
     var onChanged: ((PointerInteractionValue) -> Void)?
     var onEnded: ((PointerInteractionValue) -> Void)?
@@ -141,9 +127,6 @@ final class PointerInteractionView: NSView {
             if isTrackingPointerSequence == false {
                 restoreSequenceWindowMovementIfNeeded(reason: "removed-from-window")
             }
-            restoreHoverWindowMovementIfNeeded()
-        } else if suppressesWindowMovementWhileHovered, isPointerInside {
-            suppressWindowMovementForHover()
         }
     }
 
@@ -179,12 +162,10 @@ final class PointerInteractionView: NSView {
         if Thread.isMainThread {
             MainActor.assumeIsolated {
                 WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-sequence")
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-hover")
             }
         } else {
             Task { @MainActor in
                 WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-sequence")
-                WindowMovementSuppression.restore(ownerID: ownerID, reason: "pointer-hover")
             }
         }
     }
@@ -193,7 +174,6 @@ final class PointerInteractionView: NSView {
         logLifecycleDiagnostic("invalidate")
         cancelPointerSequence(reason: "invalidate")
         setPointerInside(false)
-        restoreHoverWindowMovementIfNeeded()
         onBegan = nil
         onChanged = nil
         onEnded = nil
@@ -204,13 +184,6 @@ final class PointerInteractionView: NSView {
         guard isPointerInside != isInside else { return }
         isPointerInside = isInside
         logCursorDiagnostic(isInside ? "pointer-inside-set" : "pointer-outside-set")
-        if suppressesWindowMovementWhileHovered {
-            if isInside {
-                suppressWindowMovementForHover()
-            } else {
-                restoreHoverWindowMovementIfNeeded()
-            }
-        }
         if notify {
             onHoverChanged?(isInside)
         }
@@ -342,14 +315,6 @@ final class PointerInteractionView: NSView {
         if let window {
             logWindowMovementSuppression(reason: "mouse-down", window: window)
         }
-    }
-
-    private func suppressWindowMovementForHover() {
-        WindowMovementSuppression.suppress(window: window, owner: self, reason: "pointer-hover")
-    }
-
-    private func restoreHoverWindowMovementIfNeeded() {
-        WindowMovementSuppression.restore(owner: self, reason: "pointer-hover")
     }
 
     private func restoreSequenceWindowMovementIfNeeded(reason: String) {

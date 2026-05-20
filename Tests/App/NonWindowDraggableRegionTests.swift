@@ -165,44 +165,6 @@ final class NonWindowDraggableRegionTests: XCTestCase {
     }
 
     @MainActor
-    func testPointerInteractionViewCanSuppressWindowMovementWhileHovered() throws {
-        defer { WindowMovementSuppression.resetForTesting() }
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        defer { window.orderOut(nil) }
-
-        let view = PointerInteractionView(frame: NSRect(x: 20, y: 30, width: 120, height: 40))
-        view.usesEventTrackingLoop = false
-        view.suppressesWindowMovementWhileHovered = true
-        window.contentView = view
-        window.makeKeyAndOrderFront(nil)
-
-        XCTAssertTrue(window.isMovable)
-        view.mouseEntered(
-            with: try pointerMouseEvent(type: .mouseEntered, location: NSPoint(x: 40, y: 50), window: window)
-        )
-        XCTAssertFalse(window.isMovable)
-
-        view.mouseDown(
-            with: try pointerMouseEvent(type: .leftMouseDown, location: NSPoint(x: 40, y: 50), window: window)
-        )
-        view.mouseUp(
-            with: try pointerMouseEvent(type: .leftMouseUp, location: NSPoint(x: 54, y: 50), window: window)
-        )
-        XCTAssertFalse(window.isMovable, "hover suppression should stay active after the pointer sequence restores")
-
-        view.mouseExited(
-            with: try pointerMouseEvent(type: .mouseExited, location: NSPoint(x: 180, y: 90), window: window)
-        )
-        XCTAssertTrue(window.isMovable)
-    }
-
-    @MainActor
     func testPointerInteractionViewReportsHoverExitWhenInvalidated() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 220, height: 120),

@@ -1481,38 +1481,38 @@ final class WorkspaceViewTests: XCTestCase {
     }
 
     @MainActor
-    func testWorkspaceTabStripUsesNonWindowDraggableContainer() throws {
+    func testWorkspaceTabPointerRegionCoversTopBarWithoutClaimingBlankTitlebarSpace() throws {
         let harness = try makeWorkspaceHarness()
         defer { harness.window.orderOut(nil) }
 
         harness.hostingView.layoutSubtreeIfNeeded()
-        let tabStripContainer = try XCTUnwrap(
-            findDescendantView(in: harness.hostingView, ofType: NonWindowDraggableContainerView.self)
-        )
-        let tabStripHost = try XCTUnwrap(
-            findDescendantView(in: tabStripContainer, ofType: NonWindowDraggableHostingView.self)
-        )
         let tabPointerView = try XCTUnwrap(
-            findDescendantView(in: tabStripContainer, ofType: PointerInteractionView.self)
+            findDescendantView(in: harness.hostingView, ofType: PointerInteractionView.self)
         )
 
-        XCTAssertFalse(tabStripContainer.mouseDownCanMoveWindow)
-
-        XCTAssertFalse(tabStripHost.mouseDownCanMoveWindow)
-        XCTAssertGreaterThan(tabStripContainer.frame.width, 0)
+        XCTAssertNil(findDescendantView(in: harness.hostingView, ofType: NonWindowDraggableContainerView.self))
+        XCTAssertFalse(tabPointerView.mouseDownCanMoveWindow)
+        XCTAssertGreaterThan(tabPointerView.frame.width, 0)
         XCTAssertEqual(
-            tabStripContainer.frame.width,
-            ToastyTheme.workspaceTabWidth + 30,
+            tabPointerView.frame.width,
+            ToastyTheme.workspaceTabWidth,
             accuracy: 1
         )
-        XCTAssertEqual(tabStripContainer.frame.height, ToastyTheme.topBarHeight, accuracy: 0.5)
-        XCTAssertGreaterThan(
-            tabStripContainer.frame.height,
-            ToastyTheme.workspaceTabHeight,
-            "tab strip hit region should cover the titlebar inset above the visible tabs"
-        )
         XCTAssertEqual(tabPointerView.frame.height, ToastyTheme.topBarHeight, accuracy: 0.5)
-        XCTAssertTrue(tabPointerView.suppressesWindowMovementWhileHovered)
+        XCTAssertGreaterThan(
+            tabPointerView.frame.height,
+            ToastyTheme.workspaceTabHeight,
+            "tab pointer hit region should cover the titlebar inset above the visible tab"
+        )
+
+        let pointerFrameInHost = tabPointerView.convert(tabPointerView.bounds, to: harness.hostingView)
+        let blankAccessoryGapPoint = NSPoint(x: pointerFrameInHost.maxX + 5, y: pointerFrameInHost.midY)
+        let blankGapHit = harness.hostingView.hitTest(blankAccessoryGapPoint)
+        XCTAssertFalse(blankGapHit is PointerInteractionView)
+        XCTAssertTrue(
+            blankGapHit?.mouseDownCanMoveWindow ?? true,
+            "blank titlebar space outside tab pointer regions should remain window-draggable"
+        )
     }
 
     private func assertColor(

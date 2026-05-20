@@ -740,49 +740,47 @@ struct WorkspaceView: View {
             )
         }
 
-        return NonWindowDraggableRegion {
-            WorkspaceTabStripLayout(
-                spacing: Self.workspaceTabStripSpacing,
-                accessorySpacing: Self.workspaceTabAccessorySpacing
-            ) {
-                ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
-                    let isSelected = workspace.resolvedSelectedTabID == tab.id
-                    let isDragged = activeTabDrag?.tabID == tab.id
-                    workspaceTabRow(
-                        workspaceID: workspace.id,
-                        orderedTabIDs: workspace.tabIDs,
-                        tab: tab,
-                        index: index,
-                        isSelected: isSelected,
-                        allowsManagementAffordances: allowsManagementAffordances,
-                        installsContextMenu: installsContextMenu
-                    )
-                    .zIndex(
-                        isDragged
-                            ? Double(workspace.orderedTabs.count + 1)
-                            : isSelected ? Double(workspace.orderedTabs.count) : Double(index)
-                    )
-                }
+        return WorkspaceTabStripLayout(
+            spacing: Self.workspaceTabStripSpacing,
+            accessorySpacing: Self.workspaceTabAccessorySpacing
+        ) {
+            ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
+                let isSelected = workspace.resolvedSelectedTabID == tab.id
+                let isDragged = activeTabDrag?.tabID == tab.id
+                workspaceTabRow(
+                    workspaceID: workspace.id,
+                    orderedTabIDs: workspace.tabIDs,
+                    tab: tab,
+                    index: index,
+                    isSelected: isSelected,
+                    allowsManagementAffordances: allowsManagementAffordances,
+                    installsContextMenu: installsContextMenu
+                )
+                .zIndex(
+                    isDragged
+                        ? Double(workspace.orderedTabs.count + 1)
+                        : isSelected ? Double(workspace.orderedTabs.count) : Double(index)
+                )
+            }
 
-                newTabButton
-            }
-            .frame(height: ToastyTheme.topBarHeight, alignment: .bottom)
-            .coordinateSpace(name: WorkspaceTabStripCoordinateSpace.name)
-            .onPreferenceChange(WorkspaceTabFramePreferenceKey.self) { measuredWorkspaceTabFramesByID = $0 }
-            .overlay(alignment: .bottomLeading) {
-                if let insertionIndicatorX {
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(ToastyTheme.accent)
-                        .frame(width: 2, height: ToastyTheme.workspaceTabHeight - 4)
-                        .offset(x: insertionIndicatorX - 1, y: -2)
-                        .allowsHitTesting(false)
-                }
-            }
-            .clipped()
-            .animation(.easeInOut(duration: 0.18), value: workspace.orderedTabs.map(\.id))
-            .accessibilityIdentifier("workspace.tabs.container")
-            .frame(maxHeight: .infinity, alignment: .bottom)
+            newTabButton
         }
+        .frame(height: ToastyTheme.topBarHeight, alignment: .bottom)
+        .coordinateSpace(name: WorkspaceTabStripCoordinateSpace.name)
+        .onPreferenceChange(WorkspaceTabFramePreferenceKey.self) { measuredWorkspaceTabFramesByID = $0 }
+        .overlay(alignment: .bottomLeading) {
+            if let insertionIndicatorX {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(ToastyTheme.accent)
+                    .frame(width: 2, height: ToastyTheme.workspaceTabHeight - 4)
+                    .offset(x: insertionIndicatorX - 1, y: -2)
+                    .allowsHitTesting(false)
+            }
+        }
+        .clipped()
+        .animation(.easeInOut(duration: 0.18), value: workspace.orderedTabs.map(\.id))
+        .accessibilityIdentifier("workspace.tabs.container")
+        .frame(maxHeight: .infinity, alignment: .bottom)
     }
 
     private var newTabButton: some View {
@@ -1920,7 +1918,6 @@ struct WorkspaceView: View {
                         "tabID": tab.id.uuidString,
                         "sourceIndex": "\(index)",
                     ],
-                    suppressesWindowMovementWhileHovered: true,
                     onBegan: { _ in
                         beginWorkspaceTabInteraction(tabID: tab.id)
                     },
@@ -1947,6 +1944,7 @@ struct WorkspaceView: View {
             if isHovered && showsManagementAffordances {
                 workspaceTabCloseButton(workspaceID: workspaceID, tab: tab)
                     .padding(.trailing, 10)
+                    .frame(height: ToastyTheme.workspaceTabHeight, alignment: .center)
             }
         }
         .frame(height: ToastyTheme.topBarHeight, alignment: .bottom)
