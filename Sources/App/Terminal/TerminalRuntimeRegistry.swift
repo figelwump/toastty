@@ -82,6 +82,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var restoredManagedLaunchPlanner: (any ManagedAgentLaunchPlanning)?
     private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private weak var agentCatalogProvider: (any AgentCatalogProviding)?
+    private var openExternalURL: @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }
     private var stateObservation: AnyCancellable?
     private var observedWindowFontPointsByID: [UUID: Double] = [:]
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
@@ -197,6 +198,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func setRestoredManagedLaunchSubmitterForTesting(_ submitter: ((String, Bool, UUID) -> Bool)?) {
         restoredManagedLaunchSubmitterForTesting = submitter
+    }
+
+    func setExternalURLOpenerForTesting(_ opener: @escaping @MainActor (URL) -> Bool) {
+        openExternalURL = opener
     }
 
     func setTerminalProfileProvider(
@@ -1185,14 +1190,16 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             openedRightPanelInToastty = false
             passthroughOpenResult = nil
         case .passthrough(let passthroughURL):
+            let forceExternalWebOpen = useAlternatePlacement && Self.isHTTPOrHTTPSURL(passthroughURL)
             let openResult = AppURLRouter.openResult(
                 passthroughURL,
                 preferredWindowID: preferredWindowID,
                 appStore: store,
-                useAlternatePlacement: useAlternatePlacement,
+                useAlternatePlacement: forceExternalWebOpen ? false : useAlternatePlacement,
+                preferences: forceExternalWebOpen ? URLRoutingPreferences(destination: .systemBrowser) : nil,
                 openExternally: { externalTarget in
                     passthroughExternalTarget = externalTarget
-                    return NSWorkspace.shared.open(externalTarget)
+                    return openExternalURL(externalTarget)
                 }
             )
             passthroughOpenResult = openResult
@@ -1322,6 +1329,13 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             metadata["passthrough_external_target"] = externalTarget.absoluteString
         }
         return metadata
+    }
+
+    private static func isHTTPOrHTTPSURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else {
+            return false
+        }
+        return scheme == "http" || scheme == "https"
     }
 
     private static func appURLRouteDescription(_ route: AppURLRoute) -> String {

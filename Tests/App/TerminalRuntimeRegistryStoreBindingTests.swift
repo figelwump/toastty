@@ -330,10 +330,9 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testAlternateOpenCommandClickLinkUsesConfiguredAlternateNewTabPlacement() throws {
+    func testAlternateOpenCommandClickWebLinkOpensExternalBrowser() throws {
         var workspace = WorkspaceState.bootstrap(title: "One")
         let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
-        let sourceTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
         workspace.focusedPanelModeActive = true
         workspace.focusModeRootNodeID = workspace.layoutTree.slotContaining(panelID: sourcePanelID)?.slotID
         let windowID = UUID()
@@ -358,6 +357,11 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             )
         )
         let registry = TerminalRuntimeRegistry()
+        var externalURL: URL?
+        registry.setExternalURLOpenerForTesting { url in
+            externalURL = url
+            return true
+        }
         registry.bind(store: store)
 
         XCTAssertTrue(
@@ -369,17 +373,11 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
 
         let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspace.id])
-        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
-        XCTAssertTrue(try XCTUnwrap(workspaceAfter.tab(id: sourceTabID)).focusedPanelModeActive)
-        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected browser panel in new tab")
-            return
-        }
-        XCTAssertEqual(webState.definition, .browser)
-        XCTAssertEqual(webState.initialURL, "https://example.com/new-tab")
+        XCTAssertEqual(externalURL?.absoluteString, "https://example.com/new-tab")
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 0)
+        XCTAssertTrue(workspaceAfter.focusedPanelModeActive)
         try StateValidator.validate(store.state)
     }
 

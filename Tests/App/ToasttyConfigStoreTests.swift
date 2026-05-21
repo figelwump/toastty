@@ -149,8 +149,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # url-opening-browser-placement = rightPanel
 
             # url-opening-alternate-browser-placement controls how Toastty
-            # places alternate browser opens such as terminal
-            # Cmd+Shift+click links.
+            # places alternate internal browser opens such as terminal
+            # Cmd+Shift+click local HTML file links.
             # Supported values: rightPanel, newTab. Legacy rootRight is still accepted.
             # The default is newTab.
             # url-opening-alternate-browser-placement = newTab
