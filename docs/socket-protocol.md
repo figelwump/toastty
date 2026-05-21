@@ -272,9 +272,11 @@ Notable action-specific behavior:
     session; it does not auto-create one.
   - `args.expectedRevision` must match the current Scratchpad document revision.
   - Replacements apply sequentially against the latest intermediate HTML.
-  - Each `oldText` must be non-empty and occur exactly once. Empty replacement
-    arrays, missing text, and duplicate text are rejected without modifying the
-    document.
+  - Each `oldText` is matched byte-for-byte against the current HTML and must
+    be non-empty and occur exactly once. Empty replacement arrays, missing
+    text, and duplicate text are rejected without modifying the document.
+  - Every accepted patch advances `revision` by one, even when every
+    replacement is a no-op that leaves the content unchanged.
   - The final HTML snapshot is stored in the Scratchpad document store and is
     limited to 1,048,576 UTF-8 bytes.
   - Successful patches still reload the sandboxed generated iframe from the
@@ -494,10 +496,13 @@ Supported action IDs:
   - `args.patch` is exact-text replacement JSON:
     `{"replacements":[{"oldText":"...","newText":"..."}]}`
   - updates only the existing Scratchpad linked to the active managed session
+  - matches each `oldText` byte-for-byte against the current HTML
   - rejects stale revisions, empty replacement arrays, empty `oldText`, missing
     `oldText`, duplicate `oldText`, oversized patch JSON, and oversized final
     HTML without modifying the document
   - applies multiple replacements sequentially
+  - advances `revision` by one for every accepted patch, including no-op
+    replacements that leave the content unchanged
   - accepts `panel.scratchpad.patchContent` as a compatibility alias
   - returns `windowID`, `workspaceID`, `panelID`, `documentID`,
     `previousRevision`, `revision`, `appliedEdits`, and `created=false`

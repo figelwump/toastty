@@ -1007,14 +1007,6 @@ final class AppStore: ObservableObject {
             throw ScratchpadPanelError.missingSession(request.sessionID)
         }
 
-        let sourcePanelID = session.panelID
-        guard let sourceSelection = state.workspaceSelection(containingPanelID: sourcePanelID) else {
-            throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
-        }
-        guard case .terminal = sourceSelection.workspace.panelState(for: sourcePanelID) else {
-            throw ScratchpadPanelError.sourcePanelIsNotTerminal(sourcePanelID)
-        }
-
         guard let existing = linkedScratchpadPanel(sessionID: session.sessionID) else {
             throw ScratchpadPanelError.missingLinkedScratchpad(session.sessionID)
         }
@@ -1022,11 +1014,14 @@ final class AppStore: ObservableObject {
             throw ScratchpadPanelError.missingScratchpadState(existing.panelID)
         }
 
+        let sourcePanelID = session.panelID
+        let sourceWorkspaceID = state.workspaceSelection(containingPanelID: sourcePanelID)?.workspaceID
+            ?? existing.workspaceID
         let sessionLink = ScratchpadSessionLink(
             sessionID: session.sessionID,
             agent: session.agent,
             sourcePanelID: sourcePanelID,
-            sourceWorkspaceID: sourceSelection.workspaceID,
+            sourceWorkspaceID: sourceWorkspaceID,
             repoRoot: session.repoRoot,
             cwd: session.cwd,
             displayTitle: session.displayTitleOverride,

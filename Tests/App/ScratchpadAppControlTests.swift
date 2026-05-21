@@ -228,6 +228,30 @@ struct ScratchpadAppControlTests {
     }
 
     @Test
+    func patchContentRejectsEmptyOrWhitespacePatchArg() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        _ = try fixture.createLinkedScratchpad()
+
+        for invalid in ["", "   ", "\n\t "] {
+            do {
+                _ = try fixture.executor.runAction(
+                    id: AppControlActionID.panelScratchpadPatchContent.rawValue,
+                    args: [
+                        "sessionID": .string(fixture.sessionID),
+                        "patch": .string(invalid),
+                        "expectedRevision": .int(1),
+                    ]
+                )
+                Issue.record("empty/whitespace patch should be rejected for input \(invalid.debugDescription)")
+            } catch AutomationSocketError.invalidPayload(let message) {
+                #expect(message == "patch must be non-empty JSON")
+            } catch {
+                Issue.record("unexpected error for input \(invalid.debugDescription): \(error)")
+            }
+        }
+    }
+
+    @Test
     func patchContentFailureLeavesPanelAndDocumentUnchanged() throws {
         let fixture = try ScratchpadAppControlFixture()
         let linked = try fixture.createLinkedScratchpad()

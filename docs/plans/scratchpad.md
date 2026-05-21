@@ -248,7 +248,8 @@ Behavior:
 - require `expectedRevision` to match the current document revision
 - reject empty replacement arrays
 - apply replacements sequentially against the latest intermediate HTML
-- require each `oldText` to be non-empty and occur exactly once
+- require each `oldText` to be non-empty and occur exactly once, matched
+  byte-for-byte (no Unicode normalization or case folding)
 - validate the final full HTML snapshot against the Scratchpad content limit
 - apply read, revision check, patch, validation, and write under the document
   store lock so concurrent patches with the same revision cannot both succeed

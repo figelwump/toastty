@@ -274,17 +274,49 @@ struct ScratchpadDocumentStoreTests {
                 sessionLink: nil
             )
         }
-        #expect(throws: ScratchpadDocumentStoreError.invalidPatch("expected JSON object with replacements entries containing oldText and newText")) {
-            try fixture.store.applyPatch(
+        do {
+            _ = try fixture.store.applyPatch(
                 documentID: created.documentID,
                 patchJSON: #"{"replacements":[{"oldText":"first","newText":"second","extra":true}]}"#,
+                expectedRevision: 1,
+                sessionLink: nil
+            )
+            Issue.record("unknown patch fields should be rejected")
+        } catch ScratchpadDocumentStoreError.invalidPatch(let reason) {
+            #expect(reason.contains("unknown field(s): extra"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+        let reloaded = try #require(try fixture.store.load(documentID: created.documentID))
+        #expect(reloaded.revision == 1)
+        #expect(reloaded.content == "first")
+    }
+
+    @Test
+    func applyPatchRequiresByteExactMatchEvenWhenUnicodeEquivalent() throws {
+        let fixture = try ScratchpadDocumentStoreFixture()
+        // Content stores the precomposed form U+00F1 ("ñ").
+        let created = try fixture.store.createDocument(
+            title: nil,
+            content: "ma\u{00F1}ana",
+            sessionLink: nil
+        )
+        // Patch quotes the canonically equivalent decomposed form ("n" + U+0303).
+        let patch = try patchJSON([
+            .init(oldText: "man\u{0303}ana", newText: "morning"),
+        ])
+
+        #expect(throws: ScratchpadDocumentStoreError.oldTextNotFound(replacementIndex: 1)) {
+            try fixture.store.applyPatch(
+                documentID: created.documentID,
+                patchJSON: patch,
                 expectedRevision: 1,
                 sessionLink: nil
             )
         }
         let reloaded = try #require(try fixture.store.load(documentID: created.documentID))
         #expect(reloaded.revision == 1)
-        #expect(reloaded.content == "first")
+        #expect(reloaded.content == "ma\u{00F1}ana")
     }
 
     @Test
@@ -396,10 +428,7 @@ struct ScratchpadDocumentStoreTests {
             content: "needle",
             sessionLink: nil
         )
-        let resultLock = NSLock()
-        var successfulRevisions: [Int] = []
-        var staleFailures = 0
-        var unexpectedErrors: [String] = []
+        let collector = ConcurrentPatchCollector()
 
         DispatchQueue.concurrentPerform(iterations: 16) { index in
             do {
@@ -409,26 +438,39 @@ struct ScratchpadDocumentStoreTests {
                     expectedRevision: 1,
                     sessionLink: nil
                 )
-                resultLock.withLock {
-                    successfulRevisions.append(outcome.revision)
-                }
+                collector.appendSuccess(outcome.revision)
             } catch ScratchpadDocumentStoreError.staleRevision(expectedRevision: 1, currentRevision: 2) {
-                resultLock.withLock {
-                    staleFailures += 1
-                }
+                collector.incrementStaleFailures()
             } catch {
-                resultLock.withLock {
-                    unexpectedErrors.append(String(describing: error))
-                }
+                collector.appendUnexpected(String(describing: error))
             }
         }
 
         let reloaded = try #require(try fixture.store.load(documentID: created.documentID))
-        #expect(successfulRevisions == [2])
-        #expect(staleFailures == 15)
-        #expect(unexpectedErrors.isEmpty)
+        #expect(collector.successfulRevisions == [2])
+        #expect(collector.staleFailures == 15)
+        #expect(collector.unexpectedErrors.isEmpty)
         #expect(reloaded.revision == 2)
         #expect(reloaded.content.hasPrefix("patched-"))
+    }
+}
+
+private final class ConcurrentPatchCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var successfulRevisions: [Int] = []
+    private(set) var staleFailures = 0
+    private(set) var unexpectedErrors: [String] = []
+
+    func appendSuccess(_ revision: Int) {
+        lock.withLock { successfulRevisions.append(revision) }
+    }
+
+    func incrementStaleFailures() {
+        lock.withLock { staleFailures += 1 }
+    }
+
+    func appendUnexpected(_ description: String) {
+        lock.withLock { unexpectedErrors.append(description) }
     }
 }
 

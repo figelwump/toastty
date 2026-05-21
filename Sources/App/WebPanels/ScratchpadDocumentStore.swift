@@ -95,8 +95,8 @@ enum ScratchpadDocumentStoreError: LocalizedError, Equatable {
             return "scratchpad patch replacement \(replacementIndex) oldText must not be empty"
         case .oldTextNotFound(let replacementIndex):
             return "scratchpad patch replacement \(replacementIndex) oldText was not found"
-        case .oldTextNotUnique(let replacementIndex, let matchCount):
-            return "scratchpad patch replacement \(replacementIndex) oldText must occur exactly once; found at least \(matchCount) matches"
+        case .oldTextNotUnique(let replacementIndex, _):
+            return "scratchpad patch replacement \(replacementIndex) oldText must occur exactly once; found multiple matches"
         case .staleRevision(let expectedRevision, let currentRevision):
             return "expectedRevision \(expectedRevision) is stale; current revision is \(currentRevision)"
         case .missingDocument(let documentID):
@@ -256,7 +256,6 @@ final class ScratchpadDocumentStore {
             try validateContent(patchedContent)
 
             document.revision += 1
-            document.contentType = .html
             document.content = patchedContent
             document.updatedAt = now
             document.sessionLink = sessionLink ?? document.sessionLink
@@ -313,16 +312,33 @@ final class ScratchpadDocumentStore {
         }
 
         do {
-            let patch = try JSONDecoder().decode(ScratchpadContentPatch.self, from: data)
+            let patch = try decoder.decode(ScratchpadContentPatch.self, from: data)
             guard patch.replacements.isEmpty == false else {
                 throw ScratchpadDocumentStoreError.emptyPatch
             }
             return patch
         } catch let error as ScratchpadDocumentStoreError {
             throw error
+        } catch let error as DecodingError {
+            throw ScratchpadDocumentStoreError.invalidPatch(Self.describe(decodingError: error))
         } catch {
-            throw ScratchpadDocumentStoreError.invalidPatch("expected JSON object with replacements entries containing oldText and newText")
+            throw ScratchpadDocumentStoreError.invalidPatch("patch must be JSON with a non-empty replacements array of objects containing oldText and newText")
         }
+    }
+
+    private static func describe(decodingError error: DecodingError) -> String {
+        let context: DecodingError.Context
+        switch error {
+        case .dataCorrupted(let ctx),
+             .keyNotFound(_, let ctx),
+             .typeMismatch(_, let ctx),
+             .valueNotFound(_, let ctx):
+            context = ctx
+        @unknown default:
+            return error.localizedDescription
+        }
+        let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+        return path.isEmpty ? context.debugDescription : "\(context.debugDescription) (at \(path))"
     }
 
     private func applyPatch(_ patch: ScratchpadContentPatch, to content: String) throws -> String {
@@ -344,7 +360,7 @@ final class ScratchpadDocumentStore {
                 )
             }
 
-            guard let range = patchedContent.range(of: replacement.oldText) else {
+            guard let range = patchedContent.range(of: replacement.oldText, options: [.literal]) else {
                 throw ScratchpadDocumentStoreError.oldTextNotFound(replacementIndex: replacementIndex)
             }
             patchedContent.replaceSubrange(range, with: replacement.newText)
@@ -355,7 +371,7 @@ final class ScratchpadDocumentStore {
     private func occurrenceCount(of needle: String, in haystack: String, maximum: Int) -> Int {
         var count = 0
         var searchRange = haystack.startIndex..<haystack.endIndex
-        while let range = haystack.range(of: needle, options: [], range: searchRange) {
+        while let range = haystack.range(of: needle, options: [.literal], range: searchRange) {
             count += 1
             if count >= maximum {
                 return count

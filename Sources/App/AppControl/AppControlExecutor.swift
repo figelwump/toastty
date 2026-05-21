@@ -746,6 +746,9 @@ private extension AppControlExecutor {
         guard let patch = args.stringValue("patch") else {
             throw AutomationSocketError.invalidPayload("patch is required")
         }
+        guard patch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw AutomationSocketError.invalidPayload("patch must be non-empty JSON")
+        }
         guard let expectedRevision = args.intValue("expectedRevision") else {
             throw AutomationSocketError.invalidPayload("expectedRevision is required")
         }
