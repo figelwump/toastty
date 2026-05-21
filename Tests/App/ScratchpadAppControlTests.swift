@@ -110,6 +110,208 @@ struct ScratchpadAppControlTests {
     }
 
     @Test
+    func patchContentUpdatesLinkedScratchpadWithoutChangingFocus() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linked = try fixture.createLinkedScratchpad()
+        let destination = try fixture.createDestinationSession()
+        let focusedPanelBefore = fixture.store.state.workspacesByID[fixture.workspaceID]?.focusedPanelID
+        let patch = try patchJSON([
+            .init(oldText: "<p>Initial</p>", newText: "<p>Patched</p>"),
+        ])
+
+        let response = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadPatchContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "patch": .string(patch),
+                "expectedRevision": .int(1),
+            ]
+        )
+        let result = try #require(response.result)
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspace.panelState(for: linked.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: linked.documentID))
+
+        #expect(destination.panelID == focusedPanelBefore)
+        #expect(response.didMutateState)
+        #expect(result.string("windowID") == fixture.windowID.uuidString)
+        #expect(result.string("workspaceID") == fixture.workspaceID.uuidString)
+        #expect(result.string("panelID") == linked.panelID.uuidString)
+        #expect(result.string("documentID") == linked.documentID.uuidString)
+        #expect(result.int("previousRevision") == 1)
+        #expect(result.int("revision") == 2)
+        #expect(result.int("appliedEdits") == 1)
+        #expect(result.bool("created") == false)
+        #expect(workspace.focusedPanelID == focusedPanelBefore)
+        #expect(webState.scratchpad?.revision == 2)
+        #expect(webState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
+        #expect(document.revision == 2)
+        #expect(document.content == "<p>Patched</p>")
+        #expect(document.sessionLink?.sessionID == fixture.sessionID)
+    }
+
+    @Test
+    func patchContentAliasResolvesToPatchAction() {
+        #expect(AppControlActionID.resolve("panel.scratchpad.patchContent") == .panelScratchpadPatchContent)
+    }
+
+    @Test
+    func patchContentRequiresExistingLinkedScratchpad() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let workspaceBefore = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelCountBefore = workspaceBefore.allPanelsByID.count
+        let patch = try patchJSON([
+            .init(oldText: "missing", newText: "patched"),
+        ])
+
+        do {
+            _ = try fixture.executor.runAction(
+                id: AppControlActionID.panelScratchpadPatchContent.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                    "patch": .string(patch),
+                    "expectedRevision": .int(1),
+                ]
+            )
+            Issue.record("patch should reject sessions without a linked Scratchpad")
+        } catch AutomationSocketError.invalidPayload(let message) {
+            #expect(message == "no Scratchpad is linked to active session: \(fixture.sessionID)")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        let workspaceAfter = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        #expect(workspaceAfter.allPanelsByID.count == panelCountBefore)
+    }
+
+    @Test
+    func patchContentRequiresPatchAndExpectedRevision() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        _ = try fixture.createLinkedScratchpad()
+        let patch = try patchJSON([
+            .init(oldText: "<p>Initial</p>", newText: "<p>Patched</p>"),
+        ])
+
+        do {
+            _ = try fixture.executor.runAction(
+                id: AppControlActionID.panelScratchpadPatchContent.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                    "expectedRevision": .int(1),
+                ]
+            )
+            Issue.record("patch should require patch")
+        } catch AutomationSocketError.invalidPayload(let message) {
+            #expect(message == "patch is required")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        do {
+            _ = try fixture.executor.runAction(
+                id: AppControlActionID.panelScratchpadPatchContent.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                    "patch": .string(patch),
+                ]
+            )
+            Issue.record("patch should require expectedRevision")
+        } catch AutomationSocketError.invalidPayload(let message) {
+            #expect(message == "expectedRevision is required")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func patchContentRejectsEmptyOrWhitespacePatchArg() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        _ = try fixture.createLinkedScratchpad()
+
+        for invalid in ["", "   ", "\n\t "] {
+            do {
+                _ = try fixture.executor.runAction(
+                    id: AppControlActionID.panelScratchpadPatchContent.rawValue,
+                    args: [
+                        "sessionID": .string(fixture.sessionID),
+                        "patch": .string(invalid),
+                        "expectedRevision": .int(1),
+                    ]
+                )
+                Issue.record("empty/whitespace patch should be rejected for input \(invalid.debugDescription)")
+            } catch AutomationSocketError.invalidPayload(let message) {
+                #expect(message == "patch must be non-empty JSON")
+            } catch {
+                Issue.record("unexpected error for input \(invalid.debugDescription): \(error)")
+            }
+        }
+    }
+
+    @Test
+    func patchContentFailureLeavesPanelAndDocumentUnchanged() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linked = try fixture.createLinkedScratchpad()
+        let patch = try patchJSON([
+            .init(oldText: "<p>Initial</p>", newText: "<p>Patched</p>"),
+        ])
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runAction(
+                id: AppControlActionID.panelScratchpadPatchContent.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                    "patch": .string(patch),
+                    "expectedRevision": .int(0),
+                ]
+            )
+        }
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspace.panelState(for: linked.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+        let document = try #require(try fixture.documentStore.load(documentID: linked.documentID))
+
+        #expect(webState.scratchpad?.revision == 1)
+        #expect(document.revision == 1)
+        #expect(document.content == "<p>Initial</p>")
+    }
+
+    @Test
+    func patchContentRejectsMissingDocument() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let linked = try fixture.createLinkedScratchpad()
+        try FileManager.default.removeItem(at: fixture.documentStore.documentURL(for: linked.documentID))
+        let patch = try patchJSON([
+            .init(oldText: "<p>Initial</p>", newText: "<p>Patched</p>"),
+        ])
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runAction(
+                id: AppControlActionID.panelScratchpadPatchContent.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                    "patch": .string(patch),
+                    "expectedRevision": .int(1),
+                ]
+            )
+        }
+        let workspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let panelState = try #require(workspace.panelState(for: linked.panelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should stay a web panel")
+            return
+        }
+
+        #expect(webState.scratchpad?.revision == 1)
+    }
+
+    @Test
     func createPolicyNewCreatesFreshLinkedScratchpadAndUnbindsPrevious() throws {
         let fixture = try ScratchpadAppControlFixture()
         let first = try fixture.executor.runAction(
@@ -739,6 +941,12 @@ struct ScratchpadAppControlTests {
             Issue.record("unexpected error: \(error)")
         }
     }
+}
+
+private func patchJSON(_ replacements: [ScratchpadContentReplacement]) throws -> String {
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(ScratchpadContentPatch(replacements: replacements))
+    return try #require(String(data: data, encoding: .utf8))
 }
 
 @MainActor

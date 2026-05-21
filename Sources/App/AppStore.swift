@@ -181,6 +181,23 @@ struct ScratchpadPanelSetContentOutcome: Equatable, Sendable {
     let created: Bool
 }
 
+struct ScratchpadPanelPatchContentRequest: Equatable, Sendable {
+    var sessionID: String
+    var patch: String
+    var expectedRevision: Int
+}
+
+struct ScratchpadPanelPatchContentOutcome: Equatable, Sendable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+    let documentID: UUID
+    let previousRevision: Int
+    let revision: Int
+    let appliedEditCount: Int
+    let created: Bool
+}
+
 struct ScratchpadPanelCreateOutcome: Equatable, Sendable {
     let windowID: UUID
     let workspaceID: UUID
@@ -248,6 +265,7 @@ enum ScratchpadPanelError: LocalizedError, Equatable {
     case updatePanelFailed(UUID)
     case missingScratchpadState(UUID)
     case missingDocument(UUID)
+    case missingLinkedScratchpad(String)
     case targetSessionOutsideScratchpadTab(String)
     case sessionAlreadyLinkedToScratchpad(String, UUID)
 
@@ -267,6 +285,8 @@ enum ScratchpadPanelError: LocalizedError, Equatable {
             return "scratchpad panel has no scratchpad state: \(panelID.uuidString)"
         case .missingDocument(let documentID):
             return "scratchpad document is missing: \(documentID.uuidString)"
+        case .missingLinkedScratchpad(let sessionID):
+            return "no Scratchpad is linked to active session: \(sessionID)"
         case .targetSessionOutsideScratchpadTab(let sessionID):
             return "target session is not in the Scratchpad tab: \(sessionID)"
         case .sessionAlreadyLinkedToScratchpad(let sessionID, let panelID):
@@ -975,6 +995,72 @@ final class AppStore: ObservableObject {
             documentID: document.documentID,
             revision: document.revision,
             created: true
+        )
+    }
+
+    func patchScratchpadContentForSession(
+        request: ScratchpadPanelPatchContentRequest,
+        sessionRuntimeStore: SessionRuntimeStore,
+        documentStore: ScratchpadDocumentStore
+    ) throws -> ScratchpadPanelPatchContentOutcome {
+        guard let session = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: request.sessionID) else {
+            throw ScratchpadPanelError.missingSession(request.sessionID)
+        }
+
+        guard let existing = linkedScratchpadPanel(sessionID: session.sessionID) else {
+            throw ScratchpadPanelError.missingLinkedScratchpad(session.sessionID)
+        }
+        guard let scratchpad = existing.webState.scratchpad else {
+            throw ScratchpadPanelError.missingScratchpadState(existing.panelID)
+        }
+
+        let sourcePanelID = session.panelID
+        let sourceWorkspaceID = state.workspaceSelection(containingPanelID: sourcePanelID)?.workspaceID
+            ?? existing.workspaceID
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: session.sessionID,
+            agent: session.agent,
+            sourcePanelID: sourcePanelID,
+            sourceWorkspaceID: sourceWorkspaceID,
+            repoRoot: session.repoRoot,
+            cwd: session.cwd,
+            displayTitle: session.displayTitleOverride,
+            startedAt: session.startedAt
+        )
+        let patchOutcome = try documentStore.applyPatch(
+            documentID: scratchpad.documentID,
+            patchJSON: request.patch,
+            expectedRevision: request.expectedRevision,
+            sessionLink: sessionLink
+        )
+        let nextScratchpad = ScratchpadState(
+            documentID: patchOutcome.documentID,
+            sessionLink: sessionLink,
+            revision: patchOutcome.revision
+        )
+        guard send(
+            .updateScratchpadPanelState(
+                panelID: existing.panelID,
+                scratchpad: nextScratchpad,
+                title: nil
+            )
+        ) else {
+            throw ScratchpadPanelError.updatePanelFailed(existing.panelID)
+        }
+        markScratchpadUpdatedIfUnfocused(
+            workspaceID: existing.workspaceID,
+            panelID: existing.panelID
+        )
+
+        return ScratchpadPanelPatchContentOutcome(
+            windowID: existing.windowID,
+            workspaceID: existing.workspaceID,
+            panelID: existing.panelID,
+            documentID: patchOutcome.documentID,
+            previousRevision: patchOutcome.previousRevision,
+            revision: patchOutcome.revision,
+            appliedEditCount: patchOutcome.appliedEditCount,
+            created: false
         )
     }
 

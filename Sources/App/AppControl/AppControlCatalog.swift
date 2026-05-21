@@ -42,6 +42,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case panelCreateBrowser = "panel.create.browser"
     case panelCreateLocalDocument = "panel.create.local-document"
     case panelScratchpadSetContent = "panel.scratchpad.set-content"
+    case panelScratchpadPatchContent = "panel.scratchpad.patch-content"
     case panelScratchpadRebind = "panel.scratchpad.rebind"
     case panelScratchpadExport = "panel.scratchpad.export"
     case panelLocalDocumentSearchStart = "panel.local-document.search.start"
@@ -87,6 +88,8 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return ["panel.create.localDocument", "panel.create.markdown"]
         case .panelScratchpadSetContent:
             return ["panel.scratchpad.setContent"]
+        case .panelScratchpadPatchContent:
+            return ["panel.scratchpad.patchContent"]
         case .panelScratchpadRebind:
             return ["panel.scratchpad.bind"]
         case .panelLocalDocumentSearchStart:
@@ -269,6 +272,19 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 ],
                 aliases: aliases
             )
+        case .panelScratchpadPatchContent:
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Patch the existing Scratchpad linked to an active session.",
+                selectors: [],
+                parameters: [
+                    .sessionID(required: true),
+                    .patch(required: true),
+                    .expectedRevision(required: true),
+                ],
+                aliases: aliases
+            )
         case .panelScratchpadRebind:
             return .init(
                 id: rawValue,
@@ -408,6 +424,10 @@ private extension AppControlParameterDescriptor {
 
     static func content(required: Bool) -> Self {
         .init(name: "content", summary: "Inline content payload. Use filePath for non-trivial HTML.", valueType: .string, required: required)
+    }
+
+    static func patch(required: Bool) -> Self {
+        .init(name: "patch", summary: "Scratchpad patch JSON. Use --stdin patch for non-trivial patches.", valueType: .string, required: required)
     }
 
     static func expectedRevision(required: Bool) -> Self {

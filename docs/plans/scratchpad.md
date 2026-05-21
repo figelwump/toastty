@@ -12,8 +12,11 @@ architecture lives in `docs/plans/web-panels.md`.
 2. V1 is agent initiated and session linked: an agent writes content for its
    current managed session, and Toastty creates or updates one scratchpad for
    that session.
-3. V1 uses whole-document replacement through `panel.scratchpad.set-content`.
-   Patch, append, streaming, comments, and user-to-agent feedback are deferred.
+3. V1 uses whole-document replacement through `panel.scratchpad.set-content`
+   for first publish and full redraws. `panel.scratchpad.patch-content` adds
+   source-level exact-text replacements for smaller targeted updates after a
+   Scratchpad already exists. Append, streaming, comments, live DOM mutation,
+   and user-to-agent feedback are deferred.
 4. Agent-authored JavaScript is allowed, but only inside a sandboxed generated
    content surface with no direct native bridge access.
 5. Scratchpad content persists outside workspace layout snapshots. The layout
@@ -66,7 +69,8 @@ Build:
 - `ScratchpadPanelHostView`
 - bundled `WebPanels/ScratchpadApp/`
 - app-control actions `panel.scratchpad.set-content`,
-  `panel.scratchpad.rebind`, and `panel.scratchpad.export`
+  `panel.scratchpad.patch-content`, `panel.scratchpad.rebind`, and
+  `panel.scratchpad.export`
 - session-linked create-or-update behavior
 - manual blank Scratchpad tabs in the right panel
 - bind, rebind, unbind, export, and open-in-browser panel affordances
@@ -81,7 +85,7 @@ Still out of scope for v1:
 - scratchpad-to-agent feedback queues
 - terminal injection
 - MCP server support
-- append, patch, or DOM-fragment update APIs
+- append, streaming, or DOM-fragment update APIs
 - true `splitBesideSource` placement
 - background tab placement
 - freeform native drawing tools
@@ -211,6 +215,63 @@ Response:
 
 Agents should prefer `filePath` for non-trivial HTML so shell quoting does not
 become part of the protocol.
+
+Incremental patch action:
+
+```text
+panel.scratchpad.patch-content
+```
+
+Inputs:
+
+- `sessionID`: required for the session-linked Scratchpad
+- `expectedRevision`: required guard against patching stale HTML
+- `patch`: required JSON string, preferably passed with `--stdin patch`
+
+Patch JSON shape:
+
+```json
+{
+  "replacements": [
+    {
+      "oldText": "<section id=\"risk\">...</section>",
+      "newText": "<section id=\"risk\">...</section>"
+    }
+  ]
+}
+```
+
+Behavior:
+
+- resolve the active session by `sessionID`
+- require an existing Scratchpad linked to that session; do not auto-create
+- require `expectedRevision` to match the current document revision
+- reject empty replacement arrays
+- apply replacements sequentially against the latest intermediate HTML
+- require each `oldText` to be non-empty and occur exactly once, matched
+  byte-for-byte (no Unicode normalization or case folding)
+- validate the final full HTML snapshot against the Scratchpad content limit
+- apply read, revision check, patch, validation, and write under the document
+  store lock so concurrent patches with the same revision cannot both succeed
+- persist the complete updated HTML snapshot and increment the revision, even
+  when a replacement leaves content unchanged
+- update Scratchpad panel state and mark the panel updated if it is unfocused
+
+Response:
+
+- `windowID`
+- `workspaceID`
+- `panelID`
+- `documentID`
+- `previousRevision`
+- `revision`
+- `appliedEdits`
+- `created` (`false`)
+
+The runtime still reloads the sandboxed generated iframe from full
+`contentHTML` after a successful patch. Patch reduces agent payload size and
+overwrite risk, but it does not preserve scroll, focus, animation, or generated
+JavaScript state.
 
 Do not add `stream-start`, `stream-chunk`, or `stream-finish` in v1. Agents do
 not naturally stream tool calls. If a live-feeling sequence is useful, agents
@@ -453,7 +514,7 @@ Recommended implementation order:
 After v1 is proven, revisit:
 
 - true `splitBesideSource`
-- append or patch APIs
+- append APIs and richer patch formats if exact-text replacement proves too limited
 - comments and feedback routing
 - Markdown-to-agent review feedback
 - MCP wrapper over the existing app-control socket
