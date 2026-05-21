@@ -37,10 +37,10 @@ When creating or replacing a visual Scratchpad artifact and a Toastty-managed se
 
 The loading screen is intentionally minimal: a title (if known) and a subtle animated indicator. Do not pre-mock the structure of the final artifact. Pre-mocking biases the design toward the same look every time and flattens visual variety across runs.
 
-Publish the loading screen from the repo root:
+Publish the loading screen:
 
 ```bash
-.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
+~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
   "Architecture Map"
 ```
 
@@ -49,7 +49,7 @@ than an update to the current one, pass `--new` on this first loading-screen
 publish only:
 
 ```bash
-.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
+~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
   --new \
   "Architecture Map"
 ```
@@ -230,17 +230,17 @@ If export reports that the session has no linked Scratchpad, ask the user to bin
 
 ## Publish
 
-From the repo root, pipe generated HTML into the helper:
+Pipe generated HTML into the helper:
 
 ```bash
-.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
+~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
   --title "Architecture Map" < /tmp/scratchpad.html
 ```
 
 Or publish an already-generated HTML file:
 
 ```bash
-.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
+~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
   --title "Data Flow" \
   --file /tmp/data-flow.html
 ```
@@ -248,7 +248,7 @@ Or publish an already-generated HTML file:
 For an explicit new/separate Scratchpad, add `--new` to the first publish:
 
 ```bash
-.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
+~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
   --new \
   --title "Data Flow" \
   --file /tmp/data-flow.html
