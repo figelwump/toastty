@@ -22,6 +22,24 @@ final class SessionRuntimeStore: ObservableObject {
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
 
+    private struct WorkspaceStatusDiagnosticRow: Equatable {
+        let sessionID: String
+        let panelID: UUID
+        let agent: AgentKind
+        let statusKind: SessionStatusKind
+        let isActive: Bool
+
+        var summary: String {
+            [
+                panelID.uuidString,
+                sessionID,
+                agent.rawValue,
+                statusKind.rawValue,
+                isActive ? "active" : "stopped",
+            ].joined(separator: ":")
+        }
+    }
+
     init(
         sendSessionStatusNotification: @escaping SessionStatusNotificationHandler = SessionRuntimeStore.defaultSendSessionStatusNotification,
         isApplicationActive: @escaping ApplicationActiveHandler = SessionRuntimeStore.defaultIsApplicationActive
@@ -91,7 +109,7 @@ final class SessionRuntimeStore: ObservableObject {
                 displayTitleOverride: displayTitleOverride
             )
         )
-        publish(nextRegistry)
+        publish(nextRegistry, reason: "start_session")
     }
 
     func startProcessWatch(
@@ -139,7 +157,7 @@ final class SessionRuntimeStore: ObservableObject {
             repoRoot: repoRoot,
             at: now
         )
-        publish(nextRegistry)
+        publish(nextRegistry, reason: "update_files")
     }
 
     func updateStatus(
@@ -178,7 +196,7 @@ final class SessionRuntimeStore: ObservableObject {
                 )
             )
         }
-        publish(nextRegistry)
+        publish(nextRegistry, reason: "update_status")
         clearUnreadForManagedSessionIfNeeded(
             previousRecord: previousRecord,
             sessionID: sessionID,
@@ -523,7 +541,7 @@ final class SessionRuntimeStore: ObservableObject {
         } else {
             nextRegistry.stopSession(sessionID: sessionID, at: now)
         }
-        publish(nextRegistry)
+        publish(nextRegistry, reason: "stop_session")
     }
 
     func stopSessionForPanel(
@@ -543,7 +561,7 @@ final class SessionRuntimeStore: ObservableObject {
         } else {
             nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
         }
-        publish(nextRegistry)
+        publish(nextRegistry, reason: "stop_session_for_panel")
     }
 
     func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
@@ -561,13 +579,13 @@ final class SessionRuntimeStore: ObservableObject {
     func setLaterFlag(sessionID: String, isFlagged: Bool) {
         var nextRegistry = sessionRegistry
         nextRegistry.setLaterFlag(sessionID: sessionID, isFlagged: isFlagged)
-        publish(nextRegistry)
+        publish(nextRegistry, reason: "set_later_flag")
     }
 
     func toggleLaterFlag(sessionID: String) {
         var nextRegistry = sessionRegistry
         nextRegistry.toggleLaterFlag(sessionID: sessionID)
-        publish(nextRegistry)
+        publish(nextRegistry, reason: "toggle_later_flag")
     }
 
     @discardableResult
@@ -649,12 +667,77 @@ final class SessionRuntimeStore: ObservableObject {
             }
         }
 
-        publish(nextRegistry)
+        publish(nextRegistry, reason: "synchronize_app_state")
     }
 
-    private func publish(_ nextRegistry: SessionRegistry) {
+    private func publish(_ nextRegistry: SessionRegistry, reason: String) {
         guard nextRegistry != sessionRegistry else { return }
+        logWorkspaceStatusSnapshotChanges(
+            previousRegistry: sessionRegistry,
+            nextRegistry: nextRegistry,
+            reason: reason
+        )
         sessionRegistry = nextRegistry
+    }
+
+    private func logWorkspaceStatusSnapshotChanges(
+        previousRegistry: SessionRegistry,
+        nextRegistry: SessionRegistry,
+        reason: String
+    ) {
+        let workspaceIDs = Set(
+            previousRegistry.sessionsByID.values.map(\.workspaceID) +
+                nextRegistry.sessionsByID.values.map(\.workspaceID)
+        )
+
+        for workspaceID in workspaceIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            let previousRows = workspaceStatusDiagnosticRows(
+                previousRegistry.workspaceStatuses(for: workspaceID)
+            )
+            let nextRows = workspaceStatusDiagnosticRows(
+                nextRegistry.workspaceStatuses(for: workspaceID)
+            )
+            guard previousRows != nextRows else { continue }
+
+            ToasttyLog.info(
+                "Workspace sidebar session status snapshot changed",
+                category: .state,
+                metadata: [
+                    "source": "session_runtime_store",
+                    "reason": reason,
+                    "workspace_id": workspaceID.uuidString,
+                    "previous_count": String(previousRows.count),
+                    "next_count": String(nextRows.count),
+                    "previous_rows": workspaceStatusDiagnosticSummary(previousRows),
+                    "next_rows": workspaceStatusDiagnosticSummary(nextRows),
+                ]
+            )
+        }
+    }
+
+    private func workspaceStatusDiagnosticRows(
+        _ statuses: [WorkspaceSessionStatus]
+    ) -> [WorkspaceStatusDiagnosticRow] {
+        statuses.map { status in
+            WorkspaceStatusDiagnosticRow(
+                sessionID: status.sessionID,
+                panelID: status.panelID,
+                agent: status.agent,
+                statusKind: status.status.kind,
+                isActive: status.isActive
+            )
+        }
+    }
+
+    private func workspaceStatusDiagnosticSummary(
+        _ rows: [WorkspaceStatusDiagnosticRow],
+        limit: Int = 12
+    ) -> String {
+        guard rows.isEmpty == false else { return "none" }
+
+        let visibleRows = rows.prefix(limit).map(\.summary)
+        let suffix = rows.count > limit ? ["+\(rows.count - limit)"] : []
+        return (visibleRows + suffix).joined(separator: ",")
     }
 
     private func updateSuppressedCodexVisibleErrorDetailIfNeeded(

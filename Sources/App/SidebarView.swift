@@ -21,6 +21,46 @@ private struct SidebarSemanticTextBridge: NSViewRepresentable {
     }
 }
 
+private struct SidebarSessionRowDiagnosticState: Equatable {
+    var windowID: UUID
+    var workspaceID: UUID
+    var sessionID: String
+    var panelID: UUID
+    var agent: AgentKind
+    var statusKind: SessionStatusKind
+    var chipKind: SessionStatusKind?
+    var indicatorState: SessionStatusIndicatorState
+    var showsUnreadSessionAccent: Bool
+    var canFocusPanel: Bool
+    var isActivePanel: Bool
+    var isLaterFlagged: Bool
+    var isFlashing: Bool
+    var selectedWorkspaceID: UUID?
+    var selectedPanelID: UUID?
+
+    var displayState: String {
+        if let chipKind {
+            return "\(chipKind.rawValue)_chip"
+        }
+        if indicatorState == .spinner {
+            return "working_spinner"
+        }
+        if indicatorState == .dot {
+            return "dot_indicator"
+        }
+        if isFlashing {
+            return "flash"
+        }
+        if showsUnreadSessionAccent {
+            return "unread_accent"
+        }
+        if isActivePanel {
+            return "active_panel"
+        }
+        return "plain"
+    }
+}
+
 struct SidebarView: View {
     struct WorkspaceDragState: Equatable {
         let workspaceID: UUID
@@ -53,6 +93,7 @@ struct SidebarView: View {
     @State private var sidebarFlashResetWorkItem: DispatchWorkItem?
     @State private var activeWorkspaceDrag: WorkspaceDragState?
     @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
+    @State private var sidebarSessionRowDiagnosticsByPanelID: [UUID: SidebarSessionRowDiagnosticState] = [:]
 
     /// Fixed height for the session detail text area (1 line at the detail
     /// font size). Reserving a constant height prevents the sidebar from
@@ -247,6 +288,10 @@ struct SidebarView: View {
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
             pruneTransientWorkspaceDragState()
+            pruneSidebarSessionRowDiagnostics()
+        }
+        .onChange(of: sessionRuntimeStore.sessionRegistry) { _, _ in
+            pruneSidebarSessionRowDiagnostics()
         }
         .onChange(of: store.pendingRenameWorkspaceRequest) { _, _ in
             guard let request = store.consumePendingWorkspaceRenameRequest(windowID: windowID),
@@ -596,20 +641,40 @@ struct SidebarView: View {
             for: workspaceSessionStatus.panelID,
             in: workspace
         )
+        let chipKind = Self.sessionStatusChipKind(
+            for: status,
+            showsUnreadSessionAccent: showsUnreadSessionAccent
+        )
         let accessibilityLabel = Self.sessionAccessibilityLabel(
             agentName: workspaceSessionStatus.displayTitle,
-            chipKind: Self.sessionStatusChipKind(
-                for: status,
-                showsUnreadSessionAccent: showsUnreadSessionAccent
-            ),
+            chipKind: chipKind,
             detailText: normalizedSessionDetail(status.detail),
             cwd: Self.abbreviatedPathLabel(workspaceSessionStatus.cwd),
             isLaterFlagged: isLaterFlagged
         )
         let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
-        let isActivePanel = store.selectedWorkspaceID(in: windowID) == workspace.id
-            && store.selectedWorkspace(in: windowID)?.focusedPanelID == workspaceSessionStatus.panelID
+        let selectedWorkspaceID = store.selectedWorkspaceID(in: windowID)
+        let selectedPanelID = store.selectedWorkspace(in: windowID)?.focusedPanelID
+        let isActivePanel = selectedWorkspaceID == workspace.id
+            && selectedPanelID == workspaceSessionStatus.panelID
         let isFlashing = flashingSessionPanelID == workspaceSessionStatus.panelID
+        let rowDiagnosticState = SidebarSessionRowDiagnosticState(
+            windowID: windowID,
+            workspaceID: workspace.id,
+            sessionID: workspaceSessionStatus.sessionID,
+            panelID: workspaceSessionStatus.panelID,
+            agent: workspaceSessionStatus.agent,
+            statusKind: status.kind,
+            chipKind: chipKind,
+            indicatorState: Self.sessionIndicatorState(for: status.kind),
+            showsUnreadSessionAccent: showsUnreadSessionAccent,
+            canFocusPanel: canFocusPanel,
+            isActivePanel: isActivePanel,
+            isLaterFlagged: isLaterFlagged,
+            isFlashing: isFlashing,
+            selectedWorkspaceID: selectedWorkspaceID,
+            selectedPanelID: selectedPanelID
+        )
 
         Group {
             if canFocusPanel {
@@ -677,6 +742,12 @@ struct SidebarView: View {
         .background {
             SidebarSemanticTextBridge(text: accessibilityLabel)
                 .frame(width: 0, height: 0)
+        }
+        .onAppear {
+            logSidebarSessionRowDiagnosticIfChanged(rowDiagnosticState, reason: "appear")
+        }
+        .onChange(of: rowDiagnosticState) { _, nextState in
+            logSidebarSessionRowDiagnosticIfChanged(nextState, reason: "changed")
         }
     }
 
@@ -1107,6 +1178,55 @@ struct SidebarView: View {
         return isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear
     }
 
+    private func logSidebarSessionRowDiagnosticIfChanged(
+        _ nextState: SidebarSessionRowDiagnosticState,
+        reason: String
+    ) {
+        let previousState = sidebarSessionRowDiagnosticsByPanelID[nextState.panelID]
+        guard previousState != nextState else { return }
+
+        var metadata = sidebarSessionRowDiagnosticMetadata(nextState)
+        metadata["source"] = "sidebar_view"
+        metadata["reason"] = reason
+        metadata["previous_state"] = previousState?.displayState ?? "none"
+        metadata["previous_status_kind"] = previousState?.statusKind.rawValue ?? "none"
+        metadata["previous_chip_kind"] = previousState?.chipKind?.rawValue ?? "none"
+        metadata["previous_unread_accent"] = previousState?.showsUnreadSessionAccent == true ? "true" : "false"
+        metadata["previous_active_panel"] = previousState?.isActivePanel == true ? "true" : "false"
+
+        ToasttyLog.info(
+            "Sidebar session row display state changed",
+            category: .state,
+            metadata: metadata
+        )
+        sidebarSessionRowDiagnosticsByPanelID[nextState.panelID] = nextState
+    }
+
+    private func sidebarSessionRowDiagnosticMetadata(
+        _ state: SidebarSessionRowDiagnosticState
+    ) -> [String: String] {
+        [
+            "window_id": state.windowID.uuidString,
+            "workspace_id": state.workspaceID.uuidString,
+            "session_id": state.sessionID,
+            "panel_id": state.panelID.uuidString,
+            "agent": state.agent.rawValue,
+            "status_kind": state.statusKind.rawValue,
+            "chip_kind": state.chipKind?.rawValue ?? "none",
+            "indicator_state": Self.sessionIndicatorLogValue(state.indicatorState),
+            "display_state": state.displayState,
+            "shows_unread_session_accent": state.showsUnreadSessionAccent ? "true" : "false",
+            "can_focus_panel": state.canFocusPanel ? "true" : "false",
+            "is_active_panel": state.isActivePanel ? "true" : "false",
+            "is_later_flagged": state.isLaterFlagged ? "true" : "false",
+            "is_flashing": state.isFlashing ? "true" : "false",
+            "selected_workspace_id": state.selectedWorkspaceID?.uuidString ?? "none",
+            "selected_panel_id": state.selectedPanelID?.uuidString ?? "none",
+            "selected_workspace_matches": state.selectedWorkspaceID == state.workspaceID ? "true" : "false",
+            "selected_panel_matches": state.selectedPanelID == state.panelID ? "true" : "false",
+        ]
+    }
+
     private func sessionStatusChip(kind: SessionStatusKind) -> some View {
         Text(Self.sessionStatusChipLabel(for: kind))
             .font(ToastyTheme.fontWorkspaceSessionChip)
@@ -1255,6 +1375,24 @@ struct SidebarView: View {
         }
     }
 
+    private func pruneSidebarSessionRowDiagnostics() {
+        guard let window = store.window(id: windowID) else {
+            sidebarSessionRowDiagnosticsByPanelID = [:]
+            return
+        }
+
+        let activePanelIDs = Set(
+            window.workspaceIDs.flatMap { workspaceID in
+                sessionRuntimeStore
+                    .workspaceStatuses(for: workspaceID)
+                    .map(\.panelID)
+            }
+        )
+        sidebarSessionRowDiagnosticsByPanelID = sidebarSessionRowDiagnosticsByPanelID.filter {
+            activePanelIDs.contains($0.key)
+        }
+    }
+
     private func pruneTransientWorkspaceDragState() {
         guard let window = store.window(id: windowID) else {
             measuredWorkspaceRowFramesByID = [:]
@@ -1369,6 +1507,17 @@ struct SidebarView: View {
             return .spinner
         case .needsApproval, .ready, .error, .idle:
             return .hidden
+        }
+    }
+
+    static func sessionIndicatorLogValue(_ state: SessionStatusIndicatorState) -> String {
+        switch state {
+        case .hidden:
+            return "hidden"
+        case .spinner:
+            return "spinner"
+        case .dot:
+            return "dot"
         }
     }
 

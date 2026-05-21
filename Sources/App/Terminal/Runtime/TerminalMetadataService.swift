@@ -1613,8 +1613,27 @@ final class TerminalMetadataService {
             return
         }
 
+        let previousWorkspaceResumeRecords = managedAgentResumeRecordSummaries(in: workspace)
+        let previousOtherResumeRecords = managedAgentResumeRecordSummaries(
+            in: workspace,
+            excludingPanelID: panelID
+        )
         let didClear = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
         if didClear {
+            let nextWorkspace = store.state.workspacesByID[workspaceID]
+            let nextWorkspaceResumeRecords = nextWorkspace.map {
+                managedAgentResumeRecordSummaries(in: $0)
+            } ?? []
+            let nextOtherResumeRecords = nextWorkspace.map {
+                managedAgentResumeRecordSummaries(in: $0, excludingPanelID: panelID)
+            } ?? []
+            let targetHasResumeRecordAfter: Bool
+            if let nextPanelState = nextWorkspace?.panelState(for: panelID),
+               case .terminal(let nextTerminalState) = nextPanelState {
+                targetHasResumeRecordAfter = nextTerminalState.resumeRecord != nil
+            } else {
+                targetHasResumeRecordAfter = false
+            }
             ToasttyLog.info(
                 "Cleared managed agent native resume record because terminal command finished",
                 category: .terminal,
@@ -1622,9 +1641,46 @@ final class TerminalMetadataService {
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
                     "agent": terminalState.resumeRecord?.agent.rawValue ?? "unknown",
+                    "target_has_resume_record_before": "true",
+                    "target_has_resume_record_after": targetHasResumeRecordAfter ? "true" : "false",
+                    "workspace_resume_record_count_before": String(previousWorkspaceResumeRecords.count),
+                    "workspace_resume_record_count_after": String(nextWorkspaceResumeRecords.count),
+                    "other_resume_record_count_before": String(previousOtherResumeRecords.count),
+                    "other_resume_record_count_after": String(nextOtherResumeRecords.count),
+                    "other_resume_records_before": managedAgentResumeRecordLogSummary(previousOtherResumeRecords),
+                    "other_resume_records_after": managedAgentResumeRecordLogSummary(nextOtherResumeRecords),
                 ]
             )
         }
+    }
+
+    private func managedAgentResumeRecordSummaries(
+        in workspace: WorkspaceState,
+        excludingPanelID: UUID? = nil
+    ) -> [String] {
+        workspace.allPanelsByID
+            .sorted { $0.key.uuidString < $1.key.uuidString }
+            .compactMap { panelID, panelState -> String? in
+                if let excludingPanelID, panelID == excludingPanelID {
+                    return nil
+                }
+                guard case .terminal(let terminalState) = panelState,
+                      let resumeRecord = terminalState.resumeRecord else {
+                    return nil
+                }
+                return "\(panelID.uuidString):\(resumeRecord.agent.rawValue)"
+            }
+    }
+
+    private func managedAgentResumeRecordLogSummary(
+        _ records: [String],
+        limit: Int = 12
+    ) -> String {
+        guard records.isEmpty == false else { return "none" }
+
+        let visibleRecords = records.prefix(limit)
+        let suffix = records.count > limit ? ["+\(records.count - limit)"] : []
+        return (Array(visibleRecords) + suffix).joined(separator: ",")
     }
 
     private func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
