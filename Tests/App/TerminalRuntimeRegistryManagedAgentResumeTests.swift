@@ -1,3 +1,4 @@
+#if TOASTTY_HAS_GHOSTTY_KIT
 import CoreState
 import Foundation
 import XCTest
@@ -532,3 +533,4 @@ private final class StubManagedAgentNativeSessionObserver: ManagedAgentNativeSes
     func startObservation(_: ManagedAgentNativeSessionObservationContext) {}
     func cancelObservation(sessionID _: String) {}
 }
+#endif

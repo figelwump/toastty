@@ -449,16 +449,14 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
-        let inputPipe = standardInput.map { _ in Pipe() }
-        if let inputPipe {
-            process.standardInput = inputPipe
-        }
+        let inputPipe = Pipe()
+        process.standardInput = inputPipe
 
         try process.run()
-        if let standardInput, let inputPipe {
+        if let standardInput {
             inputPipe.fileHandleForWriting.write(standardInput)
-            try inputPipe.fileHandleForWriting.close()
         }
+        try inputPipe.fileHandleForWriting.close()
         process.waitUntilExit()
 
         let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
