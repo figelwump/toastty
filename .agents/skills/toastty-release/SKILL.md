@@ -18,19 +18,20 @@ Use this workflow when the user asks to cut or prepare a Toastty release build a
    - `sv exec -- scripts/remote/test.sh --`
    Use `./scripts/automation/check.sh` only when the user explicitly asks for a local gate, the remote path is unavailable, or you are intentionally validating local-only release workflow changes.
 4. Run `scripts/release/release.sh` with the requested `TOASTTY_VERSION`, `TOASTTY_BUILD_NUMBER`, and signing/notary secrets.
-5. Verify that `artifacts/release/<version>-<build>/release-metadata.env`, `ghostty-metadata.env`, `sparkle-metadata.env`, and `Toastty-<version>.dmg` all exist and are non-empty, then read the metadata files.
+5. Verify that `artifacts/release/<version>-<build>/release-metadata.env`, `artifacts/release/<version>-<build>/ghostty-metadata.env`, `artifacts/release/<version>-<build>/sparkle-metadata.env`, and `artifacts/release/<version>-<build>/Toastty-<version>.dmg` all exist and are non-empty, then read the metadata files.
 6. Confirm `RELEASE_SOURCE_COMMIT` is available in the local clone before inspecting history or writing notes.
 7. Use `.agents/skills/toastty-release/assets/release-notes-template.md` as the starting structure for `RELEASE_NOTES_PATH`.
 8. Read several prior `artifacts/release/**/release-notes.md` files, prioritizing the most recent releases, so the new notes follow Toastty's established house style.
 9. Inspect the Toastty diff and commit history from `RELEASE_PREVIOUS_TAG` to `RELEASE_SOURCE_COMMIT`.
-10. Write `release-notes.md` at `RELEASE_NOTES_PATH`, grounded in the recorded metadata rather than the current `HEAD`.
-11. Let the user review or edit `release-notes.md` if they want changes before publication.
-12. Hand off the generated release directory for later publication:
-   - `release-metadata.env`
-   - `ghostty-metadata.env`
-   - `sparkle-metadata.env`
-   - `release-notes.md`
-   - `Toastty-<version>.dmg`
+10. Write `artifacts/release/<version>-<build>/release-notes.md` at `RELEASE_NOTES_PATH`, grounded in the recorded metadata rather than the current `HEAD`.
+11. Let the user review or edit `artifacts/release/<version>-<build>/release-notes.md` if they want changes before publication.
+12. Hand off the generated release directory and artifacts for later publication, always using repo-relative paths:
+   - `artifacts/release/<version>-<build>/`
+   - `artifacts/release/<version>-<build>/release-metadata.env`
+   - `artifacts/release/<version>-<build>/ghostty-metadata.env`
+   - `artifacts/release/<version>-<build>/sparkle-metadata.env`
+   - `artifacts/release/<version>-<build>/release-notes.md`
+   - `artifacts/release/<version>-<build>/Toastty-<version>.dmg`
 13. Stop after the build-and-draft handoff unless the user explicitly asks to continue into publication. If they do, open `../toastty-publish/SKILL.md` and follow that workflow.
 
 ## Important invariants
@@ -43,12 +44,14 @@ Use this workflow when the user asks to cut or prepare a Toastty release build a
 - Run automated validation before `scripts/release/release.sh`; prefer the remote smoke and test wrappers unless the user explicitly scopes the gate to a local run or the remote path is unavailable.
 - Draft release notes from the recorded metadata and git history, not from the current `HEAD`.
 - The generated release directory contains the handoff artifacts for the publish step:
-  - `release-metadata.env`
-  - `ghostty-metadata.env`
-  - `sparkle-metadata.env`
-  - `release-notes.md`
-  - `Toastty-<version>.dmg`
+  - `artifacts/release/<version>-<build>/release-metadata.env`
+  - `artifacts/release/<version>-<build>/ghostty-metadata.env`
+  - `artifacts/release/<version>-<build>/sparkle-metadata.env`
+  - `artifacts/release/<version>-<build>/release-notes.md`
+  - `artifacts/release/<version>-<build>/Toastty-<version>.dmg`
 - Keep `artifacts/release/<version>-<build>/` intact between the build and publish phases.
+- In user-facing handoffs, always include the release directory path `artifacts/release/<version>-<build>/` and use repo-relative paths for every generated artifact. Do not refer to artifact files by bare filename only, such as `release-notes.md` or `Toastty-<version>.dmg`.
+- If metadata provides an absolute path such as `RELEASE_NOTES_PATH`, convert it to the equivalent repo-relative path before presenting it to the user.
 
 ## Ghostty artifact install
 
