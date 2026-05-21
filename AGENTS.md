@@ -93,7 +93,6 @@ sv exec -- scripts/remote/test.sh -- ...
 - Xcode `Release` configuration is still a worktree run when launched from the generated scheme; do not treat it as production logging.
 - Runtime-isolated logs rotate at 5 MB to `<runtime-home>/logs/toastty.previous.log`; production logs rotate under `~/Library/Logs/Toastty/`.
 - Useful env vars: `TOASTTY_LOG_LEVEL`, `TOASTTY_LOG_FILE` (`none` disables), `TOASTTY_LOG_STDERR=1`, `TOASTTY_LOG_DISABLE=1`.
-- Key instrumentation points: `TerminalHostView` (key events), `GhosttyRuntimeManager` (action routing), `TerminalRuntimeRegistry` (dispatch), `AppReducer` (split resize/equalize).
 
 ## Menu And Interaction Gotchas
 

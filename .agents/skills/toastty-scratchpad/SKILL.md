@@ -149,6 +149,8 @@ Patch rules:
 
 - `expectedRevision` is required and must match the current Scratchpad revision.
 - `patch` is a JSON string, best passed with `--stdin patch`.
+- Patch JSON is limited to 262,144 UTF-8 bytes.
+- The top-level patch object only accepts `replacements`; each replacement object only accepts `oldText` and `newText`. Unknown fields are rejected.
 - `replacements` must be non-empty.
 - Each `oldText` must be non-empty and occur exactly once in the current intermediate HTML.
 - Replacements apply sequentially, so earlier edits can affect later matches.

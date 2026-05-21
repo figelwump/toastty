@@ -267,7 +267,10 @@ Notable action-specific behavior:
 - `panel.scratchpad.patch-content`
   - requires `args.sessionID`, `args.expectedRevision`, and `args.patch`.
   - `args.patch` is a JSON string. Prefer passing it with CLI `--stdin patch`.
+  - Patch JSON is limited to 262,144 UTF-8 bytes.
   - The patch shape is `{"replacements":[{"oldText":"...","newText":"..."}]}`.
+  - The top-level patch object only accepts `replacements`; each replacement
+    object only accepts `oldText` and `newText`. Unknown fields are rejected.
   - The action only updates an existing Scratchpad linked to the active managed
     session; it does not auto-create one.
   - `args.expectedRevision` must match the current Scratchpad document revision.
@@ -495,6 +498,9 @@ Supported action IDs:
   - requires `args.sessionID`, `args.expectedRevision`, and `args.patch`
   - `args.patch` is exact-text replacement JSON:
     `{"replacements":[{"oldText":"...","newText":"..."}]}`
+  - patch JSON is limited to 262,144 UTF-8 bytes
+  - the top-level patch object only accepts `replacements`; each replacement
+    object only accepts `oldText` and `newText`; unknown fields are rejected
   - updates only the existing Scratchpad linked to the active managed session
   - matches each `oldText` byte-for-byte against the current HTML
   - rejects stale revisions, empty replacement arrays, empty `oldText`, missing

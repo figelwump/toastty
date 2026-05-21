@@ -141,7 +141,7 @@ Descriptors can also advertise compatibility aliases. Those aliases are accepted
 Scratchpad actions are intended for agent and automation integrations:
 
 - `panel.scratchpad.set-content` creates or updates the Scratchpad linked to an active managed session. It requires `sessionID` plus either `filePath` or `content`, accepts optional `title`, `expectedRevision`, and `createPolicy`, resolves relative `filePath` values from the active session's `cwd` when available, and returns `windowID`, `workspaceID`, `panelID`, `documentID`, `revision`, and `created`. `createPolicy` defaults to `reuse`; set `createPolicy=new` to create a fresh session-linked Scratchpad and leave the previous one open but unbound.
-- `panel.scratchpad.patch-content` updates the existing Scratchpad linked to an active managed session without sending a full HTML snapshot. It requires `sessionID`, `expectedRevision`, and `patch` as a JSON string, returns `windowID`, `workspaceID`, `panelID`, `documentID`, `previousRevision`, `revision`, `appliedEdits`, and `created=false`, and does not create a Scratchpad when none is linked. Patch replacements apply sequentially; each `oldText` must be non-empty and occur exactly once in the current intermediate HTML. Successful patches still reload the generated Scratchpad iframe from the updated full HTML snapshot.
+- `panel.scratchpad.patch-content` updates the existing Scratchpad linked to an active managed session without sending a full HTML snapshot. It requires `sessionID`, `expectedRevision`, and `patch` as a JSON string, returns `windowID`, `workspaceID`, `panelID`, `documentID`, `previousRevision`, `revision`, `appliedEdits`, and `created=false`, and does not create a Scratchpad when none is linked. Patch JSON is limited to 262,144 UTF-8 bytes. The top-level patch object only accepts `replacements`; each replacement object only accepts `oldText` and `newText`, and unknown fields are rejected. Patch replacements apply sequentially; each `oldText` must be non-empty and occur exactly once in the current intermediate HTML. Successful patches still reload the generated Scratchpad iframe from the updated full HTML snapshot.
 - `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
 - `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
 
@@ -338,7 +338,7 @@ toastty session stop --session <id> [--panel <id>] [--reason <text>]
 
 ### `session ingest-agent-event`
 
-Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, and Pi instrumentation — it reads structured event JSON from stdin and translates it into `session status` and `session stop` calls over the socket.
+Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, Codex hook/notify events, and provider-native resume-record updates.
 
 ```
 toastty session ingest-agent-event --source <source> [--session <id>] [--panel <id>]
