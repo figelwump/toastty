@@ -15,6 +15,9 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     let detail: String
     let rootInputFingerprint: String?
     let rootThreadID: String?
+    let rootTurnID: String?
+    let completionThreadID: String?
+    let completionTurnID: String?
     let nativeSessionID: String?
     let nativeSessionFilePath: String?
 
@@ -23,6 +26,9 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         detail: String,
         rootInputFingerprint: String? = nil,
         rootThreadID: String? = nil,
+        rootTurnID: String? = nil,
+        completionThreadID: String? = nil,
+        completionTurnID: String? = nil,
         nativeSessionID: String? = nil,
         nativeSessionFilePath: String? = nil
     ) {
@@ -30,6 +36,9 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         self.detail = detail
         self.rootInputFingerprint = rootInputFingerprint
         self.rootThreadID = rootThreadID
+        self.rootTurnID = rootTurnID
+        self.completionThreadID = completionThreadID
+        self.completionTurnID = completionTurnID
         self.nativeSessionID = nativeSessionID
         self.nativeSessionFilePath = nativeSessionFilePath
     }
@@ -295,7 +304,8 @@ private extension CodexSessionLogWatcher {
             return CodexSessionLogEvent(
                 kind: .turnStarted,
                 detail: normalizedSummaryText(message["message"], limit: 140) ?? "Responding to your prompt",
-                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: normalizedString(message["message"]))
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: normalizedString(message["message"])),
+                rootTurnID: eventTurnID(from: object, payload: payload, message: message)
             )
 
         case "task_started":
@@ -324,7 +334,9 @@ private extension CodexSessionLogWatcher {
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .taskCompleted,
-                detail: normalizedSummaryText(message["last_agent_message"], limit: 240) ?? "Turn complete"
+                detail: normalizedSummaryText(message["last_agent_message"], limit: 240) ?? "Turn complete",
+                completionThreadID: eventThreadID(payload: payload, message: message),
+                completionTurnID: eventTurnID(from: object, payload: payload, message: message)
             )
 
         case "turn_aborted":
@@ -396,7 +408,8 @@ private extension CodexSessionLogWatcher {
             return CodexSessionLogEvent(
                 kind: .turnStarted,
                 detail: userTurnDetail(from: operation.payload) ?? "Responding to your prompt",
-                rootInputFingerprint: userTurnInputFingerprint(from: operation.payload)
+                rootInputFingerprint: userTurnInputFingerprint(from: operation.payload),
+                rootTurnID: operationExplicitTurnID(from: operation.payload)
             )
 
         case "interrupt":
@@ -579,6 +592,43 @@ private extension CodexSessionLogWatcher {
             return timestamp
         }
         return fallback
+    }
+
+    static func operationExplicitTurnID(from payload: [String: Any]) -> String? {
+        for key in ["turn_id", "id", "request_id"] {
+            if let value = normalizedString(payload[key]) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    static func eventThreadID(
+        payload: [String: Any],
+        message: [String: Any]
+    ) -> String? {
+        for key in ["thread_id"] {
+            if let value = normalizedString(message[key])
+                ?? normalizedString(payload[key]) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    static func eventTurnID(
+        from object: [String: Any],
+        payload: [String: Any],
+        message: [String: Any]
+    ) -> String? {
+        for key in ["turn_id", "id", "request_id"] {
+            if let value = normalizedString(message[key])
+                ?? normalizedString(payload[key])
+                ?? normalizedString(object[key]) {
+                return value
+            }
+        }
+        return nil
     }
 
     static func userTurnDetail(from payload: [String: Any]) -> String? {

@@ -92,6 +92,24 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
+    func testPrepareCodexLaunchUsesHooksOnlyStatusTrackingWithoutSessionLogFallback() throws {
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: ["codex", "--yolo"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            codexStatusTrackingSource: .hooks
+        )
+
+        XCTAssertEqual(preparedLaunch.argv, ["codex", "--yolo"])
+        XCTAssertNil(preparedLaunch.artifacts)
+        XCTAssertEqual(preparedLaunch.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
+        XCTAssertNil(preparedLaunch.environment["CODEX_TUI_RECORD_SESSION"])
+        XCTAssertNil(preparedLaunch.environment["CODEX_TUI_SESSION_LOG_PATH"])
+    }
+
     func testPrepareCodexLaunchInsertsNotifyAfterWrappedCodexCommand() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"

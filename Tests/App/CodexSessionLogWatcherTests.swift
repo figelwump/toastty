@@ -313,7 +313,7 @@ final class CodexSessionLogWatcherTests: XCTestCase {
 
         watcher.start()
         try append(
-            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-4","msg":{"type":"task_complete","last_agent_message":"Finished updating the launch path."}}}"# + "\n",
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-4","msg":{"type":"task_complete","thread_id":"thread-root","last_agent_message":"Finished updating the launch path."}}}"# + "\n",
             to: logURL
         )
 
@@ -322,7 +322,12 @@ final class CodexSessionLogWatcherTests: XCTestCase {
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
-            CodexSessionLogEvent(kind: .taskCompleted, detail: "Finished updating the launch path.")
+            CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: "Finished updating the launch path.",
+                completionThreadID: "thread-root",
+                completionTurnID: "turn-4"
+            )
         ])
     }
 
@@ -354,7 +359,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
             CodexSessionLogEvent(
                 kind: .turnStarted,
                 detail: "summarize skills in here",
-                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "summarize skills in here")
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "summarize skills in here"),
+                rootTurnID: "turn-3"
             )
         ])
     }
@@ -624,7 +630,11 @@ final class CodexSessionLogWatcherTests: XCTestCase {
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
-            CodexSessionLogEvent(kind: .taskCompleted, detail: "Finished updating the launch path.")
+            CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: "Finished updating the launch path.",
+                completionTurnID: "turn-nul"
+            )
         ])
     }
 
@@ -705,7 +715,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
             CodexSessionLogEvent(
                 kind: .turnStarted,
                 detail: "summarize skills in here",
-                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "summarize skills in here")
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "summarize skills in here"),
+                rootTurnID: "turn-3"
             )
         ])
     }

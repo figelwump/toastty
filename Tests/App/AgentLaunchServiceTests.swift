@@ -292,7 +292,8 @@ struct AgentLaunchServiceTests {
             agentCatalogProvider: agentCatalogProvider,
             nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) },
             cliExecutablePathProvider: { "/bin/sh" },
-            socketPathProvider: { "/tmp/toastty-tests.sock" }
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
         )
 
         let result = try service.launch(profileID: "codex")
@@ -357,6 +358,7 @@ struct AgentLaunchServiceTests {
             nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) },
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") },
             nativeSessionObserverRegistry: observerRegistry
         )
 
@@ -391,7 +393,8 @@ struct AgentLaunchServiceTests {
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
-            socketPathProvider: { "/tmp/toastty-tests.sock" }
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
         )
 
         #expect(throws: AgentLaunchError.panelBusy(runningCommand: nil)) {
@@ -422,6 +425,7 @@ struct AgentLaunchServiceTests {
             agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") },
             nativeSessionObserverRegistry: observerRegistry
         )
 
@@ -451,7 +455,8 @@ struct AgentLaunchServiceTests {
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
-            socketPathProvider: { "/tmp/toastty-tests.sock" }
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
         )
 
         let plan = try service.prepareManagedLaunch(
@@ -546,7 +551,8 @@ struct AgentLaunchServiceTests {
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
-            socketPathProvider: { "/tmp/toastty-tests.sock" }
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
         )
 
         _ = try service.launch(profileID: "codex")
@@ -584,7 +590,8 @@ struct AgentLaunchServiceTests {
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
-            socketPathProvider: { "/tmp/toastty-tests.sock" }
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
         )
 
         let result = try service.launch(profileID: "codex")
@@ -737,7 +744,8 @@ struct AgentLaunchServiceTests {
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
-            socketPathProvider: { "/tmp/toastty-tests.sock" }
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
         )
 
         return (store, sessionRuntimeStore, terminalRouter, service, windowID, workspaceID, panelID)

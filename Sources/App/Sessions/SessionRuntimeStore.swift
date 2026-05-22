@@ -19,6 +19,7 @@ final class SessionRuntimeStore: ObservableObject {
     private var storeActionObserverToken: UUID?
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
     private var codexNotifyStateBySessionID: [String: CodexNotifySessionState] = [:]
+    private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
 
@@ -67,6 +68,7 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry = SessionRegistry()
         suppressedCodexVisibleErrorDetailBySessionID = [:]
         codexNotifyStateBySessionID = [:]
+        codexStatusTrackingSourceBySessionID = [:]
     }
 
     func startSession(
@@ -76,6 +78,7 @@ final class SessionRuntimeStore: ObservableObject {
         windowID: UUID,
         workspaceID: UUID,
         usesSessionStatusNotifications: Bool = false,
+        codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
         displayTitleOverride: String? = nil,
         cwd: String?,
         repoRoot: String?,
@@ -83,6 +86,11 @@ final class SessionRuntimeStore: ObservableObject {
     ) {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        if agent == .codex, let codexStatusTrackingSource {
+            codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
+        } else {
+            codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+        }
         var nextRegistry = sessionRegistry
         nextRegistry.startSession(
             sessionID: sessionID,
@@ -212,7 +220,8 @@ final class SessionRuntimeStore: ObservableObject {
     func recordCodexRootTurnInput(
         sessionID: String,
         fingerprint: String?,
-        threadID: String? = nil
+        threadID: String? = nil,
+        turnID: String? = nil
     ) {
         guard let record = sessionRegistry.sessionsByID[sessionID],
               record.agent == .codex,
@@ -223,8 +232,15 @@ final class SessionRuntimeStore: ObservableObject {
         var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
         state.pendingRootInputFingerprint = fingerprint
         if let threadID {
+            let previousRootThreadID = state.rootThreadID
             state.rootThreadID = threadID
-            state.rootTurnID = nil
+            if let previousRootThreadID,
+               previousRootThreadID != threadID {
+                state.rootTurnID = nil
+            }
+        }
+        if let turnID {
+            state.rootTurnID = turnID
         }
         codexNotifyStateBySessionID[sessionID] = state
 
@@ -238,6 +254,7 @@ final class SessionRuntimeStore: ObservableObject {
                 additional: [
                     "input_fingerprint": truncatedFingerprint(fingerprint),
                     "thread_id": threadID ?? "none",
+                    "turn_id": turnID ?? "none",
                 ]
             )
         )
@@ -299,6 +316,18 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
+            logCodexNotifyCompletionDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                completion: completion,
+                decision: "ignored",
+                reason: "status_source_hooks"
+            )
+            return false
+        }
+
         var acceptedReason = "unknown"
         if let threadID = completion.threadID {
             if let rootThreadID = state.rootThreadID {
@@ -379,6 +408,138 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     @discardableResult
+    func handleCodexSessionLogCompletion(
+        sessionID: String,
+        detail: String,
+        threadID: String?,
+        turnID: String?,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.sessionsByID[sessionID],
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            logCodexSessionLogCompletionDecision(
+                sessionID: sessionID,
+                record: sessionRegistry.sessionsByID[sessionID],
+                state: codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState(),
+                threadID: threadID,
+                turnID: turnID,
+                decision: "ignored",
+                reason: "session_not_tracking_codex_status"
+            )
+            return false
+        }
+
+        let state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
+            logCodexSessionLogCompletionDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                threadID: threadID,
+                turnID: turnID,
+                decision: "ignored",
+                reason: "status_source_hooks"
+            )
+            return false
+        }
+
+        let acceptedReason: String
+        if let turnID {
+            guard let rootTurnID = state.rootTurnID else {
+                logCodexSessionLogCompletionDecision(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    threadID: threadID,
+                    turnID: turnID,
+                    decision: "ignored",
+                    reason: "missing_root_turn"
+                )
+                return false
+            }
+            guard turnID == rootTurnID else {
+                logCodexSessionLogCompletionDecision(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    threadID: threadID,
+                    turnID: turnID,
+                    decision: "ignored",
+                    reason: "turn_mismatch"
+                )
+                return false
+            }
+        }
+
+        if let threadID {
+            if let rootThreadID = state.rootThreadID {
+                guard threadID == rootThreadID else {
+                    logCodexSessionLogCompletionDecision(
+                        sessionID: sessionID,
+                        record: record,
+                        state: state,
+                        threadID: threadID,
+                        turnID: turnID,
+                        decision: "ignored",
+                        reason: "thread_mismatch"
+                    )
+                    return false
+                }
+                acceptedReason = "thread_match"
+            } else if let turnID,
+                      let rootTurnID = state.rootTurnID,
+                      turnID == rootTurnID {
+                acceptedReason = "turn_match_without_root_thread"
+            } else {
+                logCodexSessionLogCompletionDecision(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    threadID: threadID,
+                    turnID: turnID,
+                    decision: "ignored",
+                    reason: "missing_root_thread"
+                )
+                return false
+            }
+        } else if let turnID,
+                  let rootTurnID = state.rootTurnID {
+            guard turnID == rootTurnID else {
+                logCodexSessionLogCompletionDecision(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    threadID: threadID,
+                    turnID: turnID,
+                    decision: "ignored",
+                    reason: "turn_mismatch"
+                )
+                return false
+            }
+            acceptedReason = "turn_match"
+        } else {
+            acceptedReason = "unidentified_legacy_completion"
+        }
+
+        logCodexSessionLogCompletionDecision(
+            sessionID: sessionID,
+            record: record,
+            state: state,
+            threadID: threadID,
+            turnID: turnID,
+            decision: "accepted",
+            reason: acceptedReason
+        )
+        updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: detail),
+            at: now
+        )
+        return true
+    }
+
+    @discardableResult
     func handleCodexHookEvent(
         sessionID: String,
         event: CodexHookEvent,
@@ -416,6 +577,18 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        guard codexStatusTrackingSourceAllowsHookEvents(sessionID: sessionID) else {
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: event,
+                decision: "ignored",
+                reason: "status_source_session_log_fallback"
+            )
+            return false
+        }
+
         var stateChanged = false
 
         if let threadID = event.threadID {
@@ -535,6 +708,7 @@ final class SessionRuntimeStore: ObservableObject {
         }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         var nextRegistry = sessionRegistry
         if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
             nextRegistry.removeSession(sessionID: sessionID)
@@ -553,6 +727,7 @@ final class SessionRuntimeStore: ObservableObject {
             logSessionStop(record, reason: reason, at: now)
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
             codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
+            codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
         }
         var nextRegistry = sessionRegistry
         if let record = sessionRegistry.activeSession(for: panelID),
@@ -874,7 +1049,7 @@ final class SessionRuntimeStore: ObservableObject {
         decision: String,
         reason: String
     ) {
-        ToasttyLog.debug(
+        ToasttyLog.info(
             "Codex notify completion decision",
             category: .terminal,
             metadata: codexNotifyMetadata(
@@ -922,7 +1097,7 @@ final class SessionRuntimeStore: ObservableObject {
         decision: String,
         reason: String
     ) {
-        ToasttyLog.debug(
+        ToasttyLog.info(
             event.isStop ? "Codex hook completion decision" : "Codex hook event decision",
             category: .terminal,
             metadata: codexHookMetadata(
@@ -940,6 +1115,64 @@ final class SessionRuntimeStore: ObservableObject {
                 )
             )
         )
+    }
+
+    private func logCodexSessionLogCompletionDecision(
+        sessionID: String,
+        record: SessionRecord?,
+        state: CodexNotifySessionState,
+        threadID: String?,
+        turnID: String?,
+        decision: String,
+        reason: String
+    ) {
+        ToasttyLog.info(
+            "Codex session log completion decision",
+            category: .terminal,
+            metadata: codexSessionLogCompletionMetadata(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                threadID: threadID,
+                turnID: turnID,
+                additional: codexCompletionDecisionMetadata(
+                    decision: decision,
+                    reason: reason,
+                    hasThreadID: threadID != nil,
+                    hasTurnID: turnID != nil,
+                    rootThreadKnown: state.rootThreadID != nil,
+                    rootTurnKnown: state.rootTurnID != nil
+                )
+            )
+        )
+    }
+
+    private func codexStatusTrackingSourceAllowsFallbackEvents(sessionID: String) -> Bool {
+        guard let source = codexStatusTrackingSourceBySessionID[sessionID] else {
+            return true
+        }
+        switch source {
+        case .hooks:
+            return false
+        case .sessionLogFallback:
+            return true
+        }
+    }
+
+    private func codexStatusTrackingSourceAllowsHookEvents(sessionID: String) -> Bool {
+        guard let source = codexStatusTrackingSourceBySessionID[sessionID] else {
+            return true
+        }
+        switch source {
+        case .hooks:
+            return true
+        case .sessionLogFallback:
+            return false
+        }
+    }
+
+    private func codexStatusTrackingSourceMetadata(sessionID: String) -> String {
+        codexStatusTrackingSourceBySessionID[sessionID]?.code ?? "unspecified"
     }
 
     private func codexHookCompletionAcceptedReason(
@@ -1002,6 +1235,7 @@ final class SessionRuntimeStore: ObservableObject {
             "window_id": record?.windowID.uuidString ?? "none",
             "workspace_id": record?.workspaceID.uuidString ?? "none",
             "completion_source": "codex-hooks",
+            "status_tracking_source": codexStatusTrackingSourceMetadata(sessionID: sessionID),
             "event_name": event.hookEventName,
             "hook_event_name": event.hookEventName,
             "hook_source": event.source ?? "none",
@@ -1029,6 +1263,42 @@ final class SessionRuntimeStore: ObservableObject {
         return metadata
     }
 
+    private func codexSessionLogCompletionMetadata(
+        sessionID: String,
+        record: SessionRecord?,
+        state: CodexNotifySessionState,
+        threadID: String?,
+        turnID: String?,
+        additional: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "session_id": sessionID,
+            "agent": record?.agent.rawValue ?? "none",
+            "panel_id": record?.panelID.uuidString ?? "none",
+            "window_id": record?.windowID.uuidString ?? "none",
+            "workspace_id": record?.workspaceID.uuidString ?? "none",
+            "completion_source": "codex-session-log",
+            "status_tracking_source": codexStatusTrackingSourceMetadata(sessionID: sessionID),
+            "event_name": "task_complete",
+            "previous_status_kind": record?.status?.kind.rawValue ?? "none",
+            "root_thread_id": state.rootThreadID ?? "none",
+            "root_turn_id": state.rootTurnID ?? "none",
+            "session_log_thread_id": threadID ?? "none",
+            "session_log_turn_id": turnID ?? "none",
+            "has_thread_id": boolMetadata(threadID != nil),
+            "has_turn_id": boolMetadata(turnID != nil),
+            "root_thread_known": boolMetadata(state.rootThreadID != nil),
+            "root_turn_known": boolMetadata(state.rootTurnID != nil),
+            "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
+        ]
+
+        for (key, value) in additional {
+            metadata[key] = value
+        }
+
+        return metadata
+    }
+
     private func codexNotifyMetadata(
         sessionID: String,
         record: SessionRecord?,
@@ -1043,6 +1313,7 @@ final class SessionRuntimeStore: ObservableObject {
             "window_id": record?.windowID.uuidString ?? "none",
             "workspace_id": record?.workspaceID.uuidString ?? "none",
             "completion_source": "codex-notify",
+            "status_tracking_source": codexStatusTrackingSourceMetadata(sessionID: sessionID),
             "event_name": "notify_completion",
             "previous_status_kind": record?.status?.kind.rawValue ?? "none",
             "root_thread_id": state.rootThreadID ?? "none",

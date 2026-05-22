@@ -7,6 +7,29 @@ struct PreparedAgentLaunchCommand {
     let artifacts: PreparedAgentLaunchArtifacts?
 }
 
+enum CodexStatusTrackingSource: Equatable {
+    case hooks
+    case sessionLogFallback(reason: String)
+
+    var code: String {
+        switch self {
+        case .hooks:
+            return "hooks"
+        case .sessionLogFallback:
+            return "session_log_fallback"
+        }
+    }
+
+    var fallbackReason: String? {
+        switch self {
+        case .hooks:
+            return nil
+        case .sessionLogFallback(let reason):
+            return reason
+        }
+    }
+}
+
 enum LaunchArtifactsCleanupPolicy {
     case deleteImmediately
     case retainAfterSessionStop
@@ -44,7 +67,8 @@ enum AgentLaunchInstrumentation {
         cliExecutablePath: String,
         sessionID: String,
         workingDirectory: String?,
-        fileManager: FileManager
+        fileManager: FileManager,
+        codexStatusTrackingSource: CodexStatusTrackingSource = .sessionLogFallback(reason: "default")
     ) throws -> PreparedAgentLaunchCommand {
         if agent == .claude {
             return try prepareClaudeLaunch(
@@ -61,7 +85,8 @@ enum AgentLaunchInstrumentation {
                 argv: argv,
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
-                fileManager: fileManager
+                fileManager: fileManager,
+                statusTrackingSource: codexStatusTrackingSource
             )
         }
 
@@ -142,8 +167,17 @@ enum AgentLaunchInstrumentation {
         argv: [String],
         cliExecutablePath: String,
         sessionID: String,
-        fileManager: FileManager
+        fileManager: FileManager,
+        statusTrackingSource: CodexStatusTrackingSource
     ) throws -> PreparedAgentLaunchCommand {
+        guard statusTrackingSource != .hooks else {
+            return PreparedAgentLaunchCommand(
+                argv: argv,
+                environment: baselineEnvironment(for: .codex),
+                artifacts: nil
+            )
+        }
+
         let artifactsDirectoryURL = try makeArtifactsDirectory(
             prefix: "toastty-codex-launch",
             sessionID: sessionID,

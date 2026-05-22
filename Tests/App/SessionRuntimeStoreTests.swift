@@ -390,6 +390,302 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexNotifyCompletionIgnoresFallbackEventWhenSessionUsesHooks() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-hooks-ignore-notify",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-hooks-ignore-notify",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Root still running"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let accepted = store.handleCodexNotifyCompletion(
+            sessionID: "sess-codex-hooks-ignore-notify",
+            completion: CodexNotifyCompletion(
+                notificationType: "agent-turn-complete",
+                threadID: nil,
+                turnID: nil,
+                lastInputMessageFingerprint: nil,
+                inputMessageCount: 0,
+                detail: "Notify finished"
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-hooks-ignore-notify")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Root still running")
+    }
+
+    @Test
+    func codexSessionLogCompletionIgnoresMismatchedTurnBeforeRootCompletes() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-session-log-turn",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-session-log-turn",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Root still running"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-session-log-turn",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Root still running"),
+            threadID: "thread-root",
+            turnID: "turn-root"
+        )
+
+        let ignoredChild = store.handleCodexSessionLogCompletion(
+            sessionID: "sess-codex-session-log-turn",
+            detail: "Child finished",
+            threadID: "thread-root",
+            turnID: "turn-child",
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(ignoredChild == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-session-log-turn")?.status?.kind == .working)
+
+        let acceptedRoot = store.handleCodexSessionLogCompletion(
+            sessionID: "sess-codex-session-log-turn",
+            detail: "Root finished",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(acceptedRoot)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-session-log-turn")?.status
+        #expect(status?.kind == .ready)
+        #expect(status?.detail == "Root finished")
+    }
+
+    @Test
+    func codexSessionLogCompletionIgnoresMismatchedThreadBeforeRootCompletes() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-session-log-thread",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-session-log-thread",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Root still running"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-session-log-thread",
+            fingerprint: nil,
+            threadID: "thread-root"
+        )
+
+        let ignoredChild = store.handleCodexSessionLogCompletion(
+            sessionID: "sess-codex-session-log-thread",
+            detail: "Child finished",
+            threadID: "thread-child",
+            turnID: nil,
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(ignoredChild == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-session-log-thread")?.status?.kind == .working)
+    }
+
+    @Test
+    func codexSessionLogCompletionIgnoresIdentifiedTurnWhenRootTurnIsUnknown() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-session-log-missing-root-turn",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .sessionLogFallback(reason: "test"),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-session-log-missing-root-turn",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Root still running"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let accepted = store.handleCodexSessionLogCompletion(
+            sessionID: "sess-codex-session-log-missing-root-turn",
+            detail: "Child finished",
+            threadID: nil,
+            turnID: "turn-child",
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        #expect(
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-session-log-missing-root-turn"
+            )?.status?.kind == .working
+        )
+    }
+
+    @Test
+    func codexSessionLogCompletionIgnoresFallbackEventWhenSessionUsesHooks() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-hooks-ignore-log",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        let accepted = store.handleCodexSessionLogCompletion(
+            sessionID: "sess-codex-hooks-ignore-log",
+            detail: "Session log finished",
+            threadID: nil,
+            turnID: nil,
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(accepted == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-hooks-ignore-log")?.status?.kind == nil)
+    }
+
+    @Test
+    func codexHookEventIgnoresHookWhenSessionUsesSessionLogFallback() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-fallback-ignore-hook",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .sessionLogFallback(reason: "hooks_needsUpdate"),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-fallback-ignore-hook",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Root still running"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-fallback-ignore-hook",
+            event: CodexHookEvent(
+                hookEventName: "Stop",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: "Hook finished"),
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-fallback-ignore-hook")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Root still running")
+    }
+
+    @Test
+    func codexRootTurnInputKeepsTurnWhenThreadIsLatchedAfterTurn() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-thread-after-turn",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .sessionLogFallback(reason: "test"),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-thread-after-turn",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Fix sidebar"),
+            turnID: "turn-root"
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-thread-after-turn",
+            fingerprint: nil,
+            threadID: "thread-root"
+        )
+
+        let accepted = store.handleCodexSessionLogCompletion(
+            sessionID: "sess-codex-thread-after-turn",
+            detail: "Root finished",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(accepted)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-thread-after-turn")?.status
+        #expect(status?.kind == .ready)
+        #expect(status?.detail == "Root finished")
+    }
+
+    @Test
     func codexHookEventUpdatesStatusAndLatchesRootThread() {
         let store = SessionRuntimeStore()
         let panelID = UUID()

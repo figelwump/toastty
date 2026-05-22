@@ -89,6 +89,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath,
         socketPathProvider: @escaping @Sendable () -> String = AgentLaunchService.defaultSocketPath,
+        codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = ManagedAgentLaunchPlanner.defaultCodexStatusTrackingSource,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil
     ) {
         self.store = store
@@ -101,6 +102,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             nowProvider: nowProvider,
             cliExecutablePathProvider: cliExecutablePathProvider,
             socketPathProvider: socketPathProvider,
+            codexStatusTrackingSourceProvider: codexStatusTrackingSourceProvider,
             readVisibleText: { [weak terminalCommandRouter] panelID in
                 terminalCommandRouter?.readVisibleText(panelID: panelID)
             },

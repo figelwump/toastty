@@ -522,6 +522,7 @@ private func makeRestoredManagedLaunchPlanner(
         sessionRuntimeStore: sessionRuntimeStore,
         cliExecutablePathProvider: { "/bin/sh" },
         socketPathProvider: { "/tmp/toastty-tests.sock" },
+        codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") },
         readVisibleText: { _ in nil },
         promptState: { _ in .unavailable },
         nativeSessionObserverRegistry: StubManagedAgentNativeSessionObserver()

@@ -92,6 +92,94 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testCodexLaunchPlanUsesHooksOnlyStatusTrackingWhenHooksAreAvailable() throws {
+        let fixture = try makePlannerFixture(
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex", "--model", "gpt-5.4"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(plan.argv, ["codex", "--model", "gpt-5.4"])
+        XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
+        XCTAssertEqual(plan.environment["TOASTTY_PANEL_ID"], fixture.panelID.uuidString)
+        XCTAssertNil(plan.environment["CODEX_TUI_RECORD_SESSION"])
+        XCTAssertNil(plan.environment["CODEX_TUI_SESSION_LOG_PATH"])
+    }
+
+    func testCodexSessionLogFallbackIgnoresChildTaskCompleteBeforeRootCompletes() async throws {
+        let fixture = try makePlannerFixture()
+        let threadID = "019e316e-9f7f-7a33-aad9-33fe27b0f2cd"
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        }
+        let logURL = try codexSessionLogURL(from: plan)
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadID)","thread_id":"\(threadID)","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-\(threadID).jsonl"}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"user_message","message":"Fix sidebar state"}}}
+            """,
+            to: logURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status ==
+                SessionStatus(kind: .working, summary: "Working", detail: "Fix sidebar state")
+        }
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status,
+            SessionStatus(kind: .working, summary: "Working", detail: "Fix sidebar state")
+        )
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-child","msg":{"type":"task_complete","thread_id":"thread-child","last_agent_message":"Child finished"}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status,
+            SessionStatus(kind: .working, summary: "Working", detail: "Fix sidebar state")
+        )
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"task_complete","thread_id":"\(threadID)","last_agent_message":"Root finished"}}}
+            """,
+            to: logURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status ==
+                SessionStatus(kind: .ready, summary: "Ready", detail: "Root finished")
+        }
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status,
+            SessionStatus(kind: .ready, summary: "Ready", detail: "Root finished")
+        )
+    }
+
     func testLaunchPlanUsesRestoredLaunchWorkingDirectoryWhenLiveCWDIsEmpty() throws {
         let restoredCWD = "/tmp/restored-agent-pane"
         let observer = StubManagedAgentNativeSessionObserver()
@@ -210,7 +298,10 @@ private func makePlannerFixture(
     terminalState: TerminalPanelState? = nil,
     fileManager: FileManager = .default,
     nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
-    codexResumeResolver: (any CodexManagedSessionResolving)? = nil
+    codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
+    codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
+        .sessionLogFallback(reason: "test")
+    }
 ) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
@@ -240,6 +331,7 @@ private func makePlannerFixture(
         fileManager: fileManager,
         cliExecutablePathProvider: { "/bin/sh" },
         socketPathProvider: { "/tmp/toastty-tests.sock" },
+        codexStatusTrackingSourceProvider: codexStatusTrackingSourceProvider,
         readVisibleText: { _ in nil },
         promptState: { _ in .unavailable },
         nativeSessionObserverRegistry: nativeSessionObserverRegistry,

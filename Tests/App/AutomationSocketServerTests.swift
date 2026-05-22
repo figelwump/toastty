@@ -1419,6 +1419,9 @@ struct AutomationSocketServerTests {
         terminalCommandRouter: (any TerminalCommandRouting)? = nil,
         recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
         testHooks: AutomationSocketServerTestHooks = .disabled,
+        codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
+            .sessionLogFallback(reason: "test")
+        },
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider = { _ in .ready },
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter = { _, _, completion in
             completion(.cancel)
@@ -1452,7 +1455,8 @@ struct AutomationSocketServerTests {
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
-            socketPathProvider: { socketPath }
+            socketPathProvider: { socketPath },
+            codexStatusTrackingSourceProvider: codexStatusTrackingSourceProvider
         )
         let server = try AutomationSocketServer(
             socketPath: socketPath,

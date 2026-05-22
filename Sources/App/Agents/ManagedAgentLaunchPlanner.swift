@@ -16,6 +16,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let nowProvider: @Sendable () -> Date
     private let cliExecutablePathProvider: @Sendable () -> String?
     private let socketPathProvider: @Sendable () -> String
+    private let codexStatusTrackingSourceProvider: @MainActor () -> CodexStatusTrackingSource
     private let readVisibleText: @MainActor (UUID) -> String?
     private let promptState: @MainActor (UUID) -> TerminalPromptState
     private let nativeSessionObserverRegistry: any ManagedAgentNativeSessionObserving
@@ -30,6 +31,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String?,
         socketPathProvider: @escaping @Sendable () -> String,
+        codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = ManagedAgentLaunchPlanner.defaultCodexStatusTrackingSource,
         readVisibleText: @escaping @MainActor (UUID) -> String?,
         promptState: @escaping @MainActor (UUID) -> TerminalPromptState,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
@@ -41,6 +43,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.nowProvider = nowProvider
         self.cliExecutablePathProvider = cliExecutablePathProvider
         self.socketPathProvider = socketPathProvider
+        self.codexStatusTrackingSourceProvider = codexStatusTrackingSourceProvider
         self.readVisibleText = readVisibleText
         self.promptState = promptState
         self.nativeSessionObserverRegistry = nativeSessionObserverRegistry
@@ -67,12 +70,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let repoRoot = RepositoryRootLocator.inferRepoRoot(from: resolvedCWD, fileManager: fileManager)
         let cliExecutablePath = try resolveCLIExecutablePath()
         let sessionID = UUID().uuidString
+        let codexStatusTrackingSource = statusTrackingSource(for: request.agent)
         let preparedLaunch = prepareLaunch(
             agent: request.agent,
             argv: request.argv,
             cliExecutablePath: cliExecutablePath,
             sessionID: sessionID,
-            workingDirectory: resolvedCWD
+            workingDirectory: resolvedCWD,
+            codexStatusTrackingSource: codexStatusTrackingSource
         )
         let launchStart = nowProvider()
 
@@ -83,6 +88,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             windowID: target.windowID,
             workspaceID: target.workspaceID,
             usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: request.agent == .codex ? codexStatusTrackingSource : nil,
             cwd: resolvedCWD,
             repoRoot: repoRoot,
             at: launchStart
@@ -91,6 +97,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             sessionID: sessionID,
             status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
             at: launchStart
+        )
+        logCodexStatusTrackingSourceIfNeeded(
+            agent: request.agent,
+            source: codexStatusTrackingSource,
+            sessionID: sessionID,
+            panelID: target.panelID,
+            windowID: target.windowID,
+            workspaceID: target.workspaceID
         )
         registerManagedArtifacts(preparedLaunch.artifacts, sessionID: sessionID)
         if let resolvedCWD {
@@ -192,7 +206,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         argv: [String],
         cliExecutablePath: String,
         sessionID: String,
-        workingDirectory: String?
+        workingDirectory: String?,
+        codexStatusTrackingSource: CodexStatusTrackingSource
     ) -> PreparedAgentLaunchCommand {
         do {
             return try AgentLaunchInstrumentation.prepare(
@@ -201,7 +216,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
                 workingDirectory: workingDirectory,
-                fileManager: fileManager
+                fileManager: fileManager,
+                codexStatusTrackingSource: codexStatusTrackingSource
             )
         } catch {
             ToasttyLog.warning(
@@ -215,6 +231,39 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
         }
+    }
+
+    private func statusTrackingSource(for agent: AgentKind) -> CodexStatusTrackingSource {
+        guard agent == .codex else {
+            return .hooks
+        }
+        return codexStatusTrackingSourceProvider()
+    }
+
+    private func logCodexStatusTrackingSourceIfNeeded(
+        agent: AgentKind,
+        source: CodexStatusTrackingSource,
+        sessionID: String,
+        panelID: UUID,
+        windowID: UUID,
+        workspaceID: UUID
+    ) {
+        guard agent == .codex else {
+            return
+        }
+
+        ToasttyLog.info(
+            "Selected Codex status tracking source",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "panel_id": panelID.uuidString,
+                "window_id": windowID.uuidString,
+                "workspace_id": workspaceID.uuidString,
+                "source": source.code,
+                "fallback_reason": source.fallbackReason ?? "none",
+            ]
+        )
     }
 
     private func registerManagedArtifacts(
@@ -262,6 +311,11 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
               let cwd = normalizedNonEmpty(activeSession.cwd) else {
             return
         }
+        sessionRuntimeStore.recordCodexRootTurnInput(
+            sessionID: sessionID,
+            fingerprint: nil,
+            threadID: nativeSessionID
+        )
 
         guard let record = await codexResumeResolver.resumeRecord(
             threadID: nativeSessionID,
@@ -318,7 +372,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 sessionRuntimeStore.recordCodexRootTurnInput(
                     sessionID: sessionID,
                     fingerprint: rootInputFingerprint,
-                    threadID: event.rootThreadID
+                    threadID: event.rootThreadID,
+                    turnID: event.rootTurnID
                 )
             }
             status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
@@ -340,7 +395,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         case .approvalNeeded:
             status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: event.detail)
         case .taskCompleted:
-            status = SessionStatus(kind: .ready, summary: "Ready", detail: event.detail)
+            _ = sessionRuntimeStore.handleCodexSessionLogCompletion(
+                sessionID: sessionID,
+                detail: event.detail,
+                threadID: event.completionThreadID,
+                turnID: event.completionTurnID,
+                at: nowProvider()
+            )
+            return
         case .turnAborted:
             guard let currentKind = sessionRuntimeStore
                 .sessionRegistry
@@ -365,6 +427,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             registry.activeSession(sessionID: sessionID) == nil
         }
         for sessionID in inactiveSessionIDs {
+            guard sessionRuntimeStore?.sessionRegistry.activeSession(sessionID: sessionID) == nil else {
+                continue
+            }
             nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
             await cleanupManagedArtifacts(for: sessionID)
         }
@@ -401,6 +466,18 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             }
         }
         return nil
+    }
+
+    static func defaultCodexStatusTrackingSource() -> CodexStatusTrackingSource {
+        do {
+            let status = try CodexStatusHookInstaller().installationStatus()
+            guard status.isInstalled else {
+                return .sessionLogFallback(reason: "hooks_\(status.state.rawValue)")
+            }
+            return .hooks
+        } catch {
+            return .sessionLogFallback(reason: "hook_status_unavailable")
+        }
     }
 }
 
