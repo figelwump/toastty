@@ -34,6 +34,10 @@ struct RightAuxPanelView: View {
             focusedPanelID != nil
     }
 
+    nonisolated static func mountedContentTab(in rightAuxPanel: RightAuxPanelState) -> RightAuxPanelTabState? {
+        rightAuxPanel.activeTab ?? rightAuxPanel.orderedTabs.first
+    }
+
     var body: some View {
         let isRightAuxPanelFocused = Self.isRightAuxPanelFocused(
             isWorkspaceSelected: isWorkspaceSelected,
@@ -80,24 +84,18 @@ struct RightAuxPanelView: View {
                 createBlankScratchpad: { createBlankScratchpad(workspace.id) },
                 openBrowser: { openBrowser(windowID) }
             )
-        } else {
-            ZStack(alignment: .topLeading) {
-                ForEach(workspaceTab.rightAuxPanel.orderedTabs, id: \RightAuxPanelTabState.id) { (tab: RightAuxPanelTabState) in
-                    rightAuxPanelCard(for: tab)
-                }
-            }
+        } else if let tab = Self.mountedContentTab(in: workspaceTab.rightAuxPanel) {
+            rightAuxPanelCard(for: tab)
         }
     }
 
     private func rightAuxPanelCard(for tab: RightAuxPanelTabState) -> some View {
-        let isActiveTab = workspaceTab.rightAuxPanel.activeTabID == tab.id
-
-        return PanelCardView(
+        PanelCardView(
             workspaceID: workspace.id,
             panelID: tab.panelID,
             panelState: tab.panelState,
             isWorkspaceSelected: isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible,
-            isTabSelected: isActiveTab,
+            isTabSelected: true,
             focusedPanelID: workspaceTab.rightAuxPanel.focusedPanelID,
             hasUnreadNotification: workspaceTab.unreadPanelIDs.contains(tab.panelID),
             panelSessionStatus: nil,
@@ -116,10 +114,9 @@ struct RightAuxPanelView: View {
             focusedPanelCommandController: focusedPanelCommandController,
             terminalRuntimeContext: nil
         )
-        .opacity(WorkspaceView.mountedContentOpacity(isVisible: isActiveTab))
-        .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible && isActiveTab)
-        .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible && isActiveTab))
-        .zIndex(isActiveTab ? 1 : 0)
+        .allowsHitTesting(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible)
+        .accessibilityHidden(!(isWorkspaceSelected && isWorkspaceTabSelected && isRightAuxPanelVisible))
+        .zIndex(1)
         .id(tab.id)
     }
 }

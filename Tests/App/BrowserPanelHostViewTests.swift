@@ -244,6 +244,38 @@ final class BrowserPanelHostViewTests: XCTestCase {
             )
         )
     }
+
+    func testRuntimeDetachAndReattachReusesWebViewAndDelegates() async throws {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let firstContainer = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let firstAttachment = PanelHostAttachmentToken.next()
+        runtime.attachHost(to: firstContainer, attachment: firstAttachment)
+        let webView = try XCTUnwrap(firstContainer.subviews.first as? WKWebView)
+
+        runtime.detachHost(attachment: firstAttachment)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertNil(webView.superview)
+        XCTAssertTrue(firstContainer.subviews.isEmpty)
+
+        let secondContainer = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let secondAttachment = PanelHostAttachmentToken.next()
+        runtime.attachHost(to: secondContainer, attachment: secondAttachment)
+
+        XCTAssertTrue(secondContainer.subviews.first === webView)
+        XCTAssertEqual(
+            ObjectIdentifier(try XCTUnwrap(webView.navigationDelegate as AnyObject?)),
+            ObjectIdentifier(runtime)
+        )
+        XCTAssertEqual(
+            ObjectIdentifier(try XCTUnwrap(webView.uiDelegate as AnyObject?)),
+            ObjectIdentifier(runtime)
+        )
+    }
 }
 
 private final class ScheduledBrowserPanelApplyRecorder: @unchecked Sendable {

@@ -107,6 +107,47 @@ final class RightAuxPanelViewTests: XCTestCase {
         )
     }
 
+    func testMountedContentTabUsesActiveRightPanelTab() throws {
+        let firstTab = makeRightAuxPanelTab(title: "First")
+        let secondTab = makeRightAuxPanelTab(title: "Second")
+        let panel = RightAuxPanelState(
+            isVisible: true,
+            activeTabID: secondTab.id,
+            tabIDs: [firstTab.id, secondTab.id],
+            tabsByID: [
+                firstTab.id: firstTab,
+                secondTab.id: secondTab,
+            ]
+        )
+
+        let mountedTab = try XCTUnwrap(RightAuxPanelView.mountedContentTab(in: panel))
+
+        XCTAssertEqual(mountedTab.id, secondTab.id)
+    }
+
+    func testMountedContentTabFallsBackToFirstOrderedTabWhenActiveIDIsStale() throws {
+        let firstTab = makeRightAuxPanelTab(title: "First")
+        let secondTab = makeRightAuxPanelTab(title: "Second")
+        var panel = RightAuxPanelState(
+            isVisible: true,
+            activeTabID: secondTab.id,
+            tabIDs: [firstTab.id, secondTab.id],
+            tabsByID: [
+                firstTab.id: firstTab,
+                secondTab.id: secondTab,
+            ]
+        )
+        panel.activeTabID = UUID()
+
+        let mountedTab = try XCTUnwrap(RightAuxPanelView.mountedContentTab(in: panel))
+
+        XCTAssertEqual(mountedTab.id, firstTab.id)
+    }
+
+    func testMountedContentTabIsNilWhenRightPanelHasNoTabs() {
+        XCTAssertNil(RightAuxPanelView.mountedContentTab(in: RightAuxPanelState(isVisible: true)))
+    }
+
     func testSelectedAccentOnlyShowsForActiveRightPanelTab() {
         XCTAssertNil(
             RightAuxPanelTabStrip.selectedAccentColor(
@@ -495,6 +536,19 @@ final class RightAuxPanelViewTests: XCTestCase {
     @objc private func scratchpadBindingCandidateAction(_ sender: NSMenuItem) {}
 
     @objc private func scratchpadBindingUnbindAction(_ sender: NSMenuItem) {}
+
+    private func makeRightAuxPanelTab(
+        id: UUID = UUID(),
+        panelID: UUID = UUID(),
+        title: String
+    ) -> RightAuxPanelTabState {
+        RightAuxPanelTabState(
+            id: id,
+            identity: .browserSession(panelID),
+            panelID: panelID,
+            panelState: .web(WebPanelState(definition: .browser, title: title))
+        )
+    }
 
     private static func keyDownEvent(characters: String, keyCode: UInt16) -> NSEvent? {
         NSEvent.keyEvent(
