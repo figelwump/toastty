@@ -45,7 +45,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Per-tab Scratchpad, browser, and local-document tabs** — toggle with `Cmd+Shift+B`; each workspace tab keeps its own right-panel tabs
 - **Scratchpad** — rich agent-authored notes, plans, and review surfaces in session-linked tabs that persist locally
 - **Browser** — built-in browser for docs, dashboards, previews, external handoff, and quick screenshot sharing
-- **Local documents** — open Markdown, source files (Swift, JS/TS, Python, Go, Rust, …), configs (YAML, TOML, JSON, dotenv), and data files (CSV, TSV, XML) in editable code views with line numbers; local HTML opens in the browser
+- **Local documents** — open Markdown, source files (Swift, JS/TS, Python, Go, Rust, …), configs (YAML, TOML, JSON, dotenv), logs, and data files (CSV, TSV, XML) in editable code views with line numbers; local HTML opens in the browser
 
 ### Terminal and content
 

@@ -136,6 +136,21 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    func testResolveTreatsLogFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "toastty.log")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rightPanel)
+        )
+    }
+
     func testResolveTreatsSwiftFileAsLocalDocument() throws {
         let fixture = try makeFixture(fileName: "App.swift")
 
@@ -540,6 +555,39 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
                 placement: .rightPanel
             )
         )
+    }
+
+    func testResolveTreatsLogFileNumericSuffixAsLocalDocumentReveal() throws {
+        let fixture = try makeFixture(fileName: "toastty.log")
+        let url = try XCTUnwrap(URL(string: "docs/toastty.log:42"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(
+                path: fixture.markdownPath,
+                lineNumber: 42,
+                placement: .rightPanel
+            )
+        )
+    }
+
+    func testResolveMissingRelativeLogPathClassifiesAsFileNotFound() throws {
+        let fixture = try makeFixture()
+        let url = try XCTUnwrap(URL(string: "docs/missing.log"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .unresolvedLocalDocument(url, .fileNotFound))
     }
 
     func testResolveRecoversMalformedAbsoluteDirectoryPathWithAppendedProse() throws {

@@ -84,6 +84,12 @@ public enum LocalDocumentClassifier {
         "py": .init(format: .code, syntaxLanguage: .python, formatLabel: "Python"),
         "go": .init(format: .code, syntaxLanguage: .go, formatLabel: "Go"),
         "rs": .init(format: .code, syntaxLanguage: .rust, formatLabel: "Rust"),
+        "log": .init(
+            format: .code,
+            syntaxLanguage: nil,
+            formatLabel: "Log",
+            warnsWhenSyntaxHighlightUnavailable: false
+        ),
         "txt": .init(
             format: .code,
             syntaxLanguage: nil,

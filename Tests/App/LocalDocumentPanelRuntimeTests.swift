@@ -1817,6 +1817,40 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.content, content)
     }
 
+    func testBootstrapReadsLogFileContentsAsPlainTextDocument() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("toastty.log")
+        let content = """
+        {"level":"info","message":"toastty"}
+        plain fallback line
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "toastty.log",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .code
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "toastty.log")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .code)
+        XCTAssertNil(bootstrap.syntaxLanguage)
+        XCTAssertEqual(bootstrap.formatLabel, "Log")
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .plainText)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
     func testBootstrapReadsJSONLinesFileContents() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

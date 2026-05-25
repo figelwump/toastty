@@ -81,6 +81,18 @@ struct LocalDocumentClassifierTests {
     }
 
     @Test
+    func classificationTreatsLogFilesAsPlainTextCodeDocuments() throws {
+        let classification = try #require(
+            LocalDocumentClassifier.classification(forPathExtension: "LOG")
+        )
+
+        #expect(classification.format == .code)
+        #expect(classification.syntaxLanguage == nil)
+        #expect(classification.formatLabel == "Log")
+        #expect(classification.warnsWhenSyntaxHighlightUnavailable == false)
+    }
+
+    @Test
     func classificationTreatsDotenvFilesAsEnvironmentConfigDocuments() throws {
         let supportedFilePaths = [
             "/tmp/.env",
@@ -146,6 +158,8 @@ struct LocalDocumentClassifierTests {
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/scripts/bootstrap.zsh") == .shell)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/config.txt:42") == .code)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/README.TXT") == .code)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/logs/toastty.LOG") == .code)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/logs/toastty.log:42") == .code)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/Toastty/App.swift") == .code)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/web/index.tsx") == .code)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/notes") == nil)
