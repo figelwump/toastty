@@ -92,7 +92,7 @@ Match the visual to the structure of the content:
 Default visual choices:
 
 - **Palette**: two to four colors total. One background, one foreground for text, one accent for emphasis. Add a second accent only when the content has two real categories. Prefer light or neutral backgrounds; avoid saturated dark dashboards and full-bleed gradients. Let content-driven palettes (red for risk, sepia for archive) inform choice when relevant, but stay restrained.
-- **Typography**: one typeface, with weight and size carrying hierarchy. Add a second face only with a real reason (mono for code or tabular data, a display weight for a single headline). System fonts only — no remote fonts or imports.
+- **Typography**: one typeface, with weight and size carrying hierarchy. Add a second face only with a real reason (mono for code or tabular data, a display weight for a single headline). Prefer system fonts by default. Remote HTTPS font files are allowed only through inline `@font-face` declarations; remote font CSS imports remain blocked.
 - **Layout**: generous whitespace, clear alignment, deliberate negative space. Avoid auto-fit grids of identical cards (the AI-default look) and avoid magazine spreads or poster compositions that compete with the content.
 - **Visual primitives**: thin clean strokes, simple boxes, plain arrows, real tick marks. Decorative texture (paper grain, halftone, blueprint grid, isometric stacks) only when the subject genuinely calls for it — never as default polish.
 
@@ -120,7 +120,8 @@ If the artifact starts to feel busy, the answer is almost always to remove eleme
 1. After the loading screen is visible, write the one-sentence purpose, pick the simplest visual form that captures it, and choose a restrained palette and typeface. Sketch the structure mentally first; do not start with a card grid by reflex, and do not start with poster ornament.
 2. Generate one complete HTML document with inline CSS and optional inline JavaScript.
 3. Keep it self-contained:
-   - no remote scripts, fonts, stylesheets, images, or network fetches
+   - no remote scripts, stylesheets, images, or network fetches
+   - use remote HTTPS font files only through inline `@font-face` declarations, and only when they materially improve the artifact
    - use inline SVG, CSS, HTML, and small inline data assets when useful
    - keep content under roughly 1 MB
 4. Design for a resizable panel:
@@ -193,7 +194,7 @@ Scratchpad supports inline JavaScript, but the generated document runs in a sand
 - Use inline JavaScript for real interactivity such as filtering, sorting, expand/collapse, hover details, or client-side measurements.
 - Put executable code in `<script>` blocks and wire interactions with `addEventListener` after the relevant DOM nodes exist.
 - Inline event attributes such as `onclick`, `onchange`, and `onload` are blocked by CSP (`script-src-attr 'none'`), and `javascript:` URLs are unsupported. Do not use them.
-- Do not rely on external scripts, imports, remote styles, CDN chart libraries, network fetches, XHR, websockets, workers, nested frames, forms, local storage, or remote assets.
+- Do not rely on external scripts, imports, remote styles, CDN chart libraries, network fetches, XHR, websockets, workers, nested frames, forms, local storage, or remote assets other than HTTPS font files declared directly with inline `@font-face`.
 - Embed all data inline, either directly in the script or in a local `<script type="application/json">` block.
 - Wrap startup/rendering code in `try`/`catch`. On failure, render a visible error message in the artifact and call `console.error(...)` with useful context.
 - Avoid blank startup states where all data appears only after JavaScript runs. If JavaScript is required, include a visible loading/failure container that is replaced after successful render.

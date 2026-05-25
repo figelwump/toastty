@@ -60,7 +60,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - Toastty requests macOS notification permission the first time it attempts to deliver a desktop notification.
 - Apps launched inside Toastty can trigger macOS camera and microphone permission prompts. Toastty declares those permissions so terminal-hosted child processes can ask for access, but Toastty itself does not capture audio or video on its own.
 - The `shortcut-trace.sh` automation script requires Accessibility and Automation permissions because it drives keyboard shortcuts through `osascript`.
-- Sparkle checks `https://updates.toastty.dev/appcast.xml` for available updates. This is the only outbound network connection the app makes. No usage data or telemetry is sent with the request.
+- Sparkle checks `https://updates.toastty.dev/appcast.xml` for available updates. No usage data or telemetry is sent with the request.
+- Agent-authored Scratchpad content can load HTTPS font files when the document declares them. Other Scratchpad-generated network access remains blocked by content security policy.
 - Toastty does not request contacts, calendars, photos, or location access.
 
 ## Logging behavior

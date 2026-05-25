@@ -26,16 +26,34 @@ test("shell CSP permits generated script elements without inline attributes", ()
   assert.match(shellSource, /object-src 'none'/);
 });
 
-test("generated content CSP blocks network and native-adjacent surfaces", () => {
+test("generated content CSP limits network to HTTPS font loads", () => {
   assert.match(sandboxSource, /default-src 'none'/);
   assert.match(sandboxSource, /connect-src 'none'/);
   assert.match(sandboxSource, /frame-src 'none'/);
   assert.match(sandboxSource, /script-src 'unsafe-inline'/);
   assert.match(sandboxSource, /script-src-elem 'unsafe-inline'/);
   assert.match(sandboxSource, /script-src-attr 'none'/);
+  assert.match(sandboxSource, /font-src https: data: blob:/);
   assert.match(sandboxSource, /worker-src 'none'/);
   assert.match(sandboxSource, /object-src 'none'/);
   assert.match(sandboxSource, /form-action 'none'/);
+  for (const directive of [
+    "default-src",
+    "script-src",
+    "script-src-elem",
+    "script-src-attr",
+    "style-src",
+    "img-src",
+    "media-src",
+    "connect-src",
+    "frame-src",
+    "worker-src",
+    "object-src",
+    "base-uri",
+    "form-action"
+  ]) {
+    assert.doesNotMatch(sandboxSource, new RegExp(`"${directive} [^"]*https:`));
+  }
   assert.doesNotMatch(sandboxSource, /script-src 'unsafe-inline' data: blob:/);
   assert.doesNotMatch(sandboxSource, /worker-src blob:/);
 });

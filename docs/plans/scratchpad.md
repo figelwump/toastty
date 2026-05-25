@@ -373,7 +373,7 @@ local-document rendering.
 
 V1 requirements:
 
-- no outbound network by default
+- no outbound network by default except HTTPS font file loads declared by generated content
 - no unrestricted remote asset loading
 - no direct native bridge access from generated content
 - no generic host command dispatch

@@ -364,7 +364,7 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 
 ## Privacy and Local State
 
-Toastty is local-first. The app itself does not send usage analytics or cloud telemetry. The only outbound network connection is Sparkle's update check against `https://updates.toastty.dev/appcast.xml`.
+Toastty is local-first. The app itself does not send usage analytics or cloud telemetry. Toastty makes outbound network connections for Sparkle update checks against `https://updates.toastty.dev/appcast.xml`. Agent-authored Scratchpad content can also load HTTPS font files when the document declares them; other Scratchpad-generated network access remains blocked by content security policy.
 
 - Toastty writes user-authored config to `~/.toastty/config`, or to `TOASTTY_RUNTIME_HOME/config` for isolated dev/test runs. `TOASTTY_DEV_WORKTREE_ROOT` also enables that isolated runtime-home behavior by deriving a stable sandbox under the worktree.
 - Toastty persists window-local sidebar widths, terminal and local-document text-size overrides, plus per-browser zoom overrides in its workspace layout snapshots, or in the active runtime home's snapshot file when runtime isolation is enabled.

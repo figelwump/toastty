@@ -5,7 +5,7 @@ export const generatedContentCSP = [
   "script-src-attr 'none'",
   "style-src 'unsafe-inline'",
   "img-src data: blob:",
-  "font-src data: blob:",
+  "font-src https: data: blob:",
   "media-src data: blob:",
   "connect-src 'none'",
   "frame-src 'none'",
