@@ -1807,11 +1807,13 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
-        if kind == .escape, record.agent == .codex {
+        if kind == .escape,
+           record.agent == .codex,
+           codexStatusTrackingSourceAllowsFallbackEvents(sessionID: record.sessionID) {
             // Codex logs explicit interrupt events for Esc and other turn
-            // cancellations. Let that watcher-driven signal drive idle
-            // transitions to avoid clearing the spinner on every in-TUI
-            // Escape press.
+            // cancellations when session-log fallback is active. Let that
+            // watcher-driven signal drive idle transitions to avoid clearing
+            // the spinner on every in-TUI Escape press.
             return false
         }
 

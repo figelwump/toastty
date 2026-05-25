@@ -2369,7 +2369,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func handleLocalInterruptDoesNotResetWorkingCodexSessionOnEscape() {
+    func handleLocalInterruptDoesNotResetFallbackTrackedWorkingCodexSessionOnEscape() {
         let sessionStore = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -2380,6 +2380,8 @@ struct SessionRuntimeStoreTests {
             panelID: panelID,
             windowID: UUID(),
             workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .sessionLogFallback(reason: "test"),
             cwd: "/repo",
             repoRoot: "/repo",
             at: startedAt
@@ -2399,6 +2401,155 @@ struct SessionRuntimeStoreTests {
         #expect(didReset == false)
         #expect(
             sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .working, summary: "Working", detail: "Responding")
+        )
+    }
+
+    @Test
+    func handleLocalInterruptResetsHookTrackedWorkingCodexSessionOnEscape() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-codex-hook-working",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-codex-hook-working",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Responding"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didReset = sessionStore.handleLocalInterruptForPanelIfActive(
+            panelID: panelID,
+            kind: .escape,
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didReset)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+        )
+    }
+
+    @Test
+    func handleLocalInterruptResetsHookTrackedNeedsApprovalCodexSessionOnEscape() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-codex-hook-approval",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-codex-hook-approval",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didReset = sessionStore.handleLocalInterruptForPanelIfActive(
+            panelID: panelID,
+            kind: .escape,
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didReset)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+        )
+    }
+
+    @Test
+    func handleLocalInterruptKeepsCodexControlCResetBehavior() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-codex-control-c",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-codex-control-c",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Responding"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didReset = sessionStore.handleLocalInterruptForPanelIfActive(
+            panelID: panelID,
+            kind: .controlC,
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didReset)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+        )
+    }
+
+    @Test
+    func handleLocalInterruptDoesNotResetCodexSessionForDifferentPanelEscape() {
+        let sessionStore = SessionRuntimeStore()
+        let codexPanelID = UUID()
+        let otherPanelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-codex-focused-panel",
+            agent: .codex,
+            panelID: codexPanelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-codex-focused-panel",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Responding"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didReset = sessionStore.handleLocalInterruptForPanelIfActive(
+            panelID: otherPanelID,
+            kind: .escape,
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didReset == false)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: codexPanelID)?.status ==
                 SessionStatus(kind: .working, summary: "Working", detail: "Responding")
         )
     }
