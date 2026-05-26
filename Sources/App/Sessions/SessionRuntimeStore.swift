@@ -874,7 +874,7 @@ final class SessionRuntimeStore: ObservableObject {
             )
             guard previousRows != nextRows else { continue }
 
-            ToasttyLog.info(
+            ToasttyLog.debug(
                 "Workspace sidebar session status snapshot changed",
                 category: .state,
                 metadata: [

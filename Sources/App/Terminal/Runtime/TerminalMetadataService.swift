@@ -933,7 +933,7 @@ final class TerminalMetadataService {
             return
         }
 
-        ToasttyLog.info(
+        ToasttyLog.debug(
             "Terminal metadata update summary",
             category: .terminal,
             metadata: [

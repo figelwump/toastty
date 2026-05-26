@@ -1194,7 +1194,7 @@ struct SidebarView: View {
         metadata["previous_unread_accent"] = previousState?.showsUnreadSessionAccent == true ? "true" : "false"
         metadata["previous_active_panel"] = previousState?.isActivePanel == true ? "true" : "false"
 
-        ToasttyLog.info(
+        ToasttyLog.debug(
             "Sidebar session row display state changed",
             category: .state,
             metadata: metadata
