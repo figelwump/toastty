@@ -264,6 +264,115 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testScratchpadTerminalBindingIndicatorShowsLiveScratchpadBinding() {
+        let panelID = UUID()
+        let scratchpadPanelID = UUID()
+        let workspaceID = UUID()
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "live-session",
+            agent: .codex,
+            sourcePanelID: panelID,
+            sourceWorkspaceID: workspaceID,
+            displayTitle: "Codex",
+            startedAt: Date(timeIntervalSince1970: 100)
+        )
+        let tab = makeTerminalTabWithScratchpad(
+            terminalPanelID: panelID,
+            scratchpadPanelID: scratchpadPanelID,
+            scratchpadTitle: "Agent Notes",
+            sessionLink: sessionLink
+        )
+        var sessionRegistry = SessionRegistry()
+        sessionRegistry.startSession(
+            sessionID: "live-session",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            displayTitleOverride: "Codex",
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(
+            PanelCardView.scratchpadTerminalBindingIndicatorState(
+                for: panelID,
+                in: tab,
+                sessionRegistry: sessionRegistry
+            ),
+            ScratchpadTerminalBindingIndicatorState(
+                scratchpadPanelID: scratchpadPanelID,
+                helpText: "Bound to Scratchpad: Agent Notes"
+            )
+        )
+    }
+
+    func testScratchpadTerminalBindingIndicatorHidesStaleScratchpadBinding() {
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "stale-session",
+            agent: .codex,
+            sourcePanelID: panelID,
+            sourceWorkspaceID: workspaceID,
+            displayTitle: "Codex",
+            startedAt: Date(timeIntervalSince1970: 100)
+        )
+        let tab = makeTerminalTabWithScratchpad(
+            terminalPanelID: panelID,
+            scratchpadPanelID: UUID(),
+            sessionLink: sessionLink
+        )
+
+        XCTAssertNil(
+            PanelCardView.scratchpadTerminalBindingIndicatorState(
+                for: panelID,
+                in: tab,
+                sessionRegistry: SessionRegistry()
+            )
+        )
+    }
+
+    func testScratchpadTerminalBindingIndicatorHidesOtherTerminalBindings() {
+        let panelID = UUID()
+        let otherPanelID = UUID()
+        let workspaceID = UUID()
+        let sessionLink = ScratchpadSessionLink(
+            sessionID: "other-session",
+            agent: .claude,
+            sourcePanelID: otherPanelID,
+            sourceWorkspaceID: workspaceID,
+            displayTitle: "Claude Code",
+            startedAt: Date(timeIntervalSince1970: 100)
+        )
+        let tab = makeTerminalTabWithScratchpad(
+            terminalPanelID: panelID,
+            scratchpadPanelID: UUID(),
+            sessionLink: sessionLink
+        )
+        var sessionRegistry = SessionRegistry()
+        sessionRegistry.startSession(
+            sessionID: "other-session",
+            agent: .claude,
+            panelID: otherPanelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            displayTitleOverride: "Claude Code",
+            cwd: nil,
+            repoRoot: nil,
+            at: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertNil(
+            PanelCardView.scratchpadTerminalBindingIndicatorState(
+                for: panelID,
+                in: tab,
+                sessionRegistry: sessionRegistry
+            )
+        )
+    }
+
     func testEffectivePrimaryFocusedPanelIDClearsWhenVisibleRightPanelIsFocused() {
         let mainPanelID = UUID()
         let rightPanelID = UUID()
@@ -2037,15 +2146,18 @@ final class WorkspaceViewTests: XCTestCase {
 
     private func makeScratchpadRightAuxPanel(
         panelID: UUID,
-        isVisible: Bool
+        isVisible: Bool,
+        title: String = "Scratchpad",
+        sessionLink: ScratchpadSessionLink? = nil
     ) -> RightAuxPanelState {
         let tabID = UUID()
         let panelState = PanelState.web(
             WebPanelState(
                 definition: .scratchpad,
-                title: "Scratchpad",
+                title: title,
                 scratchpad: ScratchpadState(
                     documentID: UUID(),
+                    sessionLink: sessionLink,
                     revision: 0
                 )
             )
@@ -2065,6 +2177,30 @@ final class WorkspaceViewTests: XCTestCase {
                 ),
             ],
             focusedPanelID: isVisible ? panelID : nil
+        )
+    }
+
+    private func makeTerminalTabWithScratchpad(
+        terminalPanelID: UUID,
+        scratchpadPanelID: UUID,
+        scratchpadTitle: String = "Scratchpad",
+        sessionLink: ScratchpadSessionLink?
+    ) -> WorkspaceTabState {
+        WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: terminalPanelID),
+            panels: [
+                terminalPanelID: .terminal(
+                    TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")
+                ),
+            ],
+            focusedPanelID: terminalPanelID,
+            rightAuxPanel: makeScratchpadRightAuxPanel(
+                panelID: scratchpadPanelID,
+                isVisible: true,
+                title: scratchpadTitle,
+                sessionLink: sessionLink
+            )
         )
     }
 

@@ -4129,6 +4129,13 @@ struct PanelCardView: View {
 
     @ViewBuilder
     private var panelHeaderTrailingContent: some View {
+        if let scratchpadTerminalBindingIndicatorState {
+            ScratchpadTerminalBindingIndicator(
+                state: scratchpadTerminalBindingIndicatorState,
+                appIsActive: appIsActive
+            )
+        }
+
         if let browserHeaderAccessory {
             browserHeaderAccessory
         }
@@ -4145,6 +4152,23 @@ struct PanelCardView: View {
         case .empty:
             EmptyView()
         }
+    }
+
+    private var scratchpadTerminalBindingIndicatorState: ScratchpadTerminalBindingIndicatorState? {
+        guard case .terminal = panelState,
+              let workspace = store.state.workspacesByID[workspaceID],
+              let owningTab = workspace.orderedTabs.first(where: { tab in
+                  tab.panels[panelID] != nil &&
+                      tab.layoutTree.slotContaining(panelID: panelID) != nil
+              }) else {
+            return nil
+        }
+
+        return Self.scratchpadTerminalBindingIndicatorState(
+            for: panelID,
+            in: owningTab,
+            sessionRegistry: sessionRuntimeStore.sessionRegistry
+        )
     }
 
     private var panelHeaderCloseButton: some View {
@@ -4270,6 +4294,39 @@ struct PanelCardView: View {
             label: "Bound to \(displayName)",
             liveSessionID: activeSession.sessionID
         )
+    }
+
+    static func scratchpadTerminalBindingIndicatorState(
+        for panelID: UUID,
+        in workspaceTab: WorkspaceTabState,
+        sessionRegistry: SessionRegistry
+    ) -> ScratchpadTerminalBindingIndicatorState? {
+        for rightAuxTab in workspaceTab.rightAuxPanel.orderedTabs {
+            guard case .web(let webState) = rightAuxTab.panelState,
+                  webState.definition == .scratchpad,
+                  let sessionLink = webState.scratchpad?.sessionLink,
+                  sessionLink.sourcePanelID == panelID,
+                  let activeSession = sessionRegistry.activeSession(sessionID: sessionLink.sessionID),
+                  activeSession.panelID == panelID else {
+                continue
+            }
+
+            return ScratchpadTerminalBindingIndicatorState(
+                scratchpadPanelID: rightAuxTab.panelID,
+                helpText: scratchpadTerminalBindingIndicatorHelpText(for: webState)
+            )
+        }
+
+        return nil
+    }
+
+    private static func scratchpadTerminalBindingIndicatorHelpText(for webState: WebPanelState) -> String {
+        guard let title = normalizedScratchpadBindingLabel(webState.title),
+              title != WebPanelDefinition.scratchpad.defaultTitle else {
+            return "Bound to Scratchpad"
+        }
+
+        return "Bound to Scratchpad: \(title)"
     }
 
     private static func normalizedScratchpadBindingLabel(_ value: String?) -> String? {
@@ -4413,6 +4470,27 @@ struct ScratchpadBindingStatus: Equatable {
 
     var isLiveBound: Bool {
         liveSessionID != nil
+    }
+}
+
+struct ScratchpadTerminalBindingIndicatorState: Equatable {
+    let scratchpadPanelID: UUID
+    let helpText: String
+}
+
+private struct ScratchpadTerminalBindingIndicator: View {
+    let state: ScratchpadTerminalBindingIndicatorState
+    let appIsActive: Bool
+
+    var body: some View {
+        Image(systemName: "link")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(appIsActive ? ToastyTheme.accent : ToastyTheme.accent.opacity(0.55))
+            .frame(width: 16, height: 16)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Bound to Scratchpad")
+            .accessibilityIdentifier("panel.header.scratchpad.bound.\(state.scratchpadPanelID.uuidString)")
+            .help(state.helpText)
     }
 }
 
