@@ -11,6 +11,7 @@ struct RightAuxPanelView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalLiveTitleStore: TerminalLiveTitleStore
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -109,6 +110,7 @@ struct RightAuxPanelView: View {
             store: store,
             terminalProfileStore: terminalProfileStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            terminalLiveTitleStore: terminalLiveTitleStore,
             sessionRuntimeStore: sessionRuntimeStore,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             focusedPanelCommandController: focusedPanelCommandController,

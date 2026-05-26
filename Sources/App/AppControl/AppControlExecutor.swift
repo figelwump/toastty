@@ -1331,7 +1331,7 @@ private extension AppControlExecutor {
             "windowID": .string(windowID.uuidString),
             "workspaceID": .string(workspaceID.uuidString),
             "panelID": .string(panelID.uuidString),
-            "title": .string(terminalState.title),
+            "title": .string(currentTerminalTitle(panelID: panelID, terminalState: terminalState)),
             "cwd": .string(terminalState.cwd),
             "shell": .string(terminalState.shell),
             "profileID": terminalState.profileBinding.map { .string($0.profileID) } ?? .null,
@@ -1520,7 +1520,7 @@ private extension AppControlExecutor {
             case .terminal(let terminalState):
                 panelKind = "terminal"
                 webDefinition = .null
-                panelTitle = terminalState.title
+                panelTitle = currentTerminalTitle(panelID: tab.panelID, terminalState: terminalState)
             case .web(let webState):
                 panelKind = "web"
                 webDefinition = .string(webState.definition.rawValue)
@@ -1595,6 +1595,10 @@ private extension AppControlExecutor {
 
     static func sha256Hex(_ string: String) -> String {
         SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func currentTerminalTitle(panelID: UUID, terminalState: TerminalPanelState) -> String {
+        terminalRuntimeRegistry.terminalLiveTitleStore.title(for: panelID) ?? terminalState.title
     }
 
     func locatePanel(_ panelID: UUID) -> (windowID: UUID, workspaceID: UUID)? {

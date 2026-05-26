@@ -1585,6 +1585,36 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testTerminalStateUsesLiveTitleWhenAvailable() async throws {
+        let fixture = makeSingleWindowFixture()
+        let panelID = try XCTUnwrap(fixture.state.workspacesByID[fixture.workspaceID]?.focusedPanelID)
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            await MainActor.run {
+                harness.terminalRuntimeRegistry.terminalLiveTitleStore.setTitle(
+                    "Live Build",
+                    for: panelID
+                )
+            }
+            let response = try sendRequest(
+                command: "automation.terminal_state",
+                payload: [
+                    "panelID": panelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["title"] as? String, "Live Build")
+            let state = await MainActor.run { harness.store.state }
+            guard case .terminal(let terminalState)? = state.workspacesByID[fixture.workspaceID]?.panels[panelID] else {
+                XCTFail("expected terminal panel")
+                return
+            }
+            XCTAssertEqual(terminalState.title, "Terminal 1")
+        }
+    }
+
     func testTerminalStateTargetsBackgroundTabPanelByPanelID() async throws {
         var backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
         guard let panelID = backgroundTab.focusedPanelID,
@@ -1761,6 +1791,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         )
         return AutomationHarness(
             store: store,
+            terminalRuntimeRegistry: registry,
             server: server,
             socketPath: socketPath,
             sessionRuntimeStore: sessionRuntimeStore
@@ -2117,6 +2148,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
 
 private struct AutomationHarness {
     let store: AppStore
+    let terminalRuntimeRegistry: TerminalRuntimeRegistry
     let server: AutomationSocketServer
     let socketPath: String
     let sessionRuntimeStore: SessionRuntimeStore

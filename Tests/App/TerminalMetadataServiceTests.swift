@@ -49,6 +49,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.title, "Terminal 1")
         XCTAssertEqual(terminalState.cwd, "")
+        XCTAssertNil(service.liveTitle(for: panelID))
         try StateValidator.validate(store.state)
     }
 
@@ -112,7 +113,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.cwd, "/tmp/restored")
-        XCTAssertEqual(terminalState.title, "bundle exec rspec")
+        XCTAssertEqual(terminalState.title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "bundle exec rspec")
         try StateValidator.validate(store.state)
     }
 
@@ -176,7 +178,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.cwd, "/tmp/restored")
-        XCTAssertEqual(terminalState.title, "/tmp/restored")
+        XCTAssertEqual(terminalState.title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "/tmp/restored")
         try StateValidator.validate(store.state)
     }
 
@@ -229,6 +232,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.title, "Terminal 1")
         XCTAssertEqual(terminalState.cwd, "")
+        XCTAssertNil(service.liveTitle(for: panelID))
         try StateValidator.validate(store.state)
     }
 
@@ -280,8 +284,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(terminalState.title, "npm run dev")
+        XCTAssertEqual(terminalState.title, "Terminal 1")
         XCTAssertEqual(terminalState.cwd, "")
+        XCTAssertEqual(service.liveTitle(for: panelID), "npm run dev")
         try StateValidator.validate(store.state)
     }
 
@@ -328,8 +333,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(terminalState.title, "zmx attach toastty.$TOASTTY_PANEL_ID")
+        XCTAssertEqual(terminalState.title, "Terminal 1")
         XCTAssertEqual(terminalState.cwd, "")
+        XCTAssertEqual(service.liveTitle(for: panelID), "zmx attach toastty.$TOASTTY_PANEL_ID")
         try StateValidator.validate(store.state)
     }
 
@@ -384,8 +390,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await settleMetadataTasks()
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(terminalState.title, "zmx attach toastty.$TOASTTY_PANEL_ID")
+        XCTAssertEqual(terminalState.title, "Terminal 1")
         XCTAssertEqual(terminalState.cwd, "")
+        XCTAssertEqual(service.liveTitle(for: panelID), "zmx attach toastty.$TOASTTY_PANEL_ID")
         try StateValidator.validate(store.state)
     }
 
@@ -552,6 +559,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         let ts = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(ts.title, "Terminal 1")
         XCTAssertEqual(ts.cwd, "")
+        XCTAssertNil(service.liveTitle(for: panelID))
         XCTAssertFalse(service.prefersNativeCWDSignal(panelID: panelID))
         try StateValidator.validate(store.state)
     }
@@ -610,6 +618,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         let ts = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(ts.cwd, "/tmp/new-directory")
+        XCTAssertEqual(ts.title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "/tmp/new-directory")
         try StateValidator.validate(store.state)
     }
 
@@ -1329,8 +1339,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "first ever title")
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "first ever title")
+        XCTAssertEqual(metadataPublishCount, 0)
         let delayCallCount = await titleDelay.callCount()
         XCTAssertEqual(delayCallCount, 0, "first title should not arm the coalescer")
         try StateValidator.validate(store.state)
@@ -1370,8 +1381,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
                 state: store.state
             )
         )
-        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "first ever title")
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "first ever title")
+        XCTAssertEqual(metadataPublishCount, 0)
 
         XCTAssertTrue(
             service.handleRuntimeMetadataAction(
@@ -1391,16 +1403,18 @@ final class TerminalMetadataServiceTests: XCTestCase {
         )
         await settleMetadataTasks()
 
-        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "first ever title")
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "first ever title")
+        XCTAssertEqual(metadataPublishCount, 0)
         let armedDelayCallCount = await titleDelay.callCount()
         XCTAssertEqual(armedDelayCallCount, 1, "second and third titles should share one coalescer arming")
 
         await titleDelay.open()
         await settleMetadataTasks()
 
-        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "spinner frame B")
-        XCTAssertEqual(metadataPublishCount, 2)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "spinner frame B")
+        XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
 
@@ -1451,6 +1465,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
             originalTitle,
             "background first title should not publish immediately"
         )
+        XCTAssertNil(service.liveTitle(for: backgroundPanelID))
         XCTAssertEqual(metadataPublishCount, 0)
         let armedDelayCallCount = await titleDelay.callCount()
         XCTAssertEqual(armedDelayCallCount, 1, "background first title should arm the coalescer")
@@ -1460,9 +1475,10 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         XCTAssertEqual(
             try terminalState(panelID: backgroundPanelID, state: store.state).title,
-            "background first title"
+            originalTitle
         )
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(service.liveTitle(for: backgroundPanelID), "background first title")
+        XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
 
@@ -1513,8 +1529,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         await settleMetadataTasks()
 
-        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "latest frame")
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "latest frame")
+        XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
 
@@ -1583,8 +1600,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await titleDelay.open()
         await settleMetadataTasks()
 
-        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "spinner frame 3")
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "spinner frame 3")
+        XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
 
@@ -1631,7 +1649,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await titleDelay.open()
         await settleMetadataTasks()
 
-        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "visible window frame 3")
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "visible window frame 3")
         try StateValidator.validate(store.state)
     }
 
@@ -1674,8 +1693,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         await settleMetadataTasks()
 
-        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "vim")
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "vim")
+        XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
 
@@ -1724,6 +1744,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await settleMetadataTasks()
 
         XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertNil(service.liveTitle(for: panelID))
         XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
@@ -1768,6 +1789,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await settleMetadataTasks()
 
         XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "already current")
+        XCTAssertNil(service.liveTitle(for: panelID))
         XCTAssertEqual(metadataPublishCount, 1)
         try StateValidator.validate(store.state)
     }
@@ -1815,8 +1837,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         currentTerminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(currentTerminalState.cwd, "/tmp/title-inferred")
-        XCTAssertEqual(currentTerminalState.title, "/tmp/title-inferred")
-        XCTAssertEqual(metadataPublishCount, 2)
+        XCTAssertEqual(currentTerminalState.title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: panelID), "/tmp/title-inferred")
+        XCTAssertEqual(metadataPublishCount, 1)
         try StateValidator.validate(store.state)
     }
 
@@ -1858,6 +1881,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await settleMetadataTasks()
 
         XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertNil(service.liveTitle(for: panelID))
         XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
@@ -1921,8 +1945,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
         let terminalState = try terminalState(panelID: backgroundPanelID, state: store.state)
         let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(updatedWorkspace.selectedTabID, selectedTabID)
-        XCTAssertEqual(terminalState.title, "background frame 3")
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(terminalState.title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: backgroundPanelID), "background frame 3")
+        XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
 
@@ -1981,9 +2006,10 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         XCTAssertEqual(
             try terminalState(panelID: backgroundPanelID, state: store.state).title,
-            "background workspace frame 3"
+            originalTitle
         )
-        XCTAssertEqual(metadataPublishCount, 1)
+        XCTAssertEqual(service.liveTitle(for: backgroundPanelID), "background workspace frame 3")
+        XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
 
@@ -2035,7 +2061,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await titleDelay.open()
         await settleMetadataTasks()
 
-        XCTAssertEqual(try terminalState(panelID: hiddenPanelID, state: store.state).title, "hidden focus frame 3")
+        XCTAssertEqual(try terminalState(panelID: hiddenPanelID, state: store.state).title, originalHiddenTitle)
+        XCTAssertEqual(service.liveTitle(for: hiddenPanelID), "hidden focus frame 3")
         try StateValidator.validate(store.state)
     }
 
@@ -2088,9 +2115,9 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         await settleMetadataTasks()
 
-        XCTAssertEqual(try terminalState(panelID: firstPanelID, state: store.state).title, "first panel")
-        XCTAssertEqual(try terminalState(panelID: secondPanelID, state: store.state).title, "second panel")
-        XCTAssertEqual(metadataPublishCount, 2)
+        XCTAssertEqual(service.liveTitle(for: firstPanelID), "first panel")
+        XCTAssertEqual(service.liveTitle(for: secondPanelID), "second panel")
+        XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
 
@@ -2132,6 +2159,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
         await settleMetadataTasks()
 
         XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Terminal 1")
+        XCTAssertNil(service.liveTitle(for: panelID))
         XCTAssertEqual(metadataPublishCount, 0)
         try StateValidator.validate(store.state)
     }
@@ -2310,7 +2338,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
         let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(updatedWorkspace.selectedTabID, selectedTabID)
         XCTAssertEqual(terminalState.cwd, "/tmp/background-tab")
-        XCTAssertEqual(terminalState.title, "bundle exec rspec")
+        XCTAssertEqual(terminalState.title, "Terminal 1")
+        XCTAssertEqual(service.liveTitle(for: backgroundPanelID), "bundle exec rspec")
         try StateValidator.validate(store.state)
     }
 }

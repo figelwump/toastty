@@ -61,6 +61,7 @@ struct AppWindowView: View {
                     agentCatalogStore: agentCatalogStore,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    terminalLiveTitleStore: terminalRuntimeRegistry.terminalLiveTitleStore,
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
                     profileShortcutRegistry: profileShortcutRegistry,

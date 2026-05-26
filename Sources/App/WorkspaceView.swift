@@ -82,6 +82,7 @@ struct WorkspaceView: View {
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalLiveTitleStore: TerminalLiveTitleStore
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
@@ -340,6 +341,10 @@ struct WorkspaceView: View {
         }
 
         return panelID
+    }
+
+    nonisolated static func terminalTitleSourcePanelID(for tab: WorkspaceTabState) -> UUID? {
+        TerminalDisplayTitleResolver.terminalTitleSourcePanelID(for: tab)
     }
 
     nonisolated static func workspaceTabMinimumTotalWidth(
@@ -920,6 +925,15 @@ struct WorkspaceView: View {
         isWorkspaceSelected && isWorkspaceTabSelected
     }
 
+    static func rightAuxPanelBodyContentMounted(
+        isWorkspaceSelected: Bool,
+        isWorkspaceTabSelected: Bool,
+        rightAuxPanelVisible: Bool,
+        focusedPanelModeActive: Bool
+    ) -> Bool {
+        isWorkspaceSelected && isWorkspaceTabSelected && rightAuxPanelVisible && focusedPanelModeActive == false
+    }
+
     static func rightAuxPanelResizeHandleVisible(
         isWorkspaceSelected: Bool,
         isWorkspaceTabSelected: Bool,
@@ -1195,6 +1209,7 @@ struct WorkspaceView: View {
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    terminalLiveTitleStore: terminalLiveTitleStore,
                     sessionRuntimeStore: sessionRuntimeStore,
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
@@ -1402,31 +1417,41 @@ struct WorkspaceView: View {
         targetWidth: CGFloat,
         renderedWidth: CGFloat
     ) -> some View {
-        let isVisible = isWorkspaceSelected &&
-            isTabSelected &&
-            tab.rightAuxPanel.isVisible &&
-            tab.focusedPanelModeActive == false
-
-        return RightAuxPanelView(
-            windowID: windowID,
-            workspace: workspace,
-            workspaceTab: tab,
+        let mountsBodyContent = Self.rightAuxPanelBodyContentMounted(
             isWorkspaceSelected: isWorkspaceSelected,
             isWorkspaceTabSelected: isTabSelected,
-            store: store,
-            terminalProfileStore: terminalProfileStore,
-            terminalRuntimeRegistry: terminalRuntimeRegistry,
-            sessionRuntimeStore: sessionRuntimeStore,
-            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
-            focusedPanelCommandController: focusedPanelCommandController,
-            openLocalFileSearch: openRightPanelFileSearch,
-            createBlankScratchpad: createBlankRightPanelScratchpad(workspaceID:),
-            openBrowser: openRightPanelBrowser,
-            windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
-            windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
-            isRightAuxPanelVisible: isVisible,
-            appIsActive: appIsActive
+            rightAuxPanelVisible: tab.rightAuxPanel.isVisible,
+            focusedPanelModeActive: tab.focusedPanelModeActive
         )
+        let isVisible = mountsBodyContent
+
+        return Group {
+            if mountsBodyContent {
+                RightAuxPanelView(
+                    windowID: windowID,
+                    workspace: workspace,
+                    workspaceTab: tab,
+                    isWorkspaceSelected: isWorkspaceSelected,
+                    isWorkspaceTabSelected: isTabSelected,
+                    store: store,
+                    terminalProfileStore: terminalProfileStore,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    terminalLiveTitleStore: terminalLiveTitleStore,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                    focusedPanelCommandController: focusedPanelCommandController,
+                    openLocalFileSearch: openRightPanelFileSearch,
+                    createBlankScratchpad: createBlankRightPanelScratchpad(workspaceID:),
+                    openBrowser: openRightPanelBrowser,
+                    windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
+                    windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
+                    isRightAuxPanelVisible: isVisible,
+                    appIsActive: appIsActive
+                )
+            } else {
+                Color.clear
+            }
+        }
         .frame(width: targetWidth)
         .frame(width: renderedWidth, alignment: .leading)
         .clipped()
@@ -1854,6 +1879,48 @@ struct WorkspaceView: View {
         allowsManagementAffordances: Bool,
         installsContextMenu: Bool
     ) -> some View {
+        if let titleConfiguration = workspaceTabLiveTitleDisplayConfiguration(for: tab) {
+            TerminalLiveTitleDisplayScope(
+                liveTitleModel: titleConfiguration.liveTitleModel,
+                fallbackTitle: titleConfiguration.fallbackTitle,
+                displayTitleForLiveTitle: titleConfiguration.displayTitleForLiveTitle
+            ) { displayTitle in
+                workspaceTabRowContent(
+                    workspaceID: workspaceID,
+                    orderedTabIDs: orderedTabIDs,
+                    tab: tab,
+                    displayTitle: displayTitle,
+                    index: index,
+                    isSelected: isSelected,
+                    allowsManagementAffordances: allowsManagementAffordances,
+                    installsContextMenu: installsContextMenu
+                )
+            }
+        } else {
+            workspaceTabRowContent(
+                workspaceID: workspaceID,
+                orderedTabIDs: orderedTabIDs,
+                tab: tab,
+                displayTitle: tab.displayTitle,
+                index: index,
+                isSelected: isSelected,
+                allowsManagementAffordances: allowsManagementAffordances,
+                installsContextMenu: installsContextMenu
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceTabRowContent(
+        workspaceID: UUID,
+        orderedTabIDs: [UUID],
+        tab: WorkspaceTabState,
+        displayTitle: String,
+        index: Int,
+        isSelected: Bool,
+        allowsManagementAffordances: Bool,
+        installsContextMenu: Bool
+    ) -> some View {
         let hasUnread = tab.unreadPanelIDs.isEmpty == false
         let isAnyTabDragActive = activeTabDrag != nil
         let isDraggedTab = activeTabDrag?.tabID == tab.id
@@ -1884,6 +1951,7 @@ struct WorkspaceView: View {
                         HStack(spacing: 5) {
                             workspaceTabTitleContent(
                                 tab: tab,
+                                displayTitle: displayTitle,
                                 textColor: chromeSpec.text,
                                 hasUnread: hasUnread,
                                 focusIndicatorStyle: focusIndicatorStyle
@@ -1904,11 +1972,11 @@ struct WorkspaceView: View {
                 .contentShape(Rectangle())
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel(tab.displayTitle)
+                .accessibilityLabel(displayTitle)
                 .accessibilityAction {
                     selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id)
                 }
-                .help(tab.displayTitle)
+                .help(displayTitle)
                 .accessibilityIdentifier("workspace.tab.\(tab.id.uuidString)")
                 .animation(.easeOut(duration: 0.1), value: isHovered)
             }
@@ -1946,7 +2014,7 @@ struct WorkspaceView: View {
             }
 
             if isHovered && showsManagementAffordances {
-                workspaceTabCloseButton(workspaceID: workspaceID, tab: tab)
+                workspaceTabCloseButton(workspaceID: workspaceID, tab: tab, displayTitle: displayTitle)
                     .padding(.trailing, 10)
                     .frame(height: ToastyTheme.workspaceTabHeight, alignment: .center)
             }
@@ -1978,7 +2046,7 @@ struct WorkspaceView: View {
         if installsContextMenu {
             interactiveRow.contextMenu {
                 if isAnyTabDragActive == false {
-                    workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
+                    workspaceTabContextMenu(workspaceID: workspaceID, tab: tab, displayTitle: displayTitle)
                 }
             }
         } else {
@@ -1989,6 +2057,7 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func workspaceTabTitleContent(
         tab: WorkspaceTabState,
+        displayTitle: String,
         textColor: Color,
         hasUnread: Bool,
         focusIndicatorStyle: WorkspaceTabFocusIndicatorStyle
@@ -2012,7 +2081,7 @@ struct WorkspaceView: View {
                 )
             }
 
-            Text(tab.displayTitle)
+            Text(displayTitle)
                 .font(ToastyTheme.fontWorkspaceTab)
                 .foregroundStyle(textColor)
                 .lineLimit(1)
@@ -2022,6 +2091,37 @@ struct WorkspaceView: View {
                 workspaceTabFocusIndicator(style: focusIndicatorStyle)
             }
         }
+    }
+
+    private func workspaceTabLiveTitleDisplayConfiguration(
+        for tab: WorkspaceTabState
+    ) -> TerminalLiveTitleDisplayConfiguration? {
+        guard let terminalPanelID = Self.terminalTitleSourcePanelID(for: tab) else {
+            return nil
+        }
+
+        return TerminalLiveTitleDisplayConfiguration(
+            liveTitleModel: terminalLiveTitleStore.model(for: terminalPanelID),
+            fallbackTitle: TerminalDisplayTitleResolver.workspaceTabTitle(
+                tab: tab,
+                liveTerminalTitle: nil
+            ),
+            displayTitleForLiveTitle: { liveTitle in
+                TerminalDisplayTitleResolver.workspaceTabTitle(
+                    tab: tab,
+                    liveTerminalTitle: liveTitle
+                )
+            }
+        )
+    }
+
+    private func workspaceTabDisplayTitle(for tab: WorkspaceTabState) -> String {
+        guard let titleConfiguration = workspaceTabLiveTitleDisplayConfiguration(for: tab),
+              let liveTitle = titleConfiguration.liveTitleModel.title else {
+            return tab.displayTitle
+        }
+
+        return titleConfiguration.displayTitleForLiveTitle(liveTitle)
     }
 
     @ViewBuilder
@@ -2148,7 +2248,8 @@ struct WorkspaceView: View {
 
     private func workspaceTabCloseButton(
         workspaceID: UUID,
-        tab: WorkspaceTabState
+        tab: WorkspaceTabState,
+        displayTitle: String
     ) -> some View {
         Button {
             closeWorkspaceTab(workspaceID: workspaceID, tabID: tab.id)
@@ -2167,7 +2268,7 @@ struct WorkspaceView: View {
                 )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Close \(tab.displayTitle)")
+        .accessibilityLabel("Close \(displayTitle)")
         .onHover { hovering in
             if hovering {
                 hoveredTabCloseButtonID = tab.id
@@ -2175,18 +2276,22 @@ struct WorkspaceView: View {
                 hoveredTabCloseButtonID = nil
             }
         }
-        .help("Close \(tab.displayTitle)")
+        .help("Close \(displayTitle)")
         .accessibilityIdentifier("workspace.tab.close.\(tab.id.uuidString)")
         .transition(.opacity)
         .contextMenu {
-            workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
+            workspaceTabContextMenu(workspaceID: workspaceID, tab: tab, displayTitle: displayTitle)
         }
     }
 
     @ViewBuilder
-    private func workspaceTabContextMenu(workspaceID: UUID, tab: WorkspaceTabState) -> some View {
+    private func workspaceTabContextMenu(
+        workspaceID: UUID,
+        tab: WorkspaceTabState,
+        displayTitle: String
+    ) -> some View {
         Button(ToasttyKeyboardShortcuts.renameTab.menuTitle("Rename Tab")) {
-            beginTabRename(tab)
+            beginTabRename(tab, displayTitle: displayTitle)
         }
 
         if tab.customTitle != nil {
@@ -2200,10 +2305,10 @@ struct WorkspaceView: View {
         }
     }
 
-    private func beginTabRename(_ tab: WorkspaceTabState) {
+    private func beginTabRename(_ tab: WorkspaceTabState, displayTitle: String? = nil) {
         clearTabHoverState(for: tab.id)
         renamingTabID = tab.id
-        renameDraftTitle = tab.displayTitle
+        renameDraftTitle = displayTitle ?? workspaceTabDisplayTitle(for: tab)
     }
 
     private func commitTabRename(workspaceID: UUID, tabID: UUID) {
@@ -3443,6 +3548,39 @@ private struct SelectedWorkspaceTabSignature: Equatable {
     let tabID: UUID
 }
 
+private struct TerminalLiveTitleDisplayConfiguration {
+    let liveTitleModel: TerminalLiveTitleModel
+    let fallbackTitle: String
+    let displayTitleForLiveTitle: (String) -> String
+}
+
+private struct TerminalLiveTitleDisplayScope<Content: View>: View {
+    @ObservedObject var liveTitleModel: TerminalLiveTitleModel
+    let fallbackTitle: String
+    let displayTitleForLiveTitle: (String) -> String
+    @ViewBuilder let content: (String) -> Content
+
+    var body: some View {
+        content(liveTitleModel.title.map(displayTitleForLiveTitle) ?? fallbackTitle)
+    }
+}
+
+private struct TerminalLiveTitleText: View {
+    @ObservedObject var liveTitleModel: TerminalLiveTitleModel
+    let fallbackTitle: String
+    let displayTitleForLiveTitle: (String) -> String
+    let font: Font
+    let textColor: Color
+
+    var body: some View {
+        Text(liveTitleModel.title.map(displayTitleForLiveTitle) ?? fallbackTitle)
+            .font(font)
+            .foregroundStyle(textColor)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+}
+
 private struct SlotPlacementView: View {
     let placement: LayoutSlotPlacement
     let workspaceID: UUID
@@ -3452,6 +3590,7 @@ private struct SlotPlacementView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalLiveTitleStore: TerminalLiveTitleStore
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -3487,6 +3626,7 @@ private struct SlotPlacementView: View {
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    terminalLiveTitleStore: terminalLiveTitleStore,
                     sessionRuntimeStore: sessionRuntimeStore,
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
@@ -3530,6 +3670,7 @@ struct PanelCardView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalLiveTitleStore: TerminalLiveTitleStore
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -3717,25 +3858,44 @@ struct PanelCardView: View {
                 )
             }
 
+            panelHeaderTitleText
+        }
+        .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
+    }
+
+    @ViewBuilder
+    private var panelHeaderTitleText: some View {
+        switch panelState {
+        case .terminal:
+            TerminalLiveTitleText(
+                liveTitleModel: terminalLiveTitleStore.model(for: panelID),
+                fallbackTitle: panelLabel,
+                displayTitleForLiveTitle: { liveTitle in
+                    TerminalDisplayTitleResolver.panelHeaderTitle(
+                        panelState: panelState,
+                        liveTerminalTitle: liveTitle,
+                        panelSessionStatus: panelSessionStatus
+                    )
+                },
+                font: panelTitleFont,
+                textColor: panelTitleTextColor
+            )
+
+        case .web:
             Text(panelLabel)
                 .font(panelTitleFont)
                 .foregroundStyle(panelTitleTextColor)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
     }
 
     private var panelLabel: String {
-        switch panelState {
-        case .terminal(let terminal):
-            if let panelSessionStatus, panelSessionStatus.isActive {
-                return panelSessionStatus.displayTitle
-            }
-            return terminal.displayPanelLabel
-        case .web(let webState):
-            return webState.displayPanelLabel
-        }
+        TerminalDisplayTitleResolver.panelHeaderTitle(
+            panelState: panelState,
+            liveTerminalTitle: nil,
+            panelSessionStatus: panelSessionStatus
+        )
     }
 
     private var terminalProfileBadge: TerminalProfileBadge? {

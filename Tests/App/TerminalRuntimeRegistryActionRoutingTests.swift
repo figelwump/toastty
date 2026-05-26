@@ -85,7 +85,7 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
         }
     }
 
-    func testAppTargetTitleMetadataActionUpdatesFocusedPanelWithoutChangingFocus() async throws {
+    func testAppTargetTitleMetadataActionUpdatesFocusedPanelLiveTitleWithoutChangingFocus() async throws {
         try await MainActor.run {
             let state = AppState.bootstrap()
             let (store, registry) = makeStoreAndRegistry(state: state)
@@ -102,7 +102,8 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
                 XCTFail("expected focused panel to remain terminal")
                 return
             }
-            XCTAssertEqual(terminalState.title, "Build Logs")
+            XCTAssertEqual(terminalState.title, "Terminal 1")
+            XCTAssertEqual(registry.terminalLiveTitleStore.title(for: focusedPanelID), "Build Logs")
             try StateValidator.validate(store.state)
         }
     }
@@ -151,7 +152,7 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
         }
     }
 
-    func testSurfaceTargetTitleMetadataActionUpdatesResolvedPanel() async throws {
+    func testSurfaceTargetTitleMetadataActionUpdatesResolvedPanelLiveTitle() async throws {
         try await MainActor.run {
             let state = try makeSplitState()
             let (store, registry) = makeStoreAndRegistry(state: state)
@@ -162,6 +163,10 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
             let targetPanelID = try XCTUnwrap(
                 workspaceBefore.panels.keys.first(where: { $0 != initiallyFocusedPanelID })
             )
+            guard case .terminal(let targetTerminalBefore) = workspaceBefore.panels[targetPanelID] else {
+                XCTFail("expected target panel to be terminal")
+                return
+            }
             let surface = fakeSurfaceHandle(0x404)
             registry.registerSurfaceHandleForTesting(
                 surface,
@@ -191,7 +196,8 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
                 XCTFail("expected resolved panel to remain terminal")
                 return
             }
-            XCTAssertEqual(terminalState.title, "Background Task")
+            XCTAssertEqual(terminalState.title, targetTerminalBefore.title)
+            XCTAssertEqual(registry.terminalLiveTitleStore.title(for: targetPanelID), "Background Task")
             try StateValidator.validate(store.state)
         }
     }

@@ -140,6 +140,64 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testTerminalDisplayTitleResolverPrefersLiveHeaderTitleThenSessionStatus() {
+        let panelID = UUID()
+        let panelState = PanelState.terminal(
+            TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "")
+        )
+        let sessionStatus = WorkspaceSessionStatus(
+            sessionID: "session",
+            panelID: panelID,
+            agent: .codex,
+            status: SessionStatus(kind: .working, summary: "Running"),
+            displayTitleOverride: "Codex task",
+            cwd: nil,
+            updatedAt: Date(timeIntervalSince1970: 1),
+            isActive: true
+        )
+
+        XCTAssertEqual(
+            TerminalDisplayTitleResolver.panelHeaderTitle(
+                panelState: panelState,
+                liveTerminalTitle: "npm test",
+                panelSessionStatus: sessionStatus
+            ),
+            "npm test"
+        )
+        XCTAssertEqual(
+            TerminalDisplayTitleResolver.panelHeaderTitle(
+                panelState: panelState,
+                liveTerminalTitle: nil,
+                panelSessionStatus: sessionStatus
+            ),
+            "Codex task"
+        )
+        XCTAssertEqual(
+            TerminalDisplayTitleResolver.panelHeaderTitle(
+                panelState: panelState,
+                liveTerminalTitle: nil,
+                panelSessionStatus: nil
+            ),
+            "zsh"
+        )
+
+        let pathPanelState = PanelState.terminal(
+            TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp/toastty-live-title")
+        )
+        XCTAssertEqual(
+            TerminalDisplayTitleResolver.panelHeaderTitle(
+                panelState: pathPanelState,
+                liveTerminalTitle: "/tmp/toastty-live-title",
+                panelSessionStatus: nil
+            ),
+            TerminalPanelState(
+                title: "/tmp/toastty-live-title",
+                shell: "zsh",
+                cwd: "/tmp/toastty-live-title"
+            ).displayPanelLabel
+        )
+    }
+
     func testMountedContentOpacityKeepsVisibleContentOpaque() {
         XCTAssertEqual(WorkspaceView.mountedContentOpacity(isVisible: true), 1)
     }
@@ -530,6 +588,49 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testRightAuxPanelBodyContentMountRequiresSelectedVisibleOwner() {
+        XCTAssertTrue(
+            WorkspaceView.rightAuxPanelBodyContentMounted(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelBodyContentMounted(
+                isWorkspaceSelected: false,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelBodyContentMounted(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: false,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: false
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelBodyContentMounted(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: false,
+                focusedPanelModeActive: false
+            )
+        )
+        XCTAssertFalse(
+            WorkspaceView.rightAuxPanelBodyContentMounted(
+                isWorkspaceSelected: true,
+                isWorkspaceTabSelected: true,
+                rightAuxPanelVisible: true,
+                focusedPanelModeActive: true
+            )
+        )
+    }
+
     func testRightAuxPanelResizeHandleOnlyAppearsForVisibleSelectedTabSurface() {
         XCTAssertTrue(
             WorkspaceView.rightAuxPanelResizeHandleVisible(
@@ -682,6 +783,100 @@ final class WorkspaceViewTests: XCTestCase {
         )
 
         XCTAssertNil(WorkspaceView.browserTitleIconPanelID(for: tab))
+    }
+
+    func testTerminalTitleSourcePanelIDUsesDerivedTerminalTabTitleSource() {
+        let panelID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: ""
+                    )
+                )
+            ],
+            focusedPanelID: panelID
+        )
+
+        XCTAssertEqual(WorkspaceView.terminalTitleSourcePanelID(for: tab), panelID)
+        XCTAssertEqual(
+            TerminalDisplayTitleResolver.workspaceTabTitle(
+                tab: tab,
+                liveTerminalTitle: "npm test"
+            ),
+            "npm test"
+        )
+        XCTAssertEqual(
+            TerminalDisplayTitleResolver.workspaceTabTitle(
+                tab: tab,
+                liveTerminalTitle: nil
+            ),
+            "zsh"
+        )
+
+        var pathTab = tab
+        pathTab.panels[panelID] = .terminal(
+            TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "/tmp/toastty-live-title"
+            )
+        )
+        XCTAssertEqual(
+            TerminalDisplayTitleResolver.workspaceTabTitle(
+                tab: pathTab,
+                liveTerminalTitle: "/tmp/toastty-live-title"
+            ),
+            TerminalPanelState(
+                title: "/tmp/toastty-live-title",
+                shell: "zsh",
+                cwd: "/tmp/toastty-live-title"
+            ).displayPanelLabel
+        )
+    }
+
+    func testTerminalTitleSourcePanelIDSkipsWebDerivedTabTitleSource() {
+        let browserPanelID = UUID()
+        let terminalPanelID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: browserPanelID),
+                second: .slot(slotID: UUID(), panelID: terminalPanelID)
+            ),
+            panels: [
+                browserPanelID: .web(
+                    WebPanelState(
+                        definition: .browser,
+                        title: "Docs"
+                    )
+                ),
+                terminalPanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: ""
+                    )
+                ),
+            ],
+            focusedPanelID: browserPanelID
+        )
+
+        XCTAssertNil(WorkspaceView.terminalTitleSourcePanelID(for: tab))
+        XCTAssertEqual(
+            TerminalDisplayTitleResolver.workspaceTabTitle(
+                tab: tab,
+                liveTerminalTitle: nil
+            ),
+            "Docs"
+        )
     }
 
     func testResolvedWorkspaceTabWidthStaysAtIdealWidthWhenThereIsRoom() {
@@ -1556,6 +1751,148 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testHiddenSelectedRightPanelDoesNotCreateScratchpadRuntime() throws {
+        let rightPanelID = UUID()
+        let harness = try makeWorkspaceHarness { state, _, workspaceID in
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            var tab = try XCTUnwrap(workspace.selectedTab)
+            tab.rightAuxPanel = self.makeScratchpadRightAuxPanel(
+                panelID: rightPanelID,
+                isVisible: false
+            )
+            workspace.tabsByID[tab.id] = tab
+            state.workspacesByID[workspaceID] = workspace
+        }
+        defer { harness.window.orderOut(nil) }
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID))
+    }
+
+    @MainActor
+    func testFocusedPanelModeRightPanelDoesNotCreateScratchpadRuntime() throws {
+        let rightPanelID = UUID()
+        let harness = try makeWorkspaceHarness { state, _, workspaceID in
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            var tab = try XCTUnwrap(workspace.selectedTab)
+            tab.focusedPanelModeActive = true
+            tab.rightAuxPanel = self.makeScratchpadRightAuxPanel(
+                panelID: rightPanelID,
+                isVisible: true
+            )
+            workspace.tabsByID[tab.id] = tab
+            state.workspacesByID[workspaceID] = workspace
+        }
+        defer { harness.window.orderOut(nil) }
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID))
+    }
+
+    @MainActor
+    func testInactiveWorkspaceTabRightPanelDoesNotCreateScratchpadRuntime() throws {
+        let rightPanelID = UUID()
+        let harness = try makeWorkspaceHarness(tabCount: 2) { state, _, workspaceID in
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            let inactiveTabID = try XCTUnwrap(workspace.tabIDs.dropFirst().first)
+            var inactiveTab = try XCTUnwrap(workspace.tabsByID[inactiveTabID])
+            inactiveTab.rightAuxPanel = self.makeScratchpadRightAuxPanel(
+                panelID: rightPanelID,
+                isVisible: true
+            )
+            workspace.tabsByID[inactiveTabID] = inactiveTab
+            state.workspacesByID[workspaceID] = workspace
+        }
+        defer { harness.window.orderOut(nil) }
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID))
+    }
+
+    @MainActor
+    func testInactiveWorkspaceRightPanelDoesNotCreateScratchpadRuntime() throws {
+        let rightPanelID = UUID()
+        let harness = try makeWorkspaceHarness { state, windowID, _ in
+            var inactiveWorkspace = WorkspaceState.bootstrap(title: "Workspace 2")
+            var inactiveTab = try XCTUnwrap(inactiveWorkspace.selectedTab)
+            inactiveTab.rightAuxPanel = self.makeScratchpadRightAuxPanel(
+                panelID: rightPanelID,
+                isVisible: true
+            )
+            inactiveWorkspace.tabsByID[inactiveTab.id] = inactiveTab
+            state.workspacesByID[inactiveWorkspace.id] = inactiveWorkspace
+
+            let windowIndex = try XCTUnwrap(state.windows.firstIndex(where: { $0.id == windowID }))
+            state.windows[windowIndex].workspaceIDs.append(inactiveWorkspace.id)
+        }
+        defer { harness.window.orderOut(nil) }
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID))
+    }
+
+    @MainActor
+    func testRightPanelRuntimeSurvivesWorkspaceTabSwitch() throws {
+        let rightPanelID = UUID()
+        var visibleTabID: UUID?
+        var inactiveTabID: UUID?
+        let harness = try makeWorkspaceHarness(tabCount: 2) { state, _, workspaceID in
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+            var selectedTab = try XCTUnwrap(workspace.tabsByID[selectedTabID])
+            selectedTab.rightAuxPanel = self.makeScratchpadRightAuxPanel(
+                panelID: rightPanelID,
+                isVisible: true
+            )
+            workspace.tabsByID[selectedTabID] = selectedTab
+            visibleTabID = selectedTabID
+            inactiveTabID = try XCTUnwrap(workspace.tabIDs.dropFirst().first)
+            state.workspacesByID[workspaceID] = workspace
+        }
+        defer { harness.window.orderOut(nil) }
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let initialRuntime = try XCTUnwrap(
+            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
+        )
+
+        _ = harness.store.send(
+            .selectWorkspaceTab(
+                workspaceID: harness.workspaceID,
+                tabID: try XCTUnwrap(inactiveTabID)
+            )
+        )
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let runtimeAfterSwitchAway = try XCTUnwrap(
+            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
+        )
+        XCTAssertTrue(initialRuntime === runtimeAfterSwitchAway)
+
+        _ = harness.store.send(
+            .selectWorkspaceTab(
+                workspaceID: harness.workspaceID,
+                tabID: try XCTUnwrap(visibleTabID)
+            )
+        )
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let runtimeAfterSwitchBack = try XCTUnwrap(
+            harness.webPanelRuntimeRegistry.loadedScratchpadRuntime(for: rightPanelID)
+        )
+        XCTAssertTrue(initialRuntime === runtimeAfterSwitchBack)
+    }
+
     private func assertColor(
         _ actual: Color,
         equals expected: Color,
@@ -1595,7 +1932,8 @@ final class WorkspaceViewTests: XCTestCase {
     private func makeWorkspaceHarness(
         panelState overridePanelState: PanelState? = nil,
         tabCount: Int = 1,
-        hostWidth: CGFloat = 900
+        hostWidth: CGFloat = 900,
+        configureState: ((inout AppState, UUID, UUID) throws -> Void)? = nil
     ) throws -> WorkspaceHarness {
         XCTAssertGreaterThanOrEqual(tabCount, 1)
         var state = AppState.bootstrap()
@@ -1619,6 +1957,7 @@ final class WorkspaceViewTests: XCTestCase {
             }
             state.workspacesByID[workspaceID] = workspace
         }
+        try configureState?(&state, windowID, workspaceID)
         let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
         let panelID = try XCTUnwrap(workspace.focusedPanelID)
         let store = AppStore(state: state, persistTerminalFontPreference: false)
@@ -1659,6 +1998,7 @@ final class WorkspaceViewTests: XCTestCase {
             agentCatalogStore: agentCatalogStore,
             terminalProfileStore: terminalProfileStore,
             terminalRuntimeRegistry: registry,
+            terminalLiveTitleStore: registry.terminalLiveTitleStore,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: .empty),
@@ -1692,6 +2032,39 @@ final class WorkspaceViewTests: XCTestCase {
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             hostingView: hostingView,
             window: window
+        )
+    }
+
+    private func makeScratchpadRightAuxPanel(
+        panelID: UUID,
+        isVisible: Bool
+    ) -> RightAuxPanelState {
+        let tabID = UUID()
+        let panelState = PanelState.web(
+            WebPanelState(
+                definition: .scratchpad,
+                title: "Scratchpad",
+                scratchpad: ScratchpadState(
+                    documentID: UUID(),
+                    revision: 0
+                )
+            )
+        )
+        return RightAuxPanelState(
+            isVisible: isVisible,
+            width: 360,
+            hasCustomWidth: true,
+            activeTabID: tabID,
+            tabIDs: [tabID],
+            tabsByID: [
+                tabID: RightAuxPanelTabState(
+                    id: tabID,
+                    identity: .scratchpad(id: panelID),
+                    panelID: panelID,
+                    panelState: panelState
+                ),
+            ],
+            focusedPanelID: isVisible ? panelID : nil
         )
     }
 

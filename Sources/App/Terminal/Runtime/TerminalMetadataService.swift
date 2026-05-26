@@ -101,6 +101,7 @@ final class TerminalMetadataService {
     ]
 
     private let store: AppStore
+    private let liveTitleStore: TerminalLiveTitleStore
     private weak var registry: TerminalRuntimeRegistry?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     // Once a panel proves native Ghostty cwd support, keep process-based cwd
@@ -145,6 +146,7 @@ final class TerminalMetadataService {
     ) {
         self.init(
             store: store,
+            liveTitleStore: registry.terminalLiveTitleStore,
             registry: registry,
             sessionLifecycleTracker: sessionLifecycleTracker,
             resolveWorkingDirectoryFromProcessOverride: nil,
@@ -156,6 +158,7 @@ final class TerminalMetadataService {
 
     convenience init(
         store: AppStore,
+        liveTitleStore: TerminalLiveTitleStore? = nil,
         registry: TerminalRuntimeRegistry,
         sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)? = nil,
         resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?,
@@ -164,6 +167,7 @@ final class TerminalMetadataService {
     ) {
         self.init(
             store: store,
+            liveTitleStore: liveTitleStore ?? registry.terminalLiveTitleStore,
             registry: registry,
             sessionLifecycleTracker: sessionLifecycleTracker,
             resolveWorkingDirectoryFromProcessOverride: resolveWorkingDirectoryFromProcessOverride,
@@ -175,6 +179,7 @@ final class TerminalMetadataService {
 
     init(
         store: AppStore,
+        liveTitleStore: TerminalLiveTitleStore? = nil,
         registry: TerminalRuntimeRegistry,
         sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)? = nil,
         resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?,
@@ -183,6 +188,7 @@ final class TerminalMetadataService {
         titleCoalescingDelay: @escaping @Sendable () async -> Void = TerminalMetadataService.defaultTitleCoalescingDelay
     ) {
         self.store = store
+        self.liveTitleStore = liveTitleStore ?? registry.terminalLiveTitleStore
         self.registry = registry
         self.sessionLifecycleTracker = sessionLifecycleTracker
         self.resolveWorkingDirectoryFromProcessOverride = resolveWorkingDirectoryFromProcessOverride
@@ -201,6 +207,10 @@ final class TerminalMetadataService {
     /// this to isolate the steady-state behavior they're exercising.
     func _markPanelPastFirstGhosttyTitleForTesting(panelID: UUID) {
         panelsPastFirstGhosttyTitle.insert(panelID)
+    }
+
+    func liveTitle(for panelID: UUID) -> String? {
+        liveTitleStore.title(for: panelID)
     }
 
     func synchronizeLivePanels(_ livePanelIDs: Set<UUID>) {
@@ -236,6 +246,7 @@ final class TerminalMetadataService {
         panelsPastFirstGhosttyTitle = panelsPastFirstGhosttyTitle.filter {
             livePanelIDs.contains($0)
         }
+        liveTitleStore.synchronizeLivePanels(livePanelIDs)
     }
 
     func invalidate(panelID: UUID) {
@@ -248,6 +259,7 @@ final class TerminalMetadataService {
         cancelPendingTitleMetadataUpdate(panelID: panelID)
         metadataDiagnosticsByPanelID.removeValue(forKey: panelID)
         panelsPastFirstGhosttyTitle.remove(panelID)
+        liveTitleStore.remove(panelID: panelID)
     }
 
     func handleDesktopNotificationAction(
@@ -1003,7 +1015,8 @@ final class TerminalMetadataService {
             return
         }
 
-        guard pendingUpdate.title != currentTerminal.terminalState.title else {
+        let currentTitle = liveTitleStore.title(for: panelID) ?? currentTerminal.terminalState.title
+        guard pendingUpdate.title != currentTitle else {
             ToasttyLog.debug(
                 "Dropping coalesced terminal title update because value is already current",
                 category: .terminal,
@@ -1017,47 +1030,29 @@ final class TerminalMetadataService {
             return
         }
 
-        let handled = store.send(
-            .updateTerminalPanelMetadata(
-                panelID: panelID,
-                title: pendingUpdate.title,
-                cwd: nil
-            )
+        liveTitleStore.setTitle(pendingUpdate.title, for: panelID)
+        recordMetadataUpdateDiagnostics(
+            source: "\(pendingUpdate.source):coalesced_title",
+            workspaceID: currentTerminal.workspaceID,
+            panelID: panelID,
+            titleChanged: true,
+            cwdChanged: false,
+            commandFinished: false,
+            storePublished: false,
+            titleSample: pendingUpdate.title,
+            cwdSample: nil,
+            exitCode: nil
         )
-        if handled {
-            recordMetadataUpdateDiagnostics(
-                source: "\(pendingUpdate.source):coalesced_title",
-                workspaceID: currentTerminal.workspaceID,
-                panelID: panelID,
-                titleChanged: true,
-                cwdChanged: false,
-                commandFinished: false,
-                storePublished: true,
-                titleSample: pendingUpdate.title,
-                cwdSample: nil,
-                exitCode: nil
-            )
-            ToasttyLog.debug(
-                "Applied coalesced terminal title metadata update from Ghostty",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": currentTerminal.workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "source": pendingUpdate.source,
-                    "title_sample": String(pendingUpdate.title.prefix(80)),
-                ]
-            )
-        } else {
-            ToasttyLog.warning(
-                "Reducer rejected coalesced terminal title metadata update from Ghostty",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": currentTerminal.workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "source": pendingUpdate.source,
-                ]
-            )
-        }
+        ToasttyLog.debug(
+            "Applied coalesced terminal title metadata update to live display state",
+            category: .terminal,
+            metadata: [
+                "workspace_id": currentTerminal.workspaceID.uuidString,
+                "panel_id": panelID.uuidString,
+                "source": pendingUpdate.source,
+                "title_sample": String(pendingUpdate.title.prefix(80)),
+            ]
+        )
     }
 
     private func titleMetadataDeliveryMode(
@@ -1121,17 +1116,7 @@ final class TerminalMetadataService {
     }
 
     private func workspaceTabTitleSourcePanelID(_ tab: WorkspaceTabState) -> UUID? {
-        guard tab.customTitle == nil else { return nil }
-
-        if let focusedPanelID = tab.resolvedFocusedPanelID {
-            return focusedPanelID
-        }
-
-        for slot in tab.layoutTree.allSlotInfos where tab.panels[slot.panelID] != nil {
-            return slot.panelID
-        }
-
-        return nil
+        TerminalDisplayTitleResolver.terminalTitleSourcePanelID(for: tab)
     }
 
     private func workspaceIsSelectedInAnyWindow(_ workspaceID: UUID, state: AppState) -> Bool {
@@ -1241,7 +1226,8 @@ final class TerminalMetadataService {
             cwdSource = "none"
         }
 
-        let titleChanged = normalizedTitle.map { $0 != terminalState.title } ?? false
+        let currentDisplayTitle = liveTitleStore.title(for: panelID) ?? terminalState.title
+        let titleChanged = normalizedTitle.map { $0 != currentDisplayTitle } ?? false
         let cwdChanged = normalizedCWD.map {
             TerminalRuntimeRegistry.cwdValuesDiffer($0, terminalState.cwd)
         } ?? false
@@ -1382,25 +1368,7 @@ final class TerminalMetadataService {
         // Any pending throttled update is stale once we publish the first
         // real Ghostty title for this panel.
         cancelPendingTitleMetadataUpdate(panelID: panelID)
-        let handled = store.send(
-            .updateTerminalPanelMetadata(
-                panelID: panelID,
-                title: title,
-                cwd: nil
-            )
-        )
-        guard handled else {
-            ToasttyLog.warning(
-                "Reducer rejected first terminal title metadata update from Ghostty",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "source": source,
-                ]
-            )
-            return
-        }
+        liveTitleStore.setTitle(title, for: panelID)
         panelsPastFirstGhosttyTitle.insert(panelID)
         recordMetadataUpdateDiagnostics(
             source: "\(source):first_title",
@@ -1409,13 +1377,13 @@ final class TerminalMetadataService {
             titleChanged: true,
             cwdChanged: false,
             commandFinished: false,
-            storePublished: true,
+            storePublished: false,
             titleSample: title,
             cwdSample: nil,
             exitCode: nil
         )
         ToasttyLog.debug(
-            "Applied first terminal title metadata update immediately, bypassing throttle",
+            "Applied first terminal title metadata update to live display state, bypassing throttle",
             category: .terminal,
             metadata: [
                 "workspace_id": workspaceID.uuidString,

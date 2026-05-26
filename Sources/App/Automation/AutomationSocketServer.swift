@@ -2004,7 +2004,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         return [
             "workspaceID": .string(workspaceID.uuidString),
             "panelID": .string(panelID.uuidString),
-            "title": .string(terminalState.title),
+            "title": .string(currentTerminalTitle(panelID: panelID, terminalState: terminalState)),
             "cwd": .string(terminalState.cwd),
             "shell": .string(terminalState.shell),
             "profileID": terminalState.profileBinding.map { .string($0.profileID) } ?? .null,
@@ -2119,7 +2119,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             case .terminal(let terminalState):
                 panelKind = "terminal"
                 webDefinition = .null
-                panelTitle = terminalState.title
+                panelTitle = currentTerminalTitle(panelID: tab.panelID, terminalState: terminalState)
             case .web(let webState):
                 panelKind = "web"
                 webDefinition = .string(webState.definition.rawValue)
@@ -2504,6 +2504,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private func automationObject<T: Encodable>(_ value: T) throws -> [String: AutomationJSONValue] {
         let data = try JSONEncoder().encode(value)
         return try JSONDecoder().decode([String: AutomationJSONValue].self, from: data)
+    }
+
+    @MainActor
+    private func currentTerminalTitle(panelID: UUID, terminalState: TerminalPanelState) -> String {
+        terminalRuntimeRegistry.terminalLiveTitleStore.title(for: panelID) ?? terminalState.title
     }
 
     @MainActor
