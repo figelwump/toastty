@@ -101,6 +101,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private enum SurfaceCreationDeferralReason: String {
         case noWindow = "no_window"
         case hiddenHost = "hidden_host"
+        case presentationHidden = "presentation_hidden"
         case tinyBounds = "tiny_bounds"
         case unstableBounds = "unstable_bounds"
     }
@@ -1028,6 +1029,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ghosttySurface
     }
 
+    func hostVisibilityTraceSnapshot() -> TerminalHostView.VisibilityTraceSnapshot {
+        terminalHostView.visibilityTraceSnapshot()
+    }
+
     @discardableResult
     private func scrollToRowIfPossible(_ row: Int) -> Bool {
         guard let ghosttySurface else { return false }
@@ -1293,6 +1298,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             return .deferred(reason: .hiddenHost, width: width, height: height)
         }
 
+        if TerminalSurfaceDiagnostics.shouldDeferSurfaceCreationForPresentationVisibility(hostView: hostView) {
+            surfaceCreationStabilityPasses = 0
+            lastSurfaceCreationSignature = nil
+            return .deferred(reason: .presentationHidden, width: width, height: height)
+        }
+
         guard width >= minimumSurfaceHostDimension,
               height >= minimumSurfaceHostDimension else {
             surfaceCreationStabilityPasses = 0
@@ -1455,6 +1466,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ]
         if let terminalHostView = hostView as? TerminalHostView {
             metadata["host_effectively_visible"] = terminalHostView.isEffectivelyVisible ? "true" : "false"
+            metadata.merge(TerminalSurfaceDiagnostics.presentationVisibilityMetadata(hostView: terminalHostView)) {
+                current, _ in current
+            }
         }
         for (key, value) in extra {
             metadata[key] = value

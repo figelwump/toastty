@@ -217,6 +217,10 @@ final class TerminalHostView: NSView {
             minChainAlphaThousandths <= 10
         }
 
+        var isMountedAndTransparent: Bool {
+            hasWindow && isHidden == false && hasHiddenAncestor == false && visuallyTransparent
+        }
+
         var resolvedVisible: Bool {
             logicallyVisibleIgnoringTransparency && visuallyTransparent == false
         }

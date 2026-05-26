@@ -64,12 +64,46 @@ final class TerminalWorkspaceMaintenanceService {
         livePanelIDs: Set<UUID>,
         removedPanelIDs: Set<UUID>
     ) {
+        logSurfaceDiagnosticsIfNeeded(
+            state: state,
+            livePanelIDs: livePanelIDs,
+            removedPanelIDs: removedPanelIDs
+        )
+
         for panelID in removedPanelIDs {
             metadataService.invalidate(panelID: panelID)
         }
 
         synchronizeLivePanels(livePanelIDs)
         pulseVisibleSurfacesIfSelectionChanged(state: state)
+    }
+
+    private func logSurfaceDiagnosticsIfNeeded(
+        state: AppState,
+        livePanelIDs: Set<UUID>,
+        removedPanelIDs: Set<UUID>
+    ) {
+        guard TerminalSurfaceDiagnostics.snapshotLoggingEnabled else { return }
+        let currentSelection = resolvedVisibleWorkspaceSelection(state: state)
+        let selectionChanged = currentSelection != previousVisibleWorkspaceSelection
+        guard selectionChanged || removedPanelIDs.isEmpty == false else { return }
+
+        let event: String
+        if selectionChanged, removedPanelIDs.isEmpty == false {
+            event = "selection_changed_terminal_removed"
+        } else if selectionChanged {
+            event = "selection_changed"
+        } else {
+            event = "terminal_removed"
+        }
+
+        TerminalSurfaceDiagnostics.logSnapshot(
+            event: event,
+            state: state,
+            livePanelIDs: livePanelIDs,
+            removedPanelIDs: removedPanelIDs,
+            controllerForPanelID: controllerForPanelID
+        )
     }
 
     func handleSurfaceUnregister(panelID: UUID) {
