@@ -442,6 +442,22 @@ private extension ManagedAgentNativeSessionFileScanner {
             )
         }
 
+        // A matching shell snapshot identifies this launch more strongly than
+        // the cwd-only fallback, even if Codex has not written its JSONL yet.
+        // If the JSONL never lands, the observation timeout is safer than
+        // claiming another same-cwd pane's session.
+        if hasMatchingCodexShellSnapshot(from: snapshotFiles, for: observation) {
+            return ManagedAgentNativeSessionScanResult(
+                candidates: [],
+                summary: ManagedAgentNativeSessionScanSummary(
+                    candidateCount: 0,
+                    codexSnapshotFileCount: snapshotFiles.count,
+                    codexSnapshotCandidateCount: 0,
+                    codexDirectSessionDeferred: true
+                )
+            )
+        }
+
         guard nowProvider() >= observation.launchStart.addingTimeInterval(Self.codexDirectSessionFallbackDelay) else {
             return ManagedAgentNativeSessionScanResult(
                 candidates: [],
@@ -541,6 +557,15 @@ private extension ManagedAgentNativeSessionFileScanner {
                     updatedAt: updatedAt
                 )
             }
+        }
+    }
+
+    func hasMatchingCodexShellSnapshot(
+        from snapshotURLs: [URL],
+        for observation: ManagedAgentNativeSessionObservationContext
+    ) -> Bool {
+        snapshotURLs.contains { snapshotURL in
+            codexShellSnapshot(snapshotURL, matches: observation)
         }
     }
 

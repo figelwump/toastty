@@ -201,6 +201,54 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
+    func scannerDefersDirectCodexSessionWhenMatchingSnapshotMetadataIsUnavailable() async throws {
+        let fixture = try makeNativeSessionScannerFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let launchStart = Date()
+        let panelID = UUID()
+        let snapshotSessionID = "019e6167-f149-7031-9229-aa24f9976928"
+        let activeSameCWDSessionID = "019e6084-ab6d-7882-aa3b-20ea5f3507ec"
+        let activeSameCWDSessionURL = fixture.codexSessionsURL
+            .appendingPathComponent("rollout-\(activeSameCWDSessionID).jsonl")
+        try writeCodexSession(id: activeSameCWDSessionID, cwd: fixture.cwdURL.path, to: activeSameCWDSessionURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: launchStart.addingTimeInterval(1)],
+            ofItemAtPath: activeSameCWDSessionURL.path
+        )
+        try writeCodexShellSnapshot(
+            id: snapshotSessionID,
+            managedSessionID: "managed-1",
+            panelID: panelID,
+            to: fixture.codexShellSnapshotsURL
+        )
+        let snapshotURL = fixture.codexShellSnapshotsURL
+            .appendingPathComponent("\(snapshotSessionID).1778990848959872000.sh")
+        try FileManager.default.setAttributes(
+            [.modificationDate: launchStart.addingTimeInterval(1)],
+            ofItemAtPath: snapshotURL.path
+        )
+
+        let scanner = ManagedAgentNativeSessionFileScanner(
+            codexSessionsDirectory: fixture.codexSessionsURL,
+            claudeProjectsDirectory: fixture.claudeProjectsURL,
+            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL,
+            nowProvider: { launchStart.addingTimeInterval(31) }
+        )
+        let scan = await scanner.scan(
+            for: ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: panelID,
+                cwd: fixture.cwdURL.path,
+                launchStart: launchStart
+            )
+        )
+
+        #expect(scan.candidates.isEmpty)
+        #expect(scan.summary.codexDirectSessionDeferred == true)
+    }
+
+    @Test
     func scannerFindsCodexShellSnapshotAfterDirectFallbackDelay() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
