@@ -6,14 +6,9 @@ import Foundation
 @MainActor
 enum TerminalSurfaceDiagnostics {
     static let snapshotEnvironmentKey = "TOASTTY_GHOSTTY_SURFACE_DIAGNOSTICS"
-    static let deferBackgroundSurfaceCreationEnvironmentKey = "TOASTTY_GHOSTTY_DEFER_BACKGROUND_SURFACE_CREATION"
 
     static var snapshotLoggingEnabled: Bool {
         isEnabledFlag(ProcessInfo.processInfo.environment[snapshotEnvironmentKey])
-    }
-
-    static var deferBackgroundSurfaceCreationEnabled: Bool {
-        isEnabledFlag(ProcessInfo.processInfo.environment[deferBackgroundSurfaceCreationEnvironmentKey])
     }
 
     static func isEnabledFlag(_ rawValue: String?) -> Bool {
@@ -26,19 +21,6 @@ enum TerminalSurfaceDiagnostics {
         default:
             return false
         }
-    }
-
-    static func shouldDeferSurfaceCreationForPresentationVisibility(
-        hostView: NSView,
-        deferBackgroundSurfaceCreation: Bool = deferBackgroundSurfaceCreationEnabled
-    ) -> Bool {
-        guard deferBackgroundSurfaceCreation,
-              let terminalHostView = hostView as? TerminalHostView else {
-            return false
-        }
-
-        let snapshot = terminalHostView.visibilityTraceSnapshot()
-        return snapshot.isMountedAndTransparent
     }
 
     static func presentationVisibilityMetadata(hostView: NSView) -> [String: String] {
@@ -97,7 +79,6 @@ enum TerminalSurfaceDiagnostics {
                 "ghostty_surface_logically_visible_count": String(controllerCounts.logicallyVisibleSurfaceCount),
                 "ghostty_surface_transparent_count": String(controllerCounts.transparentSurfaceCount),
                 "ghostty_surface_no_window_count": String(controllerCounts.noWindowSurfaceCount),
-                "ghostty_surface_defer_background_enabled": deferBackgroundSurfaceCreationEnabled ? "true" : "false",
             ]
         )
     }

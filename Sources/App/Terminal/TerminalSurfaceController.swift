@@ -101,7 +101,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private enum SurfaceCreationDeferralReason: String {
         case noWindow = "no_window"
         case hiddenHost = "hidden_host"
-        case presentationHidden = "presentation_hidden"
         case tinyBounds = "tiny_bounds"
         case unstableBounds = "unstable_bounds"
     }
@@ -1296,12 +1295,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             surfaceCreationStabilityPasses = 0
             lastSurfaceCreationSignature = nil
             return .deferred(reason: .hiddenHost, width: width, height: height)
-        }
-
-        if TerminalSurfaceDiagnostics.shouldDeferSurfaceCreationForPresentationVisibility(hostView: hostView) {
-            surfaceCreationStabilityPasses = 0
-            lastSurfaceCreationSignature = nil
-            return .deferred(reason: .presentationHidden, width: width, height: height)
         }
 
         guard width >= minimumSurfaceHostDimension,
