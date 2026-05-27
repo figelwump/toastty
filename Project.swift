@@ -55,6 +55,7 @@ let ghosttyMacOSSliceDirectoryCandidates = [
 let ghosttyStaticLibraryFilenameCandidates = [
     "libghostty.a",
     "libghostty-fat.a",
+    "ghostty-internal.a",
 ]
 let ghosttyIntegrationDisabled = {
     // Tuist manifest evaluation reliably exposes TUIST_* env vars; keep TOASTTY_* as best-effort compatibility.
