@@ -442,6 +442,42 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesCurrentCodexOverrideTurnContext() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-05-28T17:30:32.495Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"cwd":null,"approval_policy":"on-request","approvals_reviewer":"guardian_subagent","permission_profile":{"type":"managed"}}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnContextUpdated,
+                detail: "Codex turn context updated",
+                approvalPolicy: "on-request",
+                approvalsReviewer: "guardian_subagent"
+            )
+        ])
+    }
+
+    func testWatcherParsesCurrentCodexOverrideTurnContextNullsAsContextClear() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-05-28T17:30:32.495Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"approval_policy":null,"approvals_reviewer":null}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnContextUpdated,
+                detail: "Codex turn context updated"
+            )
+        ])
+    }
+
     func testWatcherIgnoresThreadGoalMenuOpenAppEvents() async throws {
         let events = try await recordEvents(
             from:

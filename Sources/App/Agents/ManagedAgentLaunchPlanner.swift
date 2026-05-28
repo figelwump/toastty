@@ -385,6 +385,13 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         switch event.kind {
         case .sessionConfigured:
             return
+        case .turnContextUpdated:
+            sessionRuntimeStore.recordCodexPendingTurnContext(
+                sessionID: sessionID,
+                approvalPolicy: event.approvalPolicy,
+                approvalsReviewer: event.approvalsReviewer
+            )
+            return
         case .turnStarted:
             if event.hasRootTurnContext {
                 sessionRuntimeStore.recordCodexRootTurnInput(

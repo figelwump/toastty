@@ -4,6 +4,7 @@ import Foundation
 struct CodexSessionLogEvent: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case sessionConfigured
+        case turnContextUpdated
         case turnStarted
         case historyUpdated
         case approvalNeeded
@@ -428,6 +429,23 @@ private extension CodexSessionLogWatcher {
                 approvalsReviewer: normalizedString(operation.payload["approvals_reviewer"])
             )
 
+        case "override_turn_context":
+            guard operation.payload.keys.contains("approval_policy") ||
+                operation.payload.keys.contains("approvals_reviewer") else {
+                return nil
+            }
+            let dedupeKey = "op_override_turn_context:\(operationEventIdentifier(from: object, payload: operation.payload, fallback: fallbackLine))"
+            guard seenKeys.insert(dedupeKey).inserted else {
+                return nil
+            }
+
+            return CodexSessionLogEvent(
+                kind: .turnContextUpdated,
+                detail: "Codex turn context updated",
+                approvalPolicy: normalizedString(operation.payload["approval_policy"]),
+                approvalsReviewer: normalizedString(operation.payload["approvals_reviewer"])
+            )
+
         case "interrupt":
             // Current codex-cli recordings emit from_tui/op interrupt when the
             // user cancels the active turn (Esc, Ctrl-C, or equivalent).
@@ -453,6 +471,10 @@ private extension CodexSessionLogWatcher {
 
             if let userTurn = payload["UserTurn"] as? [String: Any] {
                 return (type: "user_turn", payload: userTurn)
+            }
+
+            if let overrideTurnContext = payload["OverrideTurnContext"] as? [String: Any] {
+                return (type: "override_turn_context", payload: overrideTurnContext)
             }
         }
 
