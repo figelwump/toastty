@@ -224,6 +224,7 @@ final class TerminalHostView: NSView {
 
     private var ghosttySurface: ghostty_surface_t?
     var ghosttySurfaceHooks = GhosttySurfaceHooks.live
+    var pressedMouseButtonsProvider: () -> Int = { NSEvent.pressedMouseButtons }
     /// Tracks the last focus value sent to Ghostty to avoid redundant calls.
     /// Each `ghostty_surface_set_focus` call restarts the internal cursor blink
     /// timer; calling it on every layout pass causes irregular blinking and
@@ -240,6 +241,11 @@ final class TerminalHostView: NSView {
         let x: Double
         let y: Double
         let mods: ghostty_input_mods_e
+        var forwardsPhysicalMouseUpToSuper: Bool
+    }
+
+    private struct SuppressedMouseRelease {
+        let forwardToSuper: Bool
     }
 
     private struct GhosttyMouseSnapshot {
@@ -249,7 +255,7 @@ final class TerminalHostView: NSView {
     }
 
     private var forwardedMousePresses: [UInt32: ForwardedMousePress] = [:]
-    private var suppressedMouseReleaseButtons: Set<UInt32> = []
+    private var suppressedMouseReleaseButtons: [UInt32: SuppressedMouseRelease] = [:]
     private var suppressFocusTransferLeftMouseSequence = false
 
     struct VisibilityTraceSnapshot: Equatable {
@@ -924,7 +930,7 @@ final class TerminalHostView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         _ = activatePanelIfNeeded?()
         focusHostViewIfNeeded()
-        suppressedMouseReleaseButtons.remove(Self.forwardedMousePressKey(for: GHOSTTY_MOUSE_RIGHT))
+        suppressedMouseReleaseButtons.removeValue(forKey: Self.forwardedMousePressKey(for: GHOSTTY_MOUSE_RIGHT))
         guard let ghosttySurface else {
             rightMousePressWasForwarded = false
             super.rightMouseDown(with: event)
@@ -940,6 +946,10 @@ final class TerminalHostView: NSView {
             state: GHOSTTY_MOUSE_PRESS,
             button: GHOSTTY_MOUSE_RIGHT
         )
+        setForwardedMousePressPhysicalMouseUpForwarding(
+            button: GHOSTTY_MOUSE_RIGHT,
+            forwardToSuper: handled == false
+        )
         rightMousePressWasForwarded = handled
         guard handled else {
             super.rightMouseDown(with: event)
@@ -948,8 +958,13 @@ final class TerminalHostView: NSView {
     }
 
     override func rightMouseUp(with event: NSEvent) {
-        if suppressedMouseReleaseButtons.remove(Self.forwardedMousePressKey(for: GHOSTTY_MOUSE_RIGHT)) != nil {
+        if let suppressedRelease = suppressedMouseReleaseButtons.removeValue(
+            forKey: Self.forwardedMousePressKey(for: GHOSTTY_MOUSE_RIGHT)
+        ) {
             rightMousePressWasForwarded = false
+            if suppressedRelease.forwardToSuper {
+                super.rightMouseUp(with: event)
+            }
             return
         }
         guard let ghosttySurface else {
@@ -978,16 +993,23 @@ final class TerminalHostView: NSView {
     override func otherMouseDown(with event: NSEvent) {
         focusHostViewIfNeeded()
         let button = Self.ghosttyMouseButton(for: event.buttonNumber)
-        suppressedMouseReleaseButtons.remove(Self.forwardedMousePressKey(for: button))
+        suppressedMouseReleaseButtons.removeValue(forKey: Self.forwardedMousePressKey(for: button))
         guard forwardMouseButton(event, state: GHOSTTY_MOUSE_PRESS, button: button) else {
+            setForwardedMousePressPhysicalMouseUpForwarding(button: button, forwardToSuper: true)
             super.otherMouseDown(with: event)
             return
         }
+        setForwardedMousePressPhysicalMouseUpForwarding(button: button, forwardToSuper: false)
     }
 
     override func otherMouseUp(with event: NSEvent) {
         let button = Self.ghosttyMouseButton(for: event.buttonNumber)
-        if suppressedMouseReleaseButtons.remove(Self.forwardedMousePressKey(for: button)) != nil {
+        if let suppressedRelease = suppressedMouseReleaseButtons.removeValue(
+            forKey: Self.forwardedMousePressKey(for: button)
+        ) {
+            if suppressedRelease.forwardToSuper {
+                super.otherMouseUp(with: event)
+            }
             return
         }
         guard forwardMouseButton(event, state: GHOSTTY_MOUSE_RELEASE, button: button) else {
@@ -999,6 +1021,10 @@ final class TerminalHostView: NSView {
     override func mouseEntered(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
         clearSyntheticLinkHoverRefreshSuppression()
+        releaseForwardedMousePressesNoLongerPhysicallyPressed(
+            reason: "mouse_entered_physical_button_up",
+            snapshot: ghosttyMouseSnapshot(for: event, modifierFlags: event.modifierFlags)
+        )
         _ = forwardMouseHoverPosition(event)
         #endif
         super.mouseEntered(with: event)
@@ -1008,7 +1034,11 @@ final class TerminalHostView: NSView {
         #if TOASTTY_HAS_GHOSTTY_KIT
         clearSyntheticLinkHoverRefreshSuppression()
         setGhosttyMouseOverLink(nil)
-        if NSEvent.pressedMouseButtons == 0,
+        releaseForwardedMousePressesNoLongerPhysicallyPressed(
+            reason: "mouse_exited_physical_button_up",
+            snapshot: ghosttyMouseSnapshot(for: event, modifierFlags: event.modifierFlags)
+        )
+        if pressedMouseButtonsProvider() == 0,
            let ghosttySurface {
             let hoverModifierFlags = Self.ghosttyLinkHoverModifierFlags(for: event.modifierFlags)
             let mods = Self.ghosttyModifierFlags(for: hoverModifierFlags)
@@ -1021,6 +1051,10 @@ final class TerminalHostView: NSView {
     override func mouseMoved(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
         clearSyntheticLinkHoverRefreshSuppression()
+        releaseForwardedMousePressesNoLongerPhysicallyPressed(
+            reason: "mouse_moved_physical_button_up",
+            snapshot: ghosttyMouseSnapshot(for: event, modifierFlags: event.modifierFlags)
+        )
         #endif
         guard forwardMouseHoverPosition(event) else {
             super.mouseMoved(with: event)
@@ -1259,6 +1293,10 @@ final class TerminalHostView: NSView {
 
         // FlagsChanged events can carry stale or zero-origin locationInWindow
         // values, so use the window's live mouse location instead of the event's.
+        releaseForwardedMousePressesNoLongerPhysicallyPressed(
+            reason: "flags_changed_physical_button_up",
+            snapshot: currentGhosttyMouseSnapshot(modifierFlags: event.modifierFlags)
+        )
         _ = forwardCurrentMouseHoverPosition(modifierFlags: event.modifierFlags)
         if suppressingLinkHoverRefresh {
             DispatchQueue.main.async { [weak self] in
@@ -1842,6 +1880,18 @@ final class TerminalHostView: NSView {
         )
     }
 
+    private func currentGhosttyMouseSnapshot(
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> GhosttyMouseSnapshot? {
+        guard let window else { return nil }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        return GhosttyMouseSnapshot(
+            x: point.x,
+            y: bounds.height - point.y,
+            mods: Self.ghosttyModifierFlags(for: modifierFlags)
+        )
+    }
+
     private func updateForwardedMousePressTracking(
         surface: ghostty_surface_t,
         snapshot: GhosttyMouseSnapshot,
@@ -1856,13 +1906,26 @@ final class TerminalHostView: NSView {
                 button: button,
                 x: snapshot.x,
                 y: snapshot.y,
-                mods: snapshot.mods
+                mods: snapshot.mods,
+                forwardsPhysicalMouseUpToSuper: false
             )
         case GHOSTTY_MOUSE_RELEASE:
             forwardedMousePresses[key] = nil
         default:
             break
         }
+    }
+
+    private func setForwardedMousePressPhysicalMouseUpForwarding(
+        button: ghostty_input_mouse_button_e,
+        forwardToSuper: Bool
+    ) {
+        let key = Self.forwardedMousePressKey(for: button)
+        guard var press = forwardedMousePresses[key] else {
+            return
+        }
+        press.forwardsPhysicalMouseUpToSuper = forwardToSuper
+        forwardedMousePresses[key] = press
     }
 
     private func hasForwardedMousePress(button: ghostty_input_mouse_button_e) -> Bool {
@@ -1895,22 +1958,49 @@ final class TerminalHostView: NSView {
         return presses.count
     }
 
+    @discardableResult
+    private func releaseForwardedMousePressesNoLongerPhysicallyPressed(
+        reason: String,
+        snapshot: GhosttyMouseSnapshot?
+    ) -> Int {
+        let pressedMouseButtons = pressedMouseButtonsProvider()
+        let stalePresses = forwardedMousePresses.values
+            .filter { press in
+                guard let mask = Self.appKitPressedMouseButtonMask(forGhosttyButton: press.button) else {
+                    return false
+                }
+                return pressedMouseButtons & mask == 0
+            }
+            .sorted { $0.button.rawValue < $1.button.rawValue }
+
+        for press in stalePresses {
+            forwardedMousePresses[Self.forwardedMousePressKey(for: press.button)] = nil
+            releaseForwardedMousePress(press, reason: reason, snapshot: snapshot)
+        }
+        return stalePresses.count
+    }
+
     private func releaseForwardedMousePress(
         _ press: ForwardedMousePress,
-        reason: String
+        reason: String,
+        snapshot: GhosttyMouseSnapshot? = nil
     ) {
         if press.button == GHOSTTY_MOUSE_RIGHT {
             rightMousePressWasForwarded = false
         }
         if press.button != GHOSTTY_MOUSE_LEFT {
-            suppressedMouseReleaseButtons.insert(Self.forwardedMousePressKey(for: press.button))
+            suppressedMouseReleaseButtons[Self.forwardedMousePressKey(for: press.button)] =
+                SuppressedMouseRelease(forwardToSuper: press.forwardsPhysicalMouseUpToSuper)
         }
-        ghosttySurfaceHooks.sendMousePosition(press.surface, press.x, press.y, press.mods)
+        let x = snapshot?.x ?? press.x
+        let y = snapshot?.y ?? press.y
+        let mods = snapshot?.mods ?? press.mods
+        ghosttySurfaceHooks.sendMousePosition(press.surface, x, y, mods)
         _ = ghosttySurfaceHooks.sendMouseButton(
             press.surface,
             GHOSTTY_MOUSE_RELEASE,
             press.button,
-            press.mods
+            mods
         )
         ghosttySurfaceHooks.setMousePressure(press.surface, 0, 0)
         ToasttyLog.debug(
@@ -1918,10 +2008,10 @@ final class TerminalHostView: NSView {
             category: .input,
             metadata: [
                 "reason": reason,
-                "x": String(format: "%.1f", press.x),
-                "y": String(format: "%.1f", press.y),
+                "x": String(format: "%.1f", x),
+                "y": String(format: "%.1f", y),
                 "button": "\(press.button.rawValue)",
-                "modifiers": "\(press.mods.rawValue)",
+                "modifiers": "\(mods.rawValue)",
             ]
         )
     }
@@ -2180,6 +2270,37 @@ final class TerminalHostView: NSView {
             return GHOSTTY_MOUSE_ELEVEN
         default:
             return GHOSTTY_MOUSE_UNKNOWN
+        }
+    }
+
+    static func appKitPressedMouseButtonMask(
+        forGhosttyButton button: ghostty_input_mouse_button_e
+    ) -> Int? {
+        switch button {
+        case GHOSTTY_MOUSE_LEFT:
+            return 1 << 0
+        case GHOSTTY_MOUSE_RIGHT:
+            return 1 << 1
+        case GHOSTTY_MOUSE_MIDDLE:
+            return 1 << 2
+        case GHOSTTY_MOUSE_EIGHT:
+            return 1 << 3
+        case GHOSTTY_MOUSE_NINE:
+            return 1 << 4
+        case GHOSTTY_MOUSE_SIX:
+            return 1 << 5
+        case GHOSTTY_MOUSE_SEVEN:
+            return 1 << 6
+        case GHOSTTY_MOUSE_FOUR:
+            return 1 << 7
+        case GHOSTTY_MOUSE_FIVE:
+            return 1 << 8
+        case GHOSTTY_MOUSE_TEN:
+            return 1 << 9
+        case GHOSTTY_MOUSE_ELEVEN:
+            return 1 << 10
+        default:
+            return nil
         }
     }
 
