@@ -146,12 +146,12 @@ When the profile ID is `codex`, Toastty:
 
 1. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default.
 2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, and `Stop`. These events drive **Working**, **Needs approval**, **Ready**, and native resume metadata for managed Codex sessions.
-3. **Creates a notification script** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
-4. **Injects Codex config** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
+3. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
+4. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 5. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit.
-6. **Starts a compatibility log watcher** that polls the session log file (every 250 ms) for the subset of Codex recording events still available in current Codex releases. The watcher and rendered-terminal-text sampling are fallbacks for launches where hooks are not installed or cannot deliver.
+6. **Starts a session recording watcher** that polls the session log file (every 250 ms) for Codex root-turn context, including auto-review approval context. When hooks are installed, hooks remain authoritative for sidebar status and the watcher is context-only; when hooks are unavailable, the watcher also acts as the compatibility status fallback.
 7. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
-8. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; per-session notify helper failures still go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
+8. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
 Typed `cdx` launches use the same Codex instrumentation path as typed `codex`
 launches when Toastty's managed command shims are enabled.

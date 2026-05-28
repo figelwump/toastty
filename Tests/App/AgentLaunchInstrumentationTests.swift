@@ -92,7 +92,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
-    func testPrepareCodexLaunchUsesHooksOnlyStatusTrackingWithoutSessionLogFallback() throws {
+    func testPrepareCodexLaunchUsesHooksForStatusAndRecordsSessionContext() throws {
         let preparedLaunch = try AgentLaunchInstrumentation.prepare(
             agent: .codex,
             argv: ["codex", "--yolo"],
@@ -102,12 +102,20 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             fileManager: .default,
             codexStatusTrackingSource: .hooks
         )
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? FileManager.default.removeItem(at: artifacts.directoryURL)
+            }
+        }
 
         XCTAssertEqual(preparedLaunch.argv, ["codex", "--yolo"])
-        XCTAssertNil(preparedLaunch.artifacts)
+        XCTAssertNotNil(preparedLaunch.artifacts)
         XCTAssertEqual(preparedLaunch.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
-        XCTAssertNil(preparedLaunch.environment["CODEX_TUI_RECORD_SESSION"])
-        XCTAssertNil(preparedLaunch.environment["CODEX_TUI_SESSION_LOG_PATH"])
+        XCTAssertEqual(preparedLaunch.environment["CODEX_TUI_RECORD_SESSION"], "1")
+        XCTAssertEqual(
+            preparedLaunch.environment["CODEX_TUI_SESSION_LOG_PATH"],
+            preparedLaunch.artifacts?.codexSessionLogURL?.path
+        )
     }
 
     func testPrepareCodexLaunchInsertsNotifyAfterWrappedCodexCommand() throws {

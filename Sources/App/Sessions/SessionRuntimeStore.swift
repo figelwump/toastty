@@ -20,8 +20,11 @@ final class SessionRuntimeStore: ObservableObject {
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
     private var codexNotifyStateBySessionID: [String: CodexNotifySessionState] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
+    private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
+    private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
+    private let codexHookApprovalDeferralNanoseconds: UInt64
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
         let sessionID: String
@@ -43,10 +46,12 @@ final class SessionRuntimeStore: ObservableObject {
 
     init(
         sendSessionStatusNotification: @escaping SessionStatusNotificationHandler = SessionRuntimeStore.defaultSendSessionStatusNotification,
-        isApplicationActive: @escaping ApplicationActiveHandler = SessionRuntimeStore.defaultIsApplicationActive
+        isApplicationActive: @escaping ApplicationActiveHandler = SessionRuntimeStore.defaultIsApplicationActive,
+        codexHookApprovalDeferralNanoseconds: UInt64 = 1_000_000_000
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
         self.isApplicationActive = isApplicationActive
+        self.codexHookApprovalDeferralNanoseconds = codexHookApprovalDeferralNanoseconds
     }
 
     func bind(store: AppStore) {
@@ -69,6 +74,7 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID = [:]
         codexNotifyStateBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
+        removeAllPendingCodexHookApprovals()
     }
 
     func startSession(
@@ -86,6 +92,7 @@ final class SessionRuntimeStore: ObservableObject {
     ) {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        removePendingCodexHookApproval(sessionID: sessionID)
         if agent == .codex, let codexStatusTrackingSource {
             codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
         } else {
@@ -278,6 +285,12 @@ final class SessionRuntimeStore: ObservableObject {
                     "approvals_reviewer": approvalsReviewer ?? "none",
                 ]
             )
+        )
+        resolvePendingCodexHookApprovalIfPossible(
+            sessionID: sessionID,
+            record: record,
+            state: state,
+            reasonPrefix: "context_update"
         )
     }
 
@@ -709,16 +722,62 @@ final class SessionRuntimeStore: ObservableObject {
             return stateChanged
         }
 
-        if shouldSuppressCodexHookApproval(event: event, state: state) {
-            logCodexHookEventDecision(
+        if event.isPermissionRequest,
+           status.kind == .needsApproval {
+            switch codexHookApprovalDecision(event: event, state: state) {
+            case .suppress(let reason):
+                removePendingCodexHookApproval(sessionID: sessionID)
+                logCodexHookEventDecision(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    event: event,
+                    decision: "suppressed",
+                    reason: reason
+                )
+                return stateChanged
+
+            case .waitForContext(let reason):
+                deferCodexHookApproval(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    event: event,
+                    reason: reason
+                )
+                return stateChanged
+
+            case .ignore(let reason):
+                removePendingCodexHookApproval(sessionID: sessionID)
+                logCodexHookEventDecision(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    event: event,
+                    decision: "ignored",
+                    reason: reason
+                )
+                return stateChanged
+
+            case .accept(let reason):
+                removePendingCodexHookApproval(sessionID: sessionID)
+                logCodexHookEventDecision(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    event: event,
+                    decision: "accepted",
+                    reason: reason
+                )
+            }
+        } else if status.kind != .needsApproval {
+            removePendingCodexHookApprovalIfSuperseded(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 event: event,
-                decision: "suppressed",
-                reason: "auto_review_approval"
+                status: status
             )
-            return stateChanged
         }
 
         if event.isStop {
@@ -746,6 +805,7 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+        removePendingCodexHookApproval(sessionID: sessionID)
         var nextRegistry = sessionRegistry
         if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
             nextRegistry.removeSession(sessionID: sessionID)
@@ -765,6 +825,7 @@ final class SessionRuntimeStore: ObservableObject {
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
             codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
             codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
+            removePendingCodexHookApproval(sessionID: record.sessionID)
         }
         var nextRegistry = sessionRegistry
         if let record = sessionRegistry.activeSession(for: panelID),
@@ -1212,26 +1273,272 @@ final class SessionRuntimeStore: ObservableObject {
         codexStatusTrackingSourceBySessionID[sessionID]?.code ?? "unspecified"
     }
 
-    private func shouldSuppressCodexHookApproval(
+    private func codexHookApprovalDecision(
         event: CodexHookEvent,
         state: CodexNotifySessionState
-    ) -> Bool {
+    ) -> CodexHookApprovalDecision {
         guard event.isPermissionRequest,
               event.status?.kind == .needsApproval else {
-            return false
+            return .accept(reason: "not_permission_request")
         }
-        guard let hookThreadID = event.threadID,
-              let rootThreadID = state.rootThreadID,
-              hookThreadID == rootThreadID else {
-            return false
+        guard let hookThreadID = event.threadID else {
+            return .accept(reason: "missing_hook_thread")
         }
-        guard let hookTurnID = event.turnID,
-              let rootTurnID = state.rootTurnID,
-              hookTurnID == rootTurnID else {
-            return false
+        guard let rootThreadID = state.rootThreadID else {
+            return .waitForContext(reason: "missing_root_thread")
         }
-        return normalizedNonEmpty(state.approvalsReviewer) != nil &&
-            normalizedNonEmpty(state.approvalPolicy)?.lowercased() == "never"
+        guard hookThreadID == rootThreadID else {
+            return .ignore(reason: "thread_mismatch")
+        }
+        guard let hookTurnID = event.turnID else {
+            return .accept(reason: "missing_hook_turn")
+        }
+        guard let rootTurnID = state.rootTurnID else {
+            guard state.pendingRootInputFingerprint != nil else {
+                return .accept(reason: "missing_root_turn")
+            }
+            return .waitForContext(reason: "missing_root_turn")
+        }
+        guard hookTurnID == rootTurnID else {
+            return .accept(reason: "turn_mismatch")
+        }
+
+        let approvalPolicy = normalizedNonEmpty(state.approvalPolicy)
+        let approvalsReviewer = normalizedNonEmpty(state.approvalsReviewer)
+        guard approvalPolicy != nil || approvalsReviewer != nil else {
+            return .waitForContext(reason: "missing_approval_context")
+        }
+        guard approvalPolicy?.lowercased() == "never" else {
+            return .accept(reason: "approval_policy_not_auto_review")
+        }
+        guard approvalsReviewer != nil else {
+            return .accept(reason: "missing_approvals_reviewer")
+        }
+        return .suppress(reason: "auto_review_approval")
+    }
+
+    private func deferCodexHookApproval(
+        sessionID: String,
+        record: SessionRecord,
+        state: CodexNotifySessionState,
+        event: CodexHookEvent,
+        reason: String
+    ) {
+        let token = UUID()
+        removePendingCodexHookApproval(sessionID: sessionID)
+        pendingCodexHookApprovalBySessionID[sessionID] = PendingCodexHookApproval(
+            event: event,
+            token: token
+        )
+        logCodexHookEventDecision(
+            sessionID: sessionID,
+            record: record,
+            state: state,
+            event: event,
+            decision: "deferred",
+            reason: reason
+        )
+
+        let delay = codexHookApprovalDeferralNanoseconds
+        pendingCodexHookApprovalTaskBySessionID[sessionID] = Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
+            }
+            await self?.expirePendingCodexHookApproval(sessionID: sessionID, token: token)
+        }
+    }
+
+    private func expirePendingCodexHookApproval(sessionID: String, token: UUID) {
+        guard let pending = pendingCodexHookApprovalBySessionID[sessionID],
+              pending.token == token else {
+            return
+        }
+        guard let record = sessionRegistry.sessionsByID[sessionID],
+              let status = pending.event.status else {
+            removePendingCodexHookApproval(sessionID: sessionID)
+            return
+        }
+
+        let state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        switch codexHookApprovalDecision(event: pending.event, state: state) {
+        case .suppress(let reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "suppressed",
+                reason: reason
+            )
+
+        case .ignore(let reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "ignored",
+                reason: reason
+            )
+
+        case .accept(let reason) where pendingCodexHookApprovalAcceptReasonIsStale(reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "ignored",
+                reason: "context_timeout_\(reason)"
+            )
+
+        case .accept(let reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "accepted",
+                reason: reason
+            )
+            updateStatus(sessionID: sessionID, status: status, at: Date())
+
+        case .waitForContext(let reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "accepted",
+                reason: "context_timeout_\(reason)"
+            )
+            updateStatus(sessionID: sessionID, status: status, at: Date())
+        }
+    }
+
+    private func resolvePendingCodexHookApprovalIfPossible(
+        sessionID: String,
+        record: SessionRecord,
+        state: CodexNotifySessionState,
+        reasonPrefix: String
+    ) {
+        guard let pending = pendingCodexHookApprovalBySessionID[sessionID],
+              let status = pending.event.status else {
+            return
+        }
+
+        switch codexHookApprovalDecision(event: pending.event, state: state) {
+        case .waitForContext:
+            return
+
+        case .suppress(let reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "suppressed",
+                reason: reason
+            )
+
+        case .ignore(let reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "ignored",
+                reason: "\(reasonPrefix)_\(reason)"
+            )
+
+        case .accept(let reason) where pendingCodexHookApprovalAcceptReasonIsStale(reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "ignored",
+                reason: "\(reasonPrefix)_\(reason)"
+            )
+
+        case .accept(let reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "accepted",
+                reason: "\(reasonPrefix)_\(reason)"
+            )
+            updateStatus(sessionID: sessionID, status: status, at: Date())
+        }
+    }
+
+    private func removePendingCodexHookApprovalIfSuperseded(
+        sessionID: String,
+        record: SessionRecord,
+        state: CodexNotifySessionState,
+        event: CodexHookEvent,
+        status: SessionStatus
+    ) {
+        guard let pending = pendingCodexHookApprovalBySessionID[sessionID],
+              codexHookEvent(event, supersedesPendingApproval: pending.event) else {
+            return
+        }
+        removePendingCodexHookApproval(sessionID: sessionID)
+        logCodexHookEventDecision(
+            sessionID: sessionID,
+            record: record,
+            state: state,
+            event: pending.event,
+            decision: "ignored",
+            reason: "superseded_by_\(status.kind.rawValue)"
+        )
+    }
+
+    private func codexHookEvent(
+        _ event: CodexHookEvent,
+        supersedesPendingApproval pendingEvent: CodexHookEvent
+    ) -> Bool {
+        var threadMatches = false
+        if let eventThreadID = event.threadID,
+           let pendingThreadID = pendingEvent.threadID {
+            guard eventThreadID == pendingThreadID else { return false }
+            threadMatches = true
+        }
+        if let eventTurnID = event.turnID,
+           let pendingTurnID = pendingEvent.turnID {
+            if eventTurnID == pendingTurnID {
+                return true
+            }
+            return threadMatches
+        }
+        return threadMatches
+    }
+
+    private func pendingCodexHookApprovalAcceptReasonIsStale(_ reason: String) -> Bool {
+        reason == "turn_mismatch"
+    }
+
+    private func removePendingCodexHookApproval(sessionID: String) {
+        pendingCodexHookApprovalBySessionID.removeValue(forKey: sessionID)
+        pendingCodexHookApprovalTaskBySessionID.removeValue(forKey: sessionID)?.cancel()
+    }
+
+    private func removeAllPendingCodexHookApprovals() {
+        pendingCodexHookApprovalBySessionID.removeAll()
+        for task in pendingCodexHookApprovalTaskBySessionID.values {
+            task.cancel()
+        }
+        pendingCodexHookApprovalTaskBySessionID.removeAll()
     }
 
     private func codexHookCompletionAcceptedReason(
@@ -1792,6 +2099,18 @@ private struct CodexNotifySessionState {
     var pendingRootInputFingerprint: String?
     var approvalPolicy: String?
     var approvalsReviewer: String?
+}
+
+private struct PendingCodexHookApproval {
+    let event: CodexHookEvent
+    let token: UUID
+}
+
+private enum CodexHookApprovalDecision {
+    case accept(reason: String)
+    case waitForContext(reason: String)
+    case ignore(reason: String)
+    case suppress(reason: String)
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {

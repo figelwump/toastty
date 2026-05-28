@@ -170,14 +170,6 @@ enum AgentLaunchInstrumentation {
         fileManager: FileManager,
         statusTrackingSource: CodexStatusTrackingSource
     ) throws -> PreparedAgentLaunchCommand {
-        guard statusTrackingSource != .hooks else {
-            return PreparedAgentLaunchCommand(
-                argv: argv,
-                environment: baselineEnvironment(for: .codex),
-                artifacts: nil
-            )
-        }
-
         let artifactsDirectoryURL = try makeArtifactsDirectory(
             prefix: "toastty-codex-launch",
             sessionID: sessionID,
@@ -185,33 +177,38 @@ enum AgentLaunchInstrumentation {
         )
 
         do {
-            let notifyScriptURL = artifactsDirectoryURL.appendingPathComponent("codex-notify.sh", isDirectory: false)
-            let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
-            try writeExecutableScript(
-                makeTelemetryForwarderScript(
-                    cliExecutablePath: cliExecutablePath,
-                    source: "codex-notify",
-                    telemetryErrorLogURL: telemetryErrorLogURL,
-                    stderrFallbackURL: artifactsDirectoryURL.appendingPathComponent("codex-notify.stderr", isDirectory: false),
-                    inputMode: .stdinOrFirstArgument
-                ),
-                to: notifyScriptURL,
-                fileManager: fileManager
-            )
-
             let logURL = artifactsDirectoryURL.appendingPathComponent("codex-session.jsonl", isDirectory: false)
-            let notifyArray = tomlStringArrayLiteral(["/bin/sh", notifyScriptURL.path])
-            let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .codex, argv: argv)
             var environment = baselineEnvironment(for: .codex)
             environment["CODEX_TUI_RECORD_SESSION"] = "1"
             environment["CODEX_TUI_SESSION_LOG_PATH"] = logURL.path
-
-            return PreparedAgentLaunchCommand(
-                argv: insertingArguments(
+            let preparedArgv: [String]
+            if statusTrackingSource == .hooks {
+                preparedArgv = argv
+            } else {
+                let notifyScriptURL = artifactsDirectoryURL.appendingPathComponent("codex-notify.sh", isDirectory: false)
+                let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
+                try writeExecutableScript(
+                    makeTelemetryForwarderScript(
+                        cliExecutablePath: cliExecutablePath,
+                        source: "codex-notify",
+                        telemetryErrorLogURL: telemetryErrorLogURL,
+                        stderrFallbackURL: artifactsDirectoryURL.appendingPathComponent("codex-notify.stderr", isDirectory: false),
+                        inputMode: .stdinOrFirstArgument
+                    ),
+                    to: notifyScriptURL,
+                    fileManager: fileManager
+                )
+                let notifyArray = tomlStringArrayLiteral(["/bin/sh", notifyScriptURL.path])
+                let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .codex, argv: argv)
+                preparedArgv = insertingArguments(
                     ["-c", "notify=\(notifyArray)"],
                     into: argv,
                     afterIndex: insertionIndex
-                ),
+                )
+            }
+
+            return PreparedAgentLaunchCommand(
+                argv: preparedArgv,
                 environment: environment,
                 artifacts: PreparedAgentLaunchArtifacts(
                     directoryURL: artifactsDirectoryURL,

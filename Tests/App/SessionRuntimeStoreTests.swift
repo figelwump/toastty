@@ -1165,6 +1165,325 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexHookPermissionRequestDefersUntilAutoReviewContextArrives() async {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 1_000_000_000)
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-deferred-auto-review",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-auto-review",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-auto-review",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-auto-review")?.status?.kind == .working)
+
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-deferred-auto-review",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+            turnID: "turn-root",
+            approvalPolicy: "never",
+            approvalsReviewer: "reviewer"
+        )
+        await settleNotificationTasks()
+
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-auto-review")?.status?.kind == .working)
+    }
+
+    @Test
+    func codexHookPermissionRequestBecomesNeedsApprovalWhenContextDoesNotArrive() async {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-deferred-timeout",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-timeout",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-timeout",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        await waitUntil {
+            store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-timeout")?.status?.kind ==
+                .needsApproval
+        }
+
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-timeout")?.status?.kind == .needsApproval)
+    }
+
+    @Test
+    func codexHookPermissionRequestDoesNotBecomeStaleNeedsApprovalAfterWorkContinues() async {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-deferred-superseded",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-superseded",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-superseded",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-superseded",
+            event: CodexHookEvent(
+                hookEventName: "PreToolUse",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Running command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+        try? await Task.sleep(nanoseconds: 80_000_000)
+
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-superseded")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Running command")
+    }
+
+    @Test
+    func codexHookPermissionRequestDoesNotBecomeStaleNeedsApprovalAfterRootTurnAdvances() async {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-deferred-context-superseded",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-context-superseded",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-context-superseded",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-deferred-context-superseded",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Next task"),
+            turnID: "turn-new",
+            approvalPolicy: "never",
+            approvalsReviewer: "reviewer"
+        )
+        try? await Task.sleep(nanoseconds: 80_000_000)
+
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-context-superseded")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Run checks")
+    }
+
+    @Test
+    func codexHookPermissionRequestIsSupersededByNewTurnHook() async {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-deferred-new-turn-superseded",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-new-turn-superseded",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-new-turn-superseded",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-deferred-new-turn-superseded",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-new",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Next task"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Next task"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+        try? await Task.sleep(nanoseconds: 80_000_000)
+
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-new-turn-superseded")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Next task")
+    }
+
+    @Test
     func codexHookEventIgnoresDifferentThreadAfterRootThreadIsLatched() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
@@ -3713,6 +4032,17 @@ private func waitUntilNotificationCount(
 ) async {
     let deadline = Date().addingTimeInterval(Double(timeoutNanoseconds) / 1_000_000_000)
     while await recorder.count() != expectedCount && Date() < deadline {
+        await Task.yield()
+    }
+}
+
+@MainActor
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    condition: @escaping @MainActor () -> Bool
+) async {
+    let deadline = Date().addingTimeInterval(Double(timeoutNanoseconds) / 1_000_000_000)
+    while condition() == false && Date() < deadline {
         await Task.yield()
     }
 }

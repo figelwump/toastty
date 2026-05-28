@@ -106,7 +106,11 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             windowID: target.windowID,
             workspaceID: target.workspaceID
         )
-        registerManagedArtifacts(preparedLaunch.artifacts, sessionID: sessionID)
+        registerManagedArtifacts(
+            preparedLaunch.artifacts,
+            sessionID: sessionID,
+            codexStatusTrackingSource: codexStatusTrackingSource
+        )
         if let resolvedCWD {
             nativeSessionObserverRegistry.startObservation(
                 ManagedAgentNativeSessionObservationContext(
@@ -268,13 +272,18 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
 
     private func registerManagedArtifacts(
         _ preparedArtifacts: PreparedAgentLaunchArtifacts?,
-        sessionID: String
+        sessionID: String,
+        codexStatusTrackingSource: CodexStatusTrackingSource
     ) {
         guard let preparedArtifacts else { return }
 
         let watcher: CodexSessionLogWatcher?
         if let logURL = preparedArtifacts.codexSessionLogURL {
-            watcher = makeCodexSessionLogWatcher(sessionID: sessionID, logURL: logURL)
+            watcher = makeCodexSessionLogWatcher(
+                sessionID: sessionID,
+                logURL: logURL,
+                codexStatusTrackingSource: codexStatusTrackingSource
+            )
         } else {
             watcher = nil
         }
@@ -288,7 +297,11 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         managedArtifactsBySessionID[sessionID] = managedArtifacts
     }
 
-    private func makeCodexSessionLogWatcher(sessionID: String, logURL: URL) -> CodexSessionLogWatcher {
+    private func makeCodexSessionLogWatcher(
+        sessionID: String,
+        logURL: URL,
+        codexStatusTrackingSource: CodexStatusTrackingSource
+    ) -> CodexSessionLogWatcher {
         // TODO: Remove this watcher once Codex exposes stable start/approval hooks.
         CodexSessionLogWatcher(logURL: logURL) { [weak self] event in
             guard let self else { return }
@@ -296,7 +309,11 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 await self.handleCodexSessionConfiguredEvent(event, sessionID: sessionID)
                 return
             }
-            await self.handleCodexSessionStatusEvent(event, sessionID: sessionID)
+            await self.handleCodexSessionStatusEvent(
+                event,
+                sessionID: sessionID,
+                codexStatusTrackingSource: codexStatusTrackingSource
+            )
         }
     }
 
@@ -357,7 +374,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
 
     private func handleCodexSessionStatusEvent(
         _ event: CodexSessionLogEvent,
-        sessionID: String
+        sessionID: String,
+        codexStatusTrackingSource: CodexStatusTrackingSource
     ) {
         guard let sessionRuntimeStore else {
             return
@@ -378,8 +396,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     approvalsReviewer: event.approvalsReviewer
                 )
             }
+            guard codexStatusTrackingSource != .hooks else {
+                return
+            }
             status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
         case .historyUpdated:
+            guard codexStatusTrackingSource != .hooks else {
+                return
+            }
             guard let panelID = sessionRuntimeStore
                 .sessionRegistry
                 .activeSession(sessionID: sessionID)?
@@ -395,8 +419,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return
         case .approvalNeeded:
+            guard codexStatusTrackingSource != .hooks else {
+                return
+            }
             status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: event.detail)
         case .taskCompleted:
+            guard codexStatusTrackingSource != .hooks else {
+                return
+            }
             _ = sessionRuntimeStore.handleCodexSessionLogCompletion(
                 sessionID: sessionID,
                 detail: event.detail,
@@ -406,6 +436,9 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return
         case .turnAborted:
+            guard codexStatusTrackingSource != .hooks else {
+                return
+            }
             guard let currentKind = sessionRuntimeStore
                 .sessionRegistry
                 .activeSession(sessionID: sessionID)?

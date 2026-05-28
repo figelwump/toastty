@@ -92,7 +92,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
-    func testCodexLaunchPlanUsesHooksOnlyStatusTrackingWhenHooksAreAvailable() throws {
+    func testCodexLaunchPlanUsesHooksForStatusAndRecordsSessionContextWhenHooksAreAvailable() throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
         )
@@ -104,12 +104,112 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 cwd: "/tmp/repo"
             )
         )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+        }
 
         XCTAssertEqual(plan.argv, ["codex", "--model", "gpt-5.4"])
         XCTAssertEqual(plan.environment["CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT"], "1")
         XCTAssertEqual(plan.environment["TOASTTY_PANEL_ID"], fixture.panelID.uuidString)
-        XCTAssertNil(plan.environment["CODEX_TUI_RECORD_SESSION"])
-        XCTAssertNil(plan.environment["CODEX_TUI_SESSION_LOG_PATH"])
+        XCTAssertEqual(plan.environment["CODEX_TUI_RECORD_SESSION"], "1")
+        XCTAssertEqual(plan.environment["CODEX_TUI_SESSION_LOG_PATH"], logURL.path)
+    }
+
+    func testCodexSessionLogIsContextOnlyWhenHooksAreAvailable() async throws {
+        let fixture = try makePlannerFixture(
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+        }
+
+        _ = fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: Date()
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-05-28T16:00:00.000Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","turn_id":"turn-root","items":[{"type":"text","text":"Run checks"}],"approval_policy":"never","approvals_reviewer":"reviewer"}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        let accepted = fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: Date()
+        )
+
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
+            .working
+        )
+    }
+
+    func testCodexSessionLogApprovalDoesNotDriveStatusWhenHooksAreAvailable() async throws {
+        let fixture = try makePlannerFixture(
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+        }
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"exec_approval_request","command":"xcodebuild test"}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
+            .idle
+        )
     }
 
     func testCodexSessionLogFallbackIgnoresChildTaskCompleteBeforeRootCompletes() async throws {
