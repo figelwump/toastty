@@ -368,12 +368,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         case .sessionConfigured:
             return
         case .turnStarted:
-            if let rootInputFingerprint = event.rootInputFingerprint {
+            if event.hasRootTurnContext {
                 sessionRuntimeStore.recordCodexRootTurnInput(
                     sessionID: sessionID,
-                    fingerprint: rootInputFingerprint,
+                    fingerprint: event.rootInputFingerprint,
                     threadID: event.rootThreadID,
-                    turnID: event.rootTurnID
+                    turnID: event.rootTurnID,
+                    approvalPolicy: event.approvalPolicy,
+                    approvalsReviewer: event.approvalsReviewer
                 )
             }
             status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)

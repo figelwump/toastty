@@ -20,6 +20,8 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     let completionTurnID: String?
     let nativeSessionID: String?
     let nativeSessionFilePath: String?
+    let approvalPolicy: String?
+    let approvalsReviewer: String?
 
     init(
         kind: Kind,
@@ -30,7 +32,9 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         completionThreadID: String? = nil,
         completionTurnID: String? = nil,
         nativeSessionID: String? = nil,
-        nativeSessionFilePath: String? = nil
+        nativeSessionFilePath: String? = nil,
+        approvalPolicy: String? = nil,
+        approvalsReviewer: String? = nil
     ) {
         self.kind = kind
         self.detail = detail
@@ -41,6 +45,16 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         self.completionTurnID = completionTurnID
         self.nativeSessionID = nativeSessionID
         self.nativeSessionFilePath = nativeSessionFilePath
+        self.approvalPolicy = approvalPolicy
+        self.approvalsReviewer = approvalsReviewer
+    }
+
+    var hasRootTurnContext: Bool {
+        rootInputFingerprint != nil ||
+            rootThreadID != nil ||
+            rootTurnID != nil ||
+            approvalPolicy != nil ||
+            approvalsReviewer != nil
     }
 }
 
@@ -409,7 +423,9 @@ private extension CodexSessionLogWatcher {
                 kind: .turnStarted,
                 detail: userTurnDetail(from: operation.payload) ?? "Responding to your prompt",
                 rootInputFingerprint: userTurnInputFingerprint(from: operation.payload),
-                rootTurnID: operationExplicitTurnID(from: operation.payload)
+                rootTurnID: operationExplicitTurnID(from: operation.payload),
+                approvalPolicy: normalizedString(operation.payload["approval_policy"]),
+                approvalsReviewer: normalizedString(operation.payload["approvals_reviewer"])
             )
 
         case "interrupt":

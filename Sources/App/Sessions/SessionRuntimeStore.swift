@@ -221,7 +221,9 @@ final class SessionRuntimeStore: ObservableObject {
         sessionID: String,
         fingerprint: String?,
         threadID: String? = nil,
-        turnID: String? = nil
+        turnID: String? = nil,
+        approvalPolicy: String? = nil,
+        approvalsReviewer: String? = nil
     ) {
         guard let record = sessionRegistry.sessionsByID[sessionID],
               record.agent == .codex,
@@ -230,6 +232,10 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        let hasApprovalContext = approvalPolicy != nil || approvalsReviewer != nil
+        let shouldReplaceApprovalContext = fingerprint != nil ||
+            turnID != nil ||
+            hasApprovalContext
         state.pendingRootInputFingerprint = fingerprint
         if let threadID {
             let previousRootThreadID = state.rootThreadID
@@ -237,10 +243,23 @@ final class SessionRuntimeStore: ObservableObject {
             if let previousRootThreadID,
                previousRootThreadID != threadID {
                 state.rootTurnID = nil
+                state.approvalPolicy = nil
+                state.approvalsReviewer = nil
             }
         }
         if let turnID {
             state.rootTurnID = turnID
+        } else if fingerprint != nil || hasApprovalContext {
+            state.rootTurnID = nil
+        }
+        if shouldReplaceApprovalContext {
+            if turnID == nil, hasApprovalContext {
+                state.approvalPolicy = nil
+                state.approvalsReviewer = nil
+            } else {
+                state.approvalPolicy = approvalPolicy
+                state.approvalsReviewer = approvalsReviewer
+            }
         }
         codexNotifyStateBySessionID[sessionID] = state
 
@@ -255,6 +274,8 @@ final class SessionRuntimeStore: ObservableObject {
                     "input_fingerprint": truncatedFingerprint(fingerprint),
                     "thread_id": threadID ?? "none",
                     "turn_id": turnID ?? "none",
+                    "approval_policy": approvalPolicy ?? "none",
+                    "approvals_reviewer": approvalsReviewer ?? "none",
                 ]
             )
         )
@@ -609,6 +630,8 @@ final class SessionRuntimeStore: ObservableObject {
                     state.rootThreadID = threadID
                     state.rootTurnID = nil
                     state.pendingRootInputFingerprint = nil
+                    state.approvalPolicy = nil
+                    state.approvalsReviewer = nil
                     stateChanged = true
                     ToasttyLog.debug(
                         "Reset Codex root hook thread after clear",
@@ -669,6 +692,8 @@ final class SessionRuntimeStore: ObservableObject {
         if event.isUserPromptSubmit,
            state.rootTurnID != event.turnID {
             state.rootTurnID = event.turnID
+            state.approvalPolicy = nil
+            state.approvalsReviewer = nil
             stateChanged = true
         }
 
@@ -681,6 +706,18 @@ final class SessionRuntimeStore: ObservableObject {
         codexNotifyStateBySessionID[sessionID] = state
 
         guard let status = event.status else {
+            return stateChanged
+        }
+
+        if shouldSuppressCodexHookApproval(event: event, state: state) {
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: event,
+                decision: "suppressed",
+                reason: "auto_review_approval"
+            )
             return stateChanged
         }
 
@@ -1175,6 +1212,28 @@ final class SessionRuntimeStore: ObservableObject {
         codexStatusTrackingSourceBySessionID[sessionID]?.code ?? "unspecified"
     }
 
+    private func shouldSuppressCodexHookApproval(
+        event: CodexHookEvent,
+        state: CodexNotifySessionState
+    ) -> Bool {
+        guard event.isPermissionRequest,
+              event.status?.kind == .needsApproval else {
+            return false
+        }
+        guard let hookThreadID = event.threadID,
+              let rootThreadID = state.rootThreadID,
+              hookThreadID == rootThreadID else {
+            return false
+        }
+        guard let hookTurnID = event.turnID,
+              let rootTurnID = state.rootTurnID,
+              hookTurnID == rootTurnID else {
+            return false
+        }
+        return normalizedNonEmpty(state.approvalsReviewer) != nil &&
+            normalizedNonEmpty(state.approvalPolicy)?.lowercased() == "never"
+    }
+
     private func codexHookCompletionAcceptedReason(
         event: CodexHookEvent,
         state: CodexNotifySessionState
@@ -1242,8 +1301,11 @@ final class SessionRuntimeStore: ObservableObject {
             "previous_status_kind": record?.status?.kind.rawValue ?? "none",
             "root_thread_id": state.rootThreadID ?? "none",
             "root_turn_id": state.rootTurnID ?? "none",
+            "approval_policy": state.approvalPolicy ?? "none",
+            "approvals_reviewer": state.approvalsReviewer ?? "none",
             "hook_thread_id": event.threadID ?? "none",
             "hook_turn_id": event.turnID ?? "none",
+            "hook_permission_mode": event.permissionMode ?? "none",
             "has_thread_id": boolMetadata(event.threadID != nil),
             "has_turn_id": boolMetadata(event.turnID != nil),
             "root_thread_known": boolMetadata(state.rootThreadID != nil),
@@ -1283,6 +1345,8 @@ final class SessionRuntimeStore: ObservableObject {
             "previous_status_kind": record?.status?.kind.rawValue ?? "none",
             "root_thread_id": state.rootThreadID ?? "none",
             "root_turn_id": state.rootTurnID ?? "none",
+            "approval_policy": state.approvalPolicy ?? "none",
+            "approvals_reviewer": state.approvalsReviewer ?? "none",
             "session_log_thread_id": threadID ?? "none",
             "session_log_turn_id": turnID ?? "none",
             "has_thread_id": boolMetadata(threadID != nil),
@@ -1318,6 +1382,8 @@ final class SessionRuntimeStore: ObservableObject {
             "previous_status_kind": record?.status?.kind.rawValue ?? "none",
             "root_thread_id": state.rootThreadID ?? "none",
             "root_turn_id": state.rootTurnID ?? "none",
+            "approval_policy": state.approvalPolicy ?? "none",
+            "approvals_reviewer": state.approvalsReviewer ?? "none",
             "root_thread_known": boolMetadata(state.rootThreadID != nil),
             "root_turn_known": boolMetadata(state.rootTurnID != nil),
             "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
@@ -1724,6 +1790,8 @@ private struct CodexNotifySessionState {
     var rootThreadID: String?
     var rootTurnID: String?
     var pendingRootInputFingerprint: String?
+    var approvalPolicy: String?
+    var approvalsReviewer: String?
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
@@ -1907,6 +1975,10 @@ private extension CodexHookEvent {
 
     var isUserPromptSubmit: Bool {
         hookEventName == "UserPromptSubmit"
+    }
+
+    var isPermissionRequest: Bool {
+        hookEventName == "PermissionRequest"
     }
 
     var canLatchRootHookThread: Bool {

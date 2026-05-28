@@ -421,6 +421,27 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesCurrentCodexUserTurnApprovalContext() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-05-27T20:00:00.000Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","turn_id":"turn-root","items":[{"type":"text","text":"Run repo checks"}],"approval_policy":"never","approvals_reviewer":"reviewer"}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Run repo checks",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "Run repo checks"),
+                rootTurnID: "turn-root",
+                approvalPolicy: "never",
+                approvalsReviewer: "reviewer"
+            )
+        ])
+    }
+
     func testWatcherIgnoresThreadGoalMenuOpenAppEvents() async throws {
         let events = try await recordEvents(
             from:

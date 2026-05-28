@@ -132,6 +132,7 @@ struct AutomationSocketServerTests {
                 requestID: UUID().uuidString,
                 payload: [
                     "hookEventName": .string("PreToolUse"),
+                    "permissionMode": .string("default"),
                     "threadID": .string("thread-root"),
                     "kind": .string(SessionStatusKind.working.rawValue),
                     "summary": .string("Working"),

@@ -110,6 +110,9 @@ enum CLICommand: Equatable {
             if let source = event.source {
                 payload["source"] = .string(source)
             }
+            if let permissionMode = event.permissionMode {
+                payload["permissionMode"] = .string(permissionMode)
+            }
             if let threadID = event.threadID {
                 payload["threadID"] = .string(threadID)
             }
@@ -1142,6 +1145,9 @@ public enum ToasttyCLI {
 
         case .codexHooks:
             var components = ["hook_event_name=\(normalizedEventField(object["hook_event_name"]) ?? "unknown")"]
+            if let permissionMode = normalizedEventField(object["permission_mode"]) {
+                components.append("permission_mode=\(permissionMode)")
+            }
             if let toolName = normalizedEventField(object["tool_name"]) {
                 components.append("tool_name=\(toolName)")
             }

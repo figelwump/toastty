@@ -2347,6 +2347,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         return CodexHookEvent(
             hookEventName: hookEventName,
             source: normalizedOptionalText(payload.string("source")),
+            permissionMode: normalizedOptionalText(payload.string("permissionMode")),
             threadID: normalizedOptionalText(payload.string("threadID")),
             turnID: normalizedOptionalText(payload.string("turnID")),
             promptFingerprint: normalizedOptionalText(payload.string("promptFingerprint")),

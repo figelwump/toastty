@@ -3,6 +3,7 @@ import Foundation
 public struct CodexHookEvent: Equatable, Sendable {
     public var hookEventName: String
     public var source: String?
+    public var permissionMode: String?
     public var threadID: String?
     public var turnID: String?
     public var promptFingerprint: String?
@@ -14,6 +15,7 @@ public struct CodexHookEvent: Equatable, Sendable {
     public init(
         hookEventName: String,
         source: String? = nil,
+        permissionMode: String? = nil,
         threadID: String?,
         turnID: String?,
         promptFingerprint: String?,
@@ -24,6 +26,7 @@ public struct CodexHookEvent: Equatable, Sendable {
     ) {
         self.hookEventName = hookEventName
         self.source = source
+        self.permissionMode = permissionMode
         self.threadID = threadID
         self.turnID = turnID
         self.promptFingerprint = promptFingerprint

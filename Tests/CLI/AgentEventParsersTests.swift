@@ -434,7 +434,7 @@ struct AgentEventParsersTests {
             sessionID: "sess-123",
             panelID: nil,
             payload: Data(
-                #"{"hook_event_name":"PermissionRequest","session_id":"thread-root","tool_name":"Bash","tool_input":{"command":"git status --short"}}"#.utf8
+                #"{"hook_event_name":"PermissionRequest","permission_mode":"default","session_id":"thread-root","turn_id":"turn-root","tool_name":"Bash","tool_input":{"command":"git status --short"}}"#.utf8
             )
         )
 
@@ -444,8 +444,9 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 event: CodexHookEvent(
                     hookEventName: "PermissionRequest",
+                    permissionMode: "default",
                     threadID: "thread-root",
-                    turnID: nil,
+                    turnID: "turn-root",
                     promptFingerprint: nil,
                     status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve git status --short"),
                     nativeSessionID: "thread-root",
