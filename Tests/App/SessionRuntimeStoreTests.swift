@@ -1066,7 +1066,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexHookPermissionRequestDoesNotReusePendingOverrideContextForRepeatedPrompt() {
+    func codexHookPermissionRequestReusesOverrideContextAcrossRepeatedPrompts() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1144,7 +1144,7 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(3)
         )
 
-        let accepted = store.handleCodexHookEvent(
+        let suppressed = store.handleCodexHookEvent(
             sessionID: "sess-codex-repeated-prompt",
             event: CodexHookEvent(
                 hookEventName: "PermissionRequest",
@@ -1160,8 +1160,269 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(4)
         )
 
+        #expect(suppressed == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-repeated-prompt")?.status?.kind == .working)
+    }
+
+    @Test
+    func codexHookPermissionRequestDoesNotCarryOverrideContextAcrossClearSessionStart() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let firstPromptFingerprint = CodexInputFingerprint.fingerprint(for: "continue")
+        let secondPromptFingerprint = CodexInputFingerprint.fingerprint(for: "manual")
+
+        store.startSession(
+            sessionID: "sess-codex-clear-session-start",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexPendingTurnContext(
+            sessionID: "sess-codex-clear-session-start",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent"
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-clear-session-start",
+            fingerprint: firstPromptFingerprint,
+            approvalPolicy: "on-request"
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-clear-session-start",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-one",
+                turnID: "turn-one",
+                promptFingerprint: firstPromptFingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "continue"),
+                nativeSessionID: "thread-one",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        let firstSuppressed = store.handleCodexHookEvent(
+            sessionID: "sess-codex-clear-session-start",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-one",
+                turnID: "turn-one",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-one",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+        #expect(firstSuppressed == false)
+
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-clear-session-start",
+            event: CodexHookEvent(
+                hookEventName: "SessionStart",
+                source: "clear",
+                threadID: "thread-two",
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: "thread-two",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-clear-session-start",
+            fingerprint: secondPromptFingerprint,
+            approvalPolicy: "on-request"
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-clear-session-start",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-two",
+                turnID: "turn-two",
+                promptFingerprint: secondPromptFingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "manual"),
+                nativeSessionID: "thread-two",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(4)
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-clear-session-start",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-two",
+                turnID: "turn-two",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-two",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(5)
+        )
+
         #expect(accepted)
-        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-repeated-prompt")?.status?.kind == .needsApproval)
+        #expect(
+            store.sessionRegistry.activeSession(sessionID: "sess-codex-clear-session-start")?.status?.kind ==
+                .needsApproval
+        )
+    }
+
+    @Test
+    func codexHookPermissionRequestWaitsForPromptContextBeforeReusingOverrideContext() {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 1_000_000_000)
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let promptFingerprint = CodexInputFingerprint.fingerprint(for: "manual command")
+
+        store.startSession(
+            sessionID: "sess-codex-waits-for-current-prompt-context",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexPendingTurnContext(
+            sessionID: "sess-codex-waits-for-current-prompt-context",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent"
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-waits-for-current-prompt-context",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: promptFingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "manual command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let deferred = store.handleCodexHookEvent(
+            sessionID: "sess-codex-waits-for-current-prompt-context",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(deferred == false)
+        #expect(
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-waits-for-current-prompt-context"
+            )?.status?.kind == .working
+        )
+
+        store.recordCodexPendingTurnContext(
+            sessionID: "sess-codex-waits-for-current-prompt-context",
+            approvalPolicy: nil,
+            approvalsReviewer: nil
+        )
+
+        #expect(
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-waits-for-current-prompt-context"
+            )?.status?.kind == .needsApproval
+        )
+    }
+
+    @Test
+    func codexHookPermissionRequestUsesOverrideContextThatArrivesAfterUserTurnContext() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let promptFingerprint = CodexInputFingerprint.fingerprint(for: "continue")
+
+        store.startSession(
+            sessionID: "sess-codex-late-override-context",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-late-override-context",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: promptFingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "continue"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-late-override-context",
+            fingerprint: promptFingerprint,
+            approvalPolicy: "on-request"
+        )
+        store.recordCodexOverrideTurnContext(
+            sessionID: "sess-codex-late-override-context",
+            approvalPolicy: .unspecified,
+            approvalsReviewer: .string("guardian_subagent")
+        )
+
+        let suppressed = store.handleCodexHookEvent(
+            sessionID: "sess-codex-late-override-context",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(suppressed == false)
+        #expect(
+            store.sessionRegistry.activeSession(sessionID: "sess-codex-late-override-context")?.status?.kind ==
+                .working
+        )
     }
 
     @Test

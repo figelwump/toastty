@@ -386,10 +386,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         case .sessionConfigured:
             return
         case .turnContextUpdated:
-            sessionRuntimeStore.recordCodexPendingTurnContext(
+            sessionRuntimeStore.recordCodexOverrideTurnContext(
                 sessionID: sessionID,
-                approvalPolicy: event.approvalPolicy,
-                approvalsReviewer: event.approvalsReviewer
+                approvalPolicy: event.approvalPolicyField,
+                approvalsReviewer: event.approvalsReviewerField
             )
             return
         case .turnStarted:

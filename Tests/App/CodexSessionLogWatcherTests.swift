@@ -473,7 +473,28 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(events, [
             CodexSessionLogEvent(
                 kind: .turnContextUpdated,
-                detail: "Codex turn context updated"
+                detail: "Codex turn context updated",
+                approvalPolicyField: .null,
+                approvalsReviewerField: .null
+            )
+        ])
+    }
+
+    func testWatcherTreatsNullUserTurnReviewerAsUnspecified() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-05-28T19:56:55.411Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"go ahead","text_elements":[]}],"cwd":"/tmp/workspace","approval_policy":"on-request","approvals_reviewer":null}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "go ahead",
+                rootInputFingerprint: CodexInputFingerprint.fingerprint(for: "go ahead"),
+                approvalPolicy: "on-request"
             )
         ])
     }

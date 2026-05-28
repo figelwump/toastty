@@ -1,6 +1,41 @@
 import CoreState
 import Foundation
 
+enum CodexSessionLogContextField: Equatable, Sendable {
+    case unspecified
+    case null
+    case string(String)
+
+    var stringValue: String? {
+        switch self {
+        case .unspecified, .null:
+            return nil
+        case .string(let value):
+            return value
+        }
+    }
+
+    var isSpecified: Bool {
+        switch self {
+        case .unspecified:
+            return false
+        case .null, .string:
+            return true
+        }
+    }
+
+    var metadataValue: String {
+        switch self {
+        case .unspecified:
+            return "unspecified"
+        case .null:
+            return "null"
+        case .string(let value):
+            return value
+        }
+    }
+}
+
 struct CodexSessionLogEvent: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case sessionConfigured
@@ -21,6 +56,8 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     let completionTurnID: String?
     let nativeSessionID: String?
     let nativeSessionFilePath: String?
+    let approvalPolicyField: CodexSessionLogContextField
+    let approvalsReviewerField: CodexSessionLogContextField
     let approvalPolicy: String?
     let approvalsReviewer: String?
 
@@ -34,9 +71,18 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         completionTurnID: String? = nil,
         nativeSessionID: String? = nil,
         nativeSessionFilePath: String? = nil,
+        approvalPolicyField: CodexSessionLogContextField? = nil,
+        approvalsReviewerField: CodexSessionLogContextField? = nil,
         approvalPolicy: String? = nil,
         approvalsReviewer: String? = nil
     ) {
+        let resolvedApprovalPolicyField = approvalPolicyField
+            ?? approvalPolicy.map(CodexSessionLogContextField.string)
+            ?? .unspecified
+        let resolvedApprovalsReviewerField = approvalsReviewerField
+            ?? approvalsReviewer.map(CodexSessionLogContextField.string)
+            ?? .unspecified
+
         self.kind = kind
         self.detail = detail
         self.rootInputFingerprint = rootInputFingerprint
@@ -46,16 +92,18 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         self.completionTurnID = completionTurnID
         self.nativeSessionID = nativeSessionID
         self.nativeSessionFilePath = nativeSessionFilePath
-        self.approvalPolicy = approvalPolicy
-        self.approvalsReviewer = approvalsReviewer
+        self.approvalPolicyField = resolvedApprovalPolicyField
+        self.approvalsReviewerField = resolvedApprovalsReviewerField
+        self.approvalPolicy = resolvedApprovalPolicyField.stringValue
+        self.approvalsReviewer = resolvedApprovalsReviewerField.stringValue
     }
 
     var hasRootTurnContext: Bool {
         rootInputFingerprint != nil ||
             rootThreadID != nil ||
             rootTurnID != nil ||
-            approvalPolicy != nil ||
-            approvalsReviewer != nil
+            approvalPolicyField.isSpecified ||
+            approvalsReviewerField.isSpecified
     }
 }
 
@@ -425,13 +473,30 @@ private extension CodexSessionLogWatcher {
                 detail: userTurnDetail(from: operation.payload) ?? "Responding to your prompt",
                 rootInputFingerprint: userTurnInputFingerprint(from: operation.payload),
                 rootTurnID: operationExplicitTurnID(from: operation.payload),
-                approvalPolicy: normalizedString(operation.payload["approval_policy"]),
-                approvalsReviewer: normalizedString(operation.payload["approvals_reviewer"])
+                approvalPolicyField: contextField(
+                    from: operation.payload,
+                    key: "approval_policy",
+                    nullMeansClear: false
+                ),
+                approvalsReviewerField: contextField(
+                    from: operation.payload,
+                    key: "approvals_reviewer",
+                    nullMeansClear: false
+                )
             )
 
         case "override_turn_context":
-            guard operation.payload.keys.contains("approval_policy") ||
-                operation.payload.keys.contains("approvals_reviewer") else {
+            let approvalPolicyField = contextField(
+                from: operation.payload,
+                key: "approval_policy",
+                nullMeansClear: true
+            )
+            let approvalsReviewerField = contextField(
+                from: operation.payload,
+                key: "approvals_reviewer",
+                nullMeansClear: true
+            )
+            guard approvalPolicyField.isSpecified || approvalsReviewerField.isSpecified else {
                 return nil
             }
             let dedupeKey = "op_override_turn_context:\(operationEventIdentifier(from: object, payload: operation.payload, fallback: fallbackLine))"
@@ -442,8 +507,8 @@ private extension CodexSessionLogWatcher {
             return CodexSessionLogEvent(
                 kind: .turnContextUpdated,
                 detail: "Codex turn context updated",
-                approvalPolicy: normalizedString(operation.payload["approval_policy"]),
-                approvalsReviewer: normalizedString(operation.payload["approvals_reviewer"])
+                approvalPolicyField: approvalPolicyField,
+                approvalsReviewerField: approvalsReviewerField
             )
 
         case "interrupt":
@@ -614,6 +679,20 @@ private extension CodexSessionLogWatcher {
             }
         }
         return fallback
+    }
+
+    static func contextField(
+        from payload: [String: Any],
+        key: String,
+        nullMeansClear: Bool
+    ) -> CodexSessionLogContextField {
+        guard payload.keys.contains(key) else {
+            return .unspecified
+        }
+        guard let value = normalizedString(payload[key]) else {
+            return nullMeansClear ? .null : .unspecified
+        }
+        return .string(value)
     }
 
     static func operationEventIdentifier(

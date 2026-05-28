@@ -180,6 +180,82 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testCodexSessionLogOverrideContextPersistsAcrossUserTurnsWhenHooksAreAvailable() async throws {
+        let fixture = try makePlannerFixture(
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        let promptFingerprint = CodexInputFingerprint.fingerprint(for: "go ahead")
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+        }
+
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-05-28T19:22:32.686Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"cwd":null,"approval_policy":"on-request","approvals_reviewer":"guardian_subagent","permission_profile":{"type":"managed"}}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-05-28T19:24:59.371Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"ok make a plan","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-05-28T19:56:55.411Z","dir":"from_tui","kind":"op","payload":{"UserTurn":{"items":[{"type":"text","text":"go ahead","text_elements":[]}],"cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":null}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        _ = fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: promptFingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "go ahead"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: Date()
+        )
+        let accepted = fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: Date()
+        )
+
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
+            .working
+        )
+    }
+
     func testCodexSessionLogApprovalDoesNotDriveStatusWhenHooksAreAvailable() async throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
