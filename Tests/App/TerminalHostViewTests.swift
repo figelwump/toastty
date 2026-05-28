@@ -956,6 +956,451 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === hostView)
     }
 
+    func testFocusedLeftMousePressAndReleaseForwardsBalancedButtons() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
+        let pressureRecorder = GhosttyMousePressureRecorder()
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(hostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            sendMouseButton: { surface, state, button, mods in
+                mouseButtonRecorder.record(
+                    surface: surface,
+                    state: state,
+                    button: button,
+                    mods: mods
+                )
+                return true
+            },
+            setMousePressure: { surface, stage, pressure in
+                pressureRecorder.record(surface: surface, stage: stage, pressure: pressure)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1250))
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+        hostView.mouseUp(with: try makeMouseEvent(type: .leftMouseUp, window: window))
+
+        XCTAssertEqual(
+            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
+            [
+                "\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
+                "\(GHOSTTY_MOUSE_RELEASE.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
+            ]
+        )
+        XCTAssertEqual(pressureRecorder.events.map(\.stage), [0])
+    }
+
+    func testFocusTransferLeftMouseClickIsFocusOnly() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let otherHostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
+        let pressureRecorder = GhosttyMousePressureRecorder()
+        var activationCount = 0
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(otherHostView)
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(otherHostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.activatePanelIfNeeded = {
+            activationCount += 1
+            return true
+        }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            sendMouseButton: { surface, state, button, mods in
+                mouseButtonRecorder.record(
+                    surface: surface,
+                    state: state,
+                    button: button,
+                    mods: mods
+                )
+                return true
+            },
+            setMousePressure: { surface, stage, pressure in
+                pressureRecorder.record(surface: surface, stage: stage, pressure: pressure)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1251))
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+        hostView.mouseUp(with: try makeMouseEvent(type: .leftMouseUp, window: window))
+
+        XCTAssertEqual(activationCount, 1)
+        XCTAssertTrue(window.firstResponder === hostView)
+        XCTAssertTrue(mouseButtonRecorder.events.isEmpty)
+        XCTAssertTrue(pressureRecorder.events.isEmpty)
+    }
+
+    func testClickFromNonTerminalFirstResponderStillForwardsMouseButton() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let focusableView = FocusableTestView(frame: NSRect(x: 0, y: 0, width: 50, height: 50))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
+        let pressureRecorder = GhosttyMousePressureRecorder()
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(focusableView)
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(focusableView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            sendMouseButton: { surface, state, button, mods in
+                mouseButtonRecorder.record(
+                    surface: surface,
+                    state: state,
+                    button: button,
+                    mods: mods
+                )
+                return true
+            },
+            setMousePressure: { surface, stage, pressure in
+                pressureRecorder.record(surface: surface, stage: stage, pressure: pressure)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1259))
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+        hostView.mouseUp(with: try makeMouseEvent(type: .leftMouseUp, window: window))
+
+        XCTAssertTrue(window.firstResponder === hostView)
+        XCTAssertEqual(
+            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
+            [
+                "\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
+                "\(GHOSTTY_MOUSE_RELEASE.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
+            ]
+        )
+        XCTAssertEqual(pressureRecorder.events.map(\.stage), [0])
+    }
+
+    func testFocusTransferDragDoesNotForwardMousePositionAfterSuppressedPress() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let otherHostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseRecorder = GhosttyMousePositionRecorder()
+        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(otherHostView)
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(otherHostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { surface, x, y, mods in
+                mouseRecorder.record(surface: surface, x: x, y: y, mods: mods)
+            },
+            sendMouseButton: { surface, state, button, mods in
+                mouseButtonRecorder.record(
+                    surface: surface,
+                    state: state,
+                    button: button,
+                    mods: mods
+                )
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1252))
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+        hostView.mouseDragged(
+            with: try makeMouseEvent(
+                type: .leftMouseDragged,
+                window: window,
+                location: NSPoint(x: 28, y: 36)
+            )
+        )
+        hostView.mouseUp(with: try makeMouseEvent(type: .leftMouseUp, window: window))
+
+        XCTAssertTrue(mouseRecorder.events.isEmpty)
+        XCTAssertTrue(mouseButtonRecorder.events.isEmpty)
+    }
+
+    func testFocusTransferCommandClickDoesNotOpenLinkOrRefreshHover() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let otherHostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseRecorder = GhosttyMousePositionRecorder()
+        var openCallCount = 0
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(otherHostView)
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(otherHostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { _, _ in
+            openCallCount += 1
+            return true
+        }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { surface, x, y, mods in
+                mouseRecorder.record(surface: surface, x: x, y: y, mods: mods)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1253))
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+
+        XCTAssertEqual(openCallCount, 0)
+        XCTAssertTrue(mouseRecorder.events.isEmpty)
+    }
+
+    func testDragAfterForwardedLeftPressStillForwardsPosition() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseRecorder = GhosttyMousePositionRecorder()
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(hostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { surface, x, y, mods in
+                mouseRecorder.record(surface: surface, x: x, y: y, mods: mods)
+            },
+            sendMouseButton: { _, _, _, _ in true },
+            setMousePressure: { _, _, _ in }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1254))
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+        hostView.mouseDragged(
+            with: try makeMouseEvent(
+                type: .leftMouseDragged,
+                window: window,
+                location: NSPoint(x: 28, y: 36)
+            )
+        )
+
+        XCTAssertEqual(mouseRecorder.events.count, 2)
+        let lastMouseEvent = try XCTUnwrap(mouseRecorder.lastEvent)
+        XCTAssertEqual(lastMouseEvent.x, 28, accuracy: 0.001)
+        XCTAssertEqual(lastMouseEvent.y, 64, accuracy: 0.001)
+    }
+
+    func testFocusLossReleasesForwardedLeftPress() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
+        let pressureRecorder = GhosttyMousePressureRecorder()
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(hostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            sendMouseButton: { surface, state, button, mods in
+                mouseButtonRecorder.record(
+                    surface: surface,
+                    state: state,
+                    button: button,
+                    mods: mods
+                )
+                return true
+            },
+            setMousePressure: { surface, stage, pressure in
+                pressureRecorder.record(surface: surface, stage: stage, pressure: pressure)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1255))
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+        _ = hostView.syncSurfaceFocus(false, reason: "test_focus_loss")
+
+        XCTAssertEqual(
+            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
+            [
+                "\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
+                "\(GHOSTTY_MOUSE_RELEASE.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
+            ]
+        )
+        XCTAssertEqual(pressureRecorder.events.map(\.stage), [0])
+    }
+
+    func testFocusLossReleasesForwardedRightPressOnce() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
+        let pressureRecorder = GhosttyMousePressureRecorder()
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(hostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            sendMouseButton: { surface, state, button, mods in
+                mouseButtonRecorder.record(
+                    surface: surface,
+                    state: state,
+                    button: button,
+                    mods: mods
+                )
+                return true
+            },
+            setMousePressure: { surface, stage, pressure in
+                pressureRecorder.record(surface: surface, stage: stage, pressure: pressure)
+            },
+            isMouseCaptured: { _ in true }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1260))
+
+        hostView.rightMouseDown(with: try makeMouseEvent(type: .rightMouseDown, window: window))
+        _ = hostView.syncSurfaceFocus(false, reason: "test_focus_loss")
+        hostView.rightMouseUp(with: try makeMouseEvent(type: .rightMouseUp, window: window))
+
+        XCTAssertEqual(
+            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
+            [
+                "\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_RIGHT.rawValue)",
+                "\(GHOSTTY_MOUSE_RELEASE.rawValue):\(GHOSTTY_MOUSE_RIGHT.rawValue)",
+            ]
+        )
+        XCTAssertEqual(pressureRecorder.events.map(\.stage), [0])
+    }
+
+    func testFocusLossAfterFocusOnlyClickDoesNotSynthesizeRelease() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let otherHostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(otherHostView)
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(otherHostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            sendMouseButton: { surface, state, button, mods in
+                mouseButtonRecorder.record(
+                    surface: surface,
+                    state: state,
+                    button: button,
+                    mods: mods
+                )
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1256))
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+        _ = hostView.syncSurfaceFocus(false, reason: "test_focus_loss")
+
+        XCTAssertTrue(mouseButtonRecorder.events.isEmpty)
+    }
+
+    func testSurfaceReplacementReleasesForwardedLeftPressAgainstOldSurface() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
+        let oldSurface = fakeSurfaceHandle(0x1257)
+        let newSurface = fakeSurfaceHandle(0x1258)
+
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        _ = window.makeFirstResponder(hostView)
+        hostView.applicationIsActiveProvider = { true }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            sendMouseButton: { surface, state, button, mods in
+                mouseButtonRecorder.record(
+                    surface: surface,
+                    state: state,
+                    button: button,
+                    mods: mods
+                )
+                return true
+            },
+            setMousePressure: { _, _, _ in }
+        )
+        hostView.setGhosttySurface(oldSurface)
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+        hostView.setGhosttySurface(newSurface)
+
+        XCTAssertEqual(
+            mouseButtonRecorder.events.map { "\($0.surfaceRawValue):\($0.stateRawValue)" },
+            [
+                "\(UInt(bitPattern: oldSurface)):\(GHOSTTY_MOUSE_PRESS.rawValue)",
+                "\(UInt(bitPattern: oldSurface)):\(GHOSTTY_MOUSE_RELEASE.rawValue)",
+            ]
+        )
+    }
+
     func testCommandClickHoveredLinkOpensViaAppCallbackOnMouseUp() throws {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -2031,9 +2476,23 @@ private struct RecordedGhosttyKeyEvent: Equatable {
 }
 
 private struct RecordedGhosttyMousePosition: Equatable {
+    let surfaceRawValue: UInt?
     let x: Double
     let y: Double
     let modsRawValue: UInt32
+}
+
+private struct RecordedGhosttyMouseButton: Equatable {
+    let surfaceRawValue: UInt
+    let stateRawValue: UInt32
+    let buttonRawValue: UInt32
+    let modsRawValue: UInt32
+}
+
+private struct RecordedGhosttyMousePressure: Equatable {
+    let surfaceRawValue: UInt
+    let stage: UInt32
+    let pressure: Double
 }
 
 private final class GhosttyKeyEventRecorder: @unchecked Sendable {
@@ -2068,9 +2527,14 @@ private final class GhosttyMousePositionRecorder: @unchecked Sendable {
     private var storage: [RecordedGhosttyMousePosition] = []
 
     func record(x: Double, y: Double, mods: ghostty_input_mods_e) {
+        record(surface: nil, x: x, y: y, mods: mods)
+    }
+
+    func record(surface: ghostty_surface_t?, x: Double, y: Double, mods: ghostty_input_mods_e) {
         lock.lock()
         storage.append(
             RecordedGhosttyMousePosition(
+                surfaceRawValue: surface.map { UInt(bitPattern: $0) },
                 x: x,
                 y: y,
                 modsRawValue: mods.rawValue
@@ -2085,6 +2549,70 @@ private final class GhosttyMousePositionRecorder: @unchecked Sendable {
             lock.unlock()
         }
         return storage.last
+    }
+
+    var events: [RecordedGhosttyMousePosition] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage
+    }
+}
+
+private final class GhosttyMouseButtonRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [RecordedGhosttyMouseButton] = []
+
+    func record(
+        surface: ghostty_surface_t,
+        state: ghostty_input_mouse_state_e,
+        button: ghostty_input_mouse_button_e,
+        mods: ghostty_input_mods_e
+    ) {
+        lock.lock()
+        storage.append(
+            RecordedGhosttyMouseButton(
+                surfaceRawValue: UInt(bitPattern: surface),
+                stateRawValue: state.rawValue,
+                buttonRawValue: button.rawValue,
+                modsRawValue: mods.rawValue
+            )
+        )
+        lock.unlock()
+    }
+
+    var events: [RecordedGhosttyMouseButton] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage
+    }
+}
+
+private final class GhosttyMousePressureRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [RecordedGhosttyMousePressure] = []
+
+    func record(surface: ghostty_surface_t, stage: UInt32, pressure: Double) {
+        lock.lock()
+        storage.append(
+            RecordedGhosttyMousePressure(
+                surfaceRawValue: UInt(bitPattern: surface),
+                stage: stage,
+                pressure: pressure
+            )
+        )
+        lock.unlock()
+    }
+
+    var events: [RecordedGhosttyMousePressure] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage
     }
 }
 
@@ -2299,6 +2827,12 @@ private final class TestWindow: NSWindow {
         }
         storedFirstResponder = responder
         return true
+    }
+}
+
+private final class FocusableTestView: NSView {
+    override var acceptsFirstResponder: Bool {
+        true
     }
 }
 #endif

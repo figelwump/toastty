@@ -125,6 +125,14 @@ final class TerminalHostView: NSView {
         var setOcclusion: @Sendable (ghostty_surface_t, Bool) -> Void
         var refresh: @Sendable (ghostty_surface_t) -> Void
         var sendMousePosition: @Sendable (ghostty_surface_t, Double, Double, ghostty_input_mods_e) -> Void
+        var sendMouseButton: @Sendable (
+            ghostty_surface_t,
+            ghostty_input_mouse_state_e,
+            ghostty_input_mouse_button_e,
+            ghostty_input_mods_e
+        ) -> Bool
+        var setMousePressure: @Sendable (ghostty_surface_t, UInt32, Double) -> Void
+        var isMouseCaptured: @Sendable (ghostty_surface_t) -> Bool
         var keyTranslationMods: @Sendable (ghostty_surface_t, ghostty_input_mods_e) -> ghostty_input_mods_e
         var sendKey: @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool
         var setPreedit: @Sendable (ghostty_surface_t, UnsafePointer<CChar>?, uintptr_t) -> Void
@@ -136,6 +144,20 @@ final class TerminalHostView: NSView {
             refresh: @escaping @Sendable (ghostty_surface_t) -> Void,
             sendMousePosition: @escaping @Sendable (ghostty_surface_t, Double, Double, ghostty_input_mods_e) -> Void = { surface, x, y, mods in
                 ghostty_surface_mouse_pos(surface, x, y, mods)
+            },
+            sendMouseButton: @escaping @Sendable (
+                ghostty_surface_t,
+                ghostty_input_mouse_state_e,
+                ghostty_input_mouse_button_e,
+                ghostty_input_mods_e
+            ) -> Bool = { surface, state, button, mods in
+                ghostty_surface_mouse_button(surface, state, button, mods)
+            },
+            setMousePressure: @escaping @Sendable (ghostty_surface_t, UInt32, Double) -> Void = { surface, stage, pressure in
+                ghostty_surface_mouse_pressure(surface, stage, pressure)
+            },
+            isMouseCaptured: @escaping @Sendable (ghostty_surface_t) -> Bool = { surface in
+                ghostty_surface_mouse_captured(surface)
             },
             keyTranslationMods: @escaping @Sendable (ghostty_surface_t, ghostty_input_mods_e) -> ghostty_input_mods_e = { surface, mods in
                 ghostty_surface_key_translation_mods(surface, mods)
@@ -154,6 +176,9 @@ final class TerminalHostView: NSView {
             self.setOcclusion = setOcclusion
             self.refresh = refresh
             self.sendMousePosition = sendMousePosition
+            self.sendMouseButton = sendMouseButton
+            self.setMousePressure = setMousePressure
+            self.isMouseCaptured = isMouseCaptured
             self.keyTranslationMods = keyTranslationMods
             self.sendKey = sendKey
             self.setPreedit = setPreedit
@@ -172,6 +197,15 @@ final class TerminalHostView: NSView {
             },
             sendMousePosition: { surface, x, y, mods in
                 ghostty_surface_mouse_pos(surface, x, y, mods)
+            },
+            sendMouseButton: { surface, state, button, mods in
+                ghostty_surface_mouse_button(surface, state, button, mods)
+            },
+            setMousePressure: { surface, stage, pressure in
+                ghostty_surface_mouse_pressure(surface, stage, pressure)
+            },
+            isMouseCaptured: { surface in
+                ghostty_surface_mouse_captured(surface)
             },
             keyTranslationMods: { surface, mods in
                 ghostty_surface_key_translation_mods(surface, mods)
@@ -199,6 +233,24 @@ final class TerminalHostView: NSView {
     private var rightMousePressWasForwarded = false
     private var ghosttyMouseCursorStyle: GhosttyMouseCursorStyle = .horizontalText
     private var ghosttyMouseCursorVisible = true
+
+    private struct ForwardedMousePress {
+        let surface: ghostty_surface_t
+        let button: ghostty_input_mouse_button_e
+        let x: Double
+        let y: Double
+        let mods: ghostty_input_mods_e
+    }
+
+    private struct GhosttyMouseSnapshot {
+        let x: Double
+        let y: Double
+        let mods: ghostty_input_mods_e
+    }
+
+    private var forwardedMousePresses: [UInt32: ForwardedMousePress] = [:]
+    private var suppressedMouseReleaseButtons: Set<UInt32> = []
+    private var suppressFocusTransferLeftMouseSequence = false
 
     struct VisibilityTraceSnapshot: Equatable {
         let hasWindow: Bool
@@ -362,13 +414,15 @@ final class TerminalHostView: NSView {
             return
         }
 
-        // If a live surface is being replaced while a modifier is held, release
-        // it against the old surface before switching pointers so Ghostty does
-        // not retain dirty per-surface modifier state.
+        // If a live surface is being replaced while mouse or modifier input is
+        // in flight, release it against the old surface before switching
+        // pointers so Ghostty does not retain dirty per-surface state.
+        _ = releaseForwardedMousePressesIfNeeded(reason: "surface_replacement")
         _ = drainTrackedGhosttyModifiers(reason: "surface_replacement")
         ghosttySurface = surface
         lastAppliedSurfaceFocus = nil
         rightMousePressWasForwarded = false
+        suppressFocusTransferLeftMouseSequence = false
         pendingFileDrop = nil
         lastKnownSurfaceVisibility = nil
         trackedPressedModifierKeyCodes.removeAll()
@@ -387,8 +441,12 @@ final class TerminalHostView: NSView {
     @discardableResult
     func syncSurfaceFocus(
         _ focused: Bool,
-        reason _: String
+        reason: String
     ) -> Bool {
+        if focused == false {
+            suppressFocusTransferLeftMouseSequence = false
+            _ = releaseForwardedMousePressesIfNeeded(reason: reason)
+        }
         guard let ghosttySurface else {
             lastAppliedSurfaceFocus = nil
             return false
@@ -570,6 +628,9 @@ final class TerminalHostView: NSView {
         syncGhosttyCursorOwner()
         if visible {
             requestFirstResponderIfNeeded?()
+        } else {
+            suppressFocusTransferLeftMouseSequence = false
+            _ = releaseForwardedMousePressesIfNeeded(reason: reason)
         }
 
         guard let ghosttySurface else {
@@ -747,8 +808,29 @@ final class TerminalHostView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let firstResponderBefore = window?.firstResponder
+        let wasFirstResponderBefore = firstResponderBefore === self
+        let wasActiveKeyWindow = applicationIsActiveProvider() && window?.isKeyWindow == true
+        suppressFocusTransferLeftMouseSequence = false
+        _ = releaseForwardedMousePressIfNeeded(button: GHOSTTY_MOUSE_LEFT, reason: "new_left_mouse_down")
         let activateResult = activatePanelIfNeeded?()
         let focusResult = focusHostViewIfNeeded()
+        let becameFirstResponder = wasFirstResponderBefore == false && window?.firstResponder === self
+        let focusTransferredFromTerminal = firstResponderBefore is TerminalHostView
+        if wasActiveKeyWindow && becameFirstResponder && focusTransferredFromTerminal {
+            suppressFocusTransferLeftMouseSequence = true
+            clearPendingCommandClickLinkOpen()
+            logMouseFocusDiagnostic(
+                "mouse-down-focus-transfer",
+                event: event,
+                firstResponderBefore: firstResponderBefore,
+                extraMetadata: [
+                    "activatePanelResult": Self.optionalBoolDescription(activateResult),
+                    "focusHostResult": "\(focusResult)",
+                    "focusTransferClick": "true",
+                ]
+            )
+            return
+        }
         if preparePendingCommandClickLinkOpen(with: event) {
             logMouseFocusDiagnostic(
                 "mouse-down-command-click",
@@ -786,6 +868,16 @@ final class TerminalHostView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         let firstResponderBefore = window?.firstResponder
+        if suppressFocusTransferLeftMouseSequence {
+            suppressFocusTransferLeftMouseSequence = false
+            logMouseFocusDiagnostic(
+                "mouse-up-focus-transfer",
+                event: event,
+                firstResponderBefore: firstResponderBefore,
+                extraMetadata: ["suppressedFocusTransferRelease": "true"]
+            )
+            return
+        }
         if performPendingCommandClickLinkOpen(with: event) {
             logMouseFocusDiagnostic(
                 "mouse-up-command-click",
@@ -795,13 +887,23 @@ final class TerminalHostView: NSView {
             )
             return
         }
+        guard hasForwardedMousePress(button: GHOSTTY_MOUSE_LEFT) else {
+            logMouseFocusDiagnostic(
+                "mouse-up-without-forwarded-press",
+                event: event,
+                firstResponderBefore: firstResponderBefore,
+                extraMetadata: ["suppressedUnbalancedRelease": "true"]
+            )
+            super.mouseUp(with: event)
+            return
+        }
         let handled = forwardMouseButton(
             event,
             state: GHOSTTY_MOUSE_RELEASE,
             button: GHOSTTY_MOUSE_LEFT
         )
         if let ghosttySurface {
-            ghostty_surface_mouse_pressure(ghosttySurface, 0, 0)
+            ghosttySurfaceHooks.setMousePressure(ghosttySurface, 0, 0)
         }
         logMouseFocusDiagnostic(
             "mouse-up",
@@ -822,6 +924,7 @@ final class TerminalHostView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         _ = activatePanelIfNeeded?()
         focusHostViewIfNeeded()
+        suppressedMouseReleaseButtons.remove(Self.forwardedMousePressKey(for: GHOSTTY_MOUSE_RIGHT))
         guard let ghosttySurface else {
             rightMousePressWasForwarded = false
             super.rightMouseDown(with: event)
@@ -845,12 +948,17 @@ final class TerminalHostView: NSView {
     }
 
     override func rightMouseUp(with event: NSEvent) {
+        if suppressedMouseReleaseButtons.remove(Self.forwardedMousePressKey(for: GHOSTTY_MOUSE_RIGHT)) != nil {
+            rightMousePressWasForwarded = false
+            return
+        }
         guard let ghosttySurface else {
             rightMousePressWasForwarded = false
             super.rightMouseUp(with: event)
             return
         }
         let shouldForward = rightMousePressWasForwarded
+            || hasForwardedMousePress(button: GHOSTTY_MOUSE_RIGHT)
             || shouldForwardRawRightMouseEvents(surface: ghosttySurface)
         rightMousePressWasForwarded = false
         guard shouldForward else {
@@ -870,6 +978,7 @@ final class TerminalHostView: NSView {
     override func otherMouseDown(with event: NSEvent) {
         focusHostViewIfNeeded()
         let button = Self.ghosttyMouseButton(for: event.buttonNumber)
+        suppressedMouseReleaseButtons.remove(Self.forwardedMousePressKey(for: button))
         guard forwardMouseButton(event, state: GHOSTTY_MOUSE_PRESS, button: button) else {
             super.otherMouseDown(with: event)
             return
@@ -878,6 +987,9 @@ final class TerminalHostView: NSView {
 
     override func otherMouseUp(with event: NSEvent) {
         let button = Self.ghosttyMouseButton(for: event.buttonNumber)
+        if suppressedMouseReleaseButtons.remove(Self.forwardedMousePressKey(for: button)) != nil {
+            return
+        }
         guard forwardMouseButton(event, state: GHOSTTY_MOUSE_RELEASE, button: button) else {
             super.otherMouseUp(with: event)
             return
@@ -920,6 +1032,9 @@ final class TerminalHostView: NSView {
         #if TOASTTY_HAS_GHOSTTY_KIT
         clearSyntheticLinkHoverRefreshSuppression()
         #endif
+        if suppressFocusTransferLeftMouseSequence {
+            return
+        }
         if pendingCommandClickLinkURL != nil {
             clearPendingCommandClickLinkOpen()
             return
@@ -982,7 +1097,7 @@ final class TerminalHostView: NSView {
             super.pressureChange(with: event)
             return
         }
-        ghostty_surface_mouse_pressure(
+        ghosttySurfaceHooks.setMousePressure(
             ghosttySurface,
             UInt32(max(event.stage, 0)),
             Double(event.pressure)
@@ -1241,7 +1356,9 @@ final class TerminalHostView: NSView {
 
     @discardableResult
     func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
-        drainTrackedGhosttyModifiers(reason: "app_deactivation")
+        suppressFocusTransferLeftMouseSequence = false
+        _ = releaseForwardedMousePressesIfNeeded(reason: "app_deactivation")
+        return drainTrackedGhosttyModifiers(reason: "app_deactivation")
     }
 
     @discardableResult
@@ -1659,7 +1776,7 @@ final class TerminalHostView: NSView {
     }
 
     private func shouldForwardRawRightMouseEvents(surface: ghostty_surface_t) -> Bool {
-        ghostty_surface_mouse_captured(surface)
+        ghosttySurfaceHooks.isMouseCaptured(surface)
     }
 
     @discardableResult
@@ -1669,9 +1786,16 @@ final class TerminalHostView: NSView {
         button: ghostty_input_mouse_button_e
     ) -> Bool {
         guard let ghosttySurface else { return false }
-        forwardMousePosition(event, surface: ghosttySurface)
-        let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
-        return ghostty_surface_mouse_button(ghosttySurface, state, button, mods)
+        let snapshot = ghosttyMouseSnapshot(for: event, modifierFlags: event.modifierFlags)
+        ghosttySurfaceHooks.sendMousePosition(ghosttySurface, snapshot.x, snapshot.y, snapshot.mods)
+        let handled = ghosttySurfaceHooks.sendMouseButton(ghosttySurface, state, button, snapshot.mods)
+        updateForwardedMousePressTracking(
+            surface: ghosttySurface,
+            snapshot: snapshot,
+            state: state,
+            button: button
+        )
+        return handled
     }
 
     @discardableResult
@@ -1702,10 +1826,104 @@ final class TerminalHostView: NSView {
         surface: ghostty_surface_t,
         modifierFlags: NSEvent.ModifierFlags
     ) {
+        let snapshot = ghosttyMouseSnapshot(for: event, modifierFlags: modifierFlags)
+        ghosttySurfaceHooks.sendMousePosition(surface, snapshot.x, snapshot.y, snapshot.mods)
+    }
+
+    private func ghosttyMouseSnapshot(
+        for event: NSEvent,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> GhosttyMouseSnapshot {
         let point = convert(event.locationInWindow, from: nil)
-        let y = bounds.height - point.y
-        let mods = Self.ghosttyModifierFlags(for: modifierFlags)
-        ghosttySurfaceHooks.sendMousePosition(surface, point.x, y, mods)
+        return GhosttyMouseSnapshot(
+            x: point.x,
+            y: bounds.height - point.y,
+            mods: Self.ghosttyModifierFlags(for: modifierFlags)
+        )
+    }
+
+    private func updateForwardedMousePressTracking(
+        surface: ghostty_surface_t,
+        snapshot: GhosttyMouseSnapshot,
+        state: ghostty_input_mouse_state_e,
+        button: ghostty_input_mouse_button_e
+    ) {
+        let key = Self.forwardedMousePressKey(for: button)
+        switch state {
+        case GHOSTTY_MOUSE_PRESS:
+            forwardedMousePresses[key] = ForwardedMousePress(
+                surface: surface,
+                button: button,
+                x: snapshot.x,
+                y: snapshot.y,
+                mods: snapshot.mods
+            )
+        case GHOSTTY_MOUSE_RELEASE:
+            forwardedMousePresses[key] = nil
+        default:
+            break
+        }
+    }
+
+    private func hasForwardedMousePress(button: ghostty_input_mouse_button_e) -> Bool {
+        forwardedMousePresses[Self.forwardedMousePressKey(for: button)] != nil
+    }
+
+    @discardableResult
+    private func releaseForwardedMousePressIfNeeded(
+        button: ghostty_input_mouse_button_e,
+        reason: String
+    ) -> Bool {
+        guard let press = forwardedMousePresses.removeValue(
+            forKey: Self.forwardedMousePressKey(for: button)
+        ) else {
+            return false
+        }
+        releaseForwardedMousePress(press, reason: reason)
+        return true
+    }
+
+    @discardableResult
+    private func releaseForwardedMousePressesIfNeeded(reason: String) -> Int {
+        let presses = forwardedMousePresses.values.sorted {
+            $0.button.rawValue < $1.button.rawValue
+        }
+        forwardedMousePresses.removeAll()
+        for press in presses {
+            releaseForwardedMousePress(press, reason: reason)
+        }
+        return presses.count
+    }
+
+    private func releaseForwardedMousePress(
+        _ press: ForwardedMousePress,
+        reason: String
+    ) {
+        if press.button == GHOSTTY_MOUSE_RIGHT {
+            rightMousePressWasForwarded = false
+        }
+        if press.button != GHOSTTY_MOUSE_LEFT {
+            suppressedMouseReleaseButtons.insert(Self.forwardedMousePressKey(for: press.button))
+        }
+        ghosttySurfaceHooks.sendMousePosition(press.surface, press.x, press.y, press.mods)
+        _ = ghosttySurfaceHooks.sendMouseButton(
+            press.surface,
+            GHOSTTY_MOUSE_RELEASE,
+            press.button,
+            press.mods
+        )
+        ghosttySurfaceHooks.setMousePressure(press.surface, 0, 0)
+        ToasttyLog.debug(
+            "Released stale Ghostty mouse press",
+            category: .input,
+            metadata: [
+                "reason": reason,
+                "x": String(format: "%.1f", press.x),
+                "y": String(format: "%.1f", press.y),
+                "button": "\(press.button.rawValue)",
+                "modifiers": "\(press.mods.rawValue)",
+            ]
+        )
     }
 
     /// Forwards the current mouse position using the window's live cursor
@@ -1963,6 +2181,10 @@ final class TerminalHostView: NSView {
         default:
             return GHOSTTY_MOUSE_UNKNOWN
         }
+    }
+
+    private static func forwardedMousePressKey(for button: ghostty_input_mouse_button_e) -> UInt32 {
+        button.rawValue
     }
 
     private static func ghosttyScrollModifierFlags(
