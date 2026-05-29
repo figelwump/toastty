@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import CoreGraphics
 import Foundation
 #if TOASTTY_HAS_GHOSTTY_KIT
 import CoreState
@@ -224,7 +225,10 @@ final class TerminalHostView: NSView {
 
     private var ghosttySurface: ghostty_surface_t?
     var ghosttySurfaceHooks = GhosttySurfaceHooks.live
-    var pressedMouseButtonsProvider: () -> Int = { NSEvent.pressedMouseButtons }
+    var physicalMouseButtonStateProvider: (CGMouseButton) -> Bool = { button in
+        CGEventSource.buttonState(.combinedSessionState, button: button)
+            || CGEventSource.buttonState(.hidSystemState, button: button)
+    }
     /// Tracks the last focus value sent to Ghostty to avoid redundant calls.
     /// Each `ghostty_surface_set_focus` call restarts the internal cursor blink
     /// timer; calling it on every layout pass causes irregular blinking and
@@ -1021,10 +1025,6 @@ final class TerminalHostView: NSView {
     override func mouseEntered(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
         clearSyntheticLinkHoverRefreshSuppression()
-        releaseForwardedMousePressesNoLongerPhysicallyPressed(
-            reason: "mouse_entered_physical_button_up",
-            snapshot: ghosttyMouseSnapshot(for: event, modifierFlags: event.modifierFlags)
-        )
         _ = forwardMouseHoverPosition(event)
         #endif
         super.mouseEntered(with: event)
@@ -1034,11 +1034,7 @@ final class TerminalHostView: NSView {
         #if TOASTTY_HAS_GHOSTTY_KIT
         clearSyntheticLinkHoverRefreshSuppression()
         setGhosttyMouseOverLink(nil)
-        releaseForwardedMousePressesNoLongerPhysicallyPressed(
-            reason: "mouse_exited_physical_button_up",
-            snapshot: ghosttyMouseSnapshot(for: event, modifierFlags: event.modifierFlags)
-        )
-        if pressedMouseButtonsProvider() == 0,
+        if !isAnyPhysicalMouseButtonPressed(),
            let ghosttySurface {
             let hoverModifierFlags = Self.ghosttyLinkHoverModifierFlags(for: event.modifierFlags)
             let mods = Self.ghosttyModifierFlags(for: hoverModifierFlags)
@@ -1291,12 +1287,6 @@ final class TerminalHostView: NSView {
             updateTrackedModifierKeyCodes(keyCode: event.keyCode, action: action)
         }
 
-        // FlagsChanged events can carry stale or zero-origin locationInWindow
-        // values, so use the window's live mouse location instead of the event's.
-        releaseForwardedMousePressesNoLongerPhysicallyPressed(
-            reason: "flags_changed_physical_button_up",
-            snapshot: currentGhosttyMouseSnapshot(modifierFlags: event.modifierFlags)
-        )
         _ = forwardCurrentMouseHoverPosition(modifierFlags: event.modifierFlags)
         if suppressingLinkHoverRefresh {
             DispatchQueue.main.async { [weak self] in
@@ -1963,13 +1953,12 @@ final class TerminalHostView: NSView {
         reason: String,
         snapshot: GhosttyMouseSnapshot?
     ) -> Int {
-        let pressedMouseButtons = pressedMouseButtonsProvider()
         let stalePresses = forwardedMousePresses.values
             .filter { press in
-                guard let mask = Self.appKitPressedMouseButtonMask(forGhosttyButton: press.button) else {
+                guard let button = Self.cgMouseButton(forGhosttyButton: press.button) else {
                     return false
                 }
-                return pressedMouseButtons & mask == 0
+                return !physicalMouseButtonStateProvider(button)
             }
             .sorted { $0.button.rawValue < $1.button.rawValue }
 
@@ -2014,6 +2003,10 @@ final class TerminalHostView: NSView {
                 "modifiers": "\(mods.rawValue)",
             ]
         )
+    }
+
+    private func isAnyPhysicalMouseButtonPressed() -> Bool {
+        Self.knownCGMouseButtons.contains { physicalMouseButtonStateProvider($0) }
     }
 
     /// Forwards the current mouse position using the window's live cursor
@@ -2273,36 +2266,39 @@ final class TerminalHostView: NSView {
         }
     }
 
-    static func appKitPressedMouseButtonMask(
+    static func cgMouseButton(
         forGhosttyButton button: ghostty_input_mouse_button_e
-    ) -> Int? {
+    ) -> CGMouseButton? {
         switch button {
         case GHOSTTY_MOUSE_LEFT:
-            return 1 << 0
+            return .left
         case GHOSTTY_MOUSE_RIGHT:
-            return 1 << 1
+            return .right
         case GHOSTTY_MOUSE_MIDDLE:
-            return 1 << 2
+            return .center
         case GHOSTTY_MOUSE_EIGHT:
-            return 1 << 3
+            return CGMouseButton(rawValue: 3)
         case GHOSTTY_MOUSE_NINE:
-            return 1 << 4
+            return CGMouseButton(rawValue: 4)
         case GHOSTTY_MOUSE_SIX:
-            return 1 << 5
+            return CGMouseButton(rawValue: 5)
         case GHOSTTY_MOUSE_SEVEN:
-            return 1 << 6
+            return CGMouseButton(rawValue: 6)
         case GHOSTTY_MOUSE_FOUR:
-            return 1 << 7
+            return CGMouseButton(rawValue: 7)
         case GHOSTTY_MOUSE_FIVE:
-            return 1 << 8
+            return CGMouseButton(rawValue: 8)
         case GHOSTTY_MOUSE_TEN:
-            return 1 << 9
+            return CGMouseButton(rawValue: 9)
         case GHOSTTY_MOUSE_ELEVEN:
-            return 1 << 10
+            return CGMouseButton(rawValue: 10)
         default:
             return nil
         }
     }
+
+    private static let knownCGMouseButtons: [CGMouseButton] = (0...10)
+        .compactMap { CGMouseButton(rawValue: UInt32($0)) }
 
     private static func forwardedMousePressKey(for button: ghostty_input_mouse_button_e) -> UInt32 {
         button.rawValue
