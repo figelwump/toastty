@@ -145,7 +145,7 @@ typing shell functions directly.
 When the profile ID is `codex`, Toastty:
 
 1. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default.
-2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, and `Stop`. These events drive **Working**, **Needs approval**, **Ready**, and native resume metadata for managed Codex sessions.
+2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, and `Stop`. These events drive **Working**, actionable **Needs approval**, **Ready**, and native resume metadata for managed Codex sessions. When session recording context shows Codex is using an auto-reviewer through `approvals_reviewer`, Toastty suppresses the matching auto-reviewed approval prompt instead of surfacing it as a user approval.
 3. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
 4. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 5. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit.
@@ -195,7 +195,7 @@ When you trigger an agent launch (menu click, top-bar button, command palette su
 4. **Render shell command** — Toastty builds a single shell command line with all `TOASTTY_*` context variables inline, the instrumentation environment, and the profile's `argv`
 5. **Start session** — A session record is created in the session runtime store with initial status "Idle / Ready for prompt"
 6. **Send to terminal** — The rendered command line is sent to the target terminal panel and submitted
-7. **Begin monitoring** — For Codex, installed hooks report primary status while notify and the log watcher provide compatibility fallback; for Claude, hooks report events back through the CLI; for Pi, the bundled extension reports events back through the CLI
+7. **Begin monitoring** — For Codex, installed hooks report primary status, the session log watcher tracks root-turn context, and notify is used only as the no-hooks compatibility fallback; for Claude, hooks report events back through the CLI; for Pi, the bundled extension reports events back through the CLI
 
 When the agent process exits and the session is stopped, Toastty cleans up Codex and Pi launch artifacts immediately. Claude hook artifacts can remain after session stop so late hook invocations do not fail at the shell layer before they turn into no-op telemetry delivery.
 

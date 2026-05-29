@@ -991,6 +991,7 @@ Accepted payload keys:
 
 - `hookEventName: String`
 - `source?: String`
+- `permissionMode?: String`
 - `threadID?: String`
 - `turnID?: String`
 - `promptFingerprint?: String`
@@ -1000,6 +1001,9 @@ Accepted payload keys:
 - `nativeSessionID?: String`
 - `sessionFilePath?: String`
 - `cwd?: String`
+
+The socket payload key is `permissionMode`; Toastty's CLI maps Codex hook JSON
+`permission_mode` into that camelCase payload field.
 
 Behavior:
 
