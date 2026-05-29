@@ -793,6 +793,304 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexHookPermissionRequestReplayFromAutoReviewedPriorTurnIsIgnored() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let store = SessionRuntimeStore()
+        store.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldFingerprint = CodexInputFingerprint.fingerprint(for: "Run checks")
+        let newFingerprint = CodexInputFingerprint.fingerprint(for: "Continue")
+
+        store.startSession(
+            sessionID: "sess-codex-replayed-auto-review",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexPendingTurnContext(
+            sessionID: "sess-codex-replayed-auto-review",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent"
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-replayed-auto-review",
+            fingerprint: oldFingerprint,
+            turnID: "turn-old",
+            approvalPolicy: "on-request"
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-replayed-auto-review",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: oldFingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let initialApprovalAccepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-replayed-auto-review",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-replayed-auto-review",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-new",
+                promptFingerprint: newFingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Continue"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        let replayAccepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-replayed-auto-review",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(4)
+        )
+
+        #expect(initialApprovalAccepted == false)
+        #expect(replayAccepted == false)
+        let status = store.sessionRegistry.activeSession(sessionID: "sess-codex-replayed-auto-review")?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Continue")
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func codexHookPermissionRequestFromPriorManualTurnStillSurfacesAfterRootAdvances() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-prior-manual-turn",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-prior-manual-turn",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+            turnID: "turn-old",
+            approvalPolicy: "on-request"
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-prior-manual-turn",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-prior-manual-turn",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-new",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Continue"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Continue"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-prior-manual-turn",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-old",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(accepted)
+        #expect(
+            store.sessionRegistry.activeSession(sessionID: "sess-codex-prior-manual-turn")?.status?.kind ==
+                .needsApproval
+        )
+    }
+
+    @Test
+    func codexHookPermissionRequestForCurrentTurnWinsOverPreviouslyAutoReviewedTurnID() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexPendingTurnContext(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent"
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+            turnID: "turn-reused",
+            approvalPolicy: "on-request"
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-reused",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        let firstSuppressed = store.handleCodexHookEvent(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-reused",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        store.recordCodexPendingTurnContext(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            approvalPolicy: "on-request",
+            approvalsReviewer: nil
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Other turn"),
+            turnID: "turn-other",
+            approvalPolicy: "on-request"
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Manual turn"),
+            turnID: "turn-reused",
+            approvalPolicy: "on-request"
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-reused",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Manual turn"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Manual turn"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-reused-auto-reviewed-turn",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-reused",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(4)
+        )
+
+        #expect(firstSuppressed == false)
+        #expect(accepted)
+        #expect(
+            store.sessionRegistry.activeSession(sessionID: "sess-codex-reused-auto-reviewed-turn")?.status?.kind ==
+                .needsApproval
+        )
+    }
+
+    @Test
     func codexHookPermissionRequestIsNotSuppressedWithoutAutoReviewer() {
         let store = SessionRuntimeStore()
         let panelID = UUID()

@@ -25,6 +25,7 @@ final class SessionRuntimeStore: ObservableObject {
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
     private let codexHookApprovalDeferralNanoseconds: UInt64
+    private static let maximumAutoReviewedCodexPermissionTurnIDs = 16
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
         let sessionID: String
@@ -251,6 +252,7 @@ final class SessionRuntimeStore: ObservableObject {
                 state.rootTurnAwaitingSessionLogContext = false
                 state.pendingRootApprovalContext = nil
                 state.activeTurnApprovalContext = nil
+                state.autoReviewedPermissionTurnIDs.removeAll()
                 applyCodexApprovalContext(nil, to: &state)
             }
         }
@@ -725,6 +727,11 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         var stateChanged = false
+        if event.isClearSessionStart,
+           !state.autoReviewedPermissionTurnIDs.isEmpty {
+            state.autoReviewedPermissionTurnIDs.removeAll()
+            stateChanged = true
+        }
 
         if let threadID = event.threadID {
             if let rootThreadID = state.rootThreadID {
@@ -748,6 +755,7 @@ final class SessionRuntimeStore: ObservableObject {
                     state.pendingRootInputFingerprint = nil
                     state.pendingRootApprovalContext = nil
                     state.activeTurnApprovalContext = nil
+                    state.autoReviewedPermissionTurnIDs.removeAll()
                     applyCodexApprovalContext(nil, to: &state)
                     stateChanged = true
                     ToasttyLog.debug(
@@ -845,6 +853,8 @@ final class SessionRuntimeStore: ObservableObject {
            status.kind == .needsApproval {
             switch codexHookApprovalDecision(event: event, state: state) {
             case .suppress(let reason):
+                markAutoReviewedCodexPermissionTurnIfNeeded(event: event, state: &state)
+                codexNotifyStateBySessionID[sessionID] = state
                 removePendingCodexHookApproval(sessionID: sessionID)
                 logCodexHookEventDecision(
                     sessionID: sessionID,
@@ -1447,6 +1457,23 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
+    private func markAutoReviewedCodexPermissionTurnIfNeeded(
+        event: CodexHookEvent,
+        state: inout CodexNotifySessionState
+    ) {
+        guard event.isPermissionRequest,
+              let turnID = normalizedNonEmpty(event.turnID),
+              !state.autoReviewedPermissionTurnIDs.contains(turnID) else {
+            return
+        }
+
+        state.autoReviewedPermissionTurnIDs.append(turnID)
+        let overflow = state.autoReviewedPermissionTurnIDs.count - Self.maximumAutoReviewedCodexPermissionTurnIDs
+        if overflow > 0 {
+            state.autoReviewedPermissionTurnIDs.removeFirst(overflow)
+        }
+    }
+
     private func applyCodexApprovalContext(
         _ approvalContext: CodexApprovalContext?,
         to state: inout CodexNotifySessionState
@@ -1481,6 +1508,10 @@ final class SessionRuntimeStore: ObservableObject {
                 return .accept(reason: "missing_root_turn")
             }
             return .waitForContext(reason: "missing_root_turn")
+        }
+        if hookTurnID != rootTurnID,
+           state.autoReviewedPermissionTurnIDs.contains(hookTurnID) {
+            return .ignore(reason: "auto_reviewed_stale_turn")
         }
         guard hookTurnID == rootTurnID else {
             return .accept(reason: "turn_mismatch")
@@ -1542,9 +1573,11 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
 
-        let state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
         switch codexHookApprovalDecision(event: pending.event, state: state) {
         case .suppress(let reason):
+            markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &state)
+            codexNotifyStateBySessionID[sessionID] = state
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -1614,11 +1647,14 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
 
+        var state = state
         switch codexHookApprovalDecision(event: pending.event, state: state) {
         case .waitForContext:
             return
 
         case .suppress(let reason):
+            markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &state)
+            codexNotifyStateBySessionID[sessionID] = state
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -1793,6 +1829,10 @@ final class SessionRuntimeStore: ObservableObject {
             "root_turn_id": state.rootTurnID ?? "none",
             "root_turn_input_fingerprint": truncatedFingerprint(state.rootTurnInputFingerprint),
             "root_turn_awaiting_session_log_context": boolMetadata(state.rootTurnAwaitingSessionLogContext),
+            "auto_reviewed_permission_turn_count": "\(state.autoReviewedPermissionTurnIDs.count)",
+            "hook_turn_was_auto_reviewed": boolMetadata(event.turnID.map {
+                state.autoReviewedPermissionTurnIDs.contains($0)
+            } ?? false),
             "approval_context_known": boolMetadata(state.approvalContextKnown),
             "approval_policy": state.approvalPolicy ?? "none",
             "approvals_reviewer": state.approvalsReviewer ?? "none",
@@ -2311,6 +2351,7 @@ private struct CodexNotifySessionState {
     var pendingRootInputFingerprint: String?
     var pendingRootApprovalContext: CodexApprovalContext?
     var activeTurnApprovalContext: CodexApprovalContext?
+    var autoReviewedPermissionTurnIDs: [String] = []
     var approvalContextKnown = false
     var approvalPolicy: String?
     var approvalsReviewer: String?
