@@ -1933,13 +1933,13 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexHookPermissionRequestIsNotSuppressedWhenAutoReviewTurnMismatches() {
+    func codexHookPermissionRequestIsSuppressedWhenAutoReviewTurnMismatches() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
 
         store.startSession(
-            sessionID: "sess-codex-auto-review-turn-mismatch",
+            sessionID: "sess-codex-auto-review-known-turn-mismatch",
             agent: .codex,
             panelID: panelID,
             windowID: UUID(),
@@ -1951,14 +1951,14 @@ struct SessionRuntimeStoreTests {
             at: startedAt
         )
         store.recordCodexRootTurnInput(
-            sessionID: "sess-codex-auto-review-turn-mismatch",
+            sessionID: "sess-codex-auto-review-known-turn-mismatch",
             fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
             turnID: "turn-root",
             approvalPolicy: "never",
             approvalsReviewer: "reviewer"
         )
         _ = store.handleCodexHookEvent(
-            sessionID: "sess-codex-auto-review-turn-mismatch",
+            sessionID: "sess-codex-auto-review-known-turn-mismatch",
             event: CodexHookEvent(
                 hookEventName: "UserPromptSubmit",
                 threadID: "thread-root",
@@ -1973,7 +1973,7 @@ struct SessionRuntimeStoreTests {
         )
 
         let accepted = store.handleCodexHookEvent(
-            sessionID: "sess-codex-auto-review-turn-mismatch",
+            sessionID: "sess-codex-auto-review-known-turn-mismatch",
             event: CodexHookEvent(
                 hookEventName: "PermissionRequest",
                 threadID: "thread-root",
@@ -1987,10 +1987,73 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(accepted)
+        #expect(accepted == false)
         #expect(
-            store.sessionRegistry.activeSession(sessionID: "sess-codex-auto-review-turn-mismatch")?.status?.kind ==
-                .needsApproval
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-auto-review-known-turn-mismatch"
+            )?.status?.kind == .working
+        )
+    }
+
+    @Test
+    func codexHookPermissionRequestIsSuppressedForAwaitingRootWhenActiveAutoReviewTurnMismatches() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let promptFingerprint = CodexInputFingerprint.fingerprint(for: "go ahead")
+
+        store.startSession(
+            sessionID: "sess-codex-auto-review-awaiting-turn-mismatch",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexPendingTurnContext(
+            sessionID: "sess-codex-auto-review-awaiting-turn-mismatch",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent"
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-auto-review-awaiting-turn-mismatch",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: promptFingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "go ahead"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-auto-review-awaiting-turn-mismatch",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                threadID: "thread-root",
+                turnID: "turn-tool",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        #expect(
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-auto-review-awaiting-turn-mismatch"
+            )?.status?.kind == .working
         )
     }
 

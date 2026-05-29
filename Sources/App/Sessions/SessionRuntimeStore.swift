@@ -1513,6 +1513,10 @@ final class SessionRuntimeStore: ObservableObject {
            state.autoReviewedPermissionTurnIDs.contains(hookTurnID) {
             return .ignore(reason: "auto_reviewed_stale_turn")
         }
+        if hookTurnID != rootTurnID,
+           codexApprovalContextHasReviewer(state) {
+            return .suppress(reason: "auto_review_context_turn_mismatch")
+        }
         guard hookTurnID == rootTurnID else {
             return .accept(reason: "turn_mismatch")
         }
@@ -1529,6 +1533,16 @@ final class SessionRuntimeStore: ObservableObject {
             return .accept(reason: "missing_approvals_reviewer")
         }
         return .suppress(reason: "auto_review_approval")
+    }
+
+    private func codexApprovalContextHasReviewer(_ state: CodexNotifySessionState) -> Bool {
+        if normalizedNonEmpty(state.approvalsReviewer) != nil {
+            return true
+        }
+        guard state.rootTurnAwaitingSessionLogContext else {
+            return false
+        }
+        return normalizedNonEmpty(state.activeTurnApprovalContext?.approvalsReviewer) != nil
     }
 
     private func deferCodexHookApproval(
