@@ -1,5 +1,4 @@
 import AppKit
-import CoreGraphics
 @testable import ToasttyApp
 import XCTest
 
@@ -1231,20 +1230,21 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(lastMouseEvent.y, 64, accuracy: 0.001)
     }
 
-    func testMouseMovedReleasesTrackedLeftPressWhenPhysicalButtonIsUp() throws {
+    func testUnhandledFocusedLeftMousePressStaysOwnedByTerminal() throws {
         let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)
         let mouseRecorder = GhosttyMousePositionRecorder()
         let mouseButtonRecorder = GhosttyMouseButtonRecorder()
         let pressureRecorder = GhosttyMousePressureRecorder()
+        let nextResponder = MouseEventRecordingResponder()
 
         window.forcedIsKeyWindow = true
         window.contentView = contentView
         contentView.addSubview(hostView)
+        hostView.nextResponder = nextResponder
         _ = window.makeFirstResponder(hostView)
         hostView.applicationIsActiveProvider = { true }
-        hostView.physicalMouseButtonStateProvider = { _ in false }
         hostView.ghosttySurfaceHooks = .init(
             setFocus: { _, _ in },
             setOcclusion: { _, _ in },
@@ -1268,13 +1268,14 @@ final class TerminalHostViewTests: XCTestCase {
         hostView.setGhosttySurface(fakeSurfaceHandle(0x1261))
 
         hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
-        hostView.mouseMoved(
+        hostView.mouseDragged(
             with: try makeMouseEvent(
-                type: .mouseMoved,
+                type: .leftMouseDragged,
                 window: window,
                 location: NSPoint(x: 30, y: 40)
             )
         )
+        hostView.mouseUp(with: try makeMouseEvent(type: .leftMouseUp, window: window))
 
         XCTAssertEqual(
             mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
@@ -1284,13 +1285,15 @@ final class TerminalHostViewTests: XCTestCase {
             ]
         )
         XCTAssertEqual(pressureRecorder.events.map(\.stage), [0])
-        XCTAssertGreaterThanOrEqual(mouseRecorder.events.count, 3)
-        let releasePosition = mouseRecorder.events[1]
-        XCTAssertEqual(releasePosition.x, 30, accuracy: 0.001)
-        XCTAssertEqual(releasePosition.y, 60, accuracy: 0.001)
+        XCTAssertEqual(nextResponder.mouseDownCount, 0)
+        XCTAssertEqual(nextResponder.mouseUpCount, 0)
+        XCTAssertEqual(mouseRecorder.events.count, 3)
+        let draggedPosition = mouseRecorder.events[1]
+        XCTAssertEqual(draggedPosition.x, 30, accuracy: 0.001)
+        XCTAssertEqual(draggedPosition.y, 60, accuracy: 0.001)
     }
 
-    func testMouseMovedDoesNotReleaseTrackedLeftPressWhilePhysicalButtonIsDown() throws {
+    func testMouseMovedAfterForwardedLeftPressDoesNotSynthesizeRelease() throws {
         let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)
@@ -1302,9 +1305,6 @@ final class TerminalHostViewTests: XCTestCase {
         contentView.addSubview(hostView)
         _ = window.makeFirstResponder(hostView)
         hostView.applicationIsActiveProvider = { true }
-        hostView.physicalMouseButtonStateProvider = { button in
-            button.rawValue == CGMouseButton.left.rawValue
-        }
         hostView.ghosttySurfaceHooks = .init(
             setFocus: { _, _ in },
             setOcclusion: { _, _ in },
@@ -1341,19 +1341,20 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(pressureRecorder.events.isEmpty)
     }
 
-    func testMouseEnterAndExitDoNotUsePhysicalButtonFallback() throws {
+    func testFocusLossAfterUnhandledRightPressStillForwardsLaterMouseUpToAppKit() throws {
         let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)
         let mouseButtonRecorder = GhosttyMouseButtonRecorder()
         let pressureRecorder = GhosttyMousePressureRecorder()
+        let nextResponder = MouseEventRecordingResponder()
 
         window.forcedIsKeyWindow = true
         window.contentView = contentView
         contentView.addSubview(hostView)
+        hostView.nextResponder = nextResponder
         _ = window.makeFirstResponder(hostView)
         hostView.applicationIsActiveProvider = { true }
-        hostView.physicalMouseButtonStateProvider = { _ in false }
         hostView.ghosttySurfaceHooks = .init(
             setFocus: { _, _ in },
             setOcclusion: { _, _ in },
@@ -1370,169 +1371,13 @@ final class TerminalHostViewTests: XCTestCase {
             },
             setMousePressure: { surface, stage, pressure in
                 pressureRecorder.record(surface: surface, stage: stage, pressure: pressure)
-            }
-        )
-        hostView.setGhosttySurface(fakeSurfaceHandle(0x1268))
-
-        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
-        hostView.mouseEntered(
-            with: try makeMouseEvent(
-                type: .mouseEntered,
-                window: window,
-                location: NSPoint(x: 30, y: 40)
-            )
-        )
-        hostView.mouseExited(
-            with: try makeMouseEvent(
-                type: .mouseExited,
-                window: window,
-                location: NSPoint(x: 32, y: 42)
-            )
-        )
-
-        XCTAssertEqual(
-            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
-            ["\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)"]
-        )
-        XCTAssertTrue(pressureRecorder.events.isEmpty)
-    }
-
-    func testMouseDraggedDoesNotUsePhysicalButtonFallback() throws {
-        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
-
-        window.forcedIsKeyWindow = true
-        window.contentView = contentView
-        contentView.addSubview(hostView)
-        _ = window.makeFirstResponder(hostView)
-        hostView.applicationIsActiveProvider = { true }
-        hostView.physicalMouseButtonStateProvider = { _ in false }
-        hostView.ghosttySurfaceHooks = .init(
-            setFocus: { _, _ in },
-            setOcclusion: { _, _ in },
-            refresh: { _ in },
-            sendMousePosition: { _, _, _, _ in },
-            sendMouseButton: { surface, state, button, mods in
-                mouseButtonRecorder.record(
-                    surface: surface,
-                    state: state,
-                    button: button,
-                    mods: mods
-                )
-                return true
-            },
-            setMousePressure: { _, _, _ in }
-        )
-        hostView.setGhosttySurface(fakeSurfaceHandle(0x1263))
-
-        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
-        hostView.mouseDragged(
-            with: try makeMouseEvent(
-                type: .leftMouseDragged,
-                window: window,
-                location: NSPoint(x: 30, y: 40)
-            )
-        )
-
-        XCTAssertEqual(
-            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
-            ["\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)"]
-        )
-    }
-
-    func testNormalMouseUpPreventsLaterPhysicalButtonFallbackRelease() throws {
-        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
-
-        window.forcedIsKeyWindow = true
-        window.contentView = contentView
-        contentView.addSubview(hostView)
-        _ = window.makeFirstResponder(hostView)
-        hostView.applicationIsActiveProvider = { true }
-        hostView.physicalMouseButtonStateProvider = { _ in false }
-        hostView.ghosttySurfaceHooks = .init(
-            setFocus: { _, _ in },
-            setOcclusion: { _, _ in },
-            refresh: { _ in },
-            sendMousePosition: { _, _, _, _ in },
-            sendMouseButton: { surface, state, button, mods in
-                mouseButtonRecorder.record(
-                    surface: surface,
-                    state: state,
-                    button: button,
-                    mods: mods
-                )
-                return true
-            },
-            setMousePressure: { _, _, _ in }
-        )
-        hostView.setGhosttySurface(fakeSurfaceHandle(0x1264))
-
-        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
-        hostView.mouseUp(with: try makeMouseEvent(type: .leftMouseUp, window: window))
-        hostView.mouseMoved(
-            with: try makeMouseEvent(
-                type: .mouseMoved,
-                window: window,
-                location: NSPoint(x: 30, y: 40)
-            )
-        )
-
-        XCTAssertEqual(
-            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
-            [
-                "\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
-                "\(GHOSTTY_MOUSE_RELEASE.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
-            ]
-        )
-    }
-
-    func testPhysicalButtonFallbackReleasesRightPressOnceAndSuppressesLaterMouseUp() throws {
-        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
-        let pressureRecorder = GhosttyMousePressureRecorder()
-
-        window.forcedIsKeyWindow = true
-        window.contentView = contentView
-        contentView.addSubview(hostView)
-        _ = window.makeFirstResponder(hostView)
-        hostView.applicationIsActiveProvider = { true }
-        hostView.physicalMouseButtonStateProvider = { _ in false }
-        hostView.ghosttySurfaceHooks = .init(
-            setFocus: { _, _ in },
-            setOcclusion: { _, _ in },
-            refresh: { _ in },
-            sendMousePosition: { _, _, _, _ in },
-            sendMouseButton: { surface, state, button, mods in
-                mouseButtonRecorder.record(
-                    surface: surface,
-                    state: state,
-                    button: button,
-                    mods: mods
-                )
-                return true
-            },
-            setMousePressure: { surface, stage, pressure in
-                pressureRecorder.record(surface: surface, stage: stage, pressure: pressure)
             },
             isMouseCaptured: { _ in true }
         )
-        hostView.setGhosttySurface(fakeSurfaceHandle(0x1265))
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1263))
 
         hostView.rightMouseDown(with: try makeMouseEvent(type: .rightMouseDown, window: window))
-        hostView.mouseMoved(
-            with: try makeMouseEvent(
-                type: .mouseMoved,
-                window: window,
-                location: NSPoint(x: 30, y: 40)
-            )
-        )
+        _ = hostView.syncSurfaceFocus(false, reason: "test_focus_loss")
         hostView.rightMouseUp(with: try makeMouseEvent(type: .rightMouseUp, window: window))
 
         XCTAssertEqual(
@@ -1543,145 +1388,7 @@ final class TerminalHostViewTests: XCTestCase {
             ]
         )
         XCTAssertEqual(pressureRecorder.events.map(\.stage), [0])
-    }
-
-    func testPhysicalButtonFallbackForUnhandledRightPressStillForwardsLaterMouseUpToAppKit() throws {
-        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
-        let nextResponder = MouseUpRecordingResponder()
-
-        window.forcedIsKeyWindow = true
-        window.contentView = contentView
-        contentView.addSubview(hostView)
-        hostView.nextResponder = nextResponder
-        _ = window.makeFirstResponder(hostView)
-        hostView.applicationIsActiveProvider = { true }
-        hostView.physicalMouseButtonStateProvider = { _ in false }
-        hostView.ghosttySurfaceHooks = .init(
-            setFocus: { _, _ in },
-            setOcclusion: { _, _ in },
-            refresh: { _ in },
-            sendMousePosition: { _, _, _, _ in },
-            sendMouseButton: { surface, state, button, mods in
-                mouseButtonRecorder.record(
-                    surface: surface,
-                    state: state,
-                    button: button,
-                    mods: mods
-                )
-                return false
-            },
-            setMousePressure: { _, _, _ in },
-            isMouseCaptured: { _ in true }
-        )
-        hostView.setGhosttySurface(fakeSurfaceHandle(0x1266))
-
-        hostView.rightMouseDown(with: try makeMouseEvent(type: .rightMouseDown, window: window))
-        hostView.mouseMoved(
-            with: try makeMouseEvent(
-                type: .mouseMoved,
-                window: window,
-                location: NSPoint(x: 30, y: 40)
-            )
-        )
-        hostView.rightMouseUp(with: try makeMouseEvent(type: .rightMouseUp, window: window))
-
-        XCTAssertEqual(
-            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
-            [
-                "\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_RIGHT.rawValue)",
-                "\(GHOSTTY_MOUSE_RELEASE.rawValue):\(GHOSTTY_MOUSE_RIGHT.rawValue)",
-            ]
-        )
         XCTAssertEqual(nextResponder.rightMouseUpCount, 1)
-    }
-
-    func testFlagsChangedDoesNotUsePhysicalButtonFallback() throws {
-        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        let mouseRecorder = GhosttyMousePositionRecorder()
-        let mouseButtonRecorder = GhosttyMouseButtonRecorder()
-        let pressureRecorder = GhosttyMousePressureRecorder()
-
-        window.forcedIsKeyWindow = true
-        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 44, y: 52)
-        window.contentView = contentView
-        contentView.addSubview(hostView)
-        _ = window.makeFirstResponder(hostView)
-        hostView.applicationIsActiveProvider = { true }
-        hostView.physicalMouseButtonStateProvider = { _ in false }
-        hostView.ghosttySurfaceHooks = .init(
-            setFocus: { _, _ in },
-            setOcclusion: { _, _ in },
-            refresh: { _ in },
-            sendMousePosition: { surface, x, y, mods in
-                mouseRecorder.record(surface: surface, x: x, y: y, mods: mods)
-            },
-            sendMouseButton: { surface, state, button, mods in
-                mouseButtonRecorder.record(
-                    surface: surface,
-                    state: state,
-                    button: button,
-                    mods: mods
-                )
-                return false
-            },
-            setMousePressure: { surface, stage, pressure in
-                pressureRecorder.record(surface: surface, stage: stage, pressure: pressure)
-            },
-            keyTranslationMods: { _, mods in mods },
-            sendKey: { _, _ in true }
-        )
-        hostView.setGhosttySurface(fakeSurfaceHandle(0x1267))
-
-        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
-        hostView.flagsChanged(
-            with: try makeKeyEvent(
-                type: .flagsChanged,
-                keyCode: 0x37,
-                modifierFlags: [.command]
-            )
-        )
-
-        XCTAssertEqual(
-            mouseButtonRecorder.events.map { "\($0.stateRawValue):\($0.buttonRawValue)" },
-            [
-                "\(GHOSTTY_MOUSE_PRESS.rawValue):\(GHOSTTY_MOUSE_LEFT.rawValue)",
-            ]
-        )
-        XCTAssertTrue(pressureRecorder.events.isEmpty)
-        let hoverPosition = try XCTUnwrap(mouseRecorder.lastEvent)
-        XCTAssertEqual(hoverPosition.x, 44, accuracy: 0.001)
-        XCTAssertEqual(hoverPosition.y, 48, accuracy: 0.001)
-        XCTAssertEqual(hoverPosition.modsRawValue, GHOSTTY_MODS_SUPER.rawValue)
-    }
-
-    func testGhosttyButtonsMapToCGMouseButtons() {
-        let cases: [(ghostty_input_mouse_button_e, UInt32)] = [
-            (GHOSTTY_MOUSE_LEFT, CGMouseButton.left.rawValue),
-            (GHOSTTY_MOUSE_RIGHT, CGMouseButton.right.rawValue),
-            (GHOSTTY_MOUSE_MIDDLE, CGMouseButton.center.rawValue),
-            (GHOSTTY_MOUSE_EIGHT, 3),
-            (GHOSTTY_MOUSE_NINE, 4),
-            (GHOSTTY_MOUSE_SIX, 5),
-            (GHOSTTY_MOUSE_SEVEN, 6),
-            (GHOSTTY_MOUSE_FOUR, 7),
-            (GHOSTTY_MOUSE_FIVE, 8),
-            (GHOSTTY_MOUSE_TEN, 9),
-            (GHOSTTY_MOUSE_ELEVEN, 10),
-        ]
-
-        for (ghosttyButton, cgButtonRawValue) in cases {
-            XCTAssertEqual(
-                TerminalHostView.cgMouseButton(forGhosttyButton: ghosttyButton)?.rawValue,
-                cgButtonRawValue,
-                "Ghostty button \(ghosttyButton.rawValue) should map to its physical button"
-            )
-        }
-        XCTAssertNil(TerminalHostView.cgMouseButton(forGhosttyButton: GHOSTTY_MOUSE_UNKNOWN))
     }
 
     func testFocusLossReleasesForwardedLeftPress() throws {
@@ -3284,8 +2991,20 @@ private final class TestWindow: NSWindow {
     }
 }
 
-private final class MouseUpRecordingResponder: NSResponder {
+private final class MouseEventRecordingResponder: NSResponder {
+    private(set) var mouseDownCount = 0
+    private(set) var mouseUpCount = 0
     private(set) var rightMouseUpCount = 0
+
+    override func mouseDown(with event: NSEvent) {
+        _ = event
+        mouseDownCount += 1
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        _ = event
+        mouseUpCount += 1
+    }
 
     override func rightMouseUp(with event: NSEvent) {
         _ = event
