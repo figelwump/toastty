@@ -293,8 +293,9 @@ PY
 validate_published_appcast() {
   local appcast_path="$1"
   local expected_download_url="$2"
+  local expected_release_url="$3"
 
-  /usr/bin/python3 - "$appcast_path" "$TOASTTY_VERSION" "$TOASTTY_BUILD_NUMBER" "$expected_download_url" "$SPARKLE_ED_SIGNATURE" <<'PY'
+  /usr/bin/python3 - "$appcast_path" "$TOASTTY_VERSION" "$TOASTTY_BUILD_NUMBER" "$expected_download_url" "$expected_release_url" "$SPARKLE_ED_SIGNATURE" <<'PY'
 import pathlib
 import sys
 import xml.etree.ElementTree as ET
@@ -305,7 +306,8 @@ appcast_path = pathlib.Path(sys.argv[1])
 short_version = sys.argv[2]
 build_number = sys.argv[3]
 download_url = sys.argv[4]
-signature = sys.argv[5]
+release_url = sys.argv[5]
+signature = sys.argv[6]
 
 
 def fail(message: str) -> None:
@@ -338,6 +340,17 @@ for item in items:
         and enclosure.get(f"{{{SPARKLE_NS}}}shortVersionString") == short_version
         and enclosure.get(f"{{{SPARKLE_NS}}}edSignature") == signature
     ):
+        release_notes_link = item.find(f"{{{SPARKLE_NS}}}releaseNotesLink")
+        if release_notes_link is None:
+            fail("appcast release item is missing <sparkle:releaseNotesLink>")
+
+        actual_release_url = (release_notes_link.text or "").strip()
+        if actual_release_url != release_url:
+            fail(
+                "appcast release notes link mismatch: "
+                f"expected {release_url}, got {actual_release_url or '<empty>'}"
+            )
+
         raise SystemExit(0)
 
 fail(
@@ -348,6 +361,7 @@ PY
 }
 
 smoke_test_published_sparkle_feed() {
+  local release_page_url="https://github.com/$REPO/releases/tag/$TAG"
   local release_download_url="https://github.com/$REPO/releases/download/$TAG/$SPARKLE_DMG_FILENAME"
   local max_attempts=24
   local retry_delay_seconds=5
@@ -368,7 +382,7 @@ smoke_test_published_sparkle_feed() {
 
   while (( attempt <= max_attempts )); do
     if curl --fail --silent --show-error --location "$SPARKLE_FEED_URL" >"$appcast_path" 2>"$curl_stderr_path"; then
-      if last_error="$(validate_published_appcast "$appcast_path" "$release_download_url" 2>&1)"; then
+      if last_error="$(validate_published_appcast "$appcast_path" "$release_download_url" "$release_page_url" 2>&1)"; then
         log "Sparkle feed smoke check passed for $SPARKLE_FEED_URL"
         rm -f "$appcast_path" "$curl_stderr_path"
         return 0
@@ -641,6 +655,7 @@ new_item = ET.Element("item")
 ET.SubElement(new_item, "title").text = f"Version {short_version}"
 ET.SubElement(new_item, "pubDate").text = published_at
 ET.SubElement(new_item, "link").text = release_url
+ET.SubElement(new_item, f"{{{SPARKLE_NS}}}releaseNotesLink").text = release_url
 ET.SubElement(new_item, "description").text = f"Toastty {short_version} is available."
 ET.SubElement(
     new_item,
@@ -685,6 +700,7 @@ publish_sparkle_appcast() {
     published_at="$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')"
     generate_updated_appcast "$current_appcast_path" "$updated_appcast_path" "$release_page_url" "$download_url" "$published_at"
     validate_appcast_file "$updated_appcast_path"
+    validate_published_appcast "$updated_appcast_path" "$download_url" "$release_page_url"
 
     if [[ "$DRY_RUN" == "1" ]]; then
       printf '%s\n' "Dry run appcast update:"
