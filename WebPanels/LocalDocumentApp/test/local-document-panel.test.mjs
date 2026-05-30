@@ -6,6 +6,229 @@ import { dirname, resolve } from "node:path";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+test("editor indentation inserts a literal tab at the caret", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "alpha",
+      selectionStart: 2,
+      selectionEnd: 2,
+      direction: "indent"
+    }),
+    {
+      value: "al\tpha",
+      selectionStart: 3,
+      selectionEnd: 3,
+      replacementStart: 2,
+      replacementEnd: 2,
+      replacementText: "\t"
+    }
+  );
+});
+
+test("editor indentation prefixes every selected line with a tab", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "one\ntwo\nthree",
+      selectionStart: 0,
+      selectionEnd: 7,
+      direction: "indent"
+    }),
+    {
+      value: "\tone\n\ttwo\nthree",
+      selectionStart: 0,
+      selectionEnd: 9,
+      replacementStart: 0,
+      replacementEnd: 7,
+      replacementText: "\tone\n\ttwo"
+    }
+  );
+});
+
+test("editor outdent removes one leading tab from selected lines", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "\tone\n\ttwo\nthree",
+      selectionStart: 0,
+      selectionEnd: 9,
+      direction: "outdent"
+    }),
+    {
+      value: "one\ntwo\nthree",
+      selectionStart: 0,
+      selectionEnd: 7,
+      replacementStart: 0,
+      replacementEnd: 9,
+      replacementText: "one\ntwo"
+    }
+  );
+});
+
+test("editor outdent skips untabbed selected lines", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "\tone\ntwo\n\tthree",
+      selectionStart: 0,
+      selectionEnd: 15,
+      direction: "outdent"
+    }),
+    {
+      value: "one\ntwo\nthree",
+      selectionStart: 0,
+      selectionEnd: 13,
+      replacementStart: 0,
+      replacementEnd: 15,
+      replacementText: "one\ntwo\nthree"
+    }
+  );
+});
+
+test("editor outdent is handled even when no selected line has a tab", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "one\ntwo",
+      selectionStart: 0,
+      selectionEnd: 7,
+      direction: "outdent"
+    }),
+    {
+      value: "one\ntwo",
+      selectionStart: 0,
+      selectionEnd: 7,
+      replacementStart: 0,
+      replacementEnd: 7,
+      replacementText: "one\ntwo"
+    }
+  );
+});
+
+test("editor indentation keeps inserted tabs inside full-line selections", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "one\ntwo",
+      selectionStart: 4,
+      selectionEnd: 7,
+      direction: "indent"
+    }),
+    {
+      value: "one\n\ttwo",
+      selectionStart: 4,
+      selectionEnd: 8,
+      replacementStart: 4,
+      replacementEnd: 7,
+      replacementText: "\ttwo"
+    }
+  );
+});
+
+test("editor outdent adjusts collapsed carets after a removed tab", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "\talpha",
+      selectionStart: 3,
+      selectionEnd: 3,
+      direction: "outdent"
+    }),
+    {
+      value: "alpha",
+      selectionStart: 2,
+      selectionEnd: 2,
+      replacementStart: 0,
+      replacementEnd: 6,
+      replacementText: "alpha"
+    }
+  );
+});
+
+test("editor indentation excludes a line when selection ends at its start", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "one\ntwo\nthree",
+      selectionStart: 0,
+      selectionEnd: 8,
+      direction: "indent"
+    }),
+    {
+      value: "\tone\n\ttwo\nthree",
+      selectionStart: 0,
+      selectionEnd: 10,
+      replacementStart: 0,
+      replacementEnd: 7,
+      replacementText: "\tone\n\ttwo"
+    }
+  );
+});
+
+test("editor indentation preserves empty lines inside a selected range", async () => {
+  const { applyEditorIndentation } = await import(
+    new URL("../src/editorIndentation.mjs", import.meta.url).href
+  );
+
+  assert.deepEqual(
+    applyEditorIndentation({
+      value: "one\n\nthree",
+      selectionStart: 0,
+      selectionEnd: 10,
+      direction: "indent"
+    }),
+    {
+      value: "\tone\n\t\n\tthree",
+      selectionStart: 0,
+      selectionEnd: 13,
+      replacementStart: 0,
+      replacementEnd: 10,
+      replacementText: "\tone\n\t\n\tthree"
+    }
+  );
+});
+
+test("editor tab handler uses native replacement and skips no-op draft updates", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /event\.metaKey/);
+  assert.match(source, /event\.ctrlKey/);
+  assert.match(source, /event\.altKey/);
+  assert.match(source, /props\.bootstrap\.isSaving/);
+  assert.match(source, /if \(result\.value === textarea\.value\) \{\s*return;\s*\}/);
+  assert.match(source, /execCommand\(\s*"insertText"/);
+  assert.match(source, /textarea\.setRangeText\(/);
+  assert.match(source, /props\.updateDraftContent\(textarea\.value\)/);
+});
+
 test("edit mode uses a non-wrapping code textarea for all supported formats", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),

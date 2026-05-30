@@ -22,6 +22,7 @@ import {
   computeOffsetRevealLayout,
   computeRevealLayout
 } from "./lineReveal.mjs";
+import { applyEditorIndentation } from "./editorIndentation.mjs";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import {
   MARKDOWN_LINE_START_SELECTOR,
@@ -599,6 +600,55 @@ function LocalDocumentEditor(props: {
     textarea.setSelectionRange(0, 0);
   }, []);
 
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Tab" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        props.bootstrap.isSaving) {
+      return;
+    }
+
+    const textarea = event.currentTarget;
+    const result = applyEditorIndentation({
+      value: textarea.value,
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd,
+      direction: event.shiftKey ? "outdent" : "indent"
+    });
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (result.value === textarea.value) {
+      return;
+    }
+
+    textarea.setSelectionRange(result.replacementStart, result.replacementEnd, "none");
+    let didApplyNativeReplacement = false;
+    try {
+      didApplyNativeReplacement = textarea.ownerDocument.execCommand(
+        "insertText",
+        false,
+        result.replacementText
+      );
+    } catch {
+      didApplyNativeReplacement = false;
+    }
+
+    if (!didApplyNativeReplacement) {
+      textarea.setRangeText(
+        result.replacementText,
+        result.replacementStart,
+        result.replacementEnd,
+        "end"
+      );
+    }
+
+    textarea.setSelectionRange(result.selectionStart, result.selectionEnd, "none");
+    props.updateDraftContent(textarea.value);
+  }
+
   return (
     <section className="local-document-editor-shell">
       {(props.bootstrap.hasExternalConflict || props.bootstrap.saveErrorMessage) && (
@@ -620,6 +670,7 @@ function LocalDocumentEditor(props: {
         className="local-document-editor"
         value={props.draftContent}
         onChange={(event) => props.updateDraftContent(event.target.value)}
+        onKeyDown={handleKeyDown}
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"
