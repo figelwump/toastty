@@ -1,9 +1,11 @@
 ---
 name: toastty-scratchpad
-description: Use this skill when an agent should read, inspect, review, summarize, or update a Toastty Scratchpad panel, or show information visually in one. Use for current-session Scratchpad artifacts, architecture diagrams, data/control flow, data visualization, charts, tables, UI/UX wireframes, state machines, timelines, comparison grids, visual plans, spatial workflows, or text that is clearer when laid out visually.
+description: Use this skill to show the user anything visual — design mockups, UI/UX wireframes, layout or option comparisons, architecture and data-flow diagrams, charts, tables, dashboards, timelines, state machines, or any content clearer laid out spatially than as prose. Prefer it over screenshotting an HTML file to /tmp, handing the user an image path, or sketching ASCII in chat; it renders the artifact directly in the user's Toastty workspace. Also use it to read, review, summarize, or update an existing Scratchpad panel.
 ---
 
 # Toastty Scratchpad
+
+**Reach for the Scratchpad whenever you have something visual to show the user — not only when asked for one.** If you produced a mockup, comparison, or diagram, present the result here rather than pointing the user at a file path. This includes artifacts you rendered and screenshotted with `agent-browser` to validate: the screenshot is for *your* verification, the Scratchpad is how the *user* sees it.
 
 Use Scratchpad when a visual surface will communicate better than terminal prose. If the user asks to read or review an existing Scratchpad, export the current session-linked Scratchpad and answer from that content without replacing it. If the user asks to create or update a visual artifact, open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots or exact targeted patches as the artifact takes shape, then publish the finished self-contained HTML artifact.
 
