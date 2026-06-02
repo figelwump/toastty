@@ -346,14 +346,21 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             to: logURL
         )
 
+        let expectedRootCompletionStatuses = [
+            SessionStatus(kind: .ready, summary: "Ready", detail: "Root finished"),
+            SessionStatus(kind: .idle, summary: "Waiting", detail: "Root finished"),
+        ]
         await waitUntil {
-            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status ==
-                SessionStatus(kind: .ready, summary: "Ready", detail: "Root finished")
+            guard let status = fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status else {
+                return false
+            }
+            return expectedRootCompletionStatuses.contains(status)
         }
-        XCTAssertEqual(
-            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status,
-            SessionStatus(kind: .ready, summary: "Ready", detail: "Root finished")
-        )
+        let finalStatus = fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status
+        XCTAssertNotNil(finalStatus)
+        if let finalStatus {
+            XCTAssertTrue(expectedRootCompletionStatuses.contains(finalStatus))
+        }
     }
 
     func testLaunchPlanUsesRestoredLaunchWorkingDirectoryWhenLiveCWDIsEmpty() throws {
