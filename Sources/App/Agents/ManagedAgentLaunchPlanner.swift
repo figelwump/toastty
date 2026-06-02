@@ -399,8 +399,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     fingerprint: event.rootInputFingerprint,
                     threadID: event.rootThreadID,
                     turnID: event.rootTurnID,
-                    approvalPolicy: event.approvalPolicy,
-                    approvalsReviewer: event.approvalsReviewer
+                    approvalPolicyField: event.approvalPolicyField,
+                    approvalsReviewerField: event.approvalsReviewerField
                 )
             }
             guard codexStatusTrackingSource != .hooks else {

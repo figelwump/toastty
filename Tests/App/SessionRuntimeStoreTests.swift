@@ -921,7 +921,8 @@ struct SessionRuntimeStoreTests {
             sessionID: "sess-codex-prior-manual-turn",
             fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
             turnID: "turn-old",
-            approvalPolicy: "on-request"
+            approvalPolicyField: .string("on-request"),
+            approvalsReviewerField: .null
         )
         _ = store.handleCodexHookEvent(
             sessionID: "sess-codex-prior-manual-turn",
@@ -1091,7 +1092,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexHookPermissionRequestIsNotSuppressedWithoutAutoReviewer() {
+    func codexHookPermissionRequestSurfacesWhenReviewerIsExplicitlyNull() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1112,7 +1113,8 @@ struct SessionRuntimeStoreTests {
             sessionID: "sess-codex-no-auto-review",
             fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
             turnID: "turn-root",
-            approvalPolicy: "on-request"
+            approvalPolicyField: .string("on-request"),
+            approvalsReviewerField: .null
         )
         _ = store.handleCodexHookEvent(
             sessionID: "sess-codex-no-auto-review",
@@ -1146,6 +1148,145 @@ struct SessionRuntimeStoreTests {
 
         #expect(accepted)
         #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-no-auto-review")?.status?.kind == .needsApproval)
+    }
+
+    @Test
+    func codexHookPermissionRequestWithOmittedReviewerIsAmbiguousAndStaysWorking() async {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-unknown-reviewer",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-unknown-reviewer",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+            turnID: "turn-root",
+            approvalPolicyField: .string("on-request"),
+            approvalsReviewerField: .unspecified
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-unknown-reviewer",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let accepted = store.handleCodexHookEvent(
+            sessionID: "sess-codex-unknown-reviewer",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-unknown-reviewer")?.status?.kind == .working)
+
+        try? await Task.sleep(nanoseconds: 80_000_000)
+
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-unknown-reviewer")?.status?.kind == .working)
+    }
+
+    @Test
+    func codexHookPermissionRequestWithOmittedReviewerSurfacesAfterExplicitNullContextArrives() {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 1_000_000_000)
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-unknown-reviewer-later-null",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-unknown-reviewer-later-null",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+            turnID: "turn-root",
+            approvalPolicyField: .string("on-request"),
+            approvalsReviewerField: .unspecified
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: "sess-codex-unknown-reviewer-later-null",
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        let deferred = store.handleCodexHookEvent(
+            sessionID: "sess-codex-unknown-reviewer-later-null",
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                permissionMode: "default",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve command"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(deferred == false)
+        #expect(
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-unknown-reviewer-later-null"
+            )?.status?.kind == .working
+        )
+
+        store.recordCodexOverrideTurnContext(
+            sessionID: "sess-codex-unknown-reviewer-later-null",
+            approvalPolicy: .unspecified,
+            approvalsReviewer: .null
+        )
+
+        #expect(
+            store.sessionRegistry.activeSession(
+                sessionID: "sess-codex-unknown-reviewer-later-null"
+            )?.status?.kind == .needsApproval
+        )
     }
 
     @Test
@@ -1541,7 +1682,8 @@ struct SessionRuntimeStoreTests {
         store.recordCodexRootTurnInput(
             sessionID: "sess-codex-clear-session-start",
             fingerprint: secondPromptFingerprint,
-            approvalPolicy: "on-request"
+            approvalPolicyField: .string("on-request"),
+            approvalsReviewerField: .null
         )
         _ = store.handleCodexHookEvent(
             sessionID: "sess-codex-clear-session-start",

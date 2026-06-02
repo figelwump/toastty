@@ -231,7 +231,9 @@ final class SessionRuntimeStore: ObservableObject {
         threadID: String? = nil,
         turnID: String? = nil,
         approvalPolicy: String? = nil,
-        approvalsReviewer: String? = nil
+        approvalsReviewer: String? = nil,
+        approvalPolicyField: CodexSessionLogContextField? = nil,
+        approvalsReviewerField: CodexSessionLogContextField? = nil
     ) {
         guard let record = sessionRegistry.sessionsByID[sessionID],
               record.agent == .codex,
@@ -240,7 +242,14 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-        let hasExplicitApprovalContext = approvalPolicy != nil || approvalsReviewer != nil
+        let resolvedApprovalPolicyField = approvalPolicyField
+            ?? approvalPolicy.map(CodexSessionLogContextField.string)
+            ?? .unspecified
+        let resolvedApprovalsReviewerField = approvalsReviewerField
+            ?? approvalsReviewer.map(CodexSessionLogContextField.string)
+            ?? .unspecified
+        let hasExplicitApprovalContext = resolvedApprovalPolicyField.isSpecified ||
+            resolvedApprovalsReviewerField.isSpecified
         state.pendingRootInputFingerprint = fingerprint
         if let threadID {
             let previousRootThreadID = state.rootThreadID
@@ -258,8 +267,8 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         let nextApprovalContext = codexApprovalContext(
-            approvalPolicy: approvalPolicy,
-            approvalsReviewer: approvalsReviewer,
+            approvalPolicy: resolvedApprovalPolicyField,
+            approvalsReviewer: resolvedApprovalsReviewerField,
             activeTurnContext: state.activeTurnApprovalContext
         )
         if let turnID {
@@ -302,8 +311,8 @@ final class SessionRuntimeStore: ObservableObject {
                     "input_fingerprint": truncatedFingerprint(fingerprint),
                     "thread_id": threadID ?? "none",
                     "turn_id": turnID ?? "none",
-                    "approval_policy": approvalPolicy ?? "none",
-                    "approvals_reviewer": approvalsReviewer ?? "none",
+                    "approval_policy": resolvedApprovalPolicyField.metadataValue,
+                    "approvals_reviewer": resolvedApprovalsReviewerField.metadataValue,
                 ]
             )
         )
@@ -1407,21 +1416,20 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func codexApprovalContext(
-        approvalPolicy: String?,
-        approvalsReviewer: String?,
+        approvalPolicy: CodexSessionLogContextField,
+        approvalsReviewer: CodexSessionLogContextField,
         activeTurnContext: CodexApprovalContext?
     ) -> CodexApprovalContext? {
-        let normalizedApprovalPolicy = normalizedNonEmpty(approvalPolicy)
-        let normalizedApprovalsReviewer = normalizedNonEmpty(approvalsReviewer)
-        guard normalizedApprovalPolicy != nil ||
-            normalizedApprovalsReviewer != nil ||
+        guard approvalPolicy.isSpecified ||
+            approvalsReviewer.isSpecified ||
             activeTurnContext != nil else {
             return nil
         }
 
-        return CodexApprovalContext(
-            approvalPolicy: normalizedApprovalPolicy ?? activeTurnContext?.approvalPolicy,
-            approvalsReviewer: normalizedApprovalsReviewer ?? activeTurnContext?.approvalsReviewer
+        return codexApprovalContext(
+            applyingApprovalPolicy: approvalPolicy,
+            approvalsReviewer: approvalsReviewer,
+            to: activeTurnContext
         )
     }
 
@@ -1432,10 +1440,10 @@ final class SessionRuntimeStore: ObservableObject {
     ) -> CodexApprovalContext {
         var nextContext = currentContext ?? CodexApprovalContext()
         if approvalPolicy.isSpecified {
-            nextContext.approvalPolicy = approvalPolicy.stringValue
+            nextContext.approvalPolicy = approvalPolicy
         }
         if approvalsReviewer.isSpecified {
-            nextContext.approvalsReviewer = approvalsReviewer.stringValue
+            nextContext.approvalsReviewer = approvalsReviewer
         }
         return nextContext
     }
@@ -1452,8 +1460,12 @@ final class SessionRuntimeStore: ObservableObject {
             to: currentContext
         )
         return CodexApprovalContext(
-            approvalPolicy: patchedContext.approvalPolicy ?? activeTurnContext?.approvalPolicy,
-            approvalsReviewer: patchedContext.approvalsReviewer ?? activeTurnContext?.approvalsReviewer
+            approvalPolicy: patchedContext.approvalPolicy.isSpecified
+                ? patchedContext.approvalPolicy
+                : activeTurnContext?.approvalPolicy ?? .unspecified,
+            approvalsReviewer: patchedContext.approvalsReviewer.isSpecified
+                ? patchedContext.approvalsReviewer
+                : activeTurnContext?.approvalsReviewer ?? .unspecified
         )
     }
 
@@ -1479,8 +1491,8 @@ final class SessionRuntimeStore: ObservableObject {
         to state: inout CodexNotifySessionState
     ) {
         state.approvalContextKnown = approvalContext != nil
-        state.approvalPolicy = approvalContext?.approvalPolicy
-        state.approvalsReviewer = approvalContext?.approvalsReviewer
+        state.approvalPolicy = approvalContext?.approvalPolicy ?? .unspecified
+        state.approvalsReviewer = approvalContext?.approvalsReviewer ?? .unspecified
     }
 
     private func codexHookApprovalDecision(
@@ -1524,25 +1536,31 @@ final class SessionRuntimeStore: ObservableObject {
             return .waitForContext(reason: "awaiting_root_turn_context")
         }
 
-        let approvalPolicy = normalizedNonEmpty(state.approvalPolicy)
-        let approvalsReviewer = normalizedNonEmpty(state.approvalsReviewer)
+        let approvalPolicy = normalizedNonEmpty(state.approvalPolicy.stringValue)
+        let approvalsReviewer = normalizedNonEmpty(state.approvalsReviewer.stringValue)
         guard approvalPolicy != nil || approvalsReviewer != nil || state.approvalContextKnown else {
             return .waitForContext(reason: "missing_approval_context")
         }
         guard approvalsReviewer != nil else {
+            guard state.approvalsReviewer.isSpecified else {
+                // In resumed Codex sessions this field can be omitted while
+                // the auto-reviewer is still handling the request. Omission
+                // is not positive evidence that a human approval is waiting.
+                return .waitForContext(reason: "unknown_approvals_reviewer")
+            }
             return .accept(reason: "missing_approvals_reviewer")
         }
         return .suppress(reason: "auto_review_approval")
     }
 
     private func codexApprovalContextHasReviewer(_ state: CodexNotifySessionState) -> Bool {
-        if normalizedNonEmpty(state.approvalsReviewer) != nil {
+        if normalizedNonEmpty(state.approvalsReviewer.stringValue) != nil {
             return true
         }
         guard state.rootTurnAwaitingSessionLogContext else {
             return false
         }
-        return normalizedNonEmpty(state.activeTurnApprovalContext?.approvalsReviewer) != nil
+        return normalizedNonEmpty(state.activeTurnApprovalContext?.approvalsReviewer.stringValue) != nil
     }
 
     private func deferCodexHookApproval(
@@ -1635,6 +1653,17 @@ final class SessionRuntimeStore: ObservableObject {
                 reason: reason
             )
             updateStatus(sessionID: sessionID, status: status, at: Date())
+
+        case .waitForContext(let reason) where pendingCodexHookApprovalWaitReasonIsAmbiguousReviewer(reason):
+            removePendingCodexHookApproval(sessionID: sessionID)
+            logCodexHookEventDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: pending.event,
+                decision: "ignored",
+                reason: "context_timeout_\(reason)"
+            )
 
         case .waitForContext(let reason):
             removePendingCodexHookApproval(sessionID: sessionID)
@@ -1761,6 +1790,10 @@ final class SessionRuntimeStore: ObservableObject {
         reason == "turn_mismatch"
     }
 
+    private func pendingCodexHookApprovalWaitReasonIsAmbiguousReviewer(_ reason: String) -> Bool {
+        reason == "unknown_approvals_reviewer"
+    }
+
     private func removePendingCodexHookApproval(sessionID: String) {
         pendingCodexHookApprovalBySessionID.removeValue(forKey: sessionID)
         pendingCodexHookApprovalTaskBySessionID.removeValue(forKey: sessionID)?.cancel()
@@ -1848,8 +1881,8 @@ final class SessionRuntimeStore: ObservableObject {
                 state.autoReviewedPermissionTurnIDs.contains($0)
             } ?? false),
             "approval_context_known": boolMetadata(state.approvalContextKnown),
-            "approval_policy": state.approvalPolicy ?? "none",
-            "approvals_reviewer": state.approvalsReviewer ?? "none",
+            "approval_policy": state.approvalPolicy.metadataValue,
+            "approvals_reviewer": state.approvalsReviewer.metadataValue,
             "hook_thread_id": event.threadID ?? "none",
             "hook_turn_id": event.turnID ?? "none",
             "hook_permission_mode": event.permissionMode ?? "none",
@@ -1859,11 +1892,11 @@ final class SessionRuntimeStore: ObservableObject {
             "root_turn_known": boolMetadata(state.rootTurnID != nil),
             "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
             "pending_root_approval_context_known": boolMetadata(state.pendingRootApprovalContext != nil),
-            "pending_root_approval_policy": state.pendingRootApprovalContext?.approvalPolicy ?? "none",
-            "pending_root_approvals_reviewer": state.pendingRootApprovalContext?.approvalsReviewer ?? "none",
+            "pending_root_approval_policy": state.pendingRootApprovalContext?.approvalPolicy.metadataValue ?? "none",
+            "pending_root_approvals_reviewer": state.pendingRootApprovalContext?.approvalsReviewer.metadataValue ?? "none",
             "active_turn_approval_context_known": boolMetadata(state.activeTurnApprovalContext != nil),
-            "active_turn_approval_policy": state.activeTurnApprovalContext?.approvalPolicy ?? "none",
-            "active_turn_approvals_reviewer": state.activeTurnApprovalContext?.approvalsReviewer ?? "none",
+            "active_turn_approval_policy": state.activeTurnApprovalContext?.approvalPolicy.metadataValue ?? "none",
+            "active_turn_approvals_reviewer": state.activeTurnApprovalContext?.approvalsReviewer.metadataValue ?? "none",
             "hook_input_fingerprint": truncatedFingerprint(event.promptFingerprint),
         ]
 
@@ -1901,8 +1934,8 @@ final class SessionRuntimeStore: ObservableObject {
             "root_turn_input_fingerprint": truncatedFingerprint(state.rootTurnInputFingerprint),
             "root_turn_awaiting_session_log_context": boolMetadata(state.rootTurnAwaitingSessionLogContext),
             "approval_context_known": boolMetadata(state.approvalContextKnown),
-            "approval_policy": state.approvalPolicy ?? "none",
-            "approvals_reviewer": state.approvalsReviewer ?? "none",
+            "approval_policy": state.approvalPolicy.metadataValue,
+            "approvals_reviewer": state.approvalsReviewer.metadataValue,
             "session_log_thread_id": threadID ?? "none",
             "session_log_turn_id": turnID ?? "none",
             "has_thread_id": boolMetadata(threadID != nil),
@@ -1911,11 +1944,11 @@ final class SessionRuntimeStore: ObservableObject {
             "root_turn_known": boolMetadata(state.rootTurnID != nil),
             "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
             "pending_root_approval_context_known": boolMetadata(state.pendingRootApprovalContext != nil),
-            "pending_root_approval_policy": state.pendingRootApprovalContext?.approvalPolicy ?? "none",
-            "pending_root_approvals_reviewer": state.pendingRootApprovalContext?.approvalsReviewer ?? "none",
+            "pending_root_approval_policy": state.pendingRootApprovalContext?.approvalPolicy.metadataValue ?? "none",
+            "pending_root_approvals_reviewer": state.pendingRootApprovalContext?.approvalsReviewer.metadataValue ?? "none",
             "active_turn_approval_context_known": boolMetadata(state.activeTurnApprovalContext != nil),
-            "active_turn_approval_policy": state.activeTurnApprovalContext?.approvalPolicy ?? "none",
-            "active_turn_approvals_reviewer": state.activeTurnApprovalContext?.approvalsReviewer ?? "none",
+            "active_turn_approval_policy": state.activeTurnApprovalContext?.approvalPolicy.metadataValue ?? "none",
+            "active_turn_approvals_reviewer": state.activeTurnApprovalContext?.approvalsReviewer.metadataValue ?? "none",
         ]
 
         for (key, value) in additional {
@@ -1947,17 +1980,17 @@ final class SessionRuntimeStore: ObservableObject {
             "root_turn_input_fingerprint": truncatedFingerprint(state.rootTurnInputFingerprint),
             "root_turn_awaiting_session_log_context": boolMetadata(state.rootTurnAwaitingSessionLogContext),
             "approval_context_known": boolMetadata(state.approvalContextKnown),
-            "approval_policy": state.approvalPolicy ?? "none",
-            "approvals_reviewer": state.approvalsReviewer ?? "none",
+            "approval_policy": state.approvalPolicy.metadataValue,
+            "approvals_reviewer": state.approvalsReviewer.metadataValue,
             "root_thread_known": boolMetadata(state.rootThreadID != nil),
             "root_turn_known": boolMetadata(state.rootTurnID != nil),
             "pending_input_fingerprint": truncatedFingerprint(state.pendingRootInputFingerprint),
             "pending_root_approval_context_known": boolMetadata(state.pendingRootApprovalContext != nil),
-            "pending_root_approval_policy": state.pendingRootApprovalContext?.approvalPolicy ?? "none",
-            "pending_root_approvals_reviewer": state.pendingRootApprovalContext?.approvalsReviewer ?? "none",
+            "pending_root_approval_policy": state.pendingRootApprovalContext?.approvalPolicy.metadataValue ?? "none",
+            "pending_root_approvals_reviewer": state.pendingRootApprovalContext?.approvalsReviewer.metadataValue ?? "none",
             "active_turn_approval_context_known": boolMetadata(state.activeTurnApprovalContext != nil),
-            "active_turn_approval_policy": state.activeTurnApprovalContext?.approvalPolicy ?? "none",
-            "active_turn_approvals_reviewer": state.activeTurnApprovalContext?.approvalsReviewer ?? "none",
+            "active_turn_approval_policy": state.activeTurnApprovalContext?.approvalPolicy.metadataValue ?? "none",
+            "active_turn_approvals_reviewer": state.activeTurnApprovalContext?.approvalsReviewer.metadataValue ?? "none",
         ]
 
         if let completion {
@@ -2367,13 +2400,13 @@ private struct CodexNotifySessionState {
     var activeTurnApprovalContext: CodexApprovalContext?
     var autoReviewedPermissionTurnIDs: [String] = []
     var approvalContextKnown = false
-    var approvalPolicy: String?
-    var approvalsReviewer: String?
+    var approvalPolicy: CodexSessionLogContextField = .unspecified
+    var approvalsReviewer: CodexSessionLogContextField = .unspecified
 }
 
 private struct CodexApprovalContext {
-    var approvalPolicy: String? = nil
-    var approvalsReviewer: String? = nil
+    var approvalPolicy: CodexSessionLogContextField = .unspecified
+    var approvalsReviewer: CodexSessionLogContextField = .unspecified
 }
 
 private struct PendingCodexHookApproval {
