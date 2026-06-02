@@ -442,6 +442,95 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesTopLevelTurnContextApprovalContext() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"timestamp":"2026-06-02T17:53:00.654Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/workspace","approval_policy":"on-request","approvals_reviewer":"auto_review"}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Responding to your prompt",
+                rootTurnID: "turn-root",
+                approvalPolicy: "on-request",
+                approvalsReviewer: "auto_review"
+            )
+        ])
+    }
+
+    func testWatcherInfersTopLevelAutoReviewFromPermissionsDeveloperMessage() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"timestamp":"2026-06-02T17:53:00.654Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\\n`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy.\\n</permissions instructions>"}]}}
+                {"timestamp":"2026-06-02T17:53:00.655Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/workspace","approval_policy":"on-request"}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Responding to your prompt",
+                rootTurnID: "turn-root",
+                approvalPolicy: "on-request",
+                approvalsReviewer: "auto_review"
+            )
+        ])
+    }
+
+    func testWatcherDoesNotInferAutoReviewFromUnscopedDeveloperText() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"timestamp":"2026-06-02T17:53:00.654Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"A note can mention `approvals_reviewer` is `auto_review` without being the permissions block."}]}}
+                {"timestamp":"2026-06-02T17:53:00.655Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/workspace","approval_policy":"on-request"}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Responding to your prompt",
+                rootTurnID: "turn-root",
+                approvalPolicy: "on-request"
+            )
+        ])
+    }
+
+    func testWatcherConsumesInferredAutoReviewForOneTopLevelTurnContext() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"timestamp":"2026-06-02T17:53:00.654Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\\n`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy.\\n</permissions instructions>"}]}}
+                {"timestamp":"2026-06-02T17:53:00.655Z","type":"turn_context","payload":{"turn_id":"turn-one","cwd":"/tmp/workspace","approval_policy":"on-request"}}
+                {"timestamp":"2026-06-02T17:54:00.655Z","type":"turn_context","payload":{"turn_id":"turn-two","cwd":"/tmp/workspace","approval_policy":"on-request"}}
+                """,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Responding to your prompt",
+                rootTurnID: "turn-one",
+                approvalPolicy: "on-request",
+                approvalsReviewer: "auto_review"
+            ),
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Responding to your prompt",
+                rootTurnID: "turn-two",
+                approvalPolicy: "on-request"
+            )
+        ])
+    }
+
     func testWatcherParsesCurrentCodexOverrideTurnContext() async throws {
         let events = try await recordEvents(
             from:

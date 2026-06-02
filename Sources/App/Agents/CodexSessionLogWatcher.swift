@@ -155,6 +155,7 @@ private extension CodexSessionLogWatcher {
             var offset: UInt64 = 0
             var bufferedRemainder = Data()
             var seenKeys: Set<String> = []
+            var pendingTopLevelApprovalsReviewer: CodexSessionLogContextField = .unspecified
             defer { close(&handle) }
 
             while true {
@@ -164,6 +165,7 @@ private extension CodexSessionLogWatcher {
                     offset: &offset,
                     bufferedRemainder: &bufferedRemainder,
                     seenKeys: &seenKeys,
+                    pendingTopLevelApprovalsReviewer: &pendingTopLevelApprovalsReviewer,
                     eventHandler: eventHandler
                 )
 
@@ -177,6 +179,7 @@ private extension CodexSessionLogWatcher {
                         offset: &offset,
                         bufferedRemainder: &bufferedRemainder,
                         seenKeys: &seenKeys,
+                        pendingTopLevelApprovalsReviewer: &pendingTopLevelApprovalsReviewer,
                         eventHandler: eventHandler
                     )
                     break
@@ -185,7 +188,11 @@ private extension CodexSessionLogWatcher {
                 try? await Task.sleep(nanoseconds: pollIntervalNanoseconds)
             }
 
-            if let event = Self.parseBufferedRemainder(bufferedRemainder, seenKeys: &seenKeys) {
+            if let event = Self.parseBufferedRemainder(
+                bufferedRemainder,
+                seenKeys: &seenKeys,
+                pendingTopLevelApprovalsReviewer: &pendingTopLevelApprovalsReviewer
+            ) {
                 await eventHandler(event)
             }
         }
@@ -197,6 +204,7 @@ private extension CodexSessionLogWatcher {
         offset: inout UInt64,
         bufferedRemainder: inout Data,
         seenKeys: inout Set<String>,
+        pendingTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
         eventHandler: @escaping EventHandler
     ) async {
         while let delta = readDelta(from: logURL, handle: &handle, offset: &offset) {
@@ -204,6 +212,7 @@ private extension CodexSessionLogWatcher {
                 delta,
                 bufferedRemainder: &bufferedRemainder,
                 seenKeys: &seenKeys,
+                pendingTopLevelApprovalsReviewer: &pendingTopLevelApprovalsReviewer,
                 eventHandler: eventHandler
             )
         }
@@ -213,6 +222,7 @@ private extension CodexSessionLogWatcher {
         _ delta: Data,
         bufferedRemainder: inout Data,
         seenKeys: inout Set<String>,
+        pendingTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
         eventHandler: @escaping EventHandler
     ) async {
         guard delta.isEmpty == false else {
@@ -225,7 +235,11 @@ private extension CodexSessionLogWatcher {
         while let newlineIndex = bufferedRemainder.firstIndex(of: newlineByte) {
             let lineData = bufferedRemainder.prefix(upTo: newlineIndex)
             bufferedRemainder.removeSubrange(...newlineIndex)
-            guard let event = parse(lineData: Data(lineData), seenKeys: &seenKeys) else {
+            guard let event = parse(
+                lineData: Data(lineData),
+                seenKeys: &seenKeys,
+                pendingTopLevelApprovalsReviewer: &pendingTopLevelApprovalsReviewer
+            ) else {
                 continue
             }
             if event.kind == .historyUpdated {
@@ -284,20 +298,43 @@ private extension CodexSessionLogWatcher {
 
     static func parseBufferedRemainder(
         _ bufferedRemainder: Data,
-        seenKeys: inout Set<String>
+        seenKeys: inout Set<String>,
+        pendingTopLevelApprovalsReviewer: inout CodexSessionLogContextField
     ) -> CodexSessionLogEvent? {
         guard bufferedRemainder.isEmpty == false else {
             return nil
         }
-        return parse(lineData: bufferedRemainder, seenKeys: &seenKeys)
+        return parse(
+            lineData: bufferedRemainder,
+            seenKeys: &seenKeys,
+            pendingTopLevelApprovalsReviewer: &pendingTopLevelApprovalsReviewer
+        )
     }
 
-    static func parse(lineData: Data, seenKeys: inout Set<String>) -> CodexSessionLogEvent? {
+    static func parse(
+        lineData: Data,
+        seenKeys: inout Set<String>,
+        pendingTopLevelApprovalsReviewer: inout CodexSessionLogContextField
+    ) -> CodexSessionLogEvent? {
         guard let normalizedLineData = normalizedJSONLineData(from: lineData),
               let object = try? JSONSerialization.jsonObject(with: normalizedLineData) as? [String: Any] else {
             return nil
         }
         let fallbackLine = String(data: normalizedLineData, encoding: .utf8) ?? ""
+
+        if let approvalsReviewer = topLevelDeveloperApprovalsReviewer(from: object) {
+            pendingTopLevelApprovalsReviewer = .string(approvalsReviewer)
+            return nil
+        }
+
+        if let event = parseTopLevelTurnContext(
+            object: object,
+            fallbackLine: fallbackLine,
+            seenKeys: &seenKeys,
+            pendingTopLevelApprovalsReviewer: &pendingTopLevelApprovalsReviewer
+        ) {
+            return event
+        }
 
         if let event = parseLegacyCodexEvent(
             object: object,
@@ -327,6 +364,53 @@ private extension CodexSessionLogWatcher {
             object: object,
             fallbackLine: fallbackLine,
             seenKeys: &seenKeys
+        )
+    }
+
+    static func parseTopLevelTurnContext(
+        object: [String: Any],
+        fallbackLine: String,
+        seenKeys: inout Set<String>,
+        pendingTopLevelApprovalsReviewer: inout CodexSessionLogContextField
+    ) -> CodexSessionLogEvent? {
+        guard normalizedString(object["type"]) == "turn_context",
+              let payload = object["payload"] as? [String: Any] else {
+            return nil
+        }
+
+        let approvalPolicyField = contextField(
+            from: payload,
+            key: "approval_policy",
+            nullMeansClear: false
+        )
+        var approvalsReviewerField = contextField(
+            from: payload,
+            key: "approvals_reviewer",
+            nullMeansClear: false
+        )
+        if !approvalsReviewerField.isSpecified,
+           pendingTopLevelApprovalsReviewer.isSpecified {
+            approvalsReviewerField = pendingTopLevelApprovalsReviewer
+        }
+        pendingTopLevelApprovalsReviewer = .unspecified
+
+        guard normalizedString(payload["turn_id"]) != nil ||
+            approvalPolicyField.isSpecified ||
+            approvalsReviewerField.isSpecified else {
+            return nil
+        }
+
+        let dedupeKey = "top_level_turn_context:\(topLevelEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
+        guard seenKeys.insert(dedupeKey).inserted else {
+            return nil
+        }
+
+        return CodexSessionLogEvent(
+            kind: .turnStarted,
+            detail: "Responding to your prompt",
+            rootTurnID: normalizedString(payload["turn_id"]),
+            approvalPolicyField: approvalPolicyField,
+            approvalsReviewerField: approvalsReviewerField
         )
     }
 
@@ -693,6 +777,44 @@ private extension CodexSessionLogWatcher {
             return nullMeansClear ? .null : .unspecified
         }
         return .string(value)
+    }
+
+    static func topLevelDeveloperApprovalsReviewer(from object: [String: Any]) -> String? {
+        guard normalizedString(object["type"]) == "response_item",
+              let payload = object["payload"] as? [String: Any],
+              normalizedString(payload["type"]) == "message",
+              normalizedString(payload["role"]) == "developer",
+              let contents = payload["content"] as? [Any] else {
+            return nil
+        }
+
+        for case let content as [String: Any] in contents {
+            guard normalizedString(content["type"]) == "input_text",
+                  let text = normalizedString(content["text"]),
+                  text.contains("<permissions instructions>"),
+                  text.contains("</permissions instructions>"),
+                  text.contains("`approvals_reviewer` is `auto_review`") else {
+                continue
+            }
+            return "auto_review"
+        }
+        return nil
+    }
+
+    static func topLevelEventIdentifier(
+        from object: [String: Any],
+        payload: [String: Any],
+        fallback: String
+    ) -> String {
+        for key in ["turn_id", "id", "request_id"] {
+            if let value = normalizedString(payload[key]) {
+                return value
+            }
+        }
+        if let timestamp = normalizedString(object["timestamp"]) {
+            return timestamp
+        }
+        return fallback
     }
 
     static func operationEventIdentifier(
