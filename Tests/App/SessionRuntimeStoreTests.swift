@@ -686,6 +686,54 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexSessionLogApprovalSuppressesNeverPolicyWithExplicitNullReviewer() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-codex-session-log-never-approval",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .sessionLogFallback(reason: "test"),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-session-log-never-approval",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Running"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: "sess-codex-session-log-never-approval",
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+            threadID: "thread-root",
+            turnID: "turn-root",
+            approvalPolicyField: .string("never"),
+            approvalsReviewerField: .null
+        )
+
+        let accepted = store.handleCodexSessionLogApproval(
+            sessionID: "sess-codex-session-log-never-approval",
+            detail: "Needs approval",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(accepted == false)
+        let status = store.sessionRegistry.activeSession(
+            sessionID: "sess-codex-session-log-never-approval"
+        )?.status
+        #expect(status?.kind == .working)
+        #expect(status?.detail == "Running")
+    }
+
+    @Test
     func codexHookEventUpdatesStatusAndLatchesRootThread() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
@@ -900,7 +948,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexHookPermissionRequestFromPriorManualTurnStillSurfacesAfterRootAdvances() {
+    func codexHookPermissionRequestFromPriorManualTurnIsIgnoredAfterRootAdvances() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -969,10 +1017,10 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(3)
         )
 
-        #expect(accepted)
+        #expect(accepted == false)
         #expect(
             store.sessionRegistry.activeSession(sessionID: "sess-codex-prior-manual-turn")?.status?.kind ==
-                .needsApproval
+                .working
         )
     }
 
@@ -1724,7 +1772,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexHookPermissionRequestWaitsForPromptContextBeforeReusingOverrideContext() {
+    func codexHookPermissionRequestDoesNotPublishWhenPromptContextClearsReviewerWithoutPolicy() {
         let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 1_000_000_000)
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1794,7 +1842,7 @@ struct SessionRuntimeStoreTests {
         #expect(
             store.sessionRegistry.activeSession(
                 sessionID: "sess-codex-waits-for-current-prompt-context"
-            )?.status?.kind == .needsApproval
+            )?.status?.kind == .working
         )
     }
 
@@ -1938,7 +1986,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexHookPermissionRequestDoesNotDeferManualApprovalAfterNullClearWithoutApprovalFields() {
+    func codexHookPermissionRequestSuppressesNullClearWithoutApprovalPolicy() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -2001,10 +2049,10 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(accepted)
+        #expect(accepted == false)
         #expect(
             store.sessionRegistry.activeSession(sessionID: "sess-codex-null-clear-without-fields")?.status?.kind ==
-                .needsApproval
+                .working
         )
     }
 
@@ -2067,10 +2115,10 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(accepted)
+        #expect(accepted == false)
         #expect(
             store.sessionRegistry.activeSession(sessionID: "sess-codex-stale-auto-review-context")?.status?.kind ==
-                .needsApproval
+                .working
         )
     }
 
@@ -2262,7 +2310,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexHookPermissionRequestIsNotSuppressedWhenHookTurnIsMissing() {
+    func codexHookPermissionRequestIsSuppressedWhenHookTurnIsMissing() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -2316,10 +2364,10 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(accepted)
+        #expect(accepted == false)
         #expect(
             store.sessionRegistry.activeSession(sessionID: "sess-codex-auto-review-missing-hook-turn")?.status?.kind ==
-                .needsApproval
+                .working
         )
     }
 
@@ -2388,7 +2436,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexHookPermissionRequestBecomesNeedsApprovalWhenContextDoesNotArrive() async {
+    func codexHookPermissionRequestStaysWorkingWhenContextDoesNotArrive() async {
         let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 20_000_000)
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -2437,10 +2485,10 @@ struct SessionRuntimeStoreTests {
 
         await waitUntil {
             store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-timeout")?.status?.kind ==
-                .needsApproval
+                .working
         }
 
-        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-timeout")?.status?.kind == .needsApproval)
+        #expect(store.sessionRegistry.activeSession(sessionID: "sess-codex-deferred-timeout")?.status?.kind == .working)
     }
 
     @Test

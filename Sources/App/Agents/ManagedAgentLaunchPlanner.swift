@@ -429,7 +429,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             guard codexStatusTrackingSource != .hooks else {
                 return
             }
-            status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: event.detail)
+            _ = sessionRuntimeStore.handleCodexSessionLogApproval(
+                sessionID: sessionID,
+                detail: event.detail,
+                threadID: event.rootThreadID,
+                turnID: event.rootTurnID,
+                at: nowProvider()
+            )
+            return
         case .taskCompleted:
             guard codexStatusTrackingSource != .hooks else {
                 return

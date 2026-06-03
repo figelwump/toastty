@@ -503,7 +503,9 @@ private extension CodexSessionLogWatcher {
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .approvalNeeded,
-                detail: approvalDetail(type: type, message: message)
+                detail: approvalDetail(type: type, message: message),
+                rootThreadID: eventThreadID(payload: payload, message: message),
+                rootTurnID: eventTurnID(from: object, payload: payload, message: message)
             )
         }
     }

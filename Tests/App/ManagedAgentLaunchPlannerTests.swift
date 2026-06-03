@@ -288,6 +288,156 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testCodexSessionLogFallbackSuppressesApprovalWhenAutoReviewerIsConfigured() async throws {
+        let fixture = try makePlannerFixture()
+        let threadID = "019e316e-auto-review"
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+        }
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadID)","thread_id":"\(threadID)","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-\(threadID).jsonl"}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"2026-06-02T17:53:00.654Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request","approvals_reviewer":"auto_review"}}
+            """,
+            to: logURL
+        )
+        await waitUntil {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind == .working
+        }
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"exec_approval_request","command":"xcodebuild test"}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
+            .working
+        )
+    }
+
+    func testCodexSessionLogFallbackSuppressesApprovalWhenReviewerContextIsMissing() async throws {
+        let fixture = try makePlannerFixture()
+        let threadID = "019e316e-missing-reviewer"
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+        }
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadID)","thread_id":"\(threadID)","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-\(threadID).jsonl"}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"2026-06-02T17:53:00.654Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request"}}
+            """,
+            to: logURL
+        )
+        await waitUntil {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind == .working
+        }
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"exec_approval_request","command":"xcodebuild test"}}}
+            """,
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
+            .working
+        )
+    }
+
+    func testCodexSessionLogFallbackPublishesApprovalWhenReviewerIsExplicitlyCleared() async throws {
+        let fixture = try makePlannerFixture()
+        let threadID = "019e316e-human-review"
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let logURL = try codexSessionLogURL(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: logURL.deletingLastPathComponent())
+        }
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadID)","thread_id":"\(threadID)","cwd":"/tmp/repo","rollout_path":"/tmp/codex-sessions/rollout-\(threadID).jsonl"}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"ts":"2026-05-28T17:30:32.495Z","dir":"from_tui","kind":"op","payload":{"OverrideTurnContext":{"approval_policy":"on-request","approvals_reviewer":null}}}
+            """,
+            to: logURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"timestamp":"2026-06-02T17:53:00.654Z","type":"turn_context","payload":{"turn_id":"turn-root","cwd":"/tmp/repo","approval_policy":"on-request"}}
+            """,
+            to: logURL
+        )
+        await waitUntil {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind == .working
+        }
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"exec_approval_request","command":"xcodebuild test"}}}
+            """,
+            to: logURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind ==
+                .needsApproval
+        }
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status?.kind,
+            .needsApproval
+        )
+    }
+
     func testCodexSessionLogFallbackIgnoresChildTaskCompleteBeforeRootCompletes() async throws {
         let fixture = try makePlannerFixture()
         let threadID = "019e316e-9f7f-7a33-aad9-33fe27b0f2cd"

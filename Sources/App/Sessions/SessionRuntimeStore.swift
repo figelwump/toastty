@@ -686,6 +686,99 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     @discardableResult
+    func handleCodexSessionLogApproval(
+        sessionID: String,
+        detail: String,
+        threadID: String?,
+        turnID: String?,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.sessionsByID[sessionID],
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            logCodexSessionLogApprovalDecision(
+                sessionID: sessionID,
+                record: sessionRegistry.sessionsByID[sessionID],
+                state: codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState(),
+                threadID: threadID,
+                turnID: turnID,
+                decision: "ignored",
+                reason: "session_not_tracking_codex_status"
+            )
+            return false
+        }
+
+        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
+            logCodexSessionLogApprovalDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                threadID: threadID,
+                turnID: turnID,
+                decision: "ignored",
+                reason: "status_source_hooks"
+            )
+            return false
+        }
+
+        let status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: detail)
+        let event = CodexHookEvent(
+            hookEventName: "PermissionRequest",
+            threadID: threadID ?? state.rootThreadID,
+            turnID: turnID ?? state.rootTurnID,
+            promptFingerprint: nil,
+            status: status,
+            nativeSessionID: threadID ?? state.rootThreadID,
+            sessionFilePath: nil,
+            cwd: nil
+        )
+
+        switch codexHookApprovalDecision(event: event, state: state) {
+        case .accept(let reason):
+            logCodexSessionLogApprovalDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                threadID: threadID,
+                turnID: turnID,
+                decision: "accepted",
+                reason: reason
+            )
+            updateStatus(sessionID: sessionID, status: status, at: now)
+            return true
+
+        case .suppress(let reason):
+            if turnID != nil {
+                markAutoReviewedCodexPermissionTurnIfNeeded(event: event, state: &state)
+            }
+            codexNotifyStateBySessionID[sessionID] = state
+            logCodexSessionLogApprovalDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                threadID: threadID,
+                turnID: turnID,
+                decision: "suppressed",
+                reason: reason
+            )
+            return false
+
+        case .ignore(let reason), .waitForContext(let reason):
+            logCodexSessionLogApprovalDecision(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                threadID: threadID,
+                turnID: turnID,
+                decision: "ignored",
+                reason: reason
+            )
+            return false
+        }
+    }
+
+    @discardableResult
     func handleCodexHookEvent(
         sessionID: String,
         event: CodexHookEvent,
@@ -1387,6 +1480,45 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
+    private func logCodexSessionLogApprovalDecision(
+        sessionID: String,
+        record: SessionRecord?,
+        state: CodexNotifySessionState,
+        threadID: String?,
+        turnID: String?,
+        decision: String,
+        reason: String
+    ) {
+        let event = CodexHookEvent(
+            hookEventName: "PermissionRequest",
+            threadID: threadID,
+            turnID: turnID,
+            promptFingerprint: nil,
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval"),
+            nativeSessionID: threadID,
+            sessionFilePath: nil,
+            cwd: nil
+        )
+        ToasttyLog.info(
+            "Codex session log approval decision",
+            category: .terminal,
+            metadata: codexHookMetadata(
+                sessionID: sessionID,
+                record: record,
+                state: state,
+                event: event,
+                additional: codexCompletionDecisionMetadata(
+                    decision: decision,
+                    reason: reason,
+                    hasThreadID: threadID != nil,
+                    hasTurnID: turnID != nil,
+                    rootThreadKnown: state.rootThreadID != nil,
+                    rootTurnKnown: state.rootTurnID != nil
+                )
+            )
+        )
+    }
+
     private func codexStatusTrackingSourceAllowsFallbackEvents(sessionID: String) -> Bool {
         guard let source = codexStatusTrackingSourceBySessionID[sessionID] else {
             return true
@@ -1504,7 +1636,7 @@ final class SessionRuntimeStore: ObservableObject {
             return .accept(reason: "not_permission_request")
         }
         guard let hookThreadID = event.threadID else {
-            return .accept(reason: "missing_hook_thread")
+            return .suppress(reason: "missing_hook_thread")
         }
         guard let rootThreadID = state.rootThreadID else {
             return .waitForContext(reason: "missing_root_thread")
@@ -1513,11 +1645,11 @@ final class SessionRuntimeStore: ObservableObject {
             return .ignore(reason: "thread_mismatch")
         }
         guard let hookTurnID = event.turnID else {
-            return .accept(reason: "missing_hook_turn")
+            return .suppress(reason: "missing_hook_turn")
         }
         guard let rootTurnID = state.rootTurnID else {
             guard state.pendingRootInputFingerprint != nil else {
-                return .accept(reason: "missing_root_turn")
+                return .suppress(reason: "missing_root_turn")
             }
             return .waitForContext(reason: "missing_root_turn")
         }
@@ -1530,7 +1662,7 @@ final class SessionRuntimeStore: ObservableObject {
             return .suppress(reason: "auto_review_context_turn_mismatch")
         }
         guard hookTurnID == rootTurnID else {
-            return .accept(reason: "turn_mismatch")
+            return .ignore(reason: "turn_mismatch")
         }
         guard state.rootTurnAwaitingSessionLogContext == false else {
             return .waitForContext(reason: "awaiting_root_turn_context")
@@ -1548,9 +1680,19 @@ final class SessionRuntimeStore: ObservableObject {
                 // is not positive evidence that a human approval is waiting.
                 return .waitForContext(reason: "unknown_approvals_reviewer")
             }
+            guard codexApprovalPolicyRequiresHumanApproval(approvalPolicy) else {
+                return .suppress(reason: "missing_human_approval_policy")
+            }
             return .accept(reason: "missing_approvals_reviewer")
         }
         return .suppress(reason: "auto_review_approval")
+    }
+
+    private func codexApprovalPolicyRequiresHumanApproval(_ approvalPolicy: String?) -> Bool {
+        guard let approvalPolicy = normalizedNonEmpty(approvalPolicy)?.lowercased() else {
+            return false
+        }
+        return approvalPolicy != "never"
     }
 
     private func codexApprovalContextHasReviewer(_ state: CodexNotifySessionState) -> Bool {
@@ -1631,17 +1773,6 @@ final class SessionRuntimeStore: ObservableObject {
                 reason: reason
             )
 
-        case .accept(let reason) where pendingCodexHookApprovalAcceptReasonIsStale(reason):
-            removePendingCodexHookApproval(sessionID: sessionID)
-            logCodexHookEventDecision(
-                sessionID: sessionID,
-                record: record,
-                state: state,
-                event: pending.event,
-                decision: "ignored",
-                reason: "context_timeout_\(reason)"
-            )
-
         case .accept(let reason):
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
@@ -1654,7 +1785,7 @@ final class SessionRuntimeStore: ObservableObject {
             )
             updateStatus(sessionID: sessionID, status: status, at: Date())
 
-        case .waitForContext(let reason) where pendingCodexHookApprovalWaitReasonIsAmbiguousReviewer(reason):
+        case .waitForContext(let reason):
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -1664,18 +1795,6 @@ final class SessionRuntimeStore: ObservableObject {
                 decision: "ignored",
                 reason: "context_timeout_\(reason)"
             )
-
-        case .waitForContext(let reason):
-            removePendingCodexHookApproval(sessionID: sessionID)
-            logCodexHookEventDecision(
-                sessionID: sessionID,
-                record: record,
-                state: state,
-                event: pending.event,
-                decision: "accepted",
-                reason: "context_timeout_\(reason)"
-            )
-            updateStatus(sessionID: sessionID, status: status, at: Date())
         }
     }
 
@@ -1709,17 +1828,6 @@ final class SessionRuntimeStore: ObservableObject {
             )
 
         case .ignore(let reason):
-            removePendingCodexHookApproval(sessionID: sessionID)
-            logCodexHookEventDecision(
-                sessionID: sessionID,
-                record: record,
-                state: state,
-                event: pending.event,
-                decision: "ignored",
-                reason: "\(reasonPrefix)_\(reason)"
-            )
-
-        case .accept(let reason) where pendingCodexHookApprovalAcceptReasonIsStale(reason):
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -1784,14 +1892,6 @@ final class SessionRuntimeStore: ObservableObject {
             return threadMatches
         }
         return threadMatches
-    }
-
-    private func pendingCodexHookApprovalAcceptReasonIsStale(_ reason: String) -> Bool {
-        reason == "turn_mismatch"
-    }
-
-    private func pendingCodexHookApprovalWaitReasonIsAmbiguousReviewer(_ reason: String) -> Bool {
-        reason == "unknown_approvals_reviewer"
     }
 
     private func removePendingCodexHookApproval(sessionID: String) {
