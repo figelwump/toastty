@@ -13,12 +13,12 @@ EOF
 
 title="Scratchpad Draft"
 title_set=0
-create_policy_args=()
+create_policy=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --new)
-      create_policy_args=(--new)
+      create_policy="new"
       shift
       ;;
     -h|--help)
@@ -57,7 +57,12 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-python3 - "$title" <<'PY' | "$script_dir/publish-scratchpad-html.sh" --title "$title" "${create_policy_args[@]}"
+publish_args=(--title "$title")
+if [[ "$create_policy" == "new" ]]; then
+  publish_args+=(--new)
+fi
+
+python3 - "$title" <<'PY' | "$script_dir/publish-scratchpad-html.sh" "${publish_args[@]}"
 import html
 import sys
 
