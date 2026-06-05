@@ -45,14 +45,6 @@ Use `.agents/skills/toastty-dev-run/SKILL.md` for live Toastty dev/debug app ins
 - Preserve `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` in the Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes.
 - Treat `instance.json` as authoritative for PID, paths, logs, and socket targeting.
 
-## Ghostty Integration
-
-Use `docs/ghostty-integration.md` for Ghostty artifact, build, config, and validation details.
-
-- Ghostty integration is default-on when a local xcframework exists in `Dependencies/` and disable env is not set.
-- Opt out with `TUIST_DISABLE_GHOSTTY=1` or `TOASTTY_DISABLE_GHOSTTY=1`.
-- After changing Ghostty artifacts or settings, regenerate and rebuild before validating.
-
 ## Release Workflow
 
 - Ghostty release provenance: install release artifacts with `GHOSTTY_BUILD_FLAGS=... ./scripts/ghostty/install-local-xcframework.sh`; the installer writes ignored sidecar metadata under `Dependencies/GhosttyKit.Release.metadata.env`.
@@ -67,7 +59,8 @@ Use `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtim
 - For worktree, Xcode, dev, or smoke runs, resolve `instance.json` and read its `logFilePath`; do not default to production logs.
 - If the target is ambiguous, default to the current worktree's runtime-isolated instance before inspecting broad process lists.
 
-## Menu And Interaction Gotchas
+## Specialized References
 
-- Read `docs/agents/menu-performance.md` before touching menu rebuilds, hidden system menu items, workspace shortcuts, terminal jank that may involve AppKit, or `Cmd+W` handling.
-- For manual GUI reproduction, prefer `.agents/skills/toastty-computer-use/SKILL.md`; `docs/agents/manual-interaction.md` covers local interaction pitfalls.
+- Ghostty: use `docs/ghostty-integration.md` for artifact, build, config, and validation details. Ghostty integration is default-on when a local xcframework exists in `Dependencies/` and disable env is not set. Opt out with `TUIST_DISABLE_GHOSTTY=1` or `TOASTTY_DISABLE_GHOSTTY=1`. After changing Ghostty artifacts or settings, regenerate and rebuild before validating.
+- Menu, shortcuts, and AppKit interaction: read `docs/agents/menu-performance.md` before touching menu rebuilds, hidden system menu items, workspace shortcuts, terminal jank that may involve AppKit, or `Cmd+W` handling.
+- Manual GUI reproduction: prefer `.agents/skills/toastty-computer-use/SKILL.md`; `docs/agents/manual-interaction.md` covers local interaction pitfalls.
