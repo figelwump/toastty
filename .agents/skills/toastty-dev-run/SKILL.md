@@ -30,7 +30,8 @@ Do not use this skill for release builds or pure unit-test work.
 7. Before any `peekaboo` call, confirm the PID from `instance.json` is still alive. If it is stale, relaunch instead of guessing.
 8. Before any required local `peekaboo` interaction, run `peekaboo permissions --json`. If Accessibility is not granted, stop and ask the user to grant local Accessibility before continuing. Do not keep trying local `peekaboo` or improvise local screenshot/menu workarounds after a failed permissions preflight. If the user does not want to grant it locally, switch to the remote GUI path.
 9. Inspect logs and runtime state inside the same runtime home you launched. Do not inspect shared `~/.toastty` data for an isolated run.
-10. Clean up only the sandbox you launched.
+10. Runtime-isolated dev/test runs must not rewrite the user's login shell files. Shell integration installation is intentionally disabled when runtime isolation is enabled.
+11. Clean up only the sandbox you launched. Use `./scripts/automation/cleanup-dev-runs.sh` for stale run cleanup, and never delete paths for a still-running PID.
 
 ## Validation planning
 
@@ -136,7 +137,7 @@ Notes:
 <worktree>/artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home
 ```
 
-- `instance.json` records the runtime-home strategy, worktree root, PID, socket path, log path, derived path, and arguments for the launched instance.
+- `instance.json` records `runtimeHomeStrategy`, `worktreeRootPath`, `pid`, `socketPath`, `logFilePath`, optional `derivedPath`, and `arguments` for the launched instance.
 
 ## Validation guidance
 

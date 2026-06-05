@@ -100,6 +100,9 @@ Disable it explicitly with:
 TUIST_DISABLE_GHOSTTY=1 tuist generate
 ```
 
+`TOASTTY_DISABLE_GHOSTTY=1` is a compatibility alias used by `Project.swift`
+and automation scripts. Prefer `TUIST_DISABLE_GHOSTTY=1` for new commands.
+
 Current selection behavior:
 
 - `Debug` prefers `GhosttyKit.Debug`, then `GhosttyKit.Release`
