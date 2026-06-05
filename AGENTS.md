@@ -61,6 +61,6 @@ Use `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtim
 
 ## Specialized References
 
-- Ghostty: use `docs/ghostty-integration.md` for artifact, build, config, and validation details. Ghostty integration is default-on when a local xcframework exists in `Dependencies/` and disable env is not set. Opt out with `TUIST_DISABLE_GHOSTTY=1` or `TOASTTY_DISABLE_GHOSTTY=1`. After changing Ghostty artifacts or settings, regenerate and rebuild before validating.
-- Menu, shortcuts, and AppKit interaction: read `docs/agents/menu-performance.md` before touching menu rebuilds, hidden system menu items, workspace shortcuts, terminal jank that may involve AppKit, or `Cmd+W` handling.
+- Before changing Ghostty artifacts, config loading, host-side terminal styling, or fallback builds, read `docs/ghostty-integration.md`.
+- Before touching menu rebuilds, hidden system menu items, workspace shortcuts, terminal jank that may involve AppKit, or `Cmd+W`, read `docs/agents/menu-performance.md`.
 - Manual GUI reproduction: prefer `.agents/skills/toastty-computer-use/SKILL.md`; `docs/agents/manual-interaction.md` covers local interaction pitfalls.
