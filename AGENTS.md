@@ -5,6 +5,7 @@
 - This project file is shared across agent runtimes. Follow the active agent's global instructions for interaction style, review mechanics, and tool availability; the Toastty commands and project constraints here win for this repository.
 - When a workflow points at `.agents/skills/.../SKILL.md`, read that file as the authoritative task guide when the task applies. If the active runtime does not load skill files automatically, read the referenced file directly and follow the documented workflow intent.
 - Keep this file concise. Detailed reference material lives under `docs/agents/`:
+  - `.agents/skills/toastty-verify/SKILL.md` for choosing, running, and reporting Toastty verification.
   - `docs/agents/automation.md` for smoke, remote, test, and dev-run details.
   - `docs/agents/menu-performance.md` for menu-related regressions and shortcuts.
   - `docs/agents/manual-interaction.md` for background notes on interaction pitfalls.
@@ -26,26 +27,10 @@
 
 ## Validation
 
-For UI/runtime changes, validate beyond unit tests: run automation and inspect visually when appropriate. Read `docs/agents/automation.md` before custom validation flows.
+Use `.agents/skills/toastty-verify/SKILL.md` as the authoritative workflow for choosing, running, and reporting validation after implementation, build, project, dependency, automation, UI/runtime, menu/shortcut, or agent-instruction changes.
 
-```bash
-# Agent default: remote smoke via the wrapper, with fallback handled by validate.sh
-sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui
-
-# Require the remote path itself when that is what you are validating
-sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui --require-remote
-
-# Agent-driven remote xcodebuild tests
-sv exec -- scripts/remote/test.sh -- ...
-```
-
-- Agent-driven smoke validation should start with `sv exec -- scripts/remote/validate.sh --smoke-test ...`. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI env is injected there.
-- Agent-driven `xcodebuild test` runs should start with `sv exec -- scripts/remote/test.sh -- ...`, not direct local `xcodebuild test`.
-- Prefer omitting `-destination` for remote tests, or set `arch=arm64` explicitly. Remote `x86_64` test destinations are blocked by default; override only when intentionally validating Rosetta.
-- Use local smoke helpers only when the user explicitly wants a local run, the check is local-only, or the remote wrapper has already fallen back or failed and you are intentionally continuing locally.
-- For live UI validation of a running app instance, follow `.agents/skills/toastty-dev-run/SKILL.md` to launch or locate the isolated instance, then use remote Computer Use for human-like GUI interaction that is not covered by smoke tests.
-- When a change needs real shortcut tracing or only a screenshot/state artifact, prefer remote wrapper variants such as `--smoke-test shortcut-trace` or `--smoke-test shortcut-hints` before stealing focus locally.
-- When a GUI bug or fix needs human-like interaction beyond the supported smoke tests, use `.agents/skills/toastty-computer-use/SKILL.md` to write a focused Computer Use prompt and run `scripts/remote/computer-use-run.sh`.
+- Keep detailed smoke, remote, test, and local-helper command semantics in `docs/agents/automation.md`.
+- Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; remote GUI/test env is injected there.
 - In handoffs, say whether validation ran remotely, locally, or through `validate.sh` with local fallback.
 - Artifacts are stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`. Committed planning docs belong in `docs/plans/`, not `artifacts/`.
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Verify"
+  short_description: "Choose and run Toastty validation."
+  default_prompt: "Use $toastty-verify to choose and run the right Toastty verification for this change."
