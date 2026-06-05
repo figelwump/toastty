@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Debug"
+  short_description: "Debug Toastty runs and logs."
+  default_prompt: "Use $toastty-debug to identify the Toastty target, inspect logs, and plan a focused debug run."

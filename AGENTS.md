@@ -6,6 +6,7 @@
 - When a workflow points at `.agents/skills/.../SKILL.md`, read that file as the authoritative task guide when the task applies. If the active runtime does not load skill files automatically, read the referenced file directly and follow the documented workflow intent.
 - Keep this file concise. Detailed reference material lives under `docs/agents/`:
   - `.agents/skills/toastty-verify/SKILL.md` for choosing, running, and reporting Toastty verification.
+  - `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtime target selection, and focused repro planning.
   - `docs/agents/automation.md` for smoke, remote, test, and dev-run details.
   - `docs/agents/menu-performance.md` for menu-related regressions and shortcuts.
   - `docs/agents/manual-interaction.md` for background notes on interaction pitfalls.
@@ -41,7 +42,7 @@ Use `.agents/skills/toastty-verify/SKILL.md` as the authoritative workflow for c
 - Tuist-generated Xcode Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` for `ToasttyApp` and `ToasttyApp-Release`. Preserve that behavior when editing `Project.swift`.
 - Before a Ghostty-backed build from a fresh worktree, run `./scripts/dev/bootstrap-worktree.sh`. The smoke, shortcut-trace, and check helpers already do this.
 - Capture launched app PID and use runtime-specific tooling whenever possible. Avoid generic `osascript` or app-name-only targeting when multiple Toastty instances may be running.
-- Runtime isolation writes `instance.json` inside the runtime home. Treat it as authoritative for `pid`, `bundlePath`, `runtimeHomePath`, `logFilePath`, `socketPath`, derived path, and worktree root.
+- Runtime isolation writes `instance.json` inside the runtime home. Treat it as authoritative for `pid`, `bundlePath`, `runtimeHomePath`, `logFilePath`, `socketPath`, `derivedPath`, and `worktreeRootPath`.
 - For Xcode-launched Toastty runs, assume runtime isolation is active unless you have evidence otherwise. Start from `artifacts/dev-runs/worktree-*/runtime-home/instance.json`, not global logs.
 - Shell integration installation is intentionally disabled when runtime isolation is enabled. Sandboxed dev/test runs must not rewrite the user's login shell files.
 - When a run is finished, clean up only its own per-run directories. Use `./scripts/automation/cleanup-dev-runs.sh` for stale run cleanup, and never delete paths for a still-running PID.
@@ -69,15 +70,11 @@ Use `.agents/skills/toastty-verify/SKILL.md` as the authoritative workflow for c
 
 ## Logging
 
-- First identify the target being debugged:
-  - Production/installed Toastty runs log to `~/Library/Logs/Toastty/toastty.log`.
-  - Worktree/Xcode/dev/smoke runs use runtime isolation; resolve `instance.json` in that worktree and read `logFilePath`.
-- If the user names a worktree, use that worktree's `artifacts/dev-runs/worktree-*/runtime-home/instance.json`.
-- If the target is ambiguous, default to the current worktree's runtime-isolated instance. Look under `artifacts/dev-runs/worktree-*/runtime-home/instance.json`, validate the PID is alive, then read `logFilePath`.
-- Only if the current-worktree target is still ambiguous or stale, inspect running Toastty processes with `pgrep -af Toastty` and use `lsof -p <pid>` to find open `toastty.log` paths.
-- Xcode `Release` configuration is still a worktree run when launched from the generated scheme; do not treat it as production logging.
-- Runtime-isolated logs rotate at 5 MB to `<runtime-home>/logs/toastty.previous.log`; production logs rotate under `~/Library/Logs/Toastty/`.
-- Useful env vars: `TOASTTY_LOG_LEVEL`, `TOASTTY_LOG_FILE` (`none` disables), `TOASTTY_LOG_STDERR=1`, `TOASTTY_LOG_DISABLE=1`.
+Use `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtime target selection, and focused repro planning.
+
+- First identify the target being debugged. Production/installed Toastty logs differ from worktree/Xcode/dev/smoke runtime-isolated logs.
+- For worktree, Xcode, dev, or smoke runs, resolve `instance.json` and read its `logFilePath`; do not default to production logs.
+- If the target is ambiguous, default to the current worktree's runtime-isolated instance before inspecting broad process lists.
 
 ## Menu And Interaction Gotchas
 
