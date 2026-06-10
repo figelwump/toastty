@@ -1631,6 +1631,65 @@ struct AppReducerTests {
     }
 
     @Test
+    func createRightAuxWebPanelPreserveTargetsBackgroundTabWithoutChangingSelectionOrFocus() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let sourceTabID = try #require(state.workspacesByID[workspaceID]?.selectedTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Existing"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let sourceTabBeforeSwitch = try #require(state.workspacesByID[workspaceID]?.tab(id: sourceTabID))
+        let existingActiveRightAuxTabID = sourceTabBeforeSwitch.rightAuxPanel.activeTabID
+        let existingFocusedRightAuxPanelID = sourceTabBeforeSwitch.rightAuxPanel.focusedPanelID
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let selectedTabIDBefore = try #require(state.workspacesByID[workspaceID]?.selectedTabID)
+        #expect(selectedTabIDBefore != sourceTabID)
+        let selectedTabBefore = try #require(state.workspacesByID[workspaceID]?.tab(id: selectedTabIDBefore))
+        let focusedPanelIDBefore = selectedTabBefore.focusedPanelID
+        let backgroundPanelID = UUID()
+
+        #expect(
+            reducer.send(
+                .createRightAuxWebPanel(
+                    workspaceID: workspaceID,
+                    tabID: sourceTabID,
+                    panelID: backgroundPanelID,
+                    panel: WebPanelState(definition: .browser, title: "Background"),
+                    activation: .preserve
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let sourceTabAfter = try #require(workspaceAfter.tab(id: sourceTabID))
+        let selectedTabAfter = try #require(workspaceAfter.tab(id: selectedTabIDBefore))
+        let backgroundPanelState = try #require(sourceTabAfter.rightAuxPanel.panelState(for: backgroundPanelID))
+        guard case .web(let webState) = backgroundPanelState else {
+            Issue.record("expected targeted right-aux panel to be web")
+            return
+        }
+
+        #expect(workspaceAfter.selectedTabID == selectedTabIDBefore)
+        #expect(selectedTabAfter.focusedPanelID == focusedPanelIDBefore)
+        #expect(sourceTabAfter.rightAuxPanel.activeTabID == existingActiveRightAuxTabID)
+        #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == existingFocusedRightAuxPanelID)
+        #expect(webState.title == "Background")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func legacyRootRightPlacementAliasesRightPanel() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()

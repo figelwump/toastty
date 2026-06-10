@@ -28,6 +28,12 @@ public enum SplitResizeDirection: String, Codable, Equatable, Sendable {
     case right
 }
 
+public enum RightAuxPanelActivation: Equatable, Sendable {
+    case preserve
+    case reveal
+    case focus
+}
+
 public enum AppAction: Equatable, Sendable {
     case selectWindow(windowID: UUID)
     case updateWindowFrame(windowID: UUID, frame: CGRectCodable)
@@ -50,6 +56,13 @@ public enum AppAction: Equatable, Sendable {
     case closePanel(panelID: UUID)
     case reopenLastClosedPanel(workspaceID: UUID)
     case createWebPanel(workspaceID: UUID, panel: WebPanelState, placement: WebPanelPlacement)
+    case createRightAuxWebPanel(
+        workspaceID: UUID,
+        tabID: UUID,
+        panelID: UUID,
+        panel: WebPanelState,
+        activation: RightAuxPanelActivation
+    )
     case setRightAuxPanelVisibility(workspaceID: UUID, isVisible: Bool)
     case toggleRightAuxPanel(workspaceID: UUID)
     case setRightAuxPanelWidth(workspaceID: UUID, width: Double)
@@ -146,6 +159,8 @@ public extension AppAction {
             return "reopenLastClosedPanel"
         case .createWebPanel:
             return "createWebPanel"
+        case .createRightAuxWebPanel:
+            return "createRightAuxWebPanel"
         case .setRightAuxPanelVisibility:
             return "setRightAuxPanelVisibility"
         case .toggleRightAuxPanel:

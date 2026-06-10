@@ -48,6 +48,7 @@ struct ScratchpadAppControlTests {
         #expect(selectedTab.panels[scratchpadPanelID] == nil)
         #expect(selectedTab.rightAuxPanel.isVisible)
         #expect(selectedTab.rightAuxPanel.activePanelID == scratchpadPanelID)
+        #expect(selectedTab.rightAuxPanel.focusedPanelID == nil)
         #expect(selectedTab.rightAuxPanel.panelState(for: scratchpadPanelID) != nil)
         #expect(stateResult.string("panelID") == scratchpadPanelIDString)
 
@@ -73,6 +74,131 @@ struct ScratchpadAppControlTests {
         #expect(webState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
         #expect(webState.scratchpad?.sessionLink?.sourcePanelID == fixture.sourcePanelID)
         #expect(document.content == "<h1>Architecture</h1>")
+    }
+
+    @Test
+    func setContentCreatesScratchpadInBackgroundWorkspaceWithoutChangingVisibleSelection() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let sourceWorkspaceBefore = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let sourceTabIDBefore = sourceWorkspaceBefore.selectedTabID
+
+        #expect(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Visible", activate: true)))
+        let visibleWorkspaceID = try #require(fixture.store.state.selectedWorkspaceID(in: fixture.windowID))
+        let visibleWorkspaceBefore = try #require(fixture.store.state.workspacesByID[visibleWorkspaceID])
+        let visibleFocusedPanelIDBefore = visibleWorkspaceBefore.focusedPanelID
+        #expect(visibleWorkspaceID != fixture.workspaceID)
+
+        let response = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Background workspace</p>"),
+                "title": .string("Background"),
+            ]
+        )
+        let result = try #require(response.result)
+        let scratchpadPanelIDString = try #require(result.string("panelID"))
+        let scratchpadPanelID = try #require(UUID(uuidString: scratchpadPanelIDString))
+        let sourceWorkspaceAfter = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let sourceTabID = try #require(sourceTabIDBefore)
+        let sourceTabAfter = try #require(sourceWorkspaceAfter.tab(id: sourceTabID))
+        let visibleWorkspaceAfter = try #require(fixture.store.state.workspacesByID[visibleWorkspaceID])
+        let panelState = try #require(sourceTabAfter.rightAuxPanel.panelState(for: scratchpadPanelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should be a web panel")
+            return
+        }
+
+        #expect(response.didMutateState)
+        #expect(fixture.store.state.selectedWorkspaceID(in: fixture.windowID) == visibleWorkspaceID)
+        #expect(visibleWorkspaceAfter.focusedPanelID == visibleFocusedPanelIDBefore)
+        #expect(sourceWorkspaceAfter.selectedTabID == sourceTabIDBefore)
+        #expect(sourceTabAfter.rightAuxPanel.isVisible == false)
+        #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == nil)
+        #expect(sourceTabAfter.unreadPanelIDs.contains(scratchpadPanelID))
+        #expect(webState.definition == .scratchpad)
+        #expect(webState.scratchpad?.sessionLink?.sessionID == fixture.sessionID)
+
+        try StateValidator.validate(fixture.store.state)
+    }
+
+    @Test
+    func setContentCreatesScratchpadInBackgroundTabWithoutChangingSelectedTab() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let sourceWorkspaceBefore = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let sourceTabID = try #require(sourceWorkspaceBefore.selectedTabID)
+
+        #expect(fixture.store.send(.createWorkspaceTab(workspaceID: fixture.workspaceID, seed: nil)))
+        let workspaceBefore = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let selectedTabIDBefore = try #require(workspaceBefore.selectedTabID)
+        let focusedPanelIDBefore = workspaceBefore.focusedPanelID
+        #expect(selectedTabIDBefore != sourceTabID)
+
+        let response = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Background tab</p>"),
+                "title": .string("Background Tab"),
+            ]
+        )
+        let result = try #require(response.result)
+        let scratchpadPanelIDString = try #require(result.string("panelID"))
+        let scratchpadPanelID = try #require(UUID(uuidString: scratchpadPanelIDString))
+        let workspaceAfter = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let sourceTabAfter = try #require(workspaceAfter.tab(id: sourceTabID))
+        let selectedTabAfter = try #require(workspaceAfter.tab(id: selectedTabIDBefore))
+        let panelState = try #require(sourceTabAfter.rightAuxPanel.panelState(for: scratchpadPanelID))
+        guard case .web(let webState) = panelState else {
+            Issue.record("scratchpad panel should be a web panel")
+            return
+        }
+
+        #expect(response.didMutateState)
+        #expect(workspaceAfter.selectedTabID == selectedTabIDBefore)
+        #expect(selectedTabAfter.focusedPanelID == focusedPanelIDBefore)
+        #expect(sourceTabAfter.rightAuxPanel.isVisible == false)
+        #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == nil)
+        #expect(sourceTabAfter.unreadPanelIDs.contains(scratchpadPanelID))
+        #expect(webState.definition == .scratchpad)
+        #expect(webState.scratchpad?.sessionLink?.sourcePanelID == fixture.sourcePanelID)
+
+        try StateValidator.validate(fixture.store.state)
+    }
+
+    @Test
+    func setContentCreatesScratchpadInBackgroundWindowWithoutChangingSelectedWindow() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let firstWindowSelectedWorkspaceID = try #require(fixture.store.state.selectedWorkspaceID(in: fixture.windowID))
+        #expect(fixture.store.createWindowFromCommand(preferredWindowID: nil))
+        let selectedWindowIDBefore = try #require(fixture.store.state.selectedWindowID)
+        let selectedWindowWorkspaceIDBefore = try #require(
+            fixture.store.state.selectedWorkspaceID(in: selectedWindowIDBefore)
+        )
+        #expect(selectedWindowIDBefore != fixture.windowID)
+
+        let response = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Background window</p>"),
+            ]
+        )
+        let result = try #require(response.result)
+        let scratchpadPanelIDString = try #require(result.string("panelID"))
+        let scratchpadPanelID = try #require(UUID(uuidString: scratchpadPanelIDString))
+        let sourceWorkspace = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let sourceTabID = try #require(sourceWorkspace.selectedTabID)
+        let sourceTab = try #require(sourceWorkspace.tab(id: sourceTabID))
+
+        #expect(response.didMutateState)
+        #expect(fixture.store.state.selectedWindowID == selectedWindowIDBefore)
+        #expect(fixture.store.state.selectedWorkspaceID(in: fixture.windowID) == firstWindowSelectedWorkspaceID)
+        #expect(fixture.store.state.selectedWorkspaceID(in: selectedWindowIDBefore) == selectedWindowWorkspaceIDBefore)
+        #expect(sourceTab.rightAuxPanel.panelState(for: scratchpadPanelID) != nil)
+        #expect(sourceTab.unreadPanelIDs.contains(scratchpadPanelID))
+
+        try StateValidator.validate(fixture.store.state)
     }
 
     @Test
@@ -107,6 +233,49 @@ struct ScratchpadAppControlTests {
         #expect(secondResult.int("revision") == 2)
         #expect(document.revision == 2)
         #expect(document.content == "<p>Second</p>")
+    }
+
+    @Test
+    func repeatedSetContentUpdatesBackgroundScratchpadWithoutChangingVisibleSelection() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let initial = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Initial</p>"),
+            ]
+        )
+        let initialResult = try #require(initial.result)
+        let initialPanelID = try #require(initialResult.string("panelID"))
+        let documentIDString = try #require(initialResult.string("documentID"))
+        let documentID = try #require(UUID(uuidString: documentIDString))
+
+        #expect(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Visible", activate: true)))
+        let visibleWorkspaceID = try #require(fixture.store.state.selectedWorkspaceID(in: fixture.windowID))
+        let visibleWorkspaceBefore = try #require(fixture.store.state.workspacesByID[visibleWorkspaceID])
+        let visibleFocusedPanelIDBefore = visibleWorkspaceBefore.focusedPanelID
+
+        let second = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<p>Updated in background</p>"),
+                "expectedRevision": .int(1),
+            ]
+        )
+        let secondResult = try #require(second.result)
+        let document = try #require(try fixture.documentStore.load(documentID: documentID))
+        let visibleWorkspaceAfter = try #require(fixture.store.state.workspacesByID[visibleWorkspaceID])
+
+        #expect(second.didMutateState)
+        #expect(secondResult.string("panelID") == initialPanelID)
+        #expect(secondResult.bool("created") == false)
+        #expect(secondResult.int("revision") == 2)
+        #expect(fixture.store.state.selectedWorkspaceID(in: fixture.windowID) == visibleWorkspaceID)
+        #expect(visibleWorkspaceAfter.focusedPanelID == visibleFocusedPanelIDBefore)
+        #expect(document.content == "<p>Updated in background</p>")
+
+        try StateValidator.validate(fixture.store.state)
     }
 
     @Test

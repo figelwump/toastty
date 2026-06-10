@@ -852,6 +852,9 @@ final class AppStore: ObservableObject {
         guard case .terminal = sourceSelection.workspace.panelState(for: sourcePanelID) else {
             throw ScratchpadPanelError.sourcePanelIsNotTerminal(sourcePanelID)
         }
+        guard let sourceTabID = sourceSelection.workspace.tabID(containingPanelID: sourcePanelID) else {
+            throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
+        }
 
         let sessionLink = ScratchpadSessionLink(
             sessionID: session.sessionID,
@@ -933,38 +936,34 @@ final class AppStore: ObservableObject {
             sessionLink: sessionLink,
             revision: document.revision
         )
+        let panelID = UUID()
+        let sourceIsVisible = state.selectedWindowID == sourceSelection.windowID
+            && state.selectedWorkspaceID(in: sourceSelection.windowID) == sourceSelection.workspaceID
+            && sourceSelection.workspace.resolvedSelectedTabID == sourceTabID
+        let activation: RightAuxPanelActivation = sourceIsVisible ? .reveal : .preserve
 
-        guard focusPanel(containing: sourcePanelID) else {
-            throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
-        }
-        guard let focusedSourceSelection = state.workspaceSelection(containingPanelID: sourcePanelID) else {
-            throw ScratchpadPanelError.missingSourcePanel(sourcePanelID)
-        }
-
-        let previousPanelIDs = Set(focusedSourceSelection.workspace.allPanelsByID.keys)
         guard send(
-            .createWebPanel(
-                workspaceID: focusedSourceSelection.workspaceID,
+            .createRightAuxWebPanel(
+                workspaceID: sourceSelection.workspaceID,
+                tabID: sourceTabID,
+                panelID: panelID,
                 panel: WebPanelState(
                     definition: .scratchpad,
                     title: document.title,
                     scratchpad: scratchpad
                 ),
-                placement: .rightPanel
+                activation: activation
             )
         ) else {
             throw ScratchpadPanelError.createPanelFailed
         }
 
-        guard let createdSelection = state.workspaceSelection(containingWorkspaceID: focusedSourceSelection.workspaceID),
-              let panelID = createdScratchpadPanelID(
-                  in: createdSelection.workspace,
-                  previousPanelIDs: previousPanelIDs
-              ) else {
+        guard let createdSelection = state.workspaceSelection(containingWorkspaceID: sourceSelection.workspaceID),
+              case .web(let createdWebState)? = createdSelection.workspace.panelState(for: panelID),
+              createdWebState.definition == .scratchpad else {
             throw ScratchpadPanelError.createPanelFailed
         }
 
-        _ = focusPanel(containing: sourcePanelID)
         markScratchpadUpdatedIfUnfocused(
             workspaceID: createdSelection.workspaceID,
             panelID: panelID

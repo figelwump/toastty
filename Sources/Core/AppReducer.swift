@@ -526,6 +526,16 @@ public struct AppReducer {
                 state: &state
             )
 
+        case .createRightAuxWebPanel(let workspaceID, let tabID, let panelID, let panel, let activation):
+            return createRightAuxWebPanel(
+                workspaceID: workspaceID,
+                tabID: tabID,
+                panelID: panelID,
+                panel: panel,
+                activation: activation,
+                state: &state
+            )
+
         case .setRightAuxPanelVisibility(let workspaceID, let isVisible):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard workspace.rightAuxPanel.isVisible != isVisible else { return false }
@@ -2092,29 +2102,15 @@ public struct AppReducer {
 
         switch placement {
         case .rightPanel:
-            let panelID = UUID()
-            let identity = RightAuxPanelTabIdentity.identity(for: panel, panelID: panelID)
-            if let existingTabID = workspace.rightAuxPanel.tabID(matching: identity),
-               var existingTab = workspace.rightAuxPanel.tabsByID[existingTabID] {
-                existingTab.panelState = .web(panel)
-                workspace.rightAuxPanel.tabsByID[existingTabID] = existingTab
-                workspace.rightAuxPanel.activeTabID = existingTabID
-                workspace.rightAuxPanel.isVisible = true
-                workspace.rightAuxPanel.focusActiveTab()
-                commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
-                return true
-            }
-
-            let tab = RightAuxPanelTabState(
-                id: UUID(),
-                identity: identity,
-                panelID: panelID,
-                panelState: .web(panel)
+            guard let selectedTabID = workspace.resolvedSelectedTabID else { return false }
+            return createRightAuxWebPanel(
+                workspaceID: workspaceID,
+                tabID: selectedTabID,
+                panelID: UUID(),
+                panel: panel,
+                activation: .focus,
+                state: &state
             )
-            workspace.rightAuxPanel.appendTab(tab)
-            workspace.rightAuxPanel.focusActiveTab()
-            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
-            return true
 
         case .newTab:
             let panelID = UUID()
@@ -2160,6 +2156,67 @@ public struct AppReducer {
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
         }
+    }
+
+    private static func createRightAuxWebPanel(
+        workspaceID: UUID,
+        tabID: UUID,
+        panelID: UUID,
+        panel: WebPanelState,
+        activation: RightAuxPanelActivation,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID],
+              var targetTab = workspace.tab(id: tabID) else {
+            return false
+        }
+
+        let identity = RightAuxPanelTabIdentity.identity(for: panel, panelID: panelID)
+        let rightAuxTabID: UUID
+        let rightAuxPanelID: UUID
+
+        if let existingTabID = targetTab.rightAuxPanel.tabID(matching: identity),
+           var existingTab = targetTab.rightAuxPanel.tabsByID[existingTabID] {
+            existingTab.panelState = .web(panel)
+            targetTab.rightAuxPanel.tabsByID[existingTabID] = existingTab
+            rightAuxTabID = existingTabID
+            rightAuxPanelID = existingTab.panelID
+        } else {
+            let rightAuxTab = RightAuxPanelTabState(
+                id: UUID(),
+                identity: identity,
+                panelID: panelID,
+                panelState: .web(panel)
+            )
+            targetTab.rightAuxPanel.tabsByID[rightAuxTab.id] = rightAuxTab
+            if targetTab.rightAuxPanel.tabIDs.contains(rightAuxTab.id) == false {
+                targetTab.rightAuxPanel.tabIDs.append(rightAuxTab.id)
+            }
+            if targetTab.rightAuxPanel.activeTabID == nil {
+                targetTab.rightAuxPanel.activeTabID = rightAuxTab.id
+            }
+            rightAuxTabID = rightAuxTab.id
+            rightAuxPanelID = panelID
+        }
+
+        switch activation {
+        case .preserve:
+            break
+        case .reveal:
+            targetTab.rightAuxPanel.activeTabID = rightAuxTabID
+            targetTab.rightAuxPanel.isVisible = true
+            targetTab.rightAuxPanel.focusedPanelID = nil
+        case .focus:
+            targetTab.rightAuxPanel.activeTabID = rightAuxTabID
+            targetTab.rightAuxPanel.isVisible = true
+            targetTab.rightAuxPanel.focusedPanelID = rightAuxPanelID
+            targetTab.unreadPanelIDs.remove(rightAuxPanelID)
+            workspace.unreadWorkspaceNotificationCount = 0
+        }
+
+        workspace.tabsByID[tabID] = targetTab
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+        return true
     }
 }
 

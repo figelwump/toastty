@@ -260,8 +260,11 @@ Notable action-specific behavior:
   - Content is stored as HTML in the Scratchpad document store and is limited to
     1,048,576 UTF-8 bytes.
   - The action creates or updates the Scratchpad linked to the active managed
-    session, opens new Scratchpads in the right panel, restores focus to the
-    source terminal after auto-create, and marks unfocused Scratchpads updated.
+    session. New Scratchpads are attached to the source session's right panel
+    without activating another window, workspace, or workspace tab. If the
+    source tab is already visible, Toastty may reveal the right panel while
+    leaving keyboard focus out of the Scratchpad. Unfocused Scratchpads are
+    marked updated.
   - The result includes `windowID`, `workspaceID`, `panelID`, `documentID`,
     `revision`, and `created`.
 - `panel.scratchpad.patch-content`
