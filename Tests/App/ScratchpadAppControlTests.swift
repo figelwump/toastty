@@ -113,7 +113,8 @@ struct ScratchpadAppControlTests {
         #expect(fixture.store.state.selectedWorkspaceID(in: fixture.windowID) == visibleWorkspaceID)
         #expect(visibleWorkspaceAfter.focusedPanelID == visibleFocusedPanelIDBefore)
         #expect(sourceWorkspaceAfter.selectedTabID == sourceTabIDBefore)
-        #expect(sourceTabAfter.rightAuxPanel.isVisible == false)
+        #expect(sourceTabAfter.rightAuxPanel.isVisible)
+        #expect(sourceTabAfter.rightAuxPanel.activePanelID == scratchpadPanelID)
         #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == nil)
         #expect(sourceTabAfter.unreadPanelIDs.contains(scratchpadPanelID))
         #expect(webState.definition == .scratchpad)
@@ -157,7 +158,8 @@ struct ScratchpadAppControlTests {
         #expect(response.didMutateState)
         #expect(workspaceAfter.selectedTabID == selectedTabIDBefore)
         #expect(selectedTabAfter.focusedPanelID == focusedPanelIDBefore)
-        #expect(sourceTabAfter.rightAuxPanel.isVisible == false)
+        #expect(sourceTabAfter.rightAuxPanel.isVisible)
+        #expect(sourceTabAfter.rightAuxPanel.activePanelID == scratchpadPanelID)
         #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == nil)
         #expect(sourceTabAfter.unreadPanelIDs.contains(scratchpadPanelID))
         #expect(webState.definition == .scratchpad)
@@ -196,6 +198,9 @@ struct ScratchpadAppControlTests {
         #expect(fixture.store.state.selectedWorkspaceID(in: fixture.windowID) == firstWindowSelectedWorkspaceID)
         #expect(fixture.store.state.selectedWorkspaceID(in: selectedWindowIDBefore) == selectedWindowWorkspaceIDBefore)
         #expect(sourceTab.rightAuxPanel.panelState(for: scratchpadPanelID) != nil)
+        #expect(sourceTab.rightAuxPanel.isVisible)
+        #expect(sourceTab.rightAuxPanel.activePanelID == scratchpadPanelID)
+        #expect(sourceTab.rightAuxPanel.focusedPanelID == nil)
         #expect(sourceTab.unreadPanelIDs.contains(scratchpadPanelID))
 
         try StateValidator.validate(fixture.store.state)
@@ -212,9 +217,23 @@ struct ScratchpadAppControlTests {
             ]
         )
         let firstResult = try #require(first.result)
-        let firstPanelID = firstResult.string("panelID")
+        let firstPanelID = try #require(firstResult.string("panelID"))
+        let firstPanelUUID = try #require(UUID(uuidString: firstPanelID))
         let documentIDString = try #require(firstResult.string("documentID"))
         let documentID = try #require(UUID(uuidString: documentIDString))
+
+        #expect(
+            fixture.store.send(
+                .createWebPanel(
+                    workspaceID: fixture.workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs"),
+                    placement: .rightPanel
+                )
+            )
+        )
+        let workspaceWithDocsActive = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let selectedTabWithDocsActive = try #require(workspaceWithDocsActive.selectedTab)
+        #expect(selectedTabWithDocsActive.rightAuxPanel.activePanelID != firstPanelUUID)
 
         let second = try fixture.executor.runAction(
             id: AppControlActionID.panelScratchpadSetContent.rawValue,
@@ -227,10 +246,16 @@ struct ScratchpadAppControlTests {
         let secondResult = try #require(second.result)
         let loadedDocument = try fixture.documentStore.load(documentID: documentID)
         let document = try #require(loadedDocument)
+        let workspaceAfter = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let selectedTabAfter = try #require(workspaceAfter.selectedTab)
 
         #expect(secondResult.string("panelID") == firstPanelID)
         #expect(secondResult.bool("created") == false)
         #expect(secondResult.int("revision") == 2)
+        #expect(workspaceAfter.focusedPanelID == fixture.sourcePanelID)
+        #expect(selectedTabAfter.rightAuxPanel.isVisible)
+        #expect(selectedTabAfter.rightAuxPanel.activePanelID == firstPanelUUID)
+        #expect(selectedTabAfter.rightAuxPanel.focusedPanelID == nil)
         #expect(document.revision == 2)
         #expect(document.content == "<p>Second</p>")
     }
@@ -266,6 +291,10 @@ struct ScratchpadAppControlTests {
         let secondResult = try #require(second.result)
         let document = try #require(try fixture.documentStore.load(documentID: documentID))
         let visibleWorkspaceAfter = try #require(fixture.store.state.workspacesByID[visibleWorkspaceID])
+        let sourceWorkspaceAfter = try #require(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let sourceTabID = try #require(sourceWorkspaceAfter.selectedTabID)
+        let sourceTabAfter = try #require(sourceWorkspaceAfter.tab(id: sourceTabID))
+        let scratchpadPanelID = try #require(UUID(uuidString: initialPanelID))
 
         #expect(second.didMutateState)
         #expect(secondResult.string("panelID") == initialPanelID)
@@ -273,6 +302,9 @@ struct ScratchpadAppControlTests {
         #expect(secondResult.int("revision") == 2)
         #expect(fixture.store.state.selectedWorkspaceID(in: fixture.windowID) == visibleWorkspaceID)
         #expect(visibleWorkspaceAfter.focusedPanelID == visibleFocusedPanelIDBefore)
+        #expect(sourceTabAfter.rightAuxPanel.isVisible)
+        #expect(sourceTabAfter.rightAuxPanel.activePanelID == scratchpadPanelID)
+        #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == nil)
         #expect(document.content == "<p>Updated in background</p>")
 
         try StateValidator.validate(fixture.store.state)

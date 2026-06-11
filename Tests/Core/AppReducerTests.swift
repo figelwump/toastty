@@ -1631,7 +1631,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func createRightAuxWebPanelPreserveTargetsBackgroundTabWithoutChangingSelectionOrFocus() throws {
+    func createRightAuxWebPanelRevealTargetsBackgroundTabWithoutChangingSelectionOrFocus() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -1648,8 +1648,7 @@ struct AppReducerTests {
             )
         )
         let sourceTabBeforeSwitch = try #require(state.workspacesByID[workspaceID]?.tab(id: sourceTabID))
-        let existingActiveRightAuxTabID = sourceTabBeforeSwitch.rightAuxPanel.activeTabID
-        let existingFocusedRightAuxPanelID = sourceTabBeforeSwitch.rightAuxPanel.focusedPanelID
+        let existingRightAuxPanelID = try #require(sourceTabBeforeSwitch.rightAuxPanel.activePanelID)
 
         #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
         let selectedTabIDBefore = try #require(state.workspacesByID[workspaceID]?.selectedTabID)
@@ -1665,7 +1664,7 @@ struct AppReducerTests {
                     tabID: sourceTabID,
                     panelID: backgroundPanelID,
                     panel: WebPanelState(definition: .browser, title: "Background"),
-                    activation: .preserve
+                    activation: .reveal
                 ),
                 state: &state
             )
@@ -1682,9 +1681,61 @@ struct AppReducerTests {
 
         #expect(workspaceAfter.selectedTabID == selectedTabIDBefore)
         #expect(selectedTabAfter.focusedPanelID == focusedPanelIDBefore)
-        #expect(sourceTabAfter.rightAuxPanel.activeTabID == existingActiveRightAuxTabID)
-        #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == existingFocusedRightAuxPanelID)
+        #expect(sourceTabAfter.rightAuxPanel.isVisible)
+        #expect(sourceTabAfter.rightAuxPanel.activePanelID == backgroundPanelID)
+        #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == nil)
+        #expect(sourceTabAfter.rightAuxPanel.panelState(for: existingRightAuxPanelID) != nil)
         #expect(webState.title == "Background")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func revealRightAuxPanelTargetsBackgroundTabWithoutChangingSelectionOrFocus() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let sourceTabID = try #require(state.workspacesByID[workspaceID]?.selectedTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .scratchpad, title: "Scratchpad"),
+                    placement: .rightPanel
+                ),
+                state: &state
+            )
+        )
+        let sourceTabBeforeSwitch = try #require(state.workspacesByID[workspaceID]?.tab(id: sourceTabID))
+        let scratchpadPanelID = try #require(sourceTabBeforeSwitch.rightAuxPanel.activePanelID)
+        #expect(reducer.send(.setRightAuxPanelVisibility(workspaceID: workspaceID, isVisible: false), state: &state))
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let selectedTabIDBefore = try #require(state.workspacesByID[workspaceID]?.selectedTabID)
+        #expect(selectedTabIDBefore != sourceTabID)
+        let selectedTabBefore = try #require(state.workspacesByID[workspaceID]?.tab(id: selectedTabIDBefore))
+        let focusedPanelIDBefore = selectedTabBefore.focusedPanelID
+
+        #expect(
+            reducer.send(
+                .revealRightAuxPanel(
+                    workspaceID: workspaceID,
+                    panelID: scratchpadPanelID
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let sourceTabAfter = try #require(workspaceAfter.tab(id: sourceTabID))
+        let selectedTabAfter = try #require(workspaceAfter.tab(id: selectedTabIDBefore))
+
+        #expect(workspaceAfter.selectedTabID == selectedTabIDBefore)
+        #expect(selectedTabAfter.focusedPanelID == focusedPanelIDBefore)
+        #expect(sourceTabAfter.rightAuxPanel.isVisible)
+        #expect(sourceTabAfter.rightAuxPanel.activePanelID == scratchpadPanelID)
+        #expect(sourceTabAfter.rightAuxPanel.focusedPanelID == nil)
 
         try StateValidator.validate(state)
     }

@@ -29,7 +29,6 @@ public enum SplitResizeDirection: String, Codable, Equatable, Sendable {
 }
 
 public enum RightAuxPanelActivation: Equatable, Sendable {
-    case preserve
     case reveal
     case focus
 }
@@ -69,6 +68,7 @@ public enum AppAction: Equatable, Sendable {
     case selectRightAuxPanelTab(workspaceID: UUID, tabID: UUID, focus: Bool)
     case selectAdjacentRightAuxPanelTab(workspaceID: UUID, direction: PanelTabNavigationDirection)
     case closeRightAuxPanelTab(workspaceID: UUID, tabID: UUID)
+    case revealRightAuxPanel(workspaceID: UUID, panelID: UUID)
     case focusRightAuxPanel(workspaceID: UUID, panelID: UUID)
     case clearRightAuxPanelFocus(workspaceID: UUID)
     case toggleFocusedPanelMode(workspaceID: UUID)
@@ -173,6 +173,8 @@ public extension AppAction {
             return "selectAdjacentRightAuxPanelTab"
         case .closeRightAuxPanelTab:
             return "closeRightAuxPanelTab"
+        case .revealRightAuxPanel:
+            return "revealRightAuxPanel"
         case .focusRightAuxPanel:
             return "focusRightAuxPanel"
         case .clearRightAuxPanelFocus:

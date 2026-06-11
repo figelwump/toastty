@@ -606,6 +606,9 @@ public struct AppReducer {
         case .closeRightAuxPanelTab(let workspaceID, let tabID):
             return closeRightAuxPanelTab(workspaceID: workspaceID, rightAuxTabID: tabID, state: &state)
 
+        case .revealRightAuxPanel(let workspaceID, let panelID):
+            return revealRightAuxPanel(workspaceID: workspaceID, panelID: panelID, state: &state)
+
         case .focusRightAuxPanel(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID],
                   let location = workspace.rightAuxPanelTabLocation(containingPanelID: panelID) else {
@@ -2200,8 +2203,6 @@ public struct AppReducer {
         }
 
         switch activation {
-        case .preserve:
-            break
         case .reveal:
             targetTab.rightAuxPanel.activeTabID = rightAuxTabID
             targetTab.rightAuxPanel.isVisible = true
@@ -2215,6 +2216,25 @@ public struct AppReducer {
         }
 
         workspace.tabsByID[tabID] = targetTab
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+        return true
+    }
+
+    private static func revealRightAuxPanel(
+        workspaceID: UUID,
+        panelID: UUID,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID],
+              let location = workspace.rightAuxPanelTabLocation(containingPanelID: panelID),
+              var mainTab = workspace.tab(id: location.mainTabID) else {
+            return false
+        }
+
+        mainTab.rightAuxPanel.activeTabID = location.rightAuxTabID
+        mainTab.rightAuxPanel.isVisible = true
+        mainTab.rightAuxPanel.focusedPanelID = nil
+        workspace.tabsByID[location.mainTabID] = mainTab
         commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
     }

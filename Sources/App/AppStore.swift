@@ -894,6 +894,12 @@ final class AppStore: ObservableObject {
             ) else {
                 throw ScratchpadPanelError.updatePanelFailed(existing.panelID)
             }
+            if let workspace = state.workspacesByID[existing.workspaceID],
+               workspace.rightAuxPanelTabLocation(containingPanelID: existing.panelID) != nil {
+                guard send(.revealRightAuxPanel(workspaceID: existing.workspaceID, panelID: existing.panelID)) else {
+                    throw ScratchpadPanelError.updatePanelFailed(existing.panelID)
+                }
+            }
             markScratchpadUpdatedIfUnfocused(
                 workspaceID: existing.workspaceID,
                 panelID: existing.panelID
@@ -937,10 +943,6 @@ final class AppStore: ObservableObject {
             revision: document.revision
         )
         let panelID = UUID()
-        let sourceIsVisible = state.selectedWindowID == sourceSelection.windowID
-            && state.selectedWorkspaceID(in: sourceSelection.windowID) == sourceSelection.workspaceID
-            && sourceSelection.workspace.resolvedSelectedTabID == sourceTabID
-        let activation: RightAuxPanelActivation = sourceIsVisible ? .reveal : .preserve
 
         guard send(
             .createRightAuxWebPanel(
@@ -952,7 +954,7 @@ final class AppStore: ObservableObject {
                     title: document.title,
                     scratchpad: scratchpad
                 ),
-                activation: activation
+                activation: .reveal
             )
         ) else {
             throw ScratchpadPanelError.createPanelFailed
