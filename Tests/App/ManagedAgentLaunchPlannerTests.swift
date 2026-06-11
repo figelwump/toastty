@@ -550,6 +550,70 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertEqual(observer.observations.first?.panelID, fixture.panelID)
     }
 
+    func testLaunchPlanContinuesWhenRepositoryRootResolutionTimesOut() throws {
+        let cwd = "/tmp/repo-root-timeout"
+        let fixture = try makePlannerFixture(
+            repositoryRootResolver: { requestedCWD in
+                XCTAssertEqual(requestedCWD, cwd)
+                return RepositoryRootResolution(repoRoot: nil, duration: 0.2, timedOut: true)
+            }
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: cwd
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertEqual(plan.cwd, cwd)
+        XCTAssertNil(plan.repoRoot)
+        XCTAssertNil(plan.environment[ToasttyLaunchContextEnvironment.repoRootKey])
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.repoRoot,
+            nil
+        )
+    }
+
+    func testLaunchPlanUsesResolvedRepositoryRootWhenAvailable() throws {
+        let cwd = "/tmp/repo-root-available/subdir"
+        let repoRoot = "/tmp/repo-root-available"
+        let fixture = try makePlannerFixture(
+            repositoryRootResolver: { requestedCWD in
+                XCTAssertEqual(requestedCWD, cwd)
+                return RepositoryRootResolution(repoRoot: repoRoot, duration: 0.001, timedOut: false)
+            }
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: cwd
+            )
+        )
+        let artifactsDirectoryURL = try claudeArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertEqual(plan.repoRoot, repoRoot)
+        XCTAssertEqual(plan.environment[ToasttyLaunchContextEnvironment.repoRootKey], repoRoot)
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.repoRoot,
+            repoRoot
+        )
+    }
+
     func testCodexSessionConfiguredEventPersistsResumeRecordAndCancelsLaunchScanner() async throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-codex-session-configured-\(UUID().uuidString)", isDirectory: true)
@@ -630,6 +694,9 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
 private func makePlannerFixture(
     terminalState: TerminalPanelState? = nil,
     fileManager: FileManager = .default,
+    repositoryRootResolver: @escaping @MainActor (String?) -> RepositoryRootResolution = {
+        RepositoryRootLocator.inferRepoRootBestEffort(from: $0)
+    },
     nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
     codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
     codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
@@ -662,6 +729,7 @@ private func makePlannerFixture(
         store: store,
         sessionRuntimeStore: sessionRuntimeStore,
         fileManager: fileManager,
+        repositoryRootResolver: repositoryRootResolver,
         cliExecutablePathProvider: { "/bin/sh" },
         socketPathProvider: { "/tmp/toastty-tests.sock" },
         codexStatusTrackingSourceProvider: codexStatusTrackingSourceProvider,

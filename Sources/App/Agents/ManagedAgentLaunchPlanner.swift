@@ -13,6 +13,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private weak var store: AppStore?
     private weak var sessionRuntimeStore: SessionRuntimeStore?
     private let fileManager: FileManager
+    private let repositoryRootResolver: @MainActor (String?) -> RepositoryRootResolution
     private let nowProvider: @Sendable () -> Date
     private let cliExecutablePathProvider: @Sendable () -> String?
     private let socketPathProvider: @Sendable () -> String
@@ -28,6 +29,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         store: AppStore,
         sessionRuntimeStore: SessionRuntimeStore,
         fileManager: FileManager = .default,
+        repositoryRootResolver: @escaping @MainActor (String?) -> RepositoryRootResolution = ManagedAgentLaunchPlanner.defaultRepositoryRootResolver,
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String?,
         socketPathProvider: @escaping @Sendable () -> String,
@@ -40,6 +42,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
         self.fileManager = fileManager
+        self.repositoryRootResolver = repositoryRootResolver
         self.nowProvider = nowProvider
         self.cliExecutablePathProvider = cliExecutablePathProvider
         self.socketPathProvider = socketPathProvider
@@ -67,7 +70,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
 
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let resolvedCWD = normalizedNonEmpty(request.cwd) ?? target.cwd
-        let repoRoot = RepositoryRootLocator.inferRepoRoot(from: resolvedCWD, fileManager: fileManager)
+        let repoRootResolution = repositoryRootResolver(resolvedCWD)
+        let repoRoot = repoRootResolution.repoRoot
+        logRepositoryRootResolutionIfNeeded(
+            repoRootResolution,
+            cwd: resolvedCWD,
+            agent: request.agent,
+            panelID: target.panelID
+        )
         let cliExecutablePath = try resolveCLIExecutablePath()
         let sessionID = UUID().uuidString
         let codexStatusTrackingSource = statusTrackingSource(for: request.agent)
@@ -159,6 +169,49 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             argv: preparedLaunch.argv,
             environment: environment
         )
+    }
+
+    private static func defaultRepositoryRootResolver(_ cwd: String?) -> RepositoryRootResolution {
+        RepositoryRootLocator.inferRepoRootBestEffort(from: cwd)
+    }
+
+    private func logRepositoryRootResolutionIfNeeded(
+        _ resolution: RepositoryRootResolution,
+        cwd: String?,
+        agent: AgentKind,
+        panelID: UUID
+    ) {
+        let metadata = [
+            "agent": agent.rawValue,
+            "panel_id": panelID.uuidString,
+            "cwd_present": normalizedNonEmpty(cwd) == nil ? "false" : "true",
+            "repo_root_found": resolution.repoRoot == nil ? "false" : "true",
+            "duration_seconds": Self.formattedSeconds(resolution.duration),
+            "timeout_seconds": Self.formattedSeconds(RepositoryRootLocator.defaultBestEffortTimeout),
+        ]
+
+        if resolution.timedOut {
+            ToasttyLog.warning(
+                "Timed out inferring repository root for managed agent launch",
+                category: .terminal,
+                metadata: metadata
+            )
+            return
+        }
+
+        guard resolution.duration >= RepositoryRootLocator.slowInferenceThreshold else {
+            return
+        }
+
+        ToasttyLog.info(
+            "Repository root inference was slow for managed agent launch",
+            category: .terminal,
+            metadata: metadata
+        )
+    }
+
+    private static func formattedSeconds(_ value: TimeInterval) -> String {
+        String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), value)
     }
 
     func discardManagedLaunch(sessionID: String) {
