@@ -11,7 +11,7 @@ struct BrowserPanelView: View {
     let isActivePanel: Bool
     let activatePanel: () -> Void
     let annotationSendCandidates: [BrowserScreenshotSendCandidate]
-    let canSubmitAnnotationsToAgent: (BrowserScreenshotSendCandidate) -> Bool
+    let annotationSendAvailability: (BrowserScreenshotSendCandidate) -> BrowserAnnotationSendAvailability
     let sendAnnotationPayloadToAgent: (String, BrowserScreenshotSendCandidate) -> Bool
 
     @State private var addressDraft = ""
@@ -48,7 +48,7 @@ struct BrowserPanelView: View {
                         panelID: panelID,
                         runtime: runtime,
                         sendCandidates: annotationSendCandidates,
-                        canSubmitToAgent: canSubmitAnnotationsToAgent,
+                        sendAvailability: annotationSendAvailability,
                         sendPayloadToAgent: sendAnnotationPayloadToAgent
                     )
                     .padding(.top, 10)
@@ -246,7 +246,7 @@ struct BrowserPanelHeaderAccessory: View {
     let screenshotInsertCandidates: [BrowserScreenshotSendCandidate]
     let activatePanel: () -> Void
     let insertScreenshotPathForAgent: (URL, BrowserScreenshotSendCandidate) -> Bool
-    let canSubmitAnnotationsToAgent: (BrowserScreenshotSendCandidate) -> Bool
+    let annotationSendAvailability: (BrowserScreenshotSendCandidate) -> BrowserAnnotationSendAvailability
     let sendAnnotationPayloadToAgent: (String, BrowserScreenshotSendCandidate) -> Bool
 
     @State private var screenshotInFlight = false
@@ -287,7 +287,7 @@ struct BrowserPanelHeaderAccessory: View {
             runtime.setAnnotationModeEnabled(runtime.annotationState.isAnnotationModeEnabled == false)
         } label: {
             browserHeaderIcon(
-                systemImage: "pencil.and.outline",
+                systemImage: "pencil",
                 isDisabled: isAnnotationToggleDisabled,
                 isActive: runtime.annotationState.isAnnotationModeEnabled
             )
@@ -320,7 +320,7 @@ struct BrowserPanelHeaderAccessory: View {
             Section("Send to Agent") {
                 BrowserAnnotationSendMenuItems(
                     candidates: screenshotInsertCandidates,
-                    canSubmit: canSubmitAnnotationsToAgent,
+                    availability: annotationSendAvailability,
                     send: sendAnnotations(to:)
                 )
             }
@@ -472,7 +472,7 @@ struct BrowserPanelHeaderAccessory: View {
         BrowserAnnotationSendFlow.send(
             runtime: runtime,
             candidate: candidate,
-            canSubmit: canSubmitAnnotationsToAgent,
+            availability: annotationSendAvailability,
             sendPayload: sendAnnotationPayloadToAgent
         )
     }

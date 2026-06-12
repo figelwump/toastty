@@ -1,7 +1,28 @@
 @testable import ToasttyApp
 import AppKit
+import CoreState
 import WebKit
 import XCTest
+
+final class BrowserAnnotationSendGateTests: XCTestCase {
+    func testAgentSessionsAreSendableUnlessApprovalOrErrorBlocksThem() {
+        XCTAssertEqual(BrowserAnnotationSendGate.availability(for: .idle), .available)
+        XCTAssertEqual(BrowserAnnotationSendGate.availability(for: .working), .available)
+        XCTAssertEqual(BrowserAnnotationSendGate.availability(for: .ready), .available)
+        XCTAssertEqual(
+            BrowserAnnotationSendGate.availability(for: .needsApproval),
+            .blocked(reason: "awaiting approval")
+        )
+        XCTAssertEqual(
+            BrowserAnnotationSendGate.availability(for: .error),
+            .blocked(reason: "in an error state")
+        )
+        XCTAssertEqual(
+            BrowserAnnotationSendGate.availability(for: nil),
+            .blocked(reason: "unavailable")
+        )
+    }
+}
 
 final class BrowserAnnotationDraftStateTests: XCTestCase {
     func testRecordAnnotationReusesMatchingSectionAndIncrementsNumbers() {

@@ -1,5 +1,43 @@
 import AppKit
+import CoreState
 import SwiftUI
+
+enum BrowserAnnotationSendAvailability: Equatable {
+    case available
+    case blocked(reason: String)
+
+    var isAvailable: Bool {
+        self == .available
+    }
+
+    var blockedReason: String? {
+        switch self {
+        case .available:
+            return nil
+        case .blocked(let reason):
+            return reason
+        }
+    }
+}
+
+/// Maps a managed agent session's status to send availability. Terminal
+/// prompt detection is useless here: agent TUIs never sit at a shell prompt,
+/// so they would always read as busy. Working agents queue composer input
+/// safely; approval prompts must not receive an auto-submitted Enter.
+enum BrowserAnnotationSendGate {
+    static func availability(for statusKind: SessionStatusKind?) -> BrowserAnnotationSendAvailability {
+        switch statusKind {
+        case .idle, .working, .ready:
+            return .available
+        case .needsApproval:
+            return .blocked(reason: "awaiting approval")
+        case .error:
+            return .blocked(reason: "in an error state")
+        case nil:
+            return .blocked(reason: "unavailable")
+        }
+    }
+}
 
 enum BrowserAnnotationCopy {
     static func clearConfirmationTitle(draftCount: Int) -> String {
@@ -14,8 +52,8 @@ enum BrowserAnnotationCopy {
             : "Sent \(draftCount) annotations to \(candidateLabel)"
     }
 
-    static func busyMessage(candidateLabel: String) -> String {
-        "\(candidateLabel) is busy — try again when it's idle"
+    static func blockedMessage(candidateLabel: String, reason: String) -> String {
+        "\(candidateLabel) is \(reason) — can't send right now"
     }
 
     static func sendFailedMessage(candidateLabel: String) -> String {
@@ -31,16 +69,19 @@ enum BrowserAnnotationSendFlow {
     static func send(
         runtime: BrowserPanelRuntime,
         candidate: BrowserScreenshotSendCandidate,
-        canSubmit: (BrowserScreenshotSendCandidate) -> Bool,
+        availability: (BrowserScreenshotSendCandidate) -> BrowserAnnotationSendAvailability,
         sendPayload: (String, BrowserScreenshotSendCandidate) -> Bool
     ) {
         guard runtime.isAnnotationSendInFlight == false,
               runtime.annotationState.hasDrafts else {
             return
         }
-        guard canSubmit(candidate) else {
+        if let blockedReason = availability(candidate).blockedReason {
             runtime.postAnnotationSendNotice(
-                message: BrowserAnnotationCopy.busyMessage(candidateLabel: candidate.label),
+                message: BrowserAnnotationCopy.blockedMessage(
+                    candidateLabel: candidate.label,
+                    reason: blockedReason
+                ),
                 isFailure: true
             )
             return
@@ -90,11 +131,12 @@ enum BrowserAnnotationSendFlow {
     }
 }
 
-/// Candidate list shared by both send menus. Busy targets stay visible but
-/// disabled so a send can't silently no-op after selection.
+/// Candidate list shared by both send menus. Blocked targets stay visible but
+/// disabled, with the reason in the label, so a send can't silently no-op
+/// after selection.
 struct BrowserAnnotationSendMenuItems: View {
     let candidates: [BrowserScreenshotSendCandidate]
-    let canSubmit: (BrowserScreenshotSendCandidate) -> Bool
+    let availability: (BrowserScreenshotSendCandidate) -> BrowserAnnotationSendAvailability
     let send: (BrowserScreenshotSendCandidate) -> Void
 
     var body: some View {
@@ -103,16 +145,16 @@ struct BrowserAnnotationSendMenuItems: View {
                 .disabled(true)
         } else {
             ForEach(candidates) { candidate in
-                let isBusy = canSubmit(candidate) == false
+                let blockedReason = availability(candidate).blockedReason
                 Button {
                     send(candidate)
                 } label: {
                     Label(
-                        isBusy ? "\(candidate.label) (busy)" : candidate.label,
+                        blockedReason.map { "\(candidate.label) (\($0))" } ?? candidate.label,
                         systemImage: "paperplane"
                     )
                 }
-                .disabled(isBusy)
+                .disabled(blockedReason != nil)
             }
         }
     }
@@ -139,7 +181,7 @@ struct BrowserAnnotationModeToolbar: View {
     let panelID: UUID
     @ObservedObject var runtime: BrowserPanelRuntime
     let sendCandidates: [BrowserScreenshotSendCandidate]
-    let canSubmitToAgent: (BrowserScreenshotSendCandidate) -> Bool
+    let sendAvailability: (BrowserScreenshotSendCandidate) -> BrowserAnnotationSendAvailability
     let sendPayloadToAgent: (String, BrowserScreenshotSendCandidate) -> Bool
 
     @State private var isClearConfirmationPresented = false
@@ -157,8 +199,8 @@ struct BrowserAnnotationModeToolbar: View {
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: "pencil.and.outline")
-                    .font(.system(size: 10, weight: .semibold))
+                Image(systemName: "pencil")
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(ToastyTheme.accent)
                 Text("Annotating")
                     .font(.system(size: 11, weight: .semibold))
@@ -174,7 +216,7 @@ struct BrowserAnnotationModeToolbar: View {
             Menu {
                 BrowserAnnotationSendMenuItems(
                     candidates: sendCandidates,
-                    canSubmit: canSubmitToAgent,
+                    availability: sendAvailability,
                     send: sendAnnotations(to:)
                 )
             } label: {
@@ -269,7 +311,7 @@ struct BrowserAnnotationModeToolbar: View {
         BrowserAnnotationSendFlow.send(
             runtime: runtime,
             candidate: candidate,
-            canSubmit: canSubmitToAgent,
+            availability: sendAvailability,
             sendPayload: sendPayloadToAgent
         )
     }

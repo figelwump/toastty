@@ -268,6 +268,9 @@ private final class InitialFocusTextView: NSTextView {
         hasRequestedInitialFocus = true
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window else { return }
+            // The popover panel does not become key on its own; without this,
+            // keystrokes keep going to the main window's first responder.
+            window.makeKey()
             window.makeFirstResponder(self)
         }
     }

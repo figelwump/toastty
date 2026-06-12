@@ -62,6 +62,7 @@ private final class BrowserAnnotationPopoverSession: NSObject, NSPopoverDelegate
     let popover: NSPopover
     var currentText: String
     var onClosedExternally: (() -> Void)?
+    var onDidShow: (() -> Void)?
 
     var isEditing: Bool {
         switch purpose {
@@ -94,6 +95,10 @@ private final class BrowserAnnotationPopoverSession: NSObject, NSPopoverDelegate
 
     func popoverDidClose(_ notification: Notification) {
         onClosedExternally?()
+    }
+
+    func popoverDidShow(_ notification: Notification) {
+        onDidShow?()
     }
 }
 
@@ -512,6 +517,13 @@ final class BrowserAnnotationOverlayNSView: NSView {
             }
             self.runtime?.setAnnotationEditorActive(false)
             self.needsDisplay = true
+        }
+        if session.isEditing {
+            // Editor popovers need their panel to be key so the comment field
+            // receives keystrokes without an extra click.
+            session.onDidShow = { [weak session] in
+                session?.popover.contentViewController?.view.window?.makeKey()
+            }
         }
         popoverSession = session
         let anchor = anchorRect.intersection(bounds).isEmpty

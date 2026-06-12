@@ -4048,7 +4048,7 @@ struct PanelCardView: View {
                     _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
                 },
                 annotationSendCandidates: browserScreenshotSendCandidates,
-                canSubmitAnnotationsToAgent: canSubmitBrowserAnnotations(to:),
+                annotationSendAvailability: browserAnnotationSendAvailability(for:),
                 sendAnnotationPayloadToAgent: sendBrowserAnnotationPayload(_:to:)
             )
             .frame(
@@ -4222,7 +4222,7 @@ struct PanelCardView: View {
                 _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
             },
             insertScreenshotPathForAgent: insertBrowserScreenshotPath(_:to:),
-            canSubmitAnnotationsToAgent: canSubmitBrowserAnnotations(to:),
+            annotationSendAvailability: browserAnnotationSendAvailability(for:),
             sendAnnotationPayloadToAgent: sendBrowserAnnotationPayload(_:to:)
         )
     }
@@ -4352,15 +4352,19 @@ struct PanelCardView: View {
         )
     }
 
-    private func canSubmitBrowserAnnotations(to candidate: BrowserScreenshotSendCandidate) -> Bool {
-        terminalRuntimeRegistry.promptState(panelID: candidate.panelID).isIdleAtPrompt
+    private func browserAnnotationSendAvailability(
+        for candidate: BrowserScreenshotSendCandidate
+    ) -> BrowserAnnotationSendAvailability {
+        BrowserAnnotationSendGate.availability(
+            for: sessionRuntimeStore.sessionRegistry.panelStatus(for: candidate.panelID)?.status.kind
+        )
     }
 
     private func sendBrowserAnnotationPayload(
         _ payload: String,
         to candidate: BrowserScreenshotSendCandidate
     ) -> Bool {
-        guard canSubmitBrowserAnnotations(to: candidate) else {
+        guard browserAnnotationSendAvailability(for: candidate).isAvailable else {
             return false
         }
         return terminalRuntimeRegistry.sendText(
