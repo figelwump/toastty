@@ -70,7 +70,7 @@ enum BrowserAnnotationSendFlow {
         runtime: BrowserPanelRuntime,
         candidate: BrowserScreenshotSendCandidate,
         availability: (BrowserScreenshotSendCandidate) -> BrowserAnnotationSendAvailability,
-        sendPayload: (String, BrowserScreenshotSendCandidate) -> Bool
+        sendPayload: @escaping (String, BrowserScreenshotSendCandidate) -> Bool
     ) {
         guard runtime.isAnnotationSendInFlight == false,
               runtime.annotationState.hasDrafts else {
@@ -87,46 +87,52 @@ enum BrowserAnnotationSendFlow {
             return
         }
 
-        runtime.setAnnotationSendInFlight(true)
-        defer { runtime.setAnnotationSendInFlight(false) }
-
+        let sections = runtime.annotationState.sections
         let draftCount = runtime.annotationState.draftCount
-        do {
-            let renderedSections = try BrowserAnnotationScreenshotWriter.writeRenderedSections(
-                from: runtime.annotationState.sections
-            )
-            let payload = BrowserAnnotationPayloadBuilder.payload(
-                renderedSections: renderedSections
-            )
-            if sendPayload(payload, candidate) {
-                runtime.clearAnnotations(exitAnnotationMode: true)
-                runtime.postAnnotationSendNotice(
-                    message: BrowserAnnotationCopy.sentMessage(
-                        draftCount: draftCount,
-                        candidateLabel: candidate.label
-                    ),
-                    isFailure: false
+        runtime.setAnnotationSendInFlight(true)
+
+        Task { @MainActor in
+            defer { runtime.setAnnotationSendInFlight(false) }
+
+            await Task.yield()
+
+            do {
+                let renderedSections = try BrowserAnnotationScreenshotWriter.writeRenderedSections(
+                    from: sections
                 )
-            } else {
-                for renderedSection in renderedSections {
-                    try? FileManager.default.removeItem(at: renderedSection.fileURL)
+                let payload = BrowserAnnotationPayloadBuilder.payload(
+                    renderedSections: renderedSections
+                )
+                if sendPayload(payload, candidate) {
+                    runtime.clearAnnotations(exitAnnotationMode: true)
+                    runtime.postAnnotationSendNotice(
+                        message: BrowserAnnotationCopy.sentMessage(
+                            draftCount: draftCount,
+                            candidateLabel: candidate.label
+                        ),
+                        isFailure: false
+                    )
+                } else {
+                    for renderedSection in renderedSections {
+                        try? FileManager.default.removeItem(at: renderedSection.fileURL)
+                    }
+                    runtime.postAnnotationSendNotice(
+                        message: BrowserAnnotationCopy.sendFailedMessage(candidateLabel: candidate.label),
+                        isFailure: true
+                    )
+                    NSLog(
+                        "Browser annotation send failed: sessionID=%@ panelID=%@",
+                        candidate.sessionID,
+                        candidate.panelID.uuidString
+                    )
                 }
+            } catch {
                 runtime.postAnnotationSendNotice(
-                    message: BrowserAnnotationCopy.sendFailedMessage(candidateLabel: candidate.label),
+                    message: "Couldn't send annotations",
                     isFailure: true
                 )
-                NSLog(
-                    "Browser annotation send failed: sessionID=%@ panelID=%@",
-                    candidate.sessionID,
-                    candidate.panelID.uuidString
-                )
+                NSLog("Browser annotation send failed: %@", error.localizedDescription)
             }
-        } catch {
-            runtime.postAnnotationSendNotice(
-                message: "Couldn't send annotations",
-                isFailure: true
-            )
-            NSLog("Browser annotation send failed: %@", error.localizedDescription)
         }
     }
 }
@@ -250,6 +256,7 @@ struct BrowserAnnotationModeToolbar: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(runtime.isAnnotationSendInFlight)
                 .help("Clear Browser Annotations")
                 .accessibilityIdentifier("panel.annotationBar.clear.\(panelID.uuidString)")
                 .confirmationDialog(

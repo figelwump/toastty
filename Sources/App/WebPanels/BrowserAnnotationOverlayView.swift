@@ -269,7 +269,8 @@ final class BrowserAnnotationOverlayNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard let runtime,
-              runtime.annotationState.isAnnotationModeEnabled else {
+              runtime.annotationState.isAnnotationModeEnabled,
+              runtime.isAnnotationSendInFlight == false else {
             super.mouseDown(with: event)
             return
         }

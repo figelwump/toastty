@@ -344,9 +344,14 @@ struct BrowserPanelHeaderAccessory: View {
         Button {
             isClearConfirmationPresented = true
         } label: {
-            browserHeaderIcon(systemImage: "xmark.circle", isDisabled: false, isActive: false)
+            browserHeaderIcon(
+                systemImage: "xmark.circle",
+                isDisabled: runtime.isAnnotationSendInFlight,
+                isActive: false
+            )
         }
         .buttonStyle(.plain)
+        .disabled(runtime.isAnnotationSendInFlight)
         .help("Clear Browser Annotations")
         .accessibilityLabel("Clear Browser Annotations")
         .accessibilityIdentifier("panel.header.browser.annotations.clear.\(panelID.uuidString)")

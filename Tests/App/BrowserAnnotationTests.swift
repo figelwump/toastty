@@ -24,6 +24,68 @@ final class BrowserAnnotationSendGateTests: XCTestCase {
     }
 }
 
+@MainActor
+final class BrowserAnnotationSendFlowTests: XCTestCase {
+    func testSendKeepsInFlightSetUntilQueuedSendRunsAndBlocksReentry() async {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        runtime.setAnnotationModeEnabled(true)
+        runtime.recordAnnotation(
+            in: BrowserAnnotationCapturedSection(
+                pngData: BrowserAnnotationTestImage.pngData(width: 20, height: 20),
+                url: "https://example.com",
+                title: "Example",
+                scrollOffset: .zero,
+                viewportSize: CGSize(width: 20, height: 20),
+                capturedAt: Date()
+            ),
+            kind: .point(CGPoint(x: 0.5, y: 0.5)),
+            comment: "Draft"
+        )
+
+        let candidate = BrowserScreenshotSendCandidate(
+            sessionID: "session-1",
+            agent: .codex,
+            panelID: UUID(),
+            label: "Codex"
+        )
+        var sendAttempts = 0
+        let sendFinished = expectation(description: "queued annotation send finished")
+
+        BrowserAnnotationSendFlow.send(
+            runtime: runtime,
+            candidate: candidate,
+            availability: { _ in .available },
+            sendPayload: { _, _ in
+                sendAttempts += 1
+                sendFinished.fulfill()
+                return false
+            }
+        )
+        BrowserAnnotationSendFlow.send(
+            runtime: runtime,
+            candidate: candidate,
+            availability: { _ in .available },
+            sendPayload: { _, _ in
+                XCTFail("Reentrant send should be ignored while the first send is in flight")
+                return false
+            }
+        )
+
+        XCTAssertTrue(runtime.isAnnotationSendInFlight)
+        XCTAssertEqual(sendAttempts, 0)
+
+        await fulfillment(of: [sendFinished], timeout: 10)
+
+        XCTAssertFalse(runtime.isAnnotationSendInFlight)
+        XCTAssertEqual(sendAttempts, 1)
+        XCTAssertTrue(runtime.annotationState.hasDrafts)
+    }
+}
+
 final class BrowserAnnotationDraftStateTests: XCTestCase {
     func testRecordAnnotationReusesMatchingSectionAndIncrementsNumbers() {
         let pngData = Self.blankPNGData(width: 80, height: 60)
