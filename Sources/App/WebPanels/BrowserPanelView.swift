@@ -20,12 +20,19 @@ struct BrowserPanelView: View {
         VStack(spacing: 0) {
             toolbar
 
-            BrowserPanelHostView(
-                runtime: runtime,
-                webState: webState,
-                isEffectivelyVisible: isEffectivelyVisible,
-                shouldFocusWebView: isActivePanel && isEditingAddressField == false
-            )
+            ZStack {
+                BrowserPanelHostView(
+                    runtime: runtime,
+                    webState: webState,
+                    isEffectivelyVisible: isEffectivelyVisible,
+                    shouldFocusWebView: isActivePanel && isEditingAddressField == false
+                )
+
+                BrowserAnnotationOverlayView(
+                    runtime: runtime,
+                    activatePanel: activatePanel
+                )
+            }
             .frame(
                 maxWidth: .infinity,
                 maxHeight: .infinity,
@@ -210,11 +217,21 @@ struct BrowserPanelHeaderAccessory: View {
     let screenshotInsertCandidates: [BrowserScreenshotSendCandidate]
     let activatePanel: () -> Void
     let insertScreenshotPathForAgent: (URL, BrowserScreenshotSendCandidate) -> Bool
+    let canSubmitAnnotationsToAgent: (BrowserScreenshotSendCandidate) -> Bool
+    let sendAnnotationPayloadToAgent: (String, BrowserScreenshotSendCandidate) -> Bool
 
     @State private var screenshotInFlight = false
+    @State private var annotationSendInFlight = false
 
     var body: some View {
         HStack(spacing: 3) {
+            browserAnnotationToggle
+
+            if runtime.annotationState.hasDrafts {
+                browserAnnotationSendMenu
+                browserAnnotationClearButton
+            }
+
             browserScreenshotMenu
 
             BrowserPanelActionsMenuButton(
@@ -229,6 +246,66 @@ struct BrowserPanelHeaderAccessory: View {
             .help("Browser Actions")
         }
         .frame(minWidth: 0)
+    }
+
+    private var browserAnnotationToggle: some View {
+        Button {
+            activatePanel()
+            runtime.setAnnotationModeEnabled(runtime.annotationState.isAnnotationModeEnabled == false)
+        } label: {
+            browserHeaderIcon(
+                systemImage: "pencil.and.outline",
+                isDisabled: false,
+                isActive: runtime.annotationState.isAnnotationModeEnabled
+            )
+        }
+        .buttonStyle(.plain)
+        .help(runtime.annotationState.isAnnotationModeEnabled ? "Exit Annotation Mode" : "Annotate Browser Page")
+        .accessibilityLabel("Annotate Browser Page")
+        .accessibilityIdentifier("panel.header.browser.annotations.toggle.\(panelID.uuidString)")
+    }
+
+    private var browserAnnotationSendMenu: some View {
+        Menu {
+            Section("Send to Agent") {
+                if screenshotInsertCandidates.isEmpty {
+                    Button("No active sessions in this tab") {}
+                        .disabled(true)
+                } else {
+                    ForEach(screenshotInsertCandidates) { candidate in
+                        Button {
+                            sendAnnotations(to: candidate)
+                        } label: {
+                            Label(candidate.label, systemImage: "paperplane")
+                        }
+                    }
+                }
+            }
+        } label: {
+            browserHeaderIcon(
+                systemImage: "paperplane",
+                isDisabled: annotationSendInFlight,
+                isActive: false
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .disabled(annotationSendInFlight)
+        .help(annotationSendInFlight ? "Sending Annotations" : "Send Browser Annotations to Agent")
+        .accessibilityLabel("Send Browser Annotations to Agent")
+        .accessibilityIdentifier("panel.header.browser.annotations.send.\(panelID.uuidString)")
+    }
+
+    private var browserAnnotationClearButton: some View {
+        Button {
+            runtime.clearAnnotations(exitAnnotationMode: true)
+        } label: {
+            browserHeaderIcon(systemImage: "xmark.circle", isDisabled: false, isActive: false)
+        }
+        .buttonStyle(.plain)
+        .help("Clear Browser Annotations")
+        .accessibilityLabel("Clear Browser Annotations")
+        .accessibilityIdentifier("panel.header.browser.annotations.clear.\(panelID.uuidString)")
     }
 
     private var browserScreenshotMenu: some View {
@@ -262,7 +339,7 @@ struct BrowserPanelHeaderAccessory: View {
                 }
             }
         } label: {
-            browserHeaderIcon(systemImage: "camera", isDisabled: screenshotInFlight)
+            browserHeaderIcon(systemImage: "camera", isDisabled: screenshotInFlight, isActive: false)
         }
         .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
@@ -272,10 +349,18 @@ struct BrowserPanelHeaderAccessory: View {
         .accessibilityIdentifier("panel.header.browser.screenshot.\(panelID.uuidString)")
     }
 
-    private func browserHeaderIcon(systemImage: String, isDisabled: Bool) -> some View {
+    private func browserHeaderIcon(
+        systemImage: String,
+        isDisabled: Bool,
+        isActive: Bool
+    ) -> some View {
         Image(systemName: systemImage)
             .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(isDisabled ? ToastyTheme.inactiveText : ToastyTheme.primaryText)
+            .foregroundStyle(
+                isDisabled
+                    ? ToastyTheme.inactiveText
+                    : (isActive ? ToastyTheme.accent : ToastyTheme.primaryText)
+            )
             .frame(width: 18, height: 18)
             .contentShape(Rectangle())
     }
@@ -323,6 +408,53 @@ struct BrowserPanelHeaderAccessory: View {
                     candidate.panelID.uuidString,
                     fileURL.path
                 )
+            }
+        }
+    }
+
+    private func sendAnnotations(to candidate: BrowserScreenshotSendCandidate) {
+        guard annotationSendInFlight == false,
+              runtime.annotationState.hasDrafts else {
+            return
+        }
+        activatePanel()
+        guard canSubmitAnnotationsToAgent(candidate) else {
+            NSLog(
+                "Browser annotation send skipped because target is not idle: sessionID=%@ panelID=%@",
+                candidate.sessionID,
+                candidate.panelID.uuidString
+            )
+            return
+        }
+
+        annotationSendInFlight = true
+        Task { @MainActor in
+            defer {
+                annotationSendInFlight = false
+            }
+
+            do {
+                let renderedSections = try BrowserAnnotationScreenshotWriter.writeRenderedSections(
+                    from: runtime.annotationState.sections
+                )
+                let payload = BrowserAnnotationPayloadBuilder.payload(
+                    renderedSections: renderedSections
+                )
+                let sent = sendAnnotationPayloadToAgent(payload, candidate)
+                if sent {
+                    runtime.clearAnnotations(exitAnnotationMode: true)
+                } else {
+                    for renderedSection in renderedSections {
+                        try? FileManager.default.removeItem(at: renderedSection.fileURL)
+                    }
+                    NSLog(
+                        "Browser annotation send failed: sessionID=%@ panelID=%@",
+                        candidate.sessionID,
+                        candidate.panelID.uuidString
+                    )
+                }
+            } catch {
+                NSLog("Browser annotation send failed: %@", error.localizedDescription)
             }
         }
     }

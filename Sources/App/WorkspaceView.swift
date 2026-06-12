@@ -4218,7 +4218,9 @@ struct PanelCardView: View {
             activatePanel: {
                 _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
             },
-            insertScreenshotPathForAgent: insertBrowserScreenshotPath(_:to:)
+            insertScreenshotPathForAgent: insertBrowserScreenshotPath(_:to:),
+            canSubmitAnnotationsToAgent: canSubmitBrowserAnnotations(to:),
+            sendAnnotationPayloadToAgent: sendBrowserAnnotationPayload(_:to:)
         )
     }
 
@@ -4343,6 +4345,24 @@ struct PanelCardView: View {
         return terminalRuntimeRegistry.sendText(
             path,
             submit: false,
+            panelID: candidate.panelID
+        )
+    }
+
+    private func canSubmitBrowserAnnotations(to candidate: BrowserScreenshotSendCandidate) -> Bool {
+        terminalRuntimeRegistry.promptState(panelID: candidate.panelID).isIdleAtPrompt
+    }
+
+    private func sendBrowserAnnotationPayload(
+        _ payload: String,
+        to candidate: BrowserScreenshotSendCandidate
+    ) -> Bool {
+        guard canSubmitBrowserAnnotations(to: candidate) else {
+            return false
+        }
+        return terminalRuntimeRegistry.sendText(
+            payload,
+            submit: true,
             panelID: candidate.panelID
         )
     }

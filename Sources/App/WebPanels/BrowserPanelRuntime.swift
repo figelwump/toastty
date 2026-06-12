@@ -123,6 +123,7 @@ private final class BrowserPopupCaptureController: NSObject, WKNavigationDelegat
 final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     @Published private(set) var navigationState = BrowserPanelNavigationState()
     @Published private(set) var locationFieldFocusRequestID: UUID?
+    @Published private(set) var annotationState = BrowserAnnotationDraftState()
     // Favicon remains runtime-only; it is useful UI chrome but not worth
     // persisting or threading through the core panel state contract.
     @Published private(set) var faviconImage: NSImage?
@@ -146,6 +147,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private var pendingFaviconRequestID: UUID?
     private var currentPageZoom: Double = WebPanelState.defaultBrowserPageZoom
     private var popupCaptureControllers: [UUID: BrowserPopupCaptureController] = [:]
+    private var annotationPageGeneration = 0
 
     init(
         panelID: UUID,
@@ -465,6 +467,74 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         }
     }
 
+    func setAnnotationModeEnabled(_ isEnabled: Bool) {
+        guard annotationState.isAnnotationModeEnabled != isEnabled else {
+            return
+        }
+        annotationState.isAnnotationModeEnabled = isEnabled
+    }
+
+    func clearAnnotations(exitAnnotationMode: Bool = true) {
+        guard annotationState.hasDrafts || annotationState.isAnnotationModeEnabled != false else {
+            return
+        }
+        annotationState.clear(exitAnnotationMode: exitAnnotationMode)
+    }
+
+    func currentAnnotationPageGeneration() -> Int {
+        annotationPageGeneration
+    }
+
+    func currentAnnotationViewport() async -> BrowserAnnotationViewport {
+        let fallbackViewport = BrowserAnnotationViewport(
+            scrollOffset: .zero,
+            viewportSize: webView.bounds.size
+        )
+        let script = """
+        (() => ({
+          x: window.scrollX || document.documentElement.scrollLeft || document.body.scrollLeft || 0,
+          y: window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0
+        }))();
+        """
+        guard let result = try? await webView.evaluateJavaScript(script),
+              let scrollOffset = Self.annotationScrollOffset(from: result) else {
+            return fallbackViewport
+        }
+        return BrowserAnnotationViewport(
+            scrollOffset: scrollOffset,
+            viewportSize: webView.bounds.size
+        )
+    }
+
+    func captureAnnotationSection(capturedAt: Date = Date()) async throws -> BrowserAnnotationCapturedSection {
+        let image = try await captureVisibleScreenshot()
+        let pngData = try BrowserPanelScreenshotWriter.pngData(from: image)
+        let viewport = await currentAnnotationViewport()
+        return BrowserAnnotationCapturedSection(
+            pngData: pngData,
+            url: reportedCurrentURLString(),
+            title: normalizedObservedTitle(),
+            scrollOffset: viewport.scrollOffset,
+            viewportSize: viewport.viewportSize,
+            capturedAt: capturedAt
+        )
+    }
+
+    @discardableResult
+    func recordAnnotation(
+        in capturedSection: BrowserAnnotationCapturedSection,
+        kind: BrowserAnnotationKind,
+        comment: String,
+        createdAt: Date = Date()
+    ) -> BrowserAnnotationItem {
+        annotationState.recordAnnotation(
+            in: capturedSection,
+            kind: kind,
+            comment: comment,
+            createdAt: createdAt
+        )
+    }
+
     func automationState() -> BrowserPanelRuntimeAutomationState {
         BrowserPanelRuntimeAutomationState(
             lifecycleState: lifecycleState,
@@ -500,6 +570,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     }
 
     private func load(urlString: String) {
+        clearAnnotationsForPageChange()
         guard let url = URL(string: urlString) else {
             isShowingStartPage = false
             clearFavicon()
@@ -597,6 +668,13 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         pendingFaviconRequestID = nil
         if faviconImage != nil {
             faviconImage = nil
+        }
+    }
+
+    private func clearAnnotationsForPageChange() {
+        annotationPageGeneration &+= 1
+        if annotationState.hasDrafts || annotationState.isAnnotationModeEnabled {
+            annotationState.clear(exitAnnotationMode: true)
         }
     }
 
@@ -808,6 +886,39 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             return nil
         }
         return FaviconLinkReference(href: href, rel: rel)
+    }
+
+    private static func annotationScrollOffset(from value: Any) -> CGPoint? {
+        if let dictionary = value as? [String: Any] {
+            return annotationScrollOffset(from: dictionary)
+        }
+        if let dictionary = value as? [AnyHashable: Any] {
+            return annotationScrollOffset(from: dictionary)
+        }
+        return nil
+    }
+
+    private static func annotationScrollOffset(from dictionary: [AnyHashable: Any]) -> CGPoint? {
+        guard let x = numericCGFloat(dictionary["x"]),
+              let y = numericCGFloat(dictionary["y"]) else {
+            return nil
+        }
+        return CGPoint(x: x, y: y)
+    }
+
+    private static func numericCGFloat(_ value: Any?) -> CGFloat? {
+        switch value {
+        case let number as NSNumber:
+            return CGFloat(truncating: number)
+        case let value as CGFloat:
+            return value
+        case let value as Double:
+            return CGFloat(value)
+        case let value as Int:
+            return CGFloat(value)
+        default:
+            return nil
+        }
     }
 
     static var defaultStartPageHTML: String {
@@ -1156,6 +1267,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
         guard webView === self.webView else {
             return
         }
+        clearAnnotationsForPageChange()
         clearFavicon()
         publishNavigationState()
     }
