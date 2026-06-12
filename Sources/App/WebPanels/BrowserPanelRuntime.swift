@@ -145,6 +145,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private var pendingDetachAttachment: PanelHostAttachmentToken?
     private var pendingDetachTask: Task<Void, Never>?
     private var lastRequestedURLString: String?
+    private var lastObservedURLStringForPageChange: String?
     private var isShowingStartPage = false
     private var faviconRefreshTask: Task<Void, Never>?
     private var pendingFaviconRequestID: UUID?
@@ -481,6 +482,9 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     }
 
     func clearAnnotations(exitAnnotationMode: Bool = true) {
+        // A committed annotation capture can still be resolving after visible
+        // state changes; a clear command must invalidate that pending save too.
+        annotationPageGeneration &+= 1
         guard annotationState.hasDrafts || annotationState.isAnnotationModeEnabled != false else {
             return
         }
@@ -659,8 +663,13 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private func observeMetadataChanges() {
         urlObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
-                self?.publishObservedMetadata()
-                self?.publishNavigationState()
+                guard let self else { return }
+                self.handleObservedURLChange(
+                    self.webView.url?.absoluteString,
+                    isPageLoading: self.webView.isLoading
+                )
+                self.publishObservedMetadata()
+                self.publishNavigationState()
             }
         }
         titleObservation = webView.observe(\.title, options: [.new]) { [weak self] _, _ in
@@ -724,6 +733,39 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         }
         isAnnotationEditorActive = false
         annotationSendNotice = nil
+    }
+
+    @discardableResult
+    func handleObservedURLChange(
+        _ observedURLString: String?,
+        isPageLoading: Bool = false
+    ) -> Bool {
+        let currentURLString = Self.annotationPageURLString(observedURLString)
+        guard isPageLoading == false else {
+            return false
+        }
+        defer { lastObservedURLStringForPageChange = currentURLString }
+
+        guard let previousURLString = lastObservedURLStringForPageChange,
+              let currentURLString,
+              previousURLString != currentURLString else {
+            return false
+        }
+
+        clearAnnotationsForPageChange()
+        return true
+    }
+
+    private func rememberObservedURLForPageChange() {
+        lastObservedURLStringForPageChange = Self.annotationPageURLString(webView.url?.absoluteString)
+    }
+
+    private static func annotationPageURLString(_ urlString: String?) -> String? {
+        guard let normalizedURLString = WebPanelState.normalizedCurrentURL(urlString),
+              normalizedURLString.caseInsensitiveCompare("about:blank") != .orderedSame else {
+            return nil
+        }
+        return normalizedURLString
     }
 
     private func refreshFavicon() {
@@ -1319,6 +1361,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
             return
         }
         clearAnnotationsForPageChange()
+        rememberObservedURLForPageChange()
         clearFavicon()
         publishNavigationState()
     }
@@ -1335,6 +1378,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
            observedURL.caseInsensitiveCompare("about:blank") != .orderedSame {
             isShowingStartPage = false
         }
+        rememberObservedURLForPageChange()
         applyPageZoom(currentPageZoom)
         publishObservedMetadata()
         publishNavigationState()

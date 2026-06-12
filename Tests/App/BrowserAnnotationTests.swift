@@ -383,6 +383,126 @@ final class BrowserAnnotationRuntimeTests: XCTestCase {
         let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
 
         runtime.setAnnotationModeEnabled(true)
+        recordDraft(in: runtime)
+
+        runtime.webView(webView, didCommit: nil)
+
+        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(runtime.annotationState.hasDrafts)
+        XCTAssertEqual(runtime.annotationState.nextSequenceNumber, 1)
+    }
+
+    func testClearAnnotationsInvalidatesPendingDraftGeneration() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+
+        runtime.setAnnotationModeEnabled(true)
+        recordDraft(in: runtime)
+        let generationBeforeClear = runtime.currentAnnotationPageGeneration()
+
+        runtime.clearAnnotations(exitAnnotationMode: false)
+
+        XCTAssertNotEqual(runtime.currentAnnotationPageGeneration(), generationBeforeClear)
+        XCTAssertTrue(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(runtime.annotationState.hasDrafts)
+        XCTAssertEqual(runtime.annotationState.nextSequenceNumber, 1)
+    }
+
+    func testClearAnnotationsInvalidatesEvenWithoutVisibleDraftState() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let generationBeforeClear = runtime.currentAnnotationPageGeneration()
+
+        runtime.clearAnnotations()
+
+        XCTAssertNotEqual(runtime.currentAnnotationPageGeneration(), generationBeforeClear)
+        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(runtime.annotationState.hasDrafts)
+    }
+
+    func testDisablingAnnotationModeDoesNotInvalidatePendingDraftGeneration() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+
+        runtime.setAnnotationModeEnabled(true)
+        let generationBeforeToggle = runtime.currentAnnotationPageGeneration()
+
+        runtime.setAnnotationModeEnabled(false)
+
+        XCTAssertEqual(runtime.currentAnnotationPageGeneration(), generationBeforeToggle)
+        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
+    }
+
+    func testObservedURLChangeClearsDraftsAndExitsAnnotationMode() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+
+        XCTAssertFalse(runtime.handleObservedURLChange("https://example.com/first"))
+        runtime.setAnnotationModeEnabled(true)
+        recordDraft(in: runtime)
+        let generationBeforeRouteChange = runtime.currentAnnotationPageGeneration()
+
+        XCTAssertTrue(runtime.handleObservedURLChange("https://example.com/second"))
+
+        XCTAssertNotEqual(runtime.currentAnnotationPageGeneration(), generationBeforeRouteChange)
+        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(runtime.annotationState.hasDrafts)
+        XCTAssertEqual(runtime.annotationState.nextSequenceNumber, 1)
+    }
+
+    func testObservedURLChangeWhileLoadingDoesNotClearDrafts() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+
+        XCTAssertFalse(runtime.handleObservedURLChange("https://example.com/first"))
+        runtime.setAnnotationModeEnabled(true)
+        recordDraft(in: runtime)
+        let generationBeforeObservedLoad = runtime.currentAnnotationPageGeneration()
+
+        XCTAssertFalse(
+            runtime.handleObservedURLChange(
+                "https://example.com/second",
+                isPageLoading: true
+            )
+        )
+
+        XCTAssertEqual(runtime.currentAnnotationPageGeneration(), generationBeforeObservedLoad)
+        XCTAssertTrue(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertTrue(runtime.annotationState.hasDrafts)
+    }
+
+    func testObservedURLChangeTreatsHashRoutesAsPageChanges() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+
+        XCTAssertFalse(runtime.handleObservedURLChange("https://example.com/#/first"))
+        runtime.setAnnotationModeEnabled(true)
+        recordDraft(in: runtime)
+
+        XCTAssertTrue(runtime.handleObservedURLChange("https://example.com/#/second"))
+        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
+        XCTAssertFalse(runtime.annotationState.hasDrafts)
+    }
+
+    private func recordDraft(in runtime: BrowserPanelRuntime) {
         runtime.recordAnnotation(
             in: BrowserAnnotationCapturedSection(
                 pngData: BrowserAnnotationTestImage.pngData(width: 20, height: 20),
@@ -395,12 +515,6 @@ final class BrowserAnnotationRuntimeTests: XCTestCase {
             kind: .point(.zero),
             comment: "Draft"
         )
-
-        runtime.webView(webView, didCommit: nil)
-
-        XCTAssertFalse(runtime.annotationState.isAnnotationModeEnabled)
-        XCTAssertFalse(runtime.annotationState.hasDrafts)
-        XCTAssertEqual(runtime.annotationState.nextSequenceNumber, 1)
     }
 }
 
