@@ -124,6 +124,9 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     @Published private(set) var navigationState = BrowserPanelNavigationState()
     @Published private(set) var locationFieldFocusRequestID: UUID?
     @Published private(set) var annotationState = BrowserAnnotationDraftState()
+    @Published private(set) var annotationSendNotice: BrowserAnnotationSendNotice?
+    @Published private(set) var isAnnotationEditorActive = false
+    @Published private(set) var isAnnotationSendInFlight = false
     // Favicon remains runtime-only; it is useful UI chrome but not worth
     // persisting or threading through the core panel state contract.
     @Published private(set) var faviconImage: NSImage?
@@ -472,6 +475,9 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             return
         }
         annotationState.isAnnotationModeEnabled = isEnabled
+        if isEnabled == false {
+            isAnnotationEditorActive = false
+        }
     }
 
     func clearAnnotations(exitAnnotationMode: Bool = true) {
@@ -479,6 +485,46 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             return
         }
         annotationState.clear(exitAnnotationMode: exitAnnotationMode)
+        if exitAnnotationMode {
+            isAnnotationEditorActive = false
+        }
+    }
+
+    @discardableResult
+    func removeAnnotation(annotationID: UUID) -> Bool {
+        annotationState.removeAnnotation(annotationID: annotationID)
+    }
+
+    @discardableResult
+    func updateAnnotationComment(annotationID: UUID, comment: String) -> Bool {
+        annotationState.updateAnnotationComment(annotationID: annotationID, comment: comment)
+    }
+
+    func setAnnotationEditorActive(_ isActive: Bool) {
+        guard isAnnotationEditorActive != isActive else { return }
+        isAnnotationEditorActive = isActive
+    }
+
+    func setAnnotationSendInFlight(_ inFlight: Bool) {
+        guard isAnnotationSendInFlight != inFlight else { return }
+        isAnnotationSendInFlight = inFlight
+    }
+
+    func postAnnotationSendNotice(message: String, isFailure: Bool) {
+        annotationSendNotice = BrowserAnnotationSendNotice(
+            id: UUID(),
+            message: message,
+            isFailure: isFailure
+        )
+    }
+
+    func clearAnnotationSendNotice(id: UUID) {
+        guard annotationSendNotice?.id == id else { return }
+        annotationSendNotice = nil
+    }
+
+    var annotationDisplayZoom: CGFloat {
+        webView.pageZoom
     }
 
     func currentAnnotationPageGeneration() -> Int {
@@ -676,6 +722,8 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         if annotationState.hasDrafts || annotationState.isAnnotationModeEnabled {
             annotationState.clear(exitAnnotationMode: true)
         }
+        isAnnotationEditorActive = false
+        annotationSendNotice = nil
     }
 
     private func refreshFavicon() {

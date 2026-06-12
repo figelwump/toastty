@@ -19,13 +19,6 @@ enum BrowserAnnotatedScreenshotRendererError: LocalizedError, Equatable {
 }
 
 enum BrowserAnnotatedScreenshotRenderer {
-    private static let pointDiameter: CGFloat = 24
-    private static let rectangleLineWidth: CGFloat = 3
-
-    private static var markColor: NSColor { .systemRed }
-    private static var textColor: NSColor { .white }
-    private static var numberFont: NSFont { .systemFont(ofSize: 13, weight: .bold) }
-
     static func render(section: BrowserAnnotationSection) throws -> Data {
         guard let sourceRep = NSBitmapImageRep(data: section.pngData),
               let sourceCGImage = sourceRep.cgImage else {
@@ -47,10 +40,13 @@ enum BrowserAnnotatedScreenshotRenderer {
         }
 
         let imageSize = CGSize(width: pixelWidth, height: pixelHeight)
+        // Screenshots are usually denser than the viewport (Retina). Scale
+        // mark sizes by that ratio so sent PNGs match what the overlay showed.
+        let scale = markScale(imageSize: imageSize, viewportSize: section.viewportSize)
         context.setShouldAntialias(true)
         context.draw(sourceCGImage, in: CGRect(origin: .zero, size: imageSize))
         for annotation in section.annotations {
-            draw(annotation: annotation, imageSize: imageSize, context: context)
+            draw(annotation: annotation, imageSize: imageSize, scale: scale, context: context)
         }
 
         guard let renderedImage = context.makeImage() else {
@@ -63,11 +59,20 @@ enum BrowserAnnotatedScreenshotRenderer {
         return pngData
     }
 
+    static func markScale(imageSize: CGSize, viewportSize: CGSize) -> CGFloat {
+        guard viewportSize.width > 0 else { return 1 }
+        let scale = imageSize.width / viewportSize.width
+        return scale > 0 ? scale : 1
+    }
+
     private static func draw(
         annotation: BrowserAnnotationItem,
         imageSize: CGSize,
+        scale: CGFloat,
         context: CGContext
     ) {
+        let diameter = BrowserAnnotationMarkStyle.bubbleDiameter * scale
+
         switch annotation.kind {
         case .point(let point):
             let center = BrowserAnnotationCoordinateMapper.drawingPoint(
@@ -77,7 +82,8 @@ enum BrowserAnnotatedScreenshotRenderer {
             drawNumberBubble(
                 sequenceNumber: annotation.sequenceNumber,
                 center: center,
-                diameter: pointDiameter,
+                diameter: diameter,
+                scale: scale,
                 context: context
             )
 
@@ -86,18 +92,23 @@ enum BrowserAnnotatedScreenshotRenderer {
                 forNormalizedTopLeftRect: rect,
                 imageSize: imageSize
             )
-            context.setStrokeColor(markColor.cgColor)
-            context.setLineWidth(rectangleLineWidth)
+            context.setFillColor(
+                BrowserAnnotationMarkStyle.markColor
+                    .withAlphaComponent(BrowserAnnotationMarkStyle.rectangleFillAlpha)
+                    .cgColor
+            )
+            context.fill(drawingRect)
+            context.setStrokeColor(BrowserAnnotationMarkStyle.markColor.cgColor)
+            context.setLineWidth(BrowserAnnotationMarkStyle.rectangleLineWidth * scale)
             context.stroke(drawingRect)
 
-            let labelCenter = CGPoint(
-                x: drawingRect.minX + pointDiameter * 0.5,
-                y: drawingRect.maxY - pointDiameter * 0.5
-            )
+            // Badge centered on the rectangle's top-left corner so it covers
+            // as little marked content as possible.
             drawNumberBubble(
                 sequenceNumber: annotation.sequenceNumber,
-                center: labelCenter,
-                diameter: pointDiameter,
+                center: CGPoint(x: drawingRect.minX, y: drawingRect.maxY),
+                diameter: diameter,
+                scale: scale,
                 context: context
             )
         }
@@ -107,6 +118,7 @@ enum BrowserAnnotatedScreenshotRenderer {
         sequenceNumber: Int,
         center: CGPoint,
         diameter: CGFloat,
+        scale: CGFloat,
         context: CGContext
     ) {
         let bubbleRect = CGRect(
@@ -115,13 +127,28 @@ enum BrowserAnnotatedScreenshotRenderer {
             width: diameter,
             height: diameter
         )
-        context.setFillColor(markColor.cgColor)
+        let ringWidth = BrowserAnnotationMarkStyle.bubbleRingWidth * scale
+
+        context.saveGState()
+        context.setShadow(
+            offset: CGSize(
+                width: BrowserAnnotationMarkStyle.shadowOffset.width * scale,
+                height: BrowserAnnotationMarkStyle.shadowOffset.height * scale
+            ),
+            blur: BrowserAnnotationMarkStyle.shadowBlurRadius * scale,
+            color: BrowserAnnotationMarkStyle.shadowColor.cgColor
+        )
+        context.setFillColor(BrowserAnnotationMarkStyle.ringColor.cgColor)
+        context.fillEllipse(in: bubbleRect.insetBy(dx: -ringWidth, dy: -ringWidth))
+        context.restoreGState()
+
+        context.setFillColor(BrowserAnnotationMarkStyle.markColor.cgColor)
         context.fillEllipse(in: bubbleRect)
 
         let text = "\(sequenceNumber)" as NSString
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: numberFont,
-            .foregroundColor: textColor,
+            .font: BrowserAnnotationMarkStyle.numberFont(scale: scale),
+            .foregroundColor: BrowserAnnotationMarkStyle.numberTextColor,
         ]
         let textSize = text.size(withAttributes: attributes)
         NSGraphicsContext.saveGraphicsState()
@@ -161,7 +188,13 @@ enum BrowserAnnotationPayloadBuilder {
                     "w=\(rounded(section.viewportSize.width)), h=\(rounded(section.viewportSize.height))"
             )
             for annotation in section.annotations.sorted(by: { $0.sequenceNumber < $1.sequenceNumber }) {
-                lines.append("\(annotation.sequenceNumber). \(annotation.comment)")
+                // Indent continuation lines of multiline comments so they stay
+                // attached to their numbered entry in the payload.
+                let commentLines = annotation.comment.components(separatedBy: .newlines)
+                lines.append("\(annotation.sequenceNumber). \(commentLines[0])")
+                for continuationLine in commentLines.dropFirst() {
+                    lines.append("   \(continuationLine)")
+                }
             }
         }
 

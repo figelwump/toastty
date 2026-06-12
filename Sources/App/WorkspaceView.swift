@@ -4046,7 +4046,10 @@ struct PanelCardView: View {
                 isActivePanel: isFocused,
                 activatePanel: {
                     _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
-                }
+                },
+                annotationSendCandidates: browserScreenshotSendCandidates,
+                canSubmitAnnotationsToAgent: canSubmitBrowserAnnotations(to:),
+                sendAnnotationPayloadToAgent: sendBrowserAnnotationPayload(_:to:)
             )
             .frame(
                 maxWidth: .infinity,

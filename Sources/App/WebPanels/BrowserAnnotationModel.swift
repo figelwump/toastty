@@ -58,15 +58,73 @@ struct BrowserAnnotationDraftState: Equatable {
         return item
     }
 
-    func visibleSection(
-        scrollOffset: CGPoint,
-        viewportSize: CGSize,
-        epsilon: CGFloat = BrowserAnnotationSection.defaultMatchingEpsilon
-    ) -> BrowserAnnotationSection? {
-        sections.first {
-            $0.matches(scrollOffset: scrollOffset, viewportSize: viewportSize, epsilon: epsilon)
+    func annotationItem(withID annotationID: UUID) -> BrowserAnnotationItem? {
+        for section in sections {
+            if let item = section.annotations.first(where: { $0.id == annotationID }) {
+                return item
+            }
         }
+        return nil
     }
+
+    @discardableResult
+    mutating func updateAnnotationComment(annotationID: UUID, comment: String) -> Bool {
+        for sectionIndex in sections.indices {
+            if let itemIndex = sections[sectionIndex].annotations.firstIndex(
+                where: { $0.id == annotationID }
+            ) {
+                sections[sectionIndex].annotations[itemIndex].comment = comment
+                return true
+            }
+        }
+        return false
+    }
+
+    @discardableResult
+    mutating func removeAnnotation(annotationID: UUID) -> Bool {
+        var removed = false
+        for sectionIndex in sections.indices {
+            if let itemIndex = sections[sectionIndex].annotations.firstIndex(
+                where: { $0.id == annotationID }
+            ) {
+                sections[sectionIndex].annotations.remove(at: itemIndex)
+                removed = true
+                break
+            }
+        }
+        guard removed else { return false }
+
+        sections.removeAll { $0.annotations.isEmpty }
+        renumberAnnotations()
+        return true
+    }
+
+    private mutating func renumberAnnotations() {
+        let orderedIDs = sections
+            .flatMap(\.annotations)
+            .sorted { $0.sequenceNumber < $1.sequenceNumber }
+            .map(\.id)
+        let numbersByID = Dictionary(
+            uniqueKeysWithValues: orderedIDs.enumerated().map { ($0.element, $0.offset + 1) }
+        )
+        for sectionIndex in sections.indices {
+            for itemIndex in sections[sectionIndex].annotations.indices {
+                let annotationID = sections[sectionIndex].annotations[itemIndex].id
+                if let number = numbersByID[annotationID] {
+                    sections[sectionIndex].annotations[itemIndex].sequenceNumber = number
+                }
+            }
+        }
+        nextSequenceNumber = orderedIDs.count + 1
+    }
+}
+
+/// Transient user-facing feedback for the annotation send flow, shown as a
+/// toast over the browser body.
+struct BrowserAnnotationSendNotice: Equatable, Identifiable {
+    let id: UUID
+    let message: String
+    let isFailure: Bool
 }
 
 struct BrowserAnnotationCapturedSection: Equatable {

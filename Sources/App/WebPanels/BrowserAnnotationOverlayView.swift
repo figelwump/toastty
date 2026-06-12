@@ -19,21 +19,104 @@ struct BrowserAnnotationOverlayView: NSViewRepresentable {
     }
 }
 
+/// One in-flight annotation gesture: the mark is shown immediately while the
+/// viewport capture runs in the background and the comment popover is open.
+private struct PendingAnnotationDraft {
+    let startPoint: CGPoint
+    let endPoint: CGPoint
+    let overlaySize: CGSize
+    let sequenceNumber: Int
+    let pageGeneration: Int
+    let captureTask: Task<BrowserAnnotationCapturedSection, Error>
+
+    var isRectangle: Bool {
+        hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y)
+            > BrowserAnnotationMarkStyle.dragThreshold
+    }
+
+    var rectangle: CGRect {
+        CGRect(
+            x: min(startPoint.x, endPoint.x),
+            y: min(startPoint.y, endPoint.y),
+            width: abs(endPoint.x - startPoint.x),
+            height: abs(endPoint.y - startPoint.y)
+        )
+    }
+
+    var bubbleRect: CGRect {
+        BrowserAnnotationDisplayGeometry.bubbleRect(
+            center: isRectangle ? rectangle.origin : endPoint
+        )
+    }
+}
+
+@MainActor
+private final class BrowserAnnotationPopoverSession: NSObject, NSPopoverDelegate {
+    enum Purpose: Equatable {
+        case create
+        case edit(annotationID: UUID)
+        case view(annotationID: UUID)
+    }
+
+    let purpose: Purpose
+    let popover: NSPopover
+    var currentText: String
+    var onClosedExternally: (() -> Void)?
+
+    var isEditing: Bool {
+        switch purpose {
+        case .create, .edit:
+            return true
+        case .view:
+            return false
+        }
+    }
+
+    var annotationID: UUID? {
+        switch purpose {
+        case .create:
+            return nil
+        case .edit(let annotationID), .view(let annotationID):
+            return annotationID
+        }
+    }
+
+    init(purpose: Purpose, initialText: String = "") {
+        self.purpose = purpose
+        self.popover = NSPopover()
+        self.currentText = initialText
+        super.init()
+        popover.behavior = .applicationDefined
+        popover.animates = false
+        popover.appearance = NSAppearance(named: .darkAqua)
+        popover.delegate = self
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        onClosedExternally?()
+    }
+}
+
 @MainActor
 final class BrowserAnnotationOverlayNSView: NSView {
-    private static let dragThreshold: CGFloat = 4
-    private static let markDiameter: CGFloat = 22
-    private static let markColor = NSColor.systemRed
-    private static let textColor = NSColor.white
-    private static let numberFont = NSFont.systemFont(ofSize: 12, weight: .bold)
-
     weak var runtime: BrowserPanelRuntime?
     var activatePanel: (() -> Void)?
 
     private var dragStartPoint: CGPoint?
     private var dragCurrentPoint: CGPoint?
-    private var cachedViewport: BrowserAnnotationViewport?
-    private var isRecordingAnnotation = false
+    private var pendingDraft: PendingAnnotationDraft?
+    private var isResolvingPendingDraft = false
+    private var popoverSession: BrowserAnnotationPopoverSession?
+    private var hoveredAnnotationID: UUID?
+    private var hoverTrackingArea: NSTrackingArea?
+    private var wasAnnotationModeEnabled = false
+
+    /// Live scroll offset estimate in view points. Updated synchronously from
+    /// scroll-wheel deltas so marks track the page without waiting for the
+    /// async JavaScript offset reconcile.
+    private var scrollEstimatePoints: CGPoint?
+    private var isViewportReconcileInFlight = false
+    private var isViewportReconcileQueued = false
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -48,11 +131,59 @@ final class BrowserAnnotationOverlayNSView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    // MARK: - Runtime state sync
+
     func annotationStateDidChange() {
         needsDisplay = true
-        resetCursorRects()
-        refreshViewportIfNeeded()
+        // Deferred so popover/first-responder side effects never run inside a
+        // SwiftUI view update pass.
+        DispatchQueue.main.async { [weak self] in
+            self?.synchronizeWithRuntimeState()
+        }
     }
+
+    private func synchronizeWithRuntimeState() {
+        guard let runtime else { return }
+        let isEnabled = runtime.annotationState.isAnnotationModeEnabled
+        if isEnabled != wasAnnotationModeEnabled {
+            wasAnnotationModeEnabled = isEnabled
+            if isEnabled {
+                window?.makeFirstResponder(self)
+                scheduleViewportReconcile()
+            } else {
+                dragStartPoint = nil
+                dragCurrentPoint = nil
+                hoveredAnnotationID = nil
+                dismissActiveSession(cancelDraft: true, restoreFocus: false)
+                // A draft mid-save keeps resolving (the user committed it);
+                // anything else is orphaned once the mode closes.
+                if isResolvingPendingDraft == false {
+                    cancelPendingDraft()
+                }
+                scrollEstimatePoints = nil
+            }
+        }
+
+        if let session = popoverSession,
+           let annotationID = session.annotationID,
+           runtime.annotationState.annotationItem(withID: annotationID) == nil {
+            dismissActiveSession(cancelDraft: false)
+        }
+
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window == nil else { return }
+        dragStartPoint = nil
+        dragCurrentPoint = nil
+        hoveredAnnotationID = nil
+        dismissActiveSession(cancelDraft: true, restoreFocus: false)
+    }
+
+    // MARK: - Hit-testing and cursors
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard runtime?.annotationState.isAnnotationModeEnabled == true,
@@ -66,21 +197,95 @@ final class BrowserAnnotationOverlayNSView: NSView {
 
     override func resetCursorRects() {
         super.resetCursorRects()
-        if runtime?.annotationState.isAnnotationModeEnabled == true {
-            addCursorRect(bounds, cursor: .crosshair)
+        guard runtime?.annotationState.isAnnotationModeEnabled == true else {
+            return
+        }
+        addCursorRect(bounds, cursor: .crosshair)
+        for mark in currentDisplayMarks() {
+            let cursorRect = mark.bubbleRect.intersection(bounds)
+            guard cursorRect.isEmpty == false else { continue }
+            addCursorRect(cursorRect, cursor: .pointingHand)
         }
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        hoverTrackingArea = trackingArea
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard runtime?.annotationState.isAnnotationModeEnabled == true else {
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        let hitID = displayMark(at: point)?.annotationID
+        guard hitID != hoveredAnnotationID else { return }
+        hoveredAnnotationID = hitID
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard hoveredAnnotationID != nil else { return }
+        hoveredAnnotationID = nil
+        needsDisplay = true
+    }
+
+    private func displayMark(at point: CGPoint) -> BrowserAnnotationDisplayMark? {
+        // Topmost (highest sequence number) marks draw last, so search from
+        // the end of the draw order.
+        currentDisplayMarks().reversed().first { $0.bubbleRect.contains(point) }
+    }
+
+    private func currentDisplayMarks() -> [BrowserAnnotationDisplayMark] {
+        guard let runtime,
+              runtime.annotationState.isAnnotationModeEnabled,
+              let scrollEstimatePoints else {
+            return []
+        }
+        return BrowserAnnotationDisplayGeometry.displayMarks(
+            sections: runtime.annotationState.sections,
+            currentScrollOffsetPoints: scrollEstimatePoints,
+            pageZoom: runtime.annotationDisplayZoom,
+            overlayBounds: bounds
+        )
+    }
+
+    // MARK: - Mouse interaction
+
     override func mouseDown(with event: NSEvent) {
-        guard runtime?.annotationState.isAnnotationModeEnabled == true,
-              isRecordingAnnotation == false else {
+        guard let runtime,
+              runtime.annotationState.isAnnotationModeEnabled else {
             super.mouseDown(with: event)
             return
         }
 
         activatePanel?()
-        window?.makeFirstResponder(self)
+
+        if popoverSession != nil {
+            resolveActiveSessionFromClickAway()
+            return
+        }
+        guard pendingDraft == nil else {
+            return
+        }
+
         let point = clampedPoint(convert(event.locationInWindow, from: nil))
+        if let mark = displayMark(at: point) {
+            openDetailPopover(annotationID: mark.annotationID, anchorRect: mark.bubbleRect)
+            return
+        }
+
+        window?.makeFirstResponder(self)
         dragStartPoint = point
         dragCurrentPoint = point
         needsDisplay = true
@@ -105,231 +310,295 @@ final class BrowserAnnotationOverlayNSView: NSView {
         let endPoint = clampedPoint(convert(event.locationInWindow, from: nil))
         dragStartPoint = nil
         dragCurrentPoint = nil
+        beginDraft(startPoint: startPoint, endPoint: endPoint)
         needsDisplay = true
-
-        recordAnnotation(startPoint: startPoint, endPoint: endPoint)
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard isRecordingAnnotation == false else {
+        if popoverSession?.isEditing == true || pendingDraft != nil {
+            // The page is visually frozen while a comment is being composed;
+            // scrolling underneath would desync the popover from its mark.
             return
         }
+        if popoverSession != nil {
+            dismissActiveSession(cancelDraft: false)
+        }
         forwardScrollWheelToUnderlyingView(event)
-        refreshViewportIfNeeded()
+        applyScrollEstimate(for: event)
+        scheduleViewportReconcile()
     }
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
-            dragStartPoint = nil
-            dragCurrentPoint = nil
-            needsDisplay = true
+            if dragStartPoint != nil {
+                dragStartPoint = nil
+                dragCurrentPoint = nil
+                needsDisplay = true
+            } else if popoverSession != nil {
+                dismissActiveSession(cancelDraft: true)
+            } else {
+                runtime?.setAnnotationModeEnabled(false)
+            }
             return
         }
         super.keyDown(with: event)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
+    // MARK: - Draft lifecycle
 
+    private func beginDraft(startPoint: CGPoint, endPoint: CGPoint) {
         guard let runtime,
-              runtime.annotationState.isAnnotationModeEnabled else {
+              pendingDraft == nil,
+              popoverSession == nil else {
             return
         }
 
-        drawExistingAnnotations(from: runtime.annotationState)
-        drawInProgressRectangle()
+        let captureTask = Task { @MainActor [weak runtime] () throws -> BrowserAnnotationCapturedSection in
+            guard let runtime else { throw CancellationError() }
+            return try await runtime.captureAnnotationSection()
+        }
+        let draft = PendingAnnotationDraft(
+            startPoint: startPoint,
+            endPoint: endPoint,
+            overlaySize: bounds.size,
+            sequenceNumber: runtime.annotationState.nextSequenceNumber,
+            pageGeneration: runtime.currentAnnotationPageGeneration(),
+            captureTask: captureTask
+        )
+        pendingDraft = draft
+        needsDisplay = true
+        openCreatePopover(for: draft)
     }
 
-    private func recordAnnotation(startPoint: CGPoint, endPoint: CGPoint) {
-        guard let runtime,
-              isRecordingAnnotation == false else {
+    private func resolvePendingDraft(comment: String) {
+        guard let draft = pendingDraft, let runtime else {
+            pendingDraft = nil
             return
         }
-        let pageGeneration = runtime.currentAnnotationPageGeneration()
-        isRecordingAnnotation = true
-        Task { @MainActor [weak self, weak runtime] in
-            guard let self, let runtime else { return }
+
+        isResolvingPendingDraft = true
+        Task { @MainActor [weak self] in
             defer {
-                self.isRecordingAnnotation = false
-                self.needsDisplay = true
+                if let self {
+                    self.isResolvingPendingDraft = false
+                    self.pendingDraft = nil
+                    self.needsDisplay = true
+                    self.window?.invalidateCursorRects(for: self)
+                }
             }
 
             do {
-                let section = try await runtime.captureAnnotationSection()
-                guard runtime.currentAnnotationPageGeneration() == pageGeneration else {
+                let section = try await draft.captureTask.value
+                guard runtime.currentAnnotationPageGeneration() == draft.pageGeneration else {
                     return
                 }
-                self.cachedViewport = BrowserAnnotationViewport(
-                    scrollOffset: section.scrollOffset,
+                let kind = BrowserAnnotationDisplayGeometry.annotationKind(
+                    startPoint: draft.startPoint,
+                    endPoint: draft.endPoint,
+                    overlaySize: draft.overlaySize,
                     viewportSize: section.viewportSize
                 )
-                guard let comment = Self.promptForComment(
-                    sequenceNumber: runtime.annotationState.nextSequenceNumber,
-                    window: self.window
-                ) else {
-                    return
-                }
-                let kind = Self.annotationKind(
-                    startPoint: startPoint,
-                    endPoint: endPoint,
-                    overlaySize: self.bounds.size,
-                    viewportSize: section.viewportSize
-                )
-                runtime.recordAnnotation(
-                    in: section,
-                    kind: kind,
-                    comment: comment
+                runtime.recordAnnotation(in: section, kind: kind, comment: comment)
+                let zoom = runtime.annotationDisplayZoom
+                self?.scrollEstimatePoints = CGPoint(
+                    x: section.scrollOffset.x * zoom,
+                    y: section.scrollOffset.y * zoom
                 )
             } catch {
+                runtime.postAnnotationSendNotice(
+                    message: "Couldn't capture the page — annotation discarded",
+                    isFailure: true
+                )
                 NSLog("Browser annotation capture failed: %@", error.localizedDescription)
             }
         }
     }
 
-    private static func annotationKind(
-        startPoint: CGPoint,
-        endPoint: CGPoint,
-        overlaySize: CGSize,
-        viewportSize: CGSize
-    ) -> BrowserAnnotationKind {
-        let scaledStartPoint = scaledOverlayPoint(
-            startPoint,
-            overlaySize: overlaySize,
-            viewportSize: viewportSize
-        )
-        let scaledEndPoint = scaledOverlayPoint(
-            endPoint,
-            overlaySize: overlaySize,
-            viewportSize: viewportSize
-        )
-
-        if scaledStartPoint.distance(to: scaledEndPoint) <= dragThreshold {
-            return .point(BrowserAnnotationCoordinateMapper.normalizedPoint(
-                fromViewportTopLeftPoint: scaledEndPoint,
-                viewportSize: viewportSize
-            ))
-        }
-        return .rectangle(BrowserAnnotationCoordinateMapper.normalizedRectangle(
-            fromViewportTopLeftStart: scaledStartPoint,
-            end: scaledEndPoint,
-            viewportSize: viewportSize
-        ))
+    private func cancelPendingDraft() {
+        pendingDraft?.captureTask.cancel()
+        pendingDraft = nil
+        needsDisplay = true
     }
 
-    private static func scaledOverlayPoint(
-        _ point: CGPoint,
-        overlaySize: CGSize,
-        viewportSize: CGSize
-    ) -> CGPoint {
-        guard overlaySize.width > 0,
-              overlaySize.height > 0 else {
-            return point
-        }
-        return CGPoint(
-            x: point.x * viewportSize.width / overlaySize.width,
-            y: point.y * viewportSize.height / overlaySize.height
+    // MARK: - Popovers
+
+    private func openCreatePopover(for draft: PendingAnnotationDraft) {
+        let session = BrowserAnnotationPopoverSession(purpose: .create)
+        let content = BrowserAnnotationCommentEditorView(
+            sequenceNumber: draft.sequenceNumber,
+            saveButtonTitle: "Add",
+            onSave: { [weak self] comment in
+                guard let self else { return }
+                self.dismissActiveSession(cancelDraft: false)
+                self.resolvePendingDraft(comment: comment)
+            },
+            onCancel: { [weak self] in
+                self?.dismissActiveSession(cancelDraft: true)
+            },
+            onTextChange: { [weak session] text in
+                session?.currentText = text
+            }
         )
+        present(session: session, content: content, anchorRect: draft.bubbleRect)
+        runtime?.setAnnotationEditorActive(true)
     }
 
-    private func drawExistingAnnotations(from state: BrowserAnnotationDraftState) {
-        let section = visibleSection(from: state) ?? state.sections.last
-        guard let section else { return }
+    private func openEditPopover(annotationID: UUID, anchorRect: CGRect) {
+        guard let runtime,
+              let item = runtime.annotationState.annotationItem(withID: annotationID) else {
+            return
+        }
+        let session = BrowserAnnotationPopoverSession(
+            purpose: .edit(annotationID: annotationID),
+            initialText: item.comment
+        )
+        let content = BrowserAnnotationCommentEditorView(
+            sequenceNumber: item.sequenceNumber,
+            initialComment: item.comment,
+            saveButtonTitle: "Save",
+            onSave: { [weak self] comment in
+                guard let self else { return }
+                self.dismissActiveSession(cancelDraft: false)
+                self.runtime?.updateAnnotationComment(annotationID: annotationID, comment: comment)
+            },
+            onCancel: { [weak self] in
+                self?.dismissActiveSession(cancelDraft: false)
+            },
+            onDelete: { [weak self] in
+                self?.deleteAnnotation(annotationID: annotationID)
+            },
+            onTextChange: { [weak session] text in
+                session?.currentText = text
+            }
+        )
+        present(session: session, content: content, anchorRect: anchorRect)
+        runtime.setAnnotationEditorActive(true)
+    }
 
-        for annotation in section.annotations {
-            switch annotation.kind {
-            case .point(let point):
-                let center = CGPoint(
-                    x: point.x * bounds.width,
-                    y: point.y * bounds.height
-                )
-                drawNumberBubble(sequenceNumber: annotation.sequenceNumber, center: center)
+    private func openDetailPopover(annotationID: UUID, anchorRect: CGRect) {
+        guard let runtime,
+              let item = runtime.annotationState.annotationItem(withID: annotationID) else {
+            return
+        }
+        let session = BrowserAnnotationPopoverSession(purpose: .view(annotationID: annotationID))
+        let content = BrowserAnnotationCommentDetailView(
+            sequenceNumber: item.sequenceNumber,
+            comment: item.comment,
+            onEdit: { [weak self] in
+                guard let self else { return }
+                self.dismissActiveSession(cancelDraft: false)
+                self.openEditPopover(annotationID: annotationID, anchorRect: anchorRect)
+            },
+            onDelete: { [weak self] in
+                self?.deleteAnnotation(annotationID: annotationID)
+            }
+        )
+        present(session: session, content: content, anchorRect: anchorRect)
+    }
 
-            case .rectangle(let rect):
-                let drawingRect = CGRect(
-                    x: rect.minX * bounds.width,
-                    y: rect.minY * bounds.height,
-                    width: rect.width * bounds.width,
-                    height: rect.height * bounds.height
-                )
-                let path = NSBezierPath(rect: drawingRect)
-                path.lineWidth = 2
-                Self.markColor.setStroke()
-                path.stroke()
-                drawNumberBubble(
-                    sequenceNumber: annotation.sequenceNumber,
-                    center: CGPoint(
-                        x: drawingRect.minX + Self.markDiameter * 0.5,
-                        y: drawingRect.minY + Self.markDiameter * 0.5
-                    )
-                )
+    private func present<Content: View>(
+        session: BrowserAnnotationPopoverSession,
+        content: Content,
+        anchorRect: CGRect
+    ) {
+        let host = NSHostingController(rootView: content)
+        host.sizingOptions = [.preferredContentSize]
+        session.popover.contentViewController = host
+        session.onClosedExternally = { [weak self, weak session] in
+            guard let self, let session, self.popoverSession === session else { return }
+            self.popoverSession = nil
+            if case .create = session.purpose {
+                self.cancelPendingDraft()
+            }
+            self.runtime?.setAnnotationEditorActive(false)
+            self.needsDisplay = true
+        }
+        popoverSession = session
+        let anchor = anchorRect.intersection(bounds).isEmpty
+            ? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+            : anchorRect.intersection(bounds)
+        session.popover.show(relativeTo: anchor, of: self, preferredEdge: .maxX)
+    }
+
+    private func dismissActiveSession(cancelDraft: Bool, restoreFocus: Bool = true) {
+        guard let session = popoverSession else { return }
+        popoverSession = nil
+        session.popover.close()
+        if cancelDraft, case .create = session.purpose {
+            cancelPendingDraft()
+        }
+        runtime?.setAnnotationEditorActive(false)
+        needsDisplay = true
+        if restoreFocus {
+            window?.makeFirstResponder(self)
+        }
+    }
+
+    /// A click on the overlay while a popover is open resolves the popover
+    /// instead of starting a new annotation: non-empty editors commit, empty
+    /// editors and detail popovers just close.
+    private func resolveActiveSessionFromClickAway() {
+        guard let session = popoverSession else { return }
+        let comment = session.currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch session.purpose {
+        case .view:
+            dismissActiveSession(cancelDraft: false)
+        case .create:
+            if comment.isEmpty {
+                dismissActiveSession(cancelDraft: true)
+            } else {
+                dismissActiveSession(cancelDraft: false)
+                resolvePendingDraft(comment: comment)
+            }
+        case .edit(let annotationID):
+            dismissActiveSession(cancelDraft: false)
+            if comment.isEmpty == false {
+                runtime?.updateAnnotationComment(annotationID: annotationID, comment: comment)
             }
         }
     }
 
-    private func drawInProgressRectangle() {
-        guard let start = dragStartPoint,
-              let current = dragCurrentPoint,
-              start.distance(to: current) > Self.dragThreshold else {
+    private func deleteAnnotation(annotationID: UUID) {
+        dismissActiveSession(cancelDraft: false)
+        runtime?.removeAnnotation(annotationID: annotationID)
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
+    }
+
+    // MARK: - Scroll tracking
+
+    private func applyScrollEstimate(for event: NSEvent) {
+        guard var estimate = scrollEstimatePoints else { return }
+        // Line-based wheel deltas arrive in rows, not points.
+        let multiplier: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 19
+        estimate.x = max(0, estimate.x - event.scrollingDeltaX * multiplier)
+        estimate.y = max(0, estimate.y - event.scrollingDeltaY * multiplier)
+        scrollEstimatePoints = estimate
+        needsDisplay = true
+    }
+
+    private func scheduleViewportReconcile() {
+        guard isViewportReconcileInFlight == false else {
+            isViewportReconcileQueued = true
             return
         }
-
-        let rect = CGRect(
-            x: min(start.x, current.x),
-            y: min(start.y, current.y),
-            width: abs(current.x - start.x),
-            height: abs(current.y - start.y)
-        )
-        let path = NSBezierPath(rect: rect)
-        path.lineWidth = 2
-        Self.markColor.withAlphaComponent(0.9).setStroke()
-        path.stroke()
-    }
-
-    private func drawNumberBubble(sequenceNumber: Int, center: CGPoint) {
-        let diameter = Self.markDiameter
-        let bubbleRect = CGRect(
-            x: center.x - diameter * 0.5,
-            y: center.y - diameter * 0.5,
-            width: diameter,
-            height: diameter
-        )
-        let bubblePath = NSBezierPath(ovalIn: bubbleRect)
-        Self.markColor.setFill()
-        bubblePath.fill()
-
-        let text = "\(sequenceNumber)" as NSString
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: Self.numberFont,
-            .foregroundColor: Self.textColor,
-        ]
-        let textSize = text.size(withAttributes: attributes)
-        text.draw(
-            at: CGPoint(
-                x: center.x - textSize.width * 0.5,
-                y: center.y - textSize.height * 0.5
-            ),
-            withAttributes: attributes
-        )
-    }
-
-    private func visibleSection(from state: BrowserAnnotationDraftState) -> BrowserAnnotationSection? {
-        guard let cachedViewport else { return nil }
-        return state.visibleSection(
-            scrollOffset: cachedViewport.scrollOffset,
-            viewportSize: cachedViewport.viewportSize
-        )
-    }
-
-    private func refreshViewportIfNeeded() {
-        guard runtime?.annotationState.isAnnotationModeEnabled == true,
-              let runtime else {
-            cachedViewport = nil
-            return
-        }
-        Task { @MainActor [weak self, weak runtime] in
-            guard let self, let runtime else { return }
-            self.cachedViewport = await runtime.currentAnnotationViewport()
+        isViewportReconcileInFlight = true
+        Task { @MainActor [weak self] in
+            guard let self, let runtime = self.runtime else { return }
+            let viewport = await runtime.currentAnnotationViewport()
+            let zoom = runtime.annotationDisplayZoom
+            self.scrollEstimatePoints = CGPoint(
+                x: viewport.scrollOffset.x * zoom,
+                y: viewport.scrollOffset.y * zoom
+            )
             self.needsDisplay = true
+            self.window?.invalidateCursorRects(for: self)
+            self.isViewportReconcileInFlight = false
+            if self.isViewportReconcileQueued {
+                self.isViewportReconcileQueued = false
+                self.scheduleViewportReconcile()
+            }
         }
     }
 
@@ -357,32 +626,110 @@ final class BrowserAnnotationOverlayNSView: NSView {
         )
     }
 
-    private static func promptForComment(sequenceNumber: Int, window: NSWindow?) -> String? {
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.placeholderString = "Comment"
+    // MARK: - Drawing
 
-        let alert = NSAlert()
-        alert.messageText = "Annotation \(sequenceNumber)"
-        alert.informativeText = "Add a comment for this browser annotation."
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
 
-        if let window {
-            alert.window.level = window.level
-        }
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else {
-            return nil
+        guard runtime?.annotationState.isAnnotationModeEnabled == true else {
+            return
         }
 
-        let comment = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return comment.isEmpty ? nil : comment
+        for mark in currentDisplayMarks() {
+            drawMark(mark)
+        }
+        if let pendingDraft {
+            drawPendingDraft(pendingDraft)
+        }
+        drawInProgressRectangle()
     }
-}
 
-private extension CGPoint {
-    func distance(to other: CGPoint) -> CGFloat {
-        hypot(x - other.x, y - other.y)
+    private func drawMark(_ mark: BrowserAnnotationDisplayMark) {
+        if case .rectangle(let rect) = mark.shape {
+            drawRectangleBody(rect)
+        }
+        if mark.annotationID == hoveredAnnotationID {
+            drawHoverHalo(around: mark.bubbleRect)
+        }
+        drawNumberBubble(number: mark.sequenceNumber, in: mark.bubbleRect)
+    }
+
+    private func drawPendingDraft(_ draft: PendingAnnotationDraft) {
+        if draft.isRectangle {
+            drawRectangleBody(draft.rectangle)
+        }
+        drawNumberBubble(number: draft.sequenceNumber, in: draft.bubbleRect)
+    }
+
+    private func drawInProgressRectangle() {
+        guard let start = dragStartPoint,
+              let current = dragCurrentPoint,
+              hypot(current.x - start.x, current.y - start.y)
+              > BrowserAnnotationMarkStyle.dragThreshold else {
+            return
+        }
+
+        let rect = CGRect(
+            x: min(start.x, current.x),
+            y: min(start.y, current.y),
+            width: abs(current.x - start.x),
+            height: abs(current.y - start.y)
+        )
+        drawRectangleBody(rect)
+    }
+
+    private func drawRectangleBody(_ rect: CGRect) {
+        let path = NSBezierPath(rect: rect)
+        BrowserAnnotationMarkStyle.markColor
+            .withAlphaComponent(BrowserAnnotationMarkStyle.rectangleFillAlpha)
+            .setFill()
+        path.fill()
+        path.lineWidth = BrowserAnnotationMarkStyle.rectangleLineWidth
+        BrowserAnnotationMarkStyle.markColor.setStroke()
+        path.stroke()
+    }
+
+    private func drawHoverHalo(around bubbleRect: CGRect) {
+        let inset = -(BrowserAnnotationMarkStyle.bubbleRingWidth
+            + BrowserAnnotationMarkStyle.hoverRingExtraRadius)
+        let haloRect = bubbleRect.insetBy(dx: inset, dy: inset)
+        BrowserAnnotationMarkStyle.markColor
+            .withAlphaComponent(BrowserAnnotationMarkStyle.hoverRingAlpha)
+            .setFill()
+        NSBezierPath(ovalIn: haloRect).fill()
+    }
+
+    private func drawNumberBubble(number: Int, in bubbleRect: CGRect) {
+        let ringWidth = BrowserAnnotationMarkStyle.bubbleRingWidth
+
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = BrowserAnnotationMarkStyle.shadowColor
+        shadow.shadowBlurRadius = BrowserAnnotationMarkStyle.shadowBlurRadius
+        shadow.shadowOffset = NSSize(
+            width: BrowserAnnotationMarkStyle.shadowOffset.width,
+            height: BrowserAnnotationMarkStyle.shadowOffset.height
+        )
+        shadow.set()
+        BrowserAnnotationMarkStyle.ringColor.setFill()
+        NSBezierPath(ovalIn: bubbleRect.insetBy(dx: -ringWidth, dy: -ringWidth)).fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        BrowserAnnotationMarkStyle.markColor.setFill()
+        NSBezierPath(ovalIn: bubbleRect).fill()
+
+        let text = "\(number)" as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: BrowserAnnotationMarkStyle.numberFont(),
+            .foregroundColor: BrowserAnnotationMarkStyle.numberTextColor,
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        text.draw(
+            at: CGPoint(
+                x: bubbleRect.midX - textSize.width * 0.5,
+                y: bubbleRect.midY - textSize.height * 0.5
+            ),
+            withAttributes: attributes
+        )
     }
 }
