@@ -272,6 +272,11 @@ private final class InitialFocusTextView: NSTextView {
             // keystrokes keep going to the main window's first responder.
             window.makeKey()
             window.makeFirstResponder(self)
+            // The insertion point does not appear until the first keystroke
+            // unless a collapsed selection is set and the caret timer kicked.
+            let endLocation = (self.string as NSString).length
+            self.setSelectedRange(NSRange(location: endLocation, length: 0))
+            self.updateInsertionPointStateAndRestartTimer(true)
         }
     }
 }

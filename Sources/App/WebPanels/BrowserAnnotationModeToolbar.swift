@@ -199,8 +199,8 @@ struct BrowserAnnotationModeToolbar: View {
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: "pencil")
-                    .font(.system(size: 10, weight: .bold))
+                Image(systemName: "pencil.tip.crop.circle")
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ToastyTheme.accent)
                 Text("Annotating")
                     .font(.system(size: 11, weight: .semibold))

@@ -287,9 +287,10 @@ struct BrowserPanelHeaderAccessory: View {
             runtime.setAnnotationModeEnabled(runtime.annotationState.isAnnotationModeEnabled == false)
         } label: {
             browserHeaderIcon(
-                systemImage: "pencil",
+                systemImage: "pencil.tip.crop.circle",
                 isDisabled: isAnnotationToggleDisabled,
-                isActive: runtime.annotationState.isAnnotationModeEnabled
+                isActive: runtime.annotationState.isAnnotationModeEnabled,
+                fontSize: 12
             )
             .overlay(alignment: .topTrailing) {
                 if runtime.annotationState.draftCount > 0 {
@@ -407,10 +408,11 @@ struct BrowserPanelHeaderAccessory: View {
     private func browserHeaderIcon(
         systemImage: String,
         isDisabled: Bool,
-        isActive: Bool
+        isActive: Bool,
+        fontSize: CGFloat = 10
     ) -> some View {
         Image(systemName: systemImage)
-            .font(.system(size: 10, weight: .semibold))
+            .font(.system(size: fontSize, weight: .semibold))
             .foregroundStyle(
                 isDisabled
                     ? ToastyTheme.inactiveText

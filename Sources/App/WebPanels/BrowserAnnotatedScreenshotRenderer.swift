@@ -171,7 +171,12 @@ struct BrowserAnnotationRenderedSection: Equatable {
 
 enum BrowserAnnotationPayloadBuilder {
     static func payload(renderedSections: [BrowserAnnotationRenderedSection]) -> String {
-        var lines: [String] = ["Browser annotations"]
+        // Self-describing preamble so receiving agents act on the feedback
+        // directly instead of searching for a skill that explains the format.
+        var lines: [String] = [
+            "Browser annotation feedback from Toastty.",
+            "Each numbered comment refers to the matching numbered mark drawn in the screenshot listed above it. Read each screenshot and address the comments.",
+        ]
 
         for (index, renderedSection) in renderedSections.enumerated() {
             let section = renderedSection.section
