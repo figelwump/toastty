@@ -888,19 +888,22 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         return FaviconLinkReference(href: href, rel: rel)
     }
 
-    private static func annotationScrollOffset(from value: Any) -> CGPoint? {
+    static func annotationScrollOffset(from value: Any) -> CGPoint? {
+        if let dictionary = value as? NSDictionary {
+            return annotationScrollOffset(x: dictionary["x"], y: dictionary["y"])
+        }
         if let dictionary = value as? [String: Any] {
-            return annotationScrollOffset(from: dictionary)
+            return annotationScrollOffset(x: dictionary["x"], y: dictionary["y"])
         }
         if let dictionary = value as? [AnyHashable: Any] {
-            return annotationScrollOffset(from: dictionary)
+            return annotationScrollOffset(x: dictionary["x"], y: dictionary["y"])
         }
         return nil
     }
 
-    private static func annotationScrollOffset(from dictionary: [AnyHashable: Any]) -> CGPoint? {
-        guard let x = numericCGFloat(dictionary["x"]),
-              let y = numericCGFloat(dictionary["y"]) else {
+    private static func annotationScrollOffset(x: Any?, y: Any?) -> CGPoint? {
+        guard let x = numericCGFloat(x),
+              let y = numericCGFloat(y) else {
             return nil
         }
         return CGPoint(x: x, y: y)

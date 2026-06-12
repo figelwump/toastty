@@ -139,6 +139,42 @@ final class BrowserAnnotationCoordinateMapperTests: XCTestCase {
 
 @MainActor
 final class BrowserAnnotationRuntimeTests: XCTestCase {
+    func testAnnotationScrollOffsetParsesStringDictionaryWithoutRecursing() {
+        let value: [String: Any] = [
+            "x": 12.5,
+            "y": NSNumber(value: 44),
+        ]
+
+        XCTAssertEqual(
+            BrowserPanelRuntime.annotationScrollOffset(from: value),
+            CGPoint(x: 12.5, y: 44)
+        )
+    }
+
+    func testAnnotationScrollOffsetParsesHashableDictionaryWithoutRecursing() {
+        let value: [AnyHashable: Any] = [
+            "x": NSNumber(value: 7),
+            "y": 9.25,
+        ]
+
+        XCTAssertEqual(
+            BrowserPanelRuntime.annotationScrollOffset(from: value),
+            CGPoint(x: 7, y: 9.25)
+        )
+    }
+
+    func testAnnotationScrollOffsetParsesNSDictionaryFromWebKitBridge() {
+        let value = NSDictionary(dictionary: [
+            "x": NSNumber(value: 3),
+            "y": NSNumber(value: 4),
+        ])
+
+        XCTAssertEqual(
+            BrowserPanelRuntime.annotationScrollOffset(from: value),
+            CGPoint(x: 3, y: 4)
+        )
+    }
+
     func testDidCommitClearsDraftsAndExitsAnnotationMode() throws {
         let runtime = BrowserPanelRuntime(
             panelID: UUID(),
