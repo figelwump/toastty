@@ -176,6 +176,7 @@ enum BrowserAnnotationPayloadBuilder {
         var lines: [String] = [
             "Browser annotation feedback from Toastty.",
             "Each numbered comment refers to the matching numbered mark drawn in the screenshot listed above it. Read each screenshot and address the comments.",
+            "For small/medium scope changes, go ahead with implementation. Only ask the user for plan review for large changes.",
         ]
 
         for (index, renderedSection) in renderedSections.enumerated() {

@@ -723,6 +723,7 @@ final class BrowserAnnotationPayloadBuilderTests: XCTestCase {
             """
             Browser annotation feedback from Toastty.
             Each numbered comment refers to the matching numbered mark drawn in the screenshot listed above it. Read each screenshot and address the comments.
+            For small/medium scope changes, go ahead with implementation. Only ask the user for plan review for large changes.
 
             Screenshot 1: /tmp/toastty-browser-annotations/example.png
             Page: Example Page
@@ -773,6 +774,7 @@ final class BrowserAnnotationPayloadBuilderTests: XCTestCase {
             """
             Browser annotation feedback from Toastty.
             Each numbered comment refers to the matching numbered mark drawn in the screenshot listed above it. Read each screenshot and address the comments.
+            For small/medium scope changes, go ahead with implementation. Only ask the user for plan review for large changes.
 
             Screenshot 1: /tmp/toastty-browser-annotations/example.png
             Viewport: x=0, y=0, w=900, h=700
