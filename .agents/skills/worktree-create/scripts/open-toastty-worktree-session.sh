@@ -3,9 +3,12 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--startup-command <command>] [--json]
+usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--startup-command <command>] [--json]
 
 Creates a new Toastty workspace for a worktree and starts a new terminal command in it.
+The default startup command launches the agent CLI (codex unless --agent-command
+overrides it) with a prompt pointing at the handoff file. --startup-command replaces
+the entire startup command and cannot be combined with --agent-command.
 EOF
 }
 
@@ -26,6 +29,8 @@ workspace_name=""
 worktree_path=""
 handoff_file=""
 window_id=""
+agent_command="codex"
+agent_command_overridden=0
 startup_command=""
 json_output=0
 
@@ -45,6 +50,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --window-id)
       window_id="${2:-}"
+      shift 2
+      ;;
+    --agent-command)
+      agent_command="${2:-}"
+      agent_command_overridden=1
       shift 2
       ;;
     --startup-command)
@@ -70,6 +80,15 @@ done
 if [[ -z "$workspace_name" || -z "$worktree_path" || -z "$handoff_file" ]]; then
   echo "error: --workspace-name, --worktree-path, and --handoff-file are required" >&2
   usage
+  exit 64
+fi
+if [[ "$agent_command_overridden" == "1" && -n "$startup_command" ]]; then
+  echo "error: --agent-command cannot be combined with --startup-command" >&2
+  usage
+  exit 64
+fi
+if [[ -z "$agent_command" || "$agent_command" =~ [[:space:]] ]]; then
+  echo "error: --agent-command must be a single executable name without whitespace" >&2
   exit 64
 fi
 
@@ -98,19 +117,21 @@ PY
 }
 
 build_default_startup_command() {
-  local quoted_worktree quoted_prompt quoted_derived relative_handoff
+  local quoted_worktree quoted_prompt quoted_derived quoted_agent relative_handoff
   quoted_worktree="$(shell_quote "$worktree_path")"
   quoted_derived="$(shell_quote "$worktree_path/artifacts/dev-runs/manual/Derived")"
+  quoted_agent="$(shell_quote "$agent_command")"
   if [[ "$handoff_file" == "$worktree_path/"* ]]; then
     relative_handoff="${handoff_file#"$worktree_path"/}"
   else
     relative_handoff="$handoff_file"
   fi
   quoted_prompt="$(shell_quote "Read ${relative_handoff} in the repo, use it as the source of truth for this handoff, and continue the task in this worktree.")"
-  printf "cd %s && export TOASTTY_DEV_WORKTREE_ROOT=%s TOASTTY_DERIVED_PATH=%s && cdx %s" \
+  printf "cd %s && export TOASTTY_DEV_WORKTREE_ROOT=%s TOASTTY_DERIVED_PATH=%s && %s %s" \
     "$quoted_worktree" \
     "$quoted_worktree" \
     "$quoted_derived" \
+    "$quoted_agent" \
     "$quoted_prompt"
 }
 

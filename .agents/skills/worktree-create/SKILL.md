@@ -1,6 +1,6 @@
 ---
 name: worktree-create
-description: Use this skill when the user asks for /worktree-create or wants to spin the current Toastty thread into a new git worktree and Toastty workspace, bootstrap that worktree for builds, persist a handoff or plan file, and launch a new cdx session in the new workspace.
+description: Use this skill when the user asks for /worktree-create or wants to spin the current Toastty thread into a new git worktree and Toastty workspace, bootstrap that worktree for builds, persist a handoff or plan file, and launch a new agent session (codex by default) in the new workspace.
 ---
 
 # Worktree Create
@@ -42,6 +42,7 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
 7. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
    - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and starts the new terminal command in the left terminal pane.
    - Background-created workspaces stay marked as new in the sidebar until the user visits them once.
+   - The startup command launches `codex` by default. If the user explicitly requested a different agent for the new session, pass it with `--agent-command <name>` (for example `--agent-command claude`); otherwise omit the flag.
 
 ```bash
 .agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh \
@@ -89,9 +90,9 @@ When the parent thread already has a full implementation plan, prefer the follow
 - Treat bootstrap as a local worktree requirement, not just a remote-build requirement.
 - Before handing off, the new worktree itself should contain the generated Xcode artifacts such as `toastty.xcworkspace` / `*.xcodeproj` from `tuist generate`.
 - Remote wrappers that bootstrap or generate in disposable remote worktrees do not satisfy this handoff requirement for the local worktree.
-- The handoff file must exist before launching the new `cdx` session.
+- The handoff file must exist before launching the new agent session.
 - The default workspace layout is terminal on the left and the handoff markdown file in the right panel.
-- The default startup command should `cd` into the new worktree, export `TOASTTY_DEV_WORKTREE_ROOT`, and start `cdx` with a short prompt that points at `WORKTREE_HANDOFF.md`.
+- The default startup command should `cd` into the new worktree, export `TOASTTY_DEV_WORKTREE_ROOT`, and start the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. The agent CLI is `codex` unless the user explicitly requested a different agent; honor an explicit request with `--agent-command`.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
 ## Window targeting
