@@ -44,7 +44,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 - **Per-tab Scratchpad, browser, and local-document tabs** — toggle with `Cmd+Shift+B`; each workspace tab keeps its own right-panel tabs
 - **Scratchpad** — rich agent-authored notes, plans, and review surfaces in session-linked tabs that persist locally
-- **Browser** — built-in browser for docs, dashboards, previews, external handoff, and quick screenshot sharing
+- **Browser** — built-in browser for docs, dashboards, previews, external handoff, quick screenshot sharing, and annotated visual feedback to agents
 - **Local documents** — open Markdown, source files (Swift, JS/TS, Python, Go, Rust, …), configs (YAML, TOML, JSON, dotenv), logs, and data files (CSV, TSV, XML) in editable code views with line numbers; local HTML opens in the browser
 
 ### Terminal and content
@@ -121,7 +121,7 @@ Each horizontal workspace tab keeps its own right-panel tabs, active tab, width,
 
 `Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. After the `toastty-scratchpad` skill is installed for an agent, you can usually skip manual creation and ask the agent for a visual; the agent can create and bind its own Scratchpad on demand.
 
-Browser panel header actions can open the current page in the default browser, copy or save the visible page screenshot, or insert a temporary PNG path into an active Toastty-managed agent session in the same workspace tab.
+Browser panel header actions can open the current page in the default browser, copy or save the visible page screenshot, insert a temporary PNG path into an active Toastty-managed agent session in the same workspace tab, or annotate the page with numbered comments and send that visual feedback to an active agent.
 
 Terminal command-click integrations use the right panel for common supporting files: supported local documents open as editable local-document tabs, and local HTML files open in the browser.
 
