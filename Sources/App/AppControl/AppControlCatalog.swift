@@ -342,6 +342,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                     .profileID(required: true),
                     .cwd(required: false),
                     .environment(required: false),
+                    .initialCommands(required: false),
                     .initialPrompt(required: false),
                 ]
             )
@@ -471,6 +472,16 @@ private extension AppControlParameterDescriptor {
 
     static func initialPrompt(required: Bool) -> Self {
         .init(name: "initialPrompt", summary: "Initial prompt passed to supported agent profiles at launch.", valueType: .string, required: required)
+    }
+
+    static func initialCommands(required: Bool) -> Self {
+        .init(
+            name: "initialCommands",
+            summary: "Shell command to run after cwd setup and before the agent command. Repeat to provide multiple commands.",
+            valueType: .string,
+            required: required,
+            repeatable: true
+        )
     }
 
     static func index(summary: String, required: Bool) -> Self {

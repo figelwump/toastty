@@ -253,15 +253,22 @@ Notable action-specific behavior:
     action when the terminal should become the interactive keyboard target.
 - `agent.launch`
   - requires `args.profileID`.
-  - accepts optional `args.cwd`, `args.initialPrompt`, and environment values as
-    either `args.env` / `args.environment` string objects or flattened
-    `args["env.NAME"]` string entries.
+  - accepts optional `args.cwd`, `args.initialCommands`, `args.initialPrompt`,
+    and environment values as either `args.env` / `args.environment` string
+    objects or flattened `args["env.NAME"]` string entries.
   - app-control delivery preserves the current AppKit first responder; use a
     separate focus/select action when the terminal should become the interactive
     keyboard target.
   - `cwd` must be an existing absolute or `~`-expanded directory and becomes the
     managed session working directory; Toastty renders the launched command as
     `cd <cwd> && ...`.
+  - `initialCommands` may be a string or string array. Toastty renders these
+    raw single-line shell snippets after `cd <cwd>` and before the final agent
+    command, joined with `&&`; a failing initial command stops the agent command
+    in the terminal after the launch request itself has succeeded. Structured
+    environment values are inlined on the final agent command and are not
+    exported to `initialCommands`. Callers own any side effects or trust changes
+    performed by these commands.
   - Caller-provided environment values are merged before Toastty's managed
     launch context, so exact reserved context and provider instrumentation keys
     cannot be overridden.
@@ -691,6 +698,7 @@ Request payload:
 - `environment?: { [name: String]: String }`
 - `env?: { [name: String]: String }`
 - `env.NAME?: String`
+- `initialCommands?: String | String[]`
 - `initialPrompt?: String`
 
 Result:
@@ -716,6 +724,9 @@ Validation:
 - if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
 - explicit `profileID=codex`, `profileID=claude`, and `profileID=pi` can be
   launched by automation even when no `agents.toml` profile exists.
+- `initialCommands` entries must be non-blank single-line strings with no NUL
+  bytes. The list is capped at 16 entries, and each entry is capped at 4096
+  UTF-8 bytes.
 - `initialPrompt` is rejected unless the resolved profile supports trailing
   prompt arguments.
 

@@ -594,6 +594,40 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func launchRendersInitialCommandsBetweenCWDAndAgentCommand() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let projectRoot = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        let cwd = projectRoot.appendingPathComponent("Packages/toastty", isDirectory: true).path
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+
+        let result = try service.launch(
+            profileID: "codex",
+            cwd: cwd,
+            environment: ["EXTRA_FLAG": "alpha beta"],
+            initialPrompt: "/work-on POP-1234",
+            initialCommands: ["direnv allow", "export FEATURE_FLAG=1"]
+        )
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(command.hasPrefix("cd \(cwd) && direnv allow && export FEATURE_FLAG=1 && "))
+        #expect(command.contains("EXTRA_FLAG='alpha beta'"))
+        #expect(command.contains("codex '/work-on POP-1234'"))
+    }
+
+    @Test
     func launchRejectsRelativeExplicitCWD() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -648,6 +682,70 @@ struct AgentLaunchServiceTests {
         #expect(command.hasPrefix("cd \(shellQuoteForTest(cwdURL.path)) && "))
         #expect(command.contains("CUSTOM_VALUE=\(shellQuoteForTest(envValue))"))
         #expect(command.contains("codex \(shellQuoteForTest(prompt))"))
+    }
+
+    @Test
+    func launchPreservesInitialCommandShellSyntaxWhileQuotingStructuredValues() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let cwdURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty agent command quoting \(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: cwdURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cwdURL) }
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+
+        let result = try service.launch(
+            profileID: "codex",
+            cwd: cwdURL.path,
+            initialPrompt: "review 'quoted'; $(echo prompt)",
+            initialCommands: ["direnv allow && printf '%s\\n' ready"]
+        )
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(command.contains(" && direnv allow && printf '%s\\n' ready && "))
+        #expect(command.contains("codex \(shellQuoteForTest("review 'quoted'; $(echo prompt)"))"))
+    }
+
+    @Test
+    func launchRejectsInvalidInitialCommands() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        #expect(throws: AgentLaunchError.invalidInitialCommands(message: "command 1 must not be blank")) {
+            _ = try service.launch(profileID: "codex", initialCommands: ["  \n"])
+        }
+        #expect(throws: AgentLaunchError.invalidInitialCommands(message: "command 1 contains a NUL byte")) {
+            _ = try service.launch(profileID: "codex", initialCommands: ["printf 'ok'\u{0}"])
+        }
+        #expect(throws: AgentLaunchError.invalidInitialCommands(message: "command 1 must be a single line")) {
+            _ = try service.launch(profileID: "codex", initialCommands: ["direnv allow\nprintf ready"])
+        }
+        #expect(throws: AgentLaunchError.invalidInitialCommands(message: "at most 16 commands are supported")) {
+            _ = try service.launch(profileID: "codex", initialCommands: Array(repeating: "true", count: 17))
+        }
+        #expect(terminalRouter.sentTextByPanelID.isEmpty)
     }
 
     @Test

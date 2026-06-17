@@ -458,6 +458,7 @@ final class AppControlExecutor {
                 cwd: normalizedOptionalText(args.stringValue("cwd")),
                 environment: try agentLaunchEnvironment(args: args),
                 initialPrompt: args.stringValue("initialPrompt"),
+                initialCommands: try agentLaunchInitialCommands(args: args),
                 focusPolicy: .preserveFirstResponder
             )
             var response: [String: AutomationJSONValue] = [
@@ -934,6 +935,27 @@ private extension AppControlExecutor {
         }
 
         return environment
+    }
+
+    func agentLaunchInitialCommands(args: [String: AutomationJSONValue]) throws -> [String] {
+        guard let value = args["initialCommands"] else {
+            return []
+        }
+        switch value {
+        case .string(let command):
+            return [command]
+        case .array(let values):
+            return try values.enumerated().map { index, value in
+                guard case .string(let command) = value else {
+                    throw AutomationSocketError.invalidPayload(
+                        "initialCommands[\(index)] must be a string"
+                    )
+                }
+                return command
+            }
+        default:
+            throw AutomationSocketError.invalidPayload("initialCommands must be a string or string array")
+        }
     }
 
     func recordEnvironmentObject(

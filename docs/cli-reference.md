@@ -145,21 +145,27 @@ Scratchpad actions are intended for agent and automation integrations:
 - `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
 - `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
 - `agent.launch` starts a managed agent profile in a resolved terminal panel. It
-  requires `profileID` and accepts optional `cwd`, repeatable `env.NAME=value`,
-  and `initialPrompt` arguments. `cwd` must be absolute or `~`-expanded and
-  becomes both the launch directory and the session working directory; `env.NAME`
-  entries are injected before Toastty's managed launch context; `initialPrompt`
-  is appended only for supported profiles. Built-in `codex` and `claude`
-  automation launches work even when the user has not created
-  `~/.toastty/agents.toml`. CLI/app-control `agent.launch` preserves the
-  current AppKit first responder; focus the target workspace or panel separately
-  when it should become the interactive keyboard target.
+  requires `profileID` and accepts optional `cwd`, repeatable
+  `initialCommands=<command>`, repeatable `env.NAME=value`, and `initialPrompt`
+  arguments. `cwd` must be absolute or `~`-expanded and becomes both the launch
+  directory and the session working directory; `initialCommands` are raw
+  single-line shell snippets rendered after `cd <cwd>` and before the final
+  agent command; `env.NAME` entries are injected before Toastty's managed launch
+  context on the final agent command and are not exported to
+  `initialCommands`; `initialPrompt` is appended only for supported profiles.
+  Callers own side effects and trust changes in `initialCommands`, such as
+  `direnv allow`. Built-in `codex` and `claude` automation launches work even
+  when the user has not created `~/.toastty/agents.toml`. CLI/app-control
+  `agent.launch` preserves the current AppKit first responder; focus the target
+  workspace or panel separately when it should become the interactive keyboard
+  target.
 
 ```bash
 "$TOASTTY_CLI_PATH" action run agent.launch \
   --workspace "$WORKSPACE_ID" \
   profileID=codex \
   cwd="$HOME/new-work-tree" \
+  "initialCommands=direnv allow" \
   env.TOASTTY_DEV_WORKTREE_ROOT="$HOME/new-work-tree" \
   initialPrompt="/work-on POP-1234"
 ```

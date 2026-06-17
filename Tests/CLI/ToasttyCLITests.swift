@@ -52,6 +52,36 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func actionRunParsesRepeatableInitialCommands() throws {
+        let workspaceID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "action", "run", "agent.launch",
+                "--workspace", workspaceID.uuidString,
+                "profileID=codex",
+                "cwd=/tmp/worktree",
+                "initialCommands=direnv allow",
+                "initialCommands=printf ready",
+                "initialPrompt=/work-on POP-1234",
+            ],
+            environment: [:]
+        )
+
+        guard case .appControlRun(let kind, let id, let args) = invocation.command else {
+            Issue.record("expected app control run command")
+            return
+        }
+
+        #expect(kind == .action)
+        #expect(id == "agent.launch")
+        #expect(args["workspaceID"] == .string(workspaceID.uuidString))
+        #expect(args["profileID"] == .string("codex"))
+        #expect(args["cwd"] == .string("/tmp/worktree"))
+        #expect(args["initialCommands"] == .array([.string("direnv allow"), .string("printf ready")]))
+        #expect(args["initialPrompt"] == .string("/work-on POP-1234"))
+    }
+
+    @Test
     func queryRunParsesStructuredCommand() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(

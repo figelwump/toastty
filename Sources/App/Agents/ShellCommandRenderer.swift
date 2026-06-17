@@ -4,7 +4,8 @@ enum ShellCommandRenderer {
     static func render(
         argv: [String],
         environment: [String: String] = [:],
-        workingDirectory: String? = nil
+        workingDirectory: String? = nil,
+        initialCommands: [String] = []
     ) -> String {
         var command = environment
             .sorted(by: { $0.key < $1.key })
@@ -12,10 +13,13 @@ enum ShellCommandRenderer {
 
         command.append(contentsOf: argv.map(quote))
         let renderedCommand = command.joined(separator: " ")
-        guard let workingDirectory else {
-            return renderedCommand
+        var segments: [String] = []
+        if let workingDirectory {
+            segments.append("cd \(quote(workingDirectory))")
         }
-        return "cd \(quote(workingDirectory)) && \(renderedCommand)"
+        segments.append(contentsOf: initialCommands)
+        segments.append(renderedCommand)
+        return segments.joined(separator: " && ")
     }
 
     private static func quote(_ value: String) -> String {

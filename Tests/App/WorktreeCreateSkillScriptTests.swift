@@ -169,6 +169,49 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertFalse(try hasSendTextInvocation(invocationLogURL: invocationLogURL))
     }
 
+    func testOpenSessionScriptPassesInitialCommandsToStructuredAgentLaunch() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-initial-commands")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(),
+            environment: [
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--initial-command", "direnv allow",
+                "--initial-command", "printf ready",
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stderr, "")
+
+        let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
+        XCTAssertTrue(agentLaunchLine.contains("profileID=codex"))
+        XCTAssertTrue(agentLaunchLine.contains("cwd=\(worktreeURL.path)"))
+        XCTAssertTrue(agentLaunchLine.contains("initialCommands=direnv allow"))
+        XCTAssertTrue(agentLaunchLine.contains("initialCommands=printf ready"))
+        XCTAssertTrue(agentLaunchLine.contains("initialPrompt=Read WORKTREE_HANDOFF.md in the repo"))
+        XCTAssertFalse(try hasSendTextInvocation(invocationLogURL: invocationLogURL))
+    }
+
     func testOpenSessionScriptRejectsAgentCommandCombinedWithStartupCommand() throws {
         let result = try runScript(
             at: skillScriptURL(),
@@ -184,6 +227,39 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
         XCTAssertEqual(result.exitCode, 64)
         XCTAssertTrue(result.stderr.contains("--agent-command cannot be combined with --startup-command"))
+    }
+
+    func testOpenSessionScriptRejectsInitialCommandCombinedWithStartupCommand() throws {
+        let result = try runScript(
+            at: skillScriptURL(),
+            environment: ["TOASTTY_CLI_PATH": "/usr/bin/true"],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", "/tmp/toastty-worktree-create-missing",
+                "--handoff-file", "/tmp/toastty-worktree-create-missing/WORKTREE_HANDOFF.md",
+                "--initial-command", "direnv allow",
+                "--startup-command", "printf 'noop\\n'",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 64)
+        XCTAssertTrue(result.stderr.contains("--initial-command cannot be combined with --startup-command"))
+    }
+
+    func testOpenSessionScriptRejectsMultilineInitialCommand() throws {
+        let result = try runScript(
+            at: skillScriptURL(),
+            environment: ["TOASTTY_CLI_PATH": "/usr/bin/true"],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", "/tmp/toastty-worktree-create-missing",
+                "--handoff-file", "/tmp/toastty-worktree-create-missing/WORKTREE_HANDOFF.md",
+                "--initial-command", "direnv allow\nprintf ready",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 64)
+        XCTAssertTrue(result.stderr.contains("--initial-command must be a single-line command"))
     }
 
     func testOpenSessionScriptRejectsAgentCommandWithWhitespace() throws {

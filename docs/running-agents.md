@@ -68,6 +68,16 @@ arguments for automation:
   `cd <cwd> && ...`, records the managed session in that directory, and uses it
   for repository-root inference. Pass an absolute path or a `~`-expanded path;
   relative paths are rejected.
+- `initialCommands=<command>` runs one or more raw single-line shell snippets
+  after `cwd` setup and before the final agent command, in the same shell,
+  joined with `&&`. Use this for explicit caller-owned setup such as
+  `direnv allow`. A failing initial command stops the later agent command in
+  the terminal, but `agent.launch` has already succeeded once the command line
+  is delivered. Commands such as `direnv allow` change trust for files in the
+  target tree; pass them only when the caller explicitly requested that trust
+  change. Structured `env.NAME=value` assignments apply to the final agent
+  command, not to `initialCommands`; export values inside `initialCommands` when
+  setup commands need them.
 - `env.NAME=value` injects caller-provided environment values before Toastty's
   managed launch context. Toastty rejects exact-key collisions with its managed
   context and provider instrumentation keys: `TOASTTY_SESSION_ID`,

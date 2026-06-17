@@ -43,6 +43,7 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
    - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and starts the new terminal command in the left terminal pane.
    - Background-created workspaces stay marked as new in the sidebar until the user visits them once.
    - The startup command launches `codex` by default. If the user explicitly requested a different agent for the new session, pass it with `--agent-command <name>` (for example `--agent-command claude`); otherwise omit the flag.
+   - If the user explicitly requested setup that must run before the agent starts, pass each command with `--initial-command <command>` so the helper keeps the structured `agent.launch` path. For example, `--initial-command "direnv allow"` runs after `cd <worktree>` and before the agent prompt. Do not add trust-changing commands such as `direnv allow` unless the user requested or approved them for that worktree. If an initial command fails, the agent command is stopped in the terminal, but the workspace creation helper may already have reported launch success.
 
 ```bash
 .agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh \
@@ -92,8 +93,8 @@ When the parent thread already has a full implementation plan, prefer the follow
 - Remote wrappers that bootstrap or generate in disposable remote worktrees do not satisfy this handoff requirement for the local worktree.
 - The handoff file must exist before launching the new agent session.
 - The default workspace layout is terminal on the left and the handoff markdown file in the right panel.
-- The default launch should use `agent.launch` with structured `cwd`, environment, and `initialPrompt` arguments so the new background workspace starts without a separate `terminal.send-text` injection. The launched command still `cd`s into the new worktree, sets `TOASTTY_DEV_WORKTREE_ROOT` and `TOASTTY_DERIVED_PATH`, and starts the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. The agent CLI is `codex` unless the user explicitly requested a different agent; honor an explicit request with `--agent-command`.
-- `--startup-command` is the explicit escape hatch for validation or custom shell setup. It replaces the structured agent launch path and uses `terminal.send-text` after resolving the terminal panel.
+- The default launch should use `agent.launch` with structured `cwd`, `initialCommands`, environment, and `initialPrompt` arguments so the new background workspace starts without a separate `terminal.send-text` injection. The launched command still `cd`s into the new worktree, runs any `--initial-command` single-line shell snippets in order with `&&`, sets `TOASTTY_DEV_WORKTREE_ROOT` and `TOASTTY_DERIVED_PATH` on the final agent command, and starts the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. The agent CLI is `codex` unless the user explicitly requested a different agent; honor an explicit request with `--agent-command`.
+- `--startup-command` is the explicit escape hatch for validation or fully custom shell setup. It replaces the structured agent launch path and uses `terminal.send-text` after resolving the terminal panel. Do not combine it with `--agent-command` or `--initial-command`.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
 ## Window targeting

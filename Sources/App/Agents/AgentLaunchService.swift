@@ -47,6 +47,7 @@ enum AgentLaunchError: LocalizedError, Equatable {
     case invalidLaunchEnvironment(message: String)
     case initialPromptUnsupported(profileID: String)
     case invalidInitialPrompt(message: String)
+    case invalidInitialCommands(message: String)
 
     var errorDescription: String? {
         switch self {
@@ -88,6 +89,8 @@ enum AgentLaunchError: LocalizedError, Equatable {
             return "Agent profile '\(profileID)' does not support initialPrompt."
         case .invalidInitialPrompt(let message):
             return "Agent launch initialPrompt is invalid: \(message)"
+        case .invalidInitialCommands(let message):
+            return "Agent launch initialCommands is invalid: \(message)"
         }
     }
 }
@@ -152,6 +155,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         cwd: String? = nil,
         environment: [String: String] = [:],
         initialPrompt: String? = nil,
+        initialCommands: [String] = [],
         focusPolicy: TerminalInputFocusPolicy = .focusTarget
     ) throws -> AgentLaunchResult {
         guard let terminalCommandRouter else {
@@ -172,6 +176,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         }
         let explicitCWD = try normalizedExplicitWorkingDirectory(cwd)
         let launchEnvironment = try validatedLaunchEnvironment(environment)
+        let launchInitialCommands = try validatedInitialCommands(initialCommands)
         let launchArgv = try argv(
             for: launchProfile,
             agent: agent,
@@ -191,7 +196,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         let commandLine = ShellCommandRenderer.render(
             argv: plan.argv,
             environment: commandEnvironment,
-            workingDirectory: explicitCWD
+            workingDirectory: explicitCWD,
+            initialCommands: launchInitialCommands
         )
 
         guard terminalCommandRouter.sendText(
@@ -311,6 +317,42 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         "CODEX_TUI_SESSION_LOG_PATH",
         "TOASTTY_PI_TELEMETRY_LOG_PATH",
     ]
+
+    private func validatedInitialCommands(_ commands: [String]) throws -> [String] {
+        guard commands.count <= Self.maximumInitialCommandCount else {
+            throw AgentLaunchError.invalidInitialCommands(
+                message: "at most \(Self.maximumInitialCommandCount) commands are supported"
+            )
+        }
+
+        for (index, command) in commands.enumerated() {
+            guard command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                throw AgentLaunchError.invalidInitialCommands(
+                    message: "command \(index + 1) must not be blank"
+                )
+            }
+            guard command.contains("\u{0}") == false else {
+                throw AgentLaunchError.invalidInitialCommands(
+                    message: "command \(index + 1) contains a NUL byte"
+                )
+            }
+            guard command.contains("\n") == false, command.contains("\r") == false else {
+                throw AgentLaunchError.invalidInitialCommands(
+                    message: "command \(index + 1) must be a single line"
+                )
+            }
+            guard command.utf8.count <= Self.maximumInitialCommandUTF8Count else {
+                throw AgentLaunchError.invalidInitialCommands(
+                    message: "command \(index + 1) exceeds \(Self.maximumInitialCommandUTF8Count) UTF-8 bytes"
+                )
+            }
+        }
+
+        return commands
+    }
+
+    private static let maximumInitialCommandCount = 16
+    private static let maximumInitialCommandUTF8Count = 4096
 
     private func argv(
         for profile: AgentProfile,

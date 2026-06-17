@@ -3,13 +3,15 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--startup-command <command>] [--json]
+usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--initial-command <command>]... [--startup-command <command>] [--json]
 
 Creates a new Toastty workspace for a worktree and starts a new terminal command in it.
 By default the helper calls agent.launch with structured cwd, environment, and
 initialPrompt values. The agent CLI is codex unless --agent-command overrides it.
+Repeat --initial-command to run single-line shell commands after cwd setup and
+before the agent command in the structured launch path.
 --startup-command replaces the structured launch with a literal terminal command
-and cannot be combined with --agent-command.
+and cannot be combined with --agent-command or --initial-command.
 EOF
 }
 
@@ -33,6 +35,7 @@ window_id=""
 agent_command="codex"
 agent_command_overridden=0
 startup_command=""
+initial_commands=()
 json_output=0
 
 while [[ $# -gt 0 ]]; do
@@ -56,6 +59,22 @@ while [[ $# -gt 0 ]]; do
     --agent-command)
       agent_command="${2:-}"
       agent_command_overridden=1
+      shift 2
+      ;;
+    --initial-command)
+      if [[ -z "${2:-}" ]]; then
+        echo "error: --initial-command requires a non-empty command" >&2
+        exit 64
+      fi
+      if [[ "${2//[[:space:]]/}" == "" ]]; then
+        echo "error: --initial-command requires a non-blank command" >&2
+        exit 64
+      fi
+      if [[ "$2" == *$'\n'* || "$2" == *$'\r'* ]]; then
+        echo "error: --initial-command must be a single-line command" >&2
+        exit 64
+      fi
+      initial_commands+=("$2")
       shift 2
       ;;
     --startup-command)
@@ -85,6 +104,11 @@ if [[ -z "$workspace_name" || -z "$worktree_path" || -z "$handoff_file" ]]; then
 fi
 if [[ "$agent_command_overridden" == "1" && -n "$startup_command" ]]; then
   echo "error: --agent-command cannot be combined with --startup-command" >&2
+  usage
+  exit 64
+fi
+if [[ "${#initial_commands[@]}" -gt 0 && -n "$startup_command" ]]; then
+  echo "error: --initial-command cannot be combined with --startup-command" >&2
   usage
   exit 64
 fi
@@ -256,15 +280,24 @@ launch_command=""
 if [[ -z "$startup_command" ]]; then
   launch_output=""
   launch_succeeded="false"
+  launch_args=(
+    action run agent.launch
+    --workspace "$workspace_id"
+    "profileID=$agent_command"
+    "cwd=$worktree_path"
+    "env.TOASTTY_DEV_WORKTREE_ROOT=$worktree_path"
+    "env.TOASTTY_DERIVED_PATH=$worktree_path/artifacts/dev-runs/manual/Derived"
+  )
+  if [[ "${#initial_commands[@]}" -gt 0 ]]; then
+    for initial_command in "${initial_commands[@]}"; do
+      launch_args+=("initialCommands=$initial_command")
+    done
+  fi
+  launch_args+=("initialPrompt=$initial_prompt")
+
   for attempt in $(seq 1 40); do
     if launch_output="$(
-      run_cli_json action run agent.launch \
-        --workspace "$workspace_id" \
-        "profileID=$agent_command" \
-        "cwd=$worktree_path" \
-        "env.TOASTTY_DEV_WORKTREE_ROOT=$worktree_path" \
-        "env.TOASTTY_DERIVED_PATH=$worktree_path/artifacts/dev-runs/manual/Derived" \
-        "initialPrompt=$initial_prompt" 2>&1
+      run_cli_json "${launch_args[@]}" 2>&1
     )"; then
       launch_succeeded="true"
       break

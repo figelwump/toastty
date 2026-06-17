@@ -132,16 +132,44 @@ final class TerminalAppControlTests: XCTestCase {
                 "cwd": .string(cwdURL.path),
                 "env.TOASTTY_DEV_WORKTREE_ROOT": .string(cwdURL.path),
                 "initialPrompt": .string("Read WORKTREE_HANDOFF.md"),
+                "initialCommands": .array([
+                    .string("direnv allow"),
+                    .string("export READY=1"),
+                ]),
             ]
         )
 
         XCTAssertEqual(outcome.result?.string("profileID"), "codex")
         XCTAssertEqual(outcome.result?.string("cwd"), cwdURL.path)
         let command = try XCTUnwrap(terminalRouter.sentTextByPanelID[fixture.panelID])
-        XCTAssertTrue(command.hasPrefix("cd \(cwdURL.path) && "))
+        XCTAssertTrue(command.hasPrefix("cd \(cwdURL.path) && direnv allow && export READY=1 && "))
         XCTAssertTrue(command.contains("TOASTTY_DEV_WORKTREE_ROOT=\(cwdURL.path)"))
         XCTAssertTrue(command.contains("'Read WORKTREE_HANDOFF.md'"))
         XCTAssertEqual(terminalRouter.focusPolicyByPanelID[fixture.panelID], .preserveFirstResponder)
+    }
+
+    func testAgentLaunchActionRejectsNonStringInitialCommandEntries() throws {
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let fixture = try TerminalAppControlFixture(agentTerminalCommandRouter: terminalRouter)
+
+        XCTAssertThrowsError(
+            try fixture.executor.runAction(
+                id: AppControlActionID.agentLaunch.rawValue,
+                args: [
+                    "profileID": .string("codex"),
+                    "workspaceID": .string(fixture.workspaceID.uuidString),
+                    "initialCommands": .array([.string("direnv allow"), .object(["bad": .string("shape")])]),
+                ]
+            )
+        ) { error in
+            guard case AutomationSocketError.invalidPayload(let message) = error else {
+                XCTFail("expected invalidPayload, got \(error)")
+                return
+            }
+            XCTAssertEqual(message, "initialCommands[1] must be a string")
+        }
+        XCTAssertTrue(terminalRouter.sentTextByPanelID.isEmpty)
     }
 
     func testTerminalStateQueryUsesLiveTitleWithoutMutatingPersistedTitle() throws {
