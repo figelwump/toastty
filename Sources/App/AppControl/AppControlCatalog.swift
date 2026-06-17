@@ -333,7 +333,18 @@ enum AppControlActionID: String, CaseIterable, Sendable {
         case .appBrowserZoomReset:
             return .init(id: rawValue, kind: .action, summary: "Reset browser zoom for a browser panel.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         case .agentLaunch:
-            return .init(id: rawValue, kind: .action, summary: "Launch an agent profile into a terminal panel.", selectors: [.workspaceID, .panelID], parameters: [.profileID(required: true)])
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Launch an agent profile into a terminal panel.",
+                selectors: [.workspaceID, .panelID],
+                parameters: [
+                    .profileID(required: true),
+                    .cwd(required: false),
+                    .environment(required: false),
+                    .initialPrompt(required: false),
+                ]
+            )
         case .configReload:
             return .init(id: rawValue, kind: .action, summary: "Reload Toastty configuration and profiles.", selectors: [])
         case .terminalSendText:
@@ -411,7 +422,17 @@ private extension AppControlParameterDescriptor {
     }
 
     static func cwd(required: Bool) -> Self {
-        .init(name: "cwd", summary: "Base directory for relative file paths.", valueType: .string, required: required)
+        .init(name: "cwd", summary: "Base directory for relative file paths or agent launches.", valueType: .string, required: required)
+    }
+
+    static func environment(required: Bool) -> Self {
+        .init(
+            name: "env.NAME",
+            summary: "Environment variable for agent.launch. Repeat with env.KEY=value.",
+            valueType: .string,
+            required: required,
+            repeatable: true
+        )
     }
 
     static func filePath(required: Bool) -> Self {
@@ -446,6 +467,10 @@ private extension AppControlParameterDescriptor {
 
     static func files(required: Bool) -> Self {
         .init(name: "files", summary: "Image file path. Repeat to provide multiple paths.", valueType: .string, required: required, repeatable: true)
+    }
+
+    static func initialPrompt(required: Bool) -> Self {
+        .init(name: "initialPrompt", summary: "Initial prompt passed to supported agent profiles at launch.", valueType: .string, required: required)
     }
 
     static func index(summary: String, required: Bool) -> Self {

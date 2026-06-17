@@ -3,14 +3,19 @@ import Foundation
 enum ShellCommandRenderer {
     static func render(
         argv: [String],
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        workingDirectory: String? = nil
     ) -> String {
         var command = environment
             .sorted(by: { $0.key < $1.key })
             .map { assignment($0.key, $0.value) }
 
         command.append(contentsOf: argv.map(quote))
-        return command.joined(separator: " ")
+        let renderedCommand = command.joined(separator: " ")
+        guard let workingDirectory else {
+            return renderedCommand
+        }
+        return "cd \(quote(workingDirectory)) && \(renderedCommand)"
     }
 
     private static func quote(_ value: String) -> String {

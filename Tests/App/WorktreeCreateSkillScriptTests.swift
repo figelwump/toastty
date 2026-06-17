@@ -116,10 +116,14 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertEqual(result.stderr, "")
 
-        let sendTextLine = try sendTextInvocationLine(invocationLogURL: invocationLogURL)
-        XCTAssertTrue(sendTextLine.contains("text=cd \(worktreeURL.path) && export TOASTTY_DEV_WORKTREE_ROOT="))
-        XCTAssertTrue(sendTextLine.contains("&& codex 'Read WORKTREE_HANDOFF.md in the repo"))
-        XCTAssertFalse(sendTextLine.contains("cdx"))
+        let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
+        XCTAssertTrue(agentLaunchLine.contains("profileID=codex"))
+        XCTAssertTrue(agentLaunchLine.contains("cwd=\(worktreeURL.path)"))
+        XCTAssertTrue(agentLaunchLine.contains("env.TOASTTY_DEV_WORKTREE_ROOT=\(worktreeURL.path)"))
+        XCTAssertTrue(agentLaunchLine.contains("env.TOASTTY_DERIVED_PATH=\(worktreeURL.path)/artifacts/dev-runs/manual/Derived"))
+        XCTAssertTrue(agentLaunchLine.contains("initialPrompt=Read WORKTREE_HANDOFF.md in the repo"))
+        XCTAssertFalse(agentLaunchLine.contains("profileID=cdx"))
+        XCTAssertFalse(try hasSendTextInvocation(invocationLogURL: invocationLogURL))
     }
 
     func testOpenSessionScriptHonorsAgentCommandOverride() throws {
@@ -155,9 +159,14 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertEqual(result.stderr, "")
 
-        let sendTextLine = try sendTextInvocationLine(invocationLogURL: invocationLogURL)
-        XCTAssertTrue(sendTextLine.contains("&& claude 'Read WORKTREE_HANDOFF.md in the repo"))
-        XCTAssertFalse(sendTextLine.contains("codex"))
+        let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
+        XCTAssertTrue(agentLaunchLine.contains("profileID=claude"))
+        XCTAssertTrue(agentLaunchLine.contains("cwd=\(worktreeURL.path)"))
+        XCTAssertTrue(agentLaunchLine.contains("env.TOASTTY_DEV_WORKTREE_ROOT=\(worktreeURL.path)"))
+        XCTAssertTrue(agentLaunchLine.contains("env.TOASTTY_DERIVED_PATH=\(worktreeURL.path)/artifacts/dev-runs/manual/Derived"))
+        XCTAssertTrue(agentLaunchLine.contains("initialPrompt=Read WORKTREE_HANDOFF.md in the repo"))
+        XCTAssertFalse(agentLaunchLine.contains("profileID=codex"))
+        XCTAssertFalse(try hasSendTextInvocation(invocationLogURL: invocationLogURL))
     }
 
     func testOpenSessionScriptRejectsAgentCommandCombinedWithStartupCommand() throws {
@@ -203,6 +212,24 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         )
     }
 
+    private func hasSendTextInvocation(invocationLogURL: URL) throws -> Bool {
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        return invocations
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .contains(where: { $0.contains("action run terminal.send-text") })
+    }
+
+    private func agentLaunchInvocationLine(invocationLogURL: URL) throws -> String {
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        return try XCTUnwrap(
+            invocations
+                .split(whereSeparator: \.isNewline)
+                .map(String.init)
+                .first(where: { $0.contains("action run agent.launch") })
+        )
+    }
+
     private func makeFakeToasttyCLI(in rootURL: URL) throws -> URL {
         try makeExecutableScript(
             named: "fake-toastty-cli",
@@ -228,6 +255,11 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
               \"action run workspace.create\")
                 cat <<'EOF'
             {"result":{"windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444"}}
+            EOF
+                ;;
+              \"action run agent.launch\")
+                cat <<'EOF'
+            {"result":{"profileID":"codex","agent":"codex","displayName":"Codex","sessionID":"66666666-6666-6666-6666-666666666666","windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444","panelID":"55555555-5555-5555-5555-555555555555","command":"cd /tmp/worktree && codex prompt","cwd":"/tmp/worktree"}}
             EOF
                 ;;
               \"action run terminal.send-text\")

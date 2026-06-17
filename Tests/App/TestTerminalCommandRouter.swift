@@ -9,10 +9,22 @@ final class TestTerminalCommandRouter: TerminalCommandRouting {
     var visibleTextByPanelID: [UUID: String] = [:]
     var promptStateByPanelID: [UUID: TerminalPromptState] = [:]
     private(set) var sentTextByPanelID: [UUID: String] = [:]
+    private(set) var focusPolicyByPanelID: [UUID: TerminalInputFocusPolicy] = [:]
 
     @discardableResult
     func sendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
+        sendText(text, submit: submit, panelID: panelID, focusPolicy: .focusTarget)
+    }
+
+    @discardableResult
+    func sendText(
+        _ text: String,
+        submit: Bool,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> Bool {
         sentTextByPanelID[panelID] = submit ? text + "\n" : text
+        focusPolicyByPanelID[panelID] = focusPolicy
         return sendSucceeds
     }
 

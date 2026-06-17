@@ -6,9 +6,10 @@ usage() {
 usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--startup-command <command>] [--json]
 
 Creates a new Toastty workspace for a worktree and starts a new terminal command in it.
-The default startup command launches the agent CLI (codex unless --agent-command
-overrides it) with a prompt pointing at the handoff file. --startup-command replaces
-the entire startup command and cannot be combined with --agent-command.
+By default the helper calls agent.launch with structured cwd, environment, and
+initialPrompt values. The agent CLI is codex unless --agent-command overrides it.
+--startup-command replaces the structured launch with a literal terminal command
+and cannot be combined with --agent-command.
 EOF
 }
 
@@ -116,17 +117,27 @@ print(shlex.quote(sys.argv[1]))
 PY
 }
 
+relative_handoff_path() {
+  if [[ "$handoff_file" == "$worktree_path/"* ]]; then
+    printf '%s\n' "${handoff_file#"$worktree_path"/}"
+  else
+    printf '%s\n' "$handoff_file"
+  fi
+}
+
+build_initial_prompt() {
+  local relative_handoff
+  relative_handoff="$(relative_handoff_path)"
+  printf 'Read %s in the repo, use it as the source of truth for this handoff, and continue the task in this worktree.' "$relative_handoff"
+}
+
 build_default_startup_command() {
-  local quoted_worktree quoted_prompt quoted_derived quoted_agent relative_handoff
+  local quoted_worktree quoted_prompt quoted_derived quoted_agent initial_prompt
   quoted_worktree="$(shell_quote "$worktree_path")"
   quoted_derived="$(shell_quote "$worktree_path/artifacts/dev-runs/manual/Derived")"
   quoted_agent="$(shell_quote "$agent_command")"
-  if [[ "$handoff_file" == "$worktree_path/"* ]]; then
-    relative_handoff="${handoff_file#"$worktree_path"/}"
-  else
-    relative_handoff="$handoff_file"
-  fi
-  quoted_prompt="$(shell_quote "Read ${relative_handoff} in the repo, use it as the source of truth for this handoff, and continue the task in this worktree.")"
+  initial_prompt="$(build_initial_prompt)"
+  quoted_prompt="$(shell_quote "$initial_prompt")"
   printf "cd %s && export TOASTTY_DEV_WORKTREE_ROOT=%s TOASTTY_DERIVED_PATH=%s && %s %s" \
     "$quoted_worktree" \
     "$quoted_worktree" \
@@ -200,7 +211,9 @@ retry_json_result_field() {
 }
 
 if [[ -z "$startup_command" ]]; then
-  startup_command="$(build_default_startup_command)"
+  initial_prompt="$(build_initial_prompt)"
+else
+  initial_prompt=""
 fi
 
 if [[ -z "$window_id" ]]; then
@@ -236,39 +249,77 @@ if [[ -f "$handoff_file" ]]; then
   fi
 fi
 
-panel_id="$(
-  retry_json_result_field \
-    40 \
-    0.25 \
-    panelID \
-    run_cli_json query run terminal.state --workspace "$workspace_id"
-)"
+terminal_available="false"
+panel_id=""
+launch_command=""
 
-if [[ -z "$panel_id" ]]; then
-  echo "error: failed to resolve terminal panel in workspace $workspace_id" >&2
-  exit 1
+if [[ -z "$startup_command" ]]; then
+  launch_output=""
+  launch_succeeded="false"
+  for attempt in $(seq 1 40); do
+    if launch_output="$(
+      run_cli_json action run agent.launch \
+        --workspace "$workspace_id" \
+        "profileID=$agent_command" \
+        "cwd=$worktree_path" \
+        "env.TOASTTY_DEV_WORKTREE_ROOT=$worktree_path" \
+        "env.TOASTTY_DERIVED_PATH=$worktree_path/artifacts/dev-runs/manual/Derived" \
+        "initialPrompt=$initial_prompt" 2>&1
+    )"; then
+      launch_succeeded="true"
+      break
+    fi
+    sleep 0.25
+  done
+
+  if [[ "$launch_succeeded" == "true" ]]; then
+    panel_id="$(extract_json_result_field "panelID" <<<"$launch_output")"
+    launch_command="$(extract_json_result_field "command" <<<"$launch_output")"
+    startup_command="$launch_command"
+    terminal_available="true"
+  elif [[ "$agent_command" == "codex" || "$agent_command" == "claude" ]]; then
+    echo "error: failed to launch managed agent with agent.launch: $launch_output" >&2
+    exit 1
+  else
+    echo "warning: agent.launch failed for '$agent_command'; falling back to terminal.send-text" >&2
+    startup_command="$(build_default_startup_command)"
+  fi
 fi
 
-terminal_available="false"
-send_text_output=""
-for attempt in $(seq 1 20); do
-  send_text_output="$(
-    run_cli_json action run terminal.send-text \
-      --panel "$panel_id" \
-      "text=$startup_command" \
-      submit=true \
-      allowUnavailable=true
-  )"
-  terminal_available="$(python3 -c 'import json, sys; print(str(json.load(sys.stdin)["result"]["available"]).lower())' <<<"$send_text_output")"
-  if [[ "$terminal_available" == "true" ]]; then
-    break
-  fi
-  sleep 0.2
-done
-
 if [[ "$terminal_available" != "true" ]]; then
-  echo "error: terminal surface stayed unavailable for panel $panel_id" >&2
-  exit 1
+  panel_id="$(
+    retry_json_result_field \
+      40 \
+      0.25 \
+      panelID \
+      run_cli_json query run terminal.state --workspace "$workspace_id"
+  )"
+
+  if [[ -z "$panel_id" ]]; then
+    echo "error: failed to resolve terminal panel in workspace $workspace_id" >&2
+    exit 1
+  fi
+
+  send_text_output=""
+  for attempt in $(seq 1 20); do
+    send_text_output="$(
+      run_cli_json action run terminal.send-text \
+        --panel "$panel_id" \
+        "text=$startup_command" \
+        submit=true \
+        allowUnavailable=true
+    )"
+    terminal_available="$(python3 -c 'import json, sys; print(str(json.load(sys.stdin)["result"]["available"]).lower())' <<<"$send_text_output")"
+    if [[ "$terminal_available" == "true" ]]; then
+      break
+    fi
+    sleep 0.2
+  done
+
+  if [[ "$terminal_available" != "true" ]]; then
+    echo "error: terminal surface stayed unavailable for panel $panel_id" >&2
+    exit 1
+  fi
 fi
 
 if [[ "$json_output" == "1" ]]; then

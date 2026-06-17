@@ -149,6 +149,24 @@ struct AgentProfilesFileTests {
     }
 
     @Test
+    func loadParsesInitialPromptPlacement() throws {
+        let contents = """
+        [gemini]
+        displayName = "Gemini"
+        argv = ["gemini", "--prompt"]
+        initialPromptPlacement = "trailing"
+        """
+
+        let fileManager = InMemoryFileManager(templateContents: contents)
+        let catalog = try AgentProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path
+        )
+
+        #expect(catalog.profiles.first?.initialPromptPlacement == .trailing)
+    }
+
+    @Test
     func ensureTemplateExistsCreatesCommentOnlyFileOnce() throws {
         let fileManager = InMemoryFileManager(templateContents: nil)
 
@@ -335,6 +353,29 @@ struct AgentProfilesFileTests {
             throws: AgentProfilesParseError(
                 line: 1,
                 message: "[codex] manualCommandNames contains duplicate entry 'RUN-SANDBOXED.SH'"
+            )
+        ) {
+            _ = try AgentProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsInvalidInitialPromptPlacement() throws {
+        let contents = """
+        [gemini]
+        displayName = "Gemini"
+        argv = ["gemini"]
+        initialPromptPlacement = "stdin"
+        """
+        let fileManager = InMemoryFileManager(templateContents: contents)
+
+        #expect(
+            throws: AgentProfilesParseError(
+                line: 4,
+                message: "[gemini] initialPromptPlacement must be one of: trailing"
             )
         ) {
             _ = try AgentProfilesFile.load(

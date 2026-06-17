@@ -5,6 +5,13 @@ import Foundation
 protocol TerminalCommandRouting: AnyObject {
     @discardableResult
     func sendText(_ text: String, submit: Bool, panelID: UUID) -> Bool
+    @discardableResult
+    func sendText(
+        _ text: String,
+        submit: Bool,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> Bool
     func readVisibleText(panelID: UUID) -> String?
     func promptState(panelID: UUID) -> TerminalPromptState
 }
@@ -36,6 +43,10 @@ enum AgentLaunchError: LocalizedError, Equatable {
     case panelBusy(runningCommand: String?)
     case cliUnavailable(path: String?)
     case terminalUnavailable(panelID: UUID)
+    case invalidWorkingDirectory(path: String)
+    case invalidLaunchEnvironment(message: String)
+    case initialPromptUnsupported(profileID: String)
+    case invalidInitialPrompt(message: String)
 
     var errorDescription: String? {
         switch self {
@@ -69,6 +80,14 @@ enum AgentLaunchError: LocalizedError, Equatable {
             return "Toastty could not resolve its CLI path."
         case .terminalUnavailable(let panelID):
             return "The target terminal is unavailable for panel \(panelID.uuidString)."
+        case .invalidWorkingDirectory(let path):
+            return "Agent launch cwd must be an existing directory: \(path)"
+        case .invalidLaunchEnvironment(let message):
+            return "Agent launch environment is invalid: \(message)"
+        case .initialPromptUnsupported(let profileID):
+            return "Agent profile '\(profileID)' does not support initialPrompt."
+        case .invalidInitialPrompt(let message):
+            return "Agent launch initialPrompt is invalid: \(message)"
         }
     }
 }
@@ -78,6 +97,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private weak var store: AppStore?
     private weak var terminalCommandRouter: (any TerminalCommandRouting)?
     private let agentCatalogProvider: any AgentCatalogProviding
+    private let fileManager: FileManager
     private let managedLaunchPlanner: any ManagedAgentLaunchPlanning
 
     init(
@@ -95,6 +115,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
         self.agentCatalogProvider = agentCatalogProvider
+        self.fileManager = fileManager
         managedLaunchPlanner = ManagedAgentLaunchPlanner(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -115,7 +136,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     func canLaunchAgent(profileID: String? = nil, workspaceID: UUID? = nil, panelID: UUID? = nil) -> Bool {
         if let profileID {
-            guard agentCatalogProvider.catalog.profile(id: profileID) != nil else {
+            guard resolvedLaunchProfile(profileID: profileID) != nil else {
                 return false
             }
         } else if agentCatalogProvider.catalog.profiles.isEmpty {
@@ -127,15 +148,19 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     func launch(
         profileID: String,
         workspaceID: UUID? = nil,
-        panelID: UUID? = nil
+        panelID: UUID? = nil,
+        cwd: String? = nil,
+        environment: [String: String] = [:],
+        initialPrompt: String? = nil,
+        focusPolicy: TerminalInputFocusPolicy = .focusTarget
     ) throws -> AgentLaunchResult {
         guard let terminalCommandRouter else {
             throw AgentLaunchError.serviceUnavailable
         }
-        guard agentCatalogProvider.catalog.profiles.isEmpty == false else {
-            throw AgentLaunchError.noProfilesConfigured
-        }
-        guard let launchProfile = agentCatalogProvider.catalog.profile(id: profileID) else {
+        guard let launchProfile = resolvedLaunchProfile(profileID: profileID) else {
+            if agentCatalogProvider.catalog.profiles.isEmpty {
+                throw AgentLaunchError.noProfilesConfigured
+            }
             throw AgentLaunchError.profileNotFound(profileID: profileID)
         }
 
@@ -145,22 +170,36 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         guard let agent = AgentKind(rawValue: launchProfile.id) else {
             throw AgentLaunchError.profileNotFound(profileID: launchProfile.id)
         }
+        let explicitCWD = try normalizedExplicitWorkingDirectory(cwd)
+        let launchEnvironment = try validatedLaunchEnvironment(environment)
+        let launchArgv = try argv(
+            for: launchProfile,
+            agent: agent,
+            applyingInitialPrompt: initialPrompt
+        )
         let plan = try managedLaunchPlanner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
                 agent: agent,
                 panelID: target.panelID,
-                argv: launchProfile.argv,
-                cwd: target.cwd
+                argv: launchArgv,
+                cwd: explicitCWD ?? target.cwd,
+                environment: launchEnvironment
             )
         )
         var commandEnvironment = plan.environment
         commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
         let commandLine = ShellCommandRenderer.render(
             argv: plan.argv,
-            environment: commandEnvironment
+            environment: commandEnvironment,
+            workingDirectory: explicitCWD
         )
 
-        guard terminalCommandRouter.sendText(commandLine, submit: true, panelID: target.panelID) else {
+        guard terminalCommandRouter.sendText(
+            commandLine,
+            submit: true,
+            panelID: target.panelID,
+            focusPolicy: focusPolicy
+        ) else {
             managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
             throw AgentLaunchError.terminalUnavailable(panelID: target.panelID)
         }
@@ -185,6 +224,154 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     func discardManagedLaunch(sessionID: String) {
         managedLaunchPlanner.discardManagedLaunch(sessionID: sessionID)
+    }
+
+    private func resolvedLaunchProfile(profileID: String) -> AgentProfile? {
+        if let profile = agentCatalogProvider.catalog.profile(id: profileID) {
+            return profile
+        }
+        guard let agent = AgentKind(rawValue: profileID),
+              Self.supportsImplicitProfile(agent) else {
+            return nil
+        }
+        return Self.implicitProfile(for: agent)
+    }
+
+    private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {
+        agent == .codex || agent == .claude || agent == .pi
+    }
+
+    private static func implicitProfile(for agent: AgentKind) -> AgentProfile {
+        AgentProfile(
+            id: agent.rawValue,
+            displayName: agent.displayName,
+            argv: [agent.rawValue],
+            initialPromptPlacement: (agent == .codex || agent == .claude) ? .trailing : nil
+        )
+    }
+
+    private func normalizedExplicitWorkingDirectory(_ cwd: String?) throws -> String? {
+        guard let cwd else { return nil }
+        let trimmed = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        guard trimmed.contains("\u{0}") == false else {
+            throw AgentLaunchError.invalidWorkingDirectory(path: cwd)
+        }
+        let normalized = ((trimmed as NSString).expandingTildeInPath as NSString).standardizingPath
+        guard (normalized as NSString).isAbsolutePath else {
+            throw AgentLaunchError.invalidWorkingDirectory(path: normalized)
+        }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: normalized, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw AgentLaunchError.invalidWorkingDirectory(path: normalized)
+        }
+        return normalized
+    }
+
+    private func validatedLaunchEnvironment(_ environment: [String: String]) throws -> [String: String] {
+        for (key, value) in environment {
+            guard Self.isValidEnvironmentKey(key) else {
+                throw AgentLaunchError.invalidLaunchEnvironment(
+                    message: "'\(key)' is not a valid environment variable name"
+                )
+            }
+            guard Self.reservedLaunchEnvironmentKeys.contains(key) == false else {
+                throw AgentLaunchError.invalidLaunchEnvironment(
+                    message: "'\(key)' is managed by Toastty"
+                )
+            }
+            guard value.contains("\u{0}") == false else {
+                throw AgentLaunchError.invalidLaunchEnvironment(
+                    message: "'\(key)' contains a NUL byte"
+                )
+            }
+        }
+        return environment
+    }
+
+    private static func isValidEnvironmentKey(_ key: String) -> Bool {
+        guard let first = key.unicodeScalars.first else { return false }
+        let firstAllowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
+        let restAllowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+        guard firstAllowed.contains(first) else { return false }
+        return key.unicodeScalars.dropFirst().allSatisfy(restAllowed.contains)
+    }
+
+    private static let reservedLaunchEnvironmentKeys: Set<String> = [
+        ToasttyLaunchContextEnvironment.sessionIDKey,
+        ToasttyLaunchContextEnvironment.panelIDKey,
+        ToasttyLaunchContextEnvironment.socketPathKey,
+        ToasttyLaunchContextEnvironment.cliPathKey,
+        ToasttyLaunchContextEnvironment.cwdKey,
+        ToasttyLaunchContextEnvironment.repoRootKey,
+        ToasttyLaunchContextEnvironment.managedAgentShimBypassKey,
+        "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT",
+        "CODEX_TUI_RECORD_SESSION",
+        "CODEX_TUI_SESSION_LOG_PATH",
+        "TOASTTY_PI_TELEMETRY_LOG_PATH",
+    ]
+
+    private func argv(
+        for profile: AgentProfile,
+        agent: AgentKind,
+        applyingInitialPrompt initialPrompt: String?
+    ) throws -> [String] {
+        guard let prompt = try normalizedInitialPrompt(initialPrompt) else {
+            return profile.argv
+        }
+        guard initialPromptPlacement(for: profile, agent: agent) == .trailing else {
+            throw AgentLaunchError.initialPromptUnsupported(profileID: profile.id)
+        }
+        return profile.argv + [prompt]
+    }
+
+    private func normalizedInitialPrompt(_ initialPrompt: String?) throws -> String? {
+        guard let initialPrompt else { return nil }
+        guard initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return nil
+        }
+        guard initialPrompt.contains("\u{0}") == false else {
+            throw AgentLaunchError.invalidInitialPrompt(message: "NUL bytes are not supported")
+        }
+        guard initialPrompt.utf8.count <= Self.maximumInitialPromptUTF8Count else {
+            throw AgentLaunchError.invalidInitialPrompt(
+                message: "value exceeds \(Self.maximumInitialPromptUTF8Count) UTF-8 bytes"
+            )
+        }
+        return initialPrompt
+    }
+
+    private static let maximumInitialPromptUTF8Count = 64 * 1024
+
+    private func initialPromptPlacement(
+        for profile: AgentProfile,
+        agent: AgentKind
+    ) -> AgentInitialPromptPlacement? {
+        if let placement = profile.initialPromptPlacement {
+            return placement
+        }
+        guard agent == .codex || agent == .claude else {
+            return nil
+        }
+        return Self.argvIsDirectFirstPartyPromptCommand(profile.argv, for: agent) ? .trailing : nil
+    }
+
+    private static func argvIsDirectFirstPartyPromptCommand(_ argv: [String], for agent: AgentKind) -> Bool {
+        guard argv.count == 1,
+              let executable = argv.first else {
+            return false
+        }
+        let commandNames: Set<String>
+        switch agent {
+        case .codex:
+            commandNames = ["codex", "cdx"]
+        case .claude:
+            commandNames = ["claude"]
+        default:
+            return false
+        }
+        return commandNames.contains(URL(fileURLWithPath: executable).lastPathComponent)
     }
 
     private func resolveLaunchTarget(

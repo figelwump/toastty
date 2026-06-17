@@ -92,7 +92,8 @@ When the parent thread already has a full implementation plan, prefer the follow
 - Remote wrappers that bootstrap or generate in disposable remote worktrees do not satisfy this handoff requirement for the local worktree.
 - The handoff file must exist before launching the new agent session.
 - The default workspace layout is terminal on the left and the handoff markdown file in the right panel.
-- The default startup command should `cd` into the new worktree, export `TOASTTY_DEV_WORKTREE_ROOT`, and start the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. The agent CLI is `codex` unless the user explicitly requested a different agent; honor an explicit request with `--agent-command`.
+- The default launch should use `agent.launch` with structured `cwd`, environment, and `initialPrompt` arguments so the new background workspace starts without a separate `terminal.send-text` injection. The launched command still `cd`s into the new worktree, sets `TOASTTY_DEV_WORKTREE_ROOT` and `TOASTTY_DERIVED_PATH`, and starts the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. The agent CLI is `codex` unless the user explicitly requested a different agent; honor an explicit request with `--agent-command`.
+- `--startup-command` is the explicit escape hatch for validation or custom shell setup. It replaces the structured agent launch path and uses `terminal.send-text` after resolving the terminal panel.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
 ## Window targeting

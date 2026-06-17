@@ -13,6 +13,11 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 Toastty sends the configured command into the focused terminal panel and starts tracking the session automatically.
 
+Automation can also launch managed `codex`, `claude`, or `pi` sessions through
+`agent.launch` without an `agents.toml` profile. Configure `agents.toml` when
+you want manual UI launch entries, shortcuts, custom argv, wrapper shim names,
+or custom initial-prompt support.
+
 ## agents.toml
 
 Agent profiles live in `~/.toastty/agents.toml`. Each TOML table defines one launchable profile:
@@ -47,7 +52,41 @@ Profile fields:
 | `displayName` | yes | Label shown in the Agent menu, command palette, and top-bar buttons when enabled |
 | `argv` | yes | The exact command Toastty executes, as a JSON-style string array |
 | `manualCommandNames` | no | For built-in `[codex]` / `[claude]` / `[pi]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
+| `initialPromptPlacement` | no | Set to `"trailing"` only for profiles whose command accepts the first prompt as the final argv argument. Automation `agent.launch initialPrompt=...` uses this to opt custom profiles or shell-helper profiles into prompt passing. |
 | `shortcutKey` | no | Single ASCII letter or digit; registers `Cmd+Opt+<key>` |
+
+### Automation launch options
+
+The `agent.launch` app-control action accepts optional structured launch
+arguments for automation:
+
+- App-control delivery preserves the current AppKit first responder, so a
+  background launch does not reroute the user's next physical keystrokes.
+  Manual launches from the Agent menu, top bar, command palette, or shortcut use
+  the normal focused-target behavior.
+- `cwd` must be an existing directory. Toastty starts the terminal command with
+  `cd <cwd> && ...`, records the managed session in that directory, and uses it
+  for repository-root inference. Pass an absolute path or a `~`-expanded path;
+  relative paths are rejected.
+- `env.NAME=value` injects caller-provided environment values before Toastty's
+  managed launch context. Toastty rejects exact-key collisions with its managed
+  context and provider instrumentation keys: `TOASTTY_SESSION_ID`,
+  `TOASTTY_PANEL_ID`, `TOASTTY_SOCKET_PATH`, `TOASTTY_CLI_PATH`, `TOASTTY_CWD`,
+  `TOASTTY_REPO_ROOT`, `TOASTTY_MANAGED_AGENT_SHIM_BYPASS`,
+  `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT`, `CODEX_TUI_RECORD_SESSION`,
+  `CODEX_TUI_SESSION_LOG_PATH`, and `TOASTTY_PI_TELEMETRY_LOG_PATH`.
+- `initialPrompt` appends the first prompt as a trailing argv argument only when
+  the resolved profile supports it.
+
+Built-in Codex and Claude automation launches support `initialPrompt` when the
+resolved argv is exactly one direct first-party command (`codex`, `cdx`, or
+`claude`). Implicit automation profiles for `codex` and `claude` also support
+it when no `agents.toml` profile exists. Profiles with extra arguments,
+subcommands, wrappers, shell helpers such as `argv = ["scodex"]`, and custom
+profiles such as `[gemini]`, must declare
+`initialPromptPlacement = "trailing"` before `initialPrompt` is accepted. Pi
+launches currently do not support `initialPrompt` unless a profile declares that
+placement explicitly.
 
 ### Profile ID rules
 

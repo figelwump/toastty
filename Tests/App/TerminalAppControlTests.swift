@@ -115,6 +115,35 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertEqual(focusFailureLogCount, 1)
     }
 
+    func testAgentLaunchActionPassesStructuredCWDEnvironmentAndInitialPrompt() throws {
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let fixture = try TerminalAppControlFixture(agentTerminalCommandRouter: terminalRouter)
+        let cwdURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-app-control-agent-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: cwdURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cwdURL) }
+
+        let outcome = try fixture.executor.runAction(
+            id: AppControlActionID.agentLaunch.rawValue,
+            args: [
+                "profileID": .string("codex"),
+                "workspaceID": .string(fixture.workspaceID.uuidString),
+                "cwd": .string(cwdURL.path),
+                "env.TOASTTY_DEV_WORKTREE_ROOT": .string(cwdURL.path),
+                "initialPrompt": .string("Read WORKTREE_HANDOFF.md"),
+            ]
+        )
+
+        XCTAssertEqual(outcome.result?.string("profileID"), "codex")
+        XCTAssertEqual(outcome.result?.string("cwd"), cwdURL.path)
+        let command = try XCTUnwrap(terminalRouter.sentTextByPanelID[fixture.panelID])
+        XCTAssertTrue(command.hasPrefix("cd \(cwdURL.path) && "))
+        XCTAssertTrue(command.contains("TOASTTY_DEV_WORKTREE_ROOT=\(cwdURL.path)"))
+        XCTAssertTrue(command.contains("'Read WORKTREE_HANDOFF.md'"))
+        XCTAssertEqual(terminalRouter.focusPolicyByPanelID[fixture.panelID], .preserveFirstResponder)
+    }
+
     func testTerminalStateQueryUsesLiveTitleWithoutMutatingPersistedTitle() throws {
         let fixture = try TerminalAppControlFixture()
         fixture.terminalRuntimeRegistry.terminalLiveTitleStore.setTitle(
@@ -195,6 +224,7 @@ private struct TerminalAppControlFixture {
     let panelID: UUID
 
     init(
+        agentTerminalCommandRouter: (any TerminalCommandRouting)? = nil,
         configureState: ((inout AppState, UUID) throws -> Void)? = nil
     ) throws {
         var state = AppState.bootstrap()
@@ -219,7 +249,7 @@ private struct TerminalAppControlFixture {
         )
         let agentLaunchService = AgentLaunchService(
             store: store,
-            terminalCommandRouter: terminalRuntimeRegistry,
+            terminalCommandRouter: agentTerminalCommandRouter ?? terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: TestAgentCatalogProvider(),
             cliExecutablePathProvider: { "/bin/sh" },

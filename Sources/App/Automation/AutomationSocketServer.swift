@@ -962,11 +962,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("argv must be a non-empty string array")
             }
             let preflightPolicy = try managedLaunchPreflightPolicy(from: payload)
+            let environment = try managedLaunchEnvironment(from: payload)
             let request = ManagedAgentLaunchRequest(
                 agent: agent,
                 panelID: panelID,
                 argv: argv,
                 cwd: normalizedOptionalText(payload.string("cwd")),
+                environment: environment,
                 preflightPolicy: preflightPolicy
             )
 
@@ -2401,6 +2403,20 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             throw AutomationSocketError.invalidPayload("preflightPolicy must be one of: skip, interactive")
         }
         return policy
+    }
+
+    private func managedLaunchEnvironment(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> [String: String] {
+        guard let rawEnvironment = payload.object("environment") ?? payload.object("env") else {
+            return [:]
+        }
+        return try rawEnvironment.reduce(into: [String: String]()) { result, entry in
+            guard case .string(let value) = entry.value else {
+                throw AutomationSocketError.invalidPayload("environment values must be strings")
+            }
+            result[entry.key] = value
+        }
     }
 
     @MainActor

@@ -144,6 +144,25 @@ Scratchpad actions are intended for agent and automation integrations:
 - `panel.scratchpad.patch-content` updates the existing Scratchpad linked to an active managed session without sending a full HTML snapshot. It requires `sessionID`, `expectedRevision`, and `patch` as a JSON string, returns `windowID`, `workspaceID`, `panelID`, `documentID`, `previousRevision`, `revision`, `appliedEdits`, and `created=false`, and does not create a Scratchpad when none is linked. Patch JSON is limited to 262,144 UTF-8 bytes. The top-level patch object only accepts `replacements`; each replacement object only accepts `oldText` and `newText`, and unknown fields are rejected. Patch replacements apply sequentially; each `oldText` must be non-empty and occur exactly once in the current intermediate HTML. Successful patches still reload the generated Scratchpad iframe from the updated full HTML snapshot.
 - `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
 - `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
+- `agent.launch` starts a managed agent profile in a resolved terminal panel. It
+  requires `profileID` and accepts optional `cwd`, repeatable `env.NAME=value`,
+  and `initialPrompt` arguments. `cwd` must be absolute or `~`-expanded and
+  becomes both the launch directory and the session working directory; `env.NAME`
+  entries are injected before Toastty's managed launch context; `initialPrompt`
+  is appended only for supported profiles. Built-in `codex` and `claude`
+  automation launches work even when the user has not created
+  `~/.toastty/agents.toml`. CLI/app-control `agent.launch` preserves the
+  current AppKit first responder; focus the target workspace or panel separately
+  when it should become the interactive keyboard target.
+
+```bash
+"$TOASTTY_CLI_PATH" action run agent.launch \
+  --workspace "$WORKSPACE_ID" \
+  profileID=codex \
+  cwd="$HOME/new-work-tree" \
+  env.TOASTTY_DEV_WORKTREE_ROOT="$HOME/new-work-tree" \
+  initialPrompt="/work-on POP-1234"
+```
 
 `terminal.send-text` writes directly to the resolved terminal surface and does
 not move AppKit keyboard focus. This lets automation prepare or start work in a

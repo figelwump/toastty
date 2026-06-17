@@ -454,7 +454,11 @@ final class AppControlExecutor {
             let result = try agentLaunchService.launch(
                 profileID: profileID,
                 workspaceID: args.uuid("workspaceID"),
-                panelID: args.uuid("panelID")
+                panelID: args.uuid("panelID"),
+                cwd: normalizedOptionalText(args.stringValue("cwd")),
+                environment: try agentLaunchEnvironment(args: args),
+                initialPrompt: args.stringValue("initialPrompt"),
+                focusPolicy: .preserveFirstResponder
             )
             var response: [String: AutomationJSONValue] = [
                 "profileID": .string(result.agent.rawValue),
@@ -908,6 +912,44 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("\(name) is required")
         }
         return value
+    }
+
+    func agentLaunchEnvironment(args: [String: AutomationJSONValue]) throws -> [String: String] {
+        var environment: [String: String] = [:]
+        try recordEnvironmentObject(args.object("environment"), into: &environment)
+        try recordEnvironmentObject(args.object("env"), into: &environment)
+
+        for (key, value) in args where key.hasPrefix("env.") {
+            let environmentKey = String(key.dropFirst("env.".count))
+            guard environmentKey.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("env. keys must include an environment variable name")
+            }
+            guard environment[environmentKey] == nil else {
+                throw AutomationSocketError.invalidPayload("duplicate environment variable: \(environmentKey)")
+            }
+            guard case .string(let environmentValue) = value else {
+                throw AutomationSocketError.invalidPayload("env.\(environmentKey) must be a string")
+            }
+            environment[environmentKey] = environmentValue
+        }
+
+        return environment
+    }
+
+    func recordEnvironmentObject(
+        _ object: [String: AutomationJSONValue]?,
+        into environment: inout [String: String]
+    ) throws {
+        guard let object else { return }
+        for (key, value) in object {
+            guard environment[key] == nil else {
+                throw AutomationSocketError.invalidPayload("duplicate environment variable: \(key)")
+            }
+            guard case .string(let environmentValue) = value else {
+                throw AutomationSocketError.invalidPayload("environment values must be strings")
+            }
+            environment[key] = environmentValue
+        }
     }
 
     func resolveRequiredIndex(

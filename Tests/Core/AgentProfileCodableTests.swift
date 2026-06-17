@@ -10,6 +10,7 @@ struct AgentProfileCodableTests {
             displayName: "Codex",
             argv: ["codex"],
             manualCommandNames: ["cdx"],
+            initialPromptPlacement: .trailing,
             shortcutKey: "c"
         )
 
@@ -19,6 +20,7 @@ struct AgentProfileCodableTests {
         #expect(decoded == profile)
         #expect(String(data: data, encoding: .utf8)?.contains("\"shortcutKey\":\"c\"") == true)
         #expect(String(data: data, encoding: .utf8)?.contains("\"manualCommandNames\":[\"cdx\"]") == true)
+        #expect(String(data: data, encoding: .utf8)?.contains("\"initialPromptPlacement\":\"trailing\"") == true)
     }
 
     @Test

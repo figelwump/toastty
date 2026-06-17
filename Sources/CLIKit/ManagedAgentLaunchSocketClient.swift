@@ -83,6 +83,13 @@ enum ManagedAgentLaunchSocketClient {
         if let cwd = request.cwd {
             payload["cwd"] = .string(cwd)
         }
+        if request.environment.isEmpty == false {
+            payload["environment"] = .object(
+                request.environment.reduce(into: [String: AutomationJSONValue]()) { result, entry in
+                    result[entry.key] = .string(entry.value)
+                }
+            )
+        }
         return payload
     }
 }

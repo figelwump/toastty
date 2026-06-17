@@ -312,6 +312,7 @@ struct AgentLaunchServiceTests {
         #expect(store.hasEverLaunchedAgent)
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
+        #expect(terminalRouter.focusPolicyByPanelID[panelID] == .focusTarget)
         #expect(injectedCommand.contains("TOASTTY_SESSION_ID=\(result.sessionID)"))
         #expect(injectedCommand.contains("TOASTTY_PANEL_ID=\(panelID.uuidString)"))
         #expect(injectedCommand.contains("TOASTTY_SOCKET_PATH=/tmp/toastty-tests.sock"))
@@ -521,6 +522,256 @@ struct AgentLaunchServiceTests {
         #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=") == false)
         #expect(injectedCommand.contains("'/Applications/Claude Code.app/Contents/MacOS/cc' --settings "))
         #expect(injectedCommand.contains("'--append-system-prompt=review only'"))
+    }
+
+    @Test
+    func launchUsesImplicitBuiltInProfileWhenCatalogIsEmpty() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(profiles: []),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+
+        let result = try service.launch(profileID: "codex", initialPrompt: "/work-on POP-1234")
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(result.agent == .codex)
+        #expect(result.displayName == "Codex")
+        #expect(command.contains("codex '/work-on POP-1234'"))
+    }
+
+    @Test
+    func launchWithExplicitCWDAndEnvironmentRendersStructuredShellPrefix() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let projectRoot = try makeProjectRoot()
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        let cwd = projectRoot.appendingPathComponent("Packages/toastty", isDirectory: true).path
+        let workspace = try #require(store.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        _ = store.send(.updateTerminalPanelMetadata(panelID: panelID, title: nil, cwd: "/tmp/other"))
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+
+        let result = try service.launch(
+            profileID: "codex",
+            cwd: cwd,
+            environment: [
+                "TOASTTY_DEV_WORKTREE_ROOT": projectRoot.path,
+                "TOASTTY_DERIVED_PATH": projectRoot.appendingPathComponent("artifacts/Derived").path,
+            ],
+            initialPrompt: "Read WORKTREE_HANDOFF.md"
+        )
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+        let activeSession = try #require(sessionRuntimeStore.sessionRegistry.activeSession(sessionID: result.sessionID))
+
+        #expect(command.hasPrefix("cd \(cwd) && "))
+        #expect(command.contains("TOASTTY_DEV_WORKTREE_ROOT=\(projectRoot.path)"))
+        #expect(command.contains("TOASTTY_DERIVED_PATH=\(projectRoot.path)/artifacts/Derived"))
+        #expect(command.contains("TOASTTY_CWD=\(cwd)"))
+        #expect(command.contains("codex 'Read WORKTREE_HANDOFF.md'"))
+        #expect(result.cwd == cwd)
+        #expect(activeSession.cwd == cwd)
+    }
+
+    @Test
+    func launchRejectsRelativeExplicitCWD() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        #expect(throws: AgentLaunchError.invalidWorkingDirectory(path: "Sources")) {
+            _ = try service.launch(profileID: "codex", cwd: "Sources")
+        }
+    }
+
+    @Test
+    func launchQuotesStructuredCWDEnvironmentAndInitialPromptMetacharacters() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let cwdURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty agent 'quote' \(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: cwdURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cwdURL) }
+        let envValue = "alpha beta; $(echo nope) 'tail'"
+        let prompt = "review 'quoted'; $(echo nope)"
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .hooks }
+        )
+
+        let result = try service.launch(
+            profileID: "codex",
+            cwd: cwdURL.path,
+            environment: ["CUSTOM_VALUE": envValue],
+            initialPrompt: prompt
+        )
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(command.hasPrefix("cd \(shellQuoteForTest(cwdURL.path)) && "))
+        #expect(command.contains("CUSTOM_VALUE=\(shellQuoteForTest(envValue))"))
+        #expect(command.contains("codex \(shellQuoteForTest(prompt))"))
+    }
+
+    @Test
+    func launchRejectsReservedEnvironmentVariables() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_SESSION_ID' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "codex",
+                environment: ["TOASTTY_SESSION_ID": "user-value"]
+            )
+        }
+    }
+
+    @Test
+    func launchRejectsInitialPromptForCustomProfileWithoutDeclaredPlacement() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(
+                profiles: [AgentProfile(id: "gemini", displayName: "Gemini", argv: ["gemini"])]
+            ),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        #expect(throws: AgentLaunchError.initialPromptUnsupported(profileID: "gemini")) {
+            _ = try service.launch(profileID: "gemini", initialPrompt: "start")
+        }
+    }
+
+    @Test
+    func launchRejectsInitialPromptForShellHelperWithoutDeclaredPlacement() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(
+                profiles: [AgentProfile(id: "codex", displayName: "Codex", argv: ["scodex"])]
+            ),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        #expect(throws: AgentLaunchError.initialPromptUnsupported(profileID: "codex")) {
+            _ = try service.launch(profileID: "codex", initialPrompt: "start")
+        }
+    }
+
+    @Test
+    func launchRejectsInitialPromptForFirstPartyProfileWithExtraArgumentsWithoutDeclaredPlacement() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(
+                profiles: [AgentProfile(id: "codex", displayName: "Codex", argv: ["codex", "resume"])]
+            ),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        #expect(throws: AgentLaunchError.initialPromptUnsupported(profileID: "codex")) {
+            _ = try service.launch(profileID: "codex", initialPrompt: "start")
+        }
+    }
+
+    @Test
+    func launchUsesDeclaredTrailingInitialPromptPlacementForCustomProfile() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(
+                profiles: [
+                    AgentProfile(
+                        id: "gemini",
+                        displayName: "Gemini",
+                        argv: ["gemini", "--prompt"],
+                        initialPromptPlacement: .trailing
+                    ),
+                ]
+            ),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let result = try service.launch(profileID: "gemini", initialPrompt: "hello world")
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(command.contains("gemini --prompt 'hello world'"))
     }
 
     @Test
@@ -803,5 +1054,15 @@ private func makeFile(at url: URL, executable: Bool) throws {
         try handle.seekToEnd()
         let terminatedString = string.hasSuffix("\n") ? string : string + "\n"
         try handle.write(contentsOf: Data(terminatedString.utf8))
+    }
+
+    private func shellQuoteForTest(_ value: String) -> String {
+        guard value.isEmpty == false else { return "''" }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789%+,-./:=@_")
+        if value.unicodeScalars.allSatisfy(allowed.contains) {
+            return value
+        }
+        let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
+        return "'\(escaped)'"
     }
 }

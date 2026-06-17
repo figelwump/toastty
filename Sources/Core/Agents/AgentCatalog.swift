@@ -1,10 +1,15 @@
 import Foundation
 
+public enum AgentInitialPromptPlacement: String, Codable, Equatable, Hashable, Sendable {
+    case trailing
+}
+
 public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable {
     public let id: String
     public let displayName: String
     public let argv: [String]
     public let manualCommandNames: [String]
+    public let initialPromptPlacement: AgentInitialPromptPlacement?
     /// Single lowercase alphanumeric character used as a keyboard shortcut.
     /// Launch: ⌘⌥<key>.
     public let shortcutKey: Character?
@@ -14,12 +19,14 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
         displayName: String,
         argv: [String],
         manualCommandNames: [String] = [],
+        initialPromptPlacement: AgentInitialPromptPlacement? = nil,
         shortcutKey: Character? = nil
     ) {
         self.id = id
         self.displayName = displayName
         self.argv = argv
         self.manualCommandNames = manualCommandNames
+        self.initialPromptPlacement = initialPromptPlacement
         self.shortcutKey = shortcutKey
     }
 
@@ -28,6 +35,7 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
         case displayName
         case argv
         case manualCommandNames
+        case initialPromptPlacement
         case shortcutKey
     }
 
@@ -37,6 +45,10 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
         displayName = try container.decode(String.self, forKey: .displayName)
         argv = try container.decode([String].self, forKey: .argv)
         manualCommandNames = try container.decodeIfPresent([String].self, forKey: .manualCommandNames) ?? []
+        initialPromptPlacement = try container.decodeIfPresent(
+            AgentInitialPromptPlacement.self,
+            forKey: .initialPromptPlacement
+        )
 
         if let rawShortcutKey = try container.decodeIfPresent(String.self, forKey: .shortcutKey) {
             guard rawShortcutKey.count == 1 else {
@@ -60,6 +72,7 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
         if manualCommandNames.isEmpty == false {
             try container.encode(manualCommandNames, forKey: .manualCommandNames)
         }
+        try container.encodeIfPresent(initialPromptPlacement, forKey: .initialPromptPlacement)
         try container.encodeIfPresent(shortcutKey.map(String.init), forKey: .shortcutKey)
     }
 }

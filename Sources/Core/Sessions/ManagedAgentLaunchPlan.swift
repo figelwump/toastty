@@ -5,6 +5,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
     public let panelID: UUID
     public let argv: [String]
     public let cwd: String?
+    public let environment: [String: String]
     public let preflightPolicy: ManagedAgentLaunchPreflightPolicy
 
     private enum CodingKeys: String, CodingKey {
@@ -12,6 +13,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         case panelID
         case argv
         case cwd
+        case environment
         case preflightPolicy
     }
 
@@ -20,12 +22,14 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         panelID: UUID,
         argv: [String],
         cwd: String?,
+        environment: [String: String] = [:],
         preflightPolicy: ManagedAgentLaunchPreflightPolicy = .skip
     ) {
         self.agent = agent
         self.panelID = panelID
         self.argv = argv
         self.cwd = cwd
+        self.environment = environment
         self.preflightPolicy = preflightPolicy
     }
 
@@ -35,6 +39,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         panelID = try container.decode(UUID.self, forKey: .panelID)
         argv = try container.decode([String].self, forKey: .argv)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        environment = try container.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
         preflightPolicy = try container.decodeIfPresent(
             ManagedAgentLaunchPreflightPolicy.self,
             forKey: .preflightPolicy

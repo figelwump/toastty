@@ -77,6 +77,9 @@ public enum AgentProfilesFile {
         #                        should shim for typed launches of built-in
         #                        Codex/Claude/Pi wrappers. Use basenames only,
         #                        with no paths or spaces.
+        #   initialPromptPlacement — (optional) set to "trailing" only when
+        #                            automation may pass the first prompt as
+        #                            the final argv argument for this profile.
         #   shortcutKey  — (optional) single letter or digit; registers ⌘⌥<key>.
         #
         # Edit these examples to match your local setup.
@@ -109,6 +112,7 @@ private enum AgentProfilesParser {
         var displayName: String?
         var argv: [String]?
         var manualCommandNames: [String]?
+        var initialPromptPlacement: AgentInitialPromptPlacement?
         var shortcutKey: String?
     }
 
@@ -152,6 +156,7 @@ private enum AgentProfilesParser {
                     displayName: displayName,
                     argv: argv,
                     manualCommandNames: manualCommandNames,
+                    initialPromptPlacement: currentProfile.initialPromptPlacement,
                     shortcutKey: shortcutKey
                 )
             )
@@ -304,6 +309,31 @@ private enum AgentProfilesParser {
                     throw AgentProfilesParseError(
                         line: lineIndex + 1,
                         message: "[\(currentID)] has invalid manualCommandNames"
+                    )
+                }
+
+            case "initialPromptPlacement":
+                guard currentProfile?.initialPromptPlacement == nil else {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "[\(currentID)] has duplicate initialPromptPlacement"
+                    )
+                }
+                do {
+                    let value = try decodeJSONString(rawValue)
+                    guard let placement = AgentInitialPromptPlacement(rawValue: value) else {
+                        throw AgentProfilesParseError(
+                            line: lineIndex + 1,
+                            message: "[\(currentID)] initialPromptPlacement must be one of: trailing"
+                        )
+                    }
+                    currentProfile?.initialPromptPlacement = placement
+                } catch let error as AgentProfilesParseError {
+                    throw error
+                } catch {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "[\(currentID)] has invalid initialPromptPlacement"
                     )
                 }
 

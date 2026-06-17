@@ -143,7 +143,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
         }
 
-        var environment = AgentLaunchInstrumentation.baselineEnvironment(for: request.agent)
+        var environment = request.environment
+        for (key, value) in AgentLaunchInstrumentation.baselineEnvironment(for: request.agent) {
+            environment[key] = value
+        }
         for (key, value) in preparedLaunch.environment {
             environment[key] = value
         }
