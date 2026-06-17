@@ -441,6 +441,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
         Task { @MainActor [weak self] in
+            ToasttyApplicationIconPolicy.applyLegacySwitcherIconIfNeeded()
             self?.hasCompletedLaunch = true
             self?.scheduleMenuBridgeInstallations()
         }
