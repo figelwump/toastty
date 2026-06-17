@@ -4,6 +4,117 @@ import XCTest
 
 @MainActor
 final class TerminalAppControlTests: XCTestCase {
+    func testTerminalSendTextActionPreservesFirstResponder() throws {
+        let fixture = try TerminalAppControlFixture()
+        var capturedText: String?
+        var capturedSubmit: Bool?
+        var capturedPanelID: UUID?
+        var capturedFocusPolicy: TerminalInputFocusPolicy?
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { text, submit, panelID, focusPolicy in
+            capturedText = text
+            capturedSubmit = submit
+            capturedPanelID = panelID
+            capturedFocusPolicy = focusPolicy
+            return true
+        }
+
+        let outcome = try fixture.executor.runAction(
+            id: AppControlActionID.terminalSendText.rawValue,
+            args: [
+                "panelID": .string(fixture.panelID.uuidString),
+                "text": .string("codex --continue"),
+                "submit": .bool(true),
+            ]
+        )
+
+        XCTAssertEqual(capturedText, "codex --continue")
+        XCTAssertEqual(capturedSubmit, true)
+        XCTAssertEqual(capturedPanelID, fixture.panelID)
+        XCTAssertEqual(capturedFocusPolicy, .preserveFirstResponder)
+        XCTAssertEqual(outcome.result?.string("workspaceID"), fixture.workspaceID.uuidString)
+        XCTAssertEqual(outcome.result?.string("panelID"), fixture.panelID.uuidString)
+        XCTAssertEqual(outcome.result?.bool("submitted"), true)
+        XCTAssertEqual(outcome.result?.bool("available"), true)
+    }
+
+    func testTerminalRuntimeSendTextDefaultsToFocusingTarget() throws {
+        let fixture = try TerminalAppControlFixture()
+        var capturedFocusPolicy: TerminalInputFocusPolicy?
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, focusPolicy in
+            capturedFocusPolicy = focusPolicy
+            return true
+        }
+
+        XCTAssertTrue(
+            fixture.terminalRuntimeRegistry.sendText(
+                "agent launch",
+                submit: true,
+                panelID: fixture.panelID
+            )
+        )
+        XCTAssertEqual(capturedFocusPolicy, .focusTarget)
+    }
+
+    func testPreserveFirstResponderDeliverySendsWithoutFocusing() {
+        var focusCallCount = 0
+        var sentText: [String] = []
+        var submitCallCount = 0
+        var focusFailureLogCount = 0
+        let delivery = TerminalAutomationInputDelivery(
+            focusPolicy: .preserveFirstResponder,
+            focusHostViewIfNeeded: {
+                focusCallCount += 1
+                return false
+            },
+            sendText: { text in
+                sentText.append(text)
+            },
+            sendSubmit: {
+                submitCallCount += 1
+                return true
+            },
+            logFocusFailure: {
+                focusFailureLogCount += 1
+            }
+        )
+
+        XCTAssertTrue(delivery.deliver(text: "codex --continue", submit: true))
+        XCTAssertEqual(focusCallCount, 0)
+        XCTAssertEqual(sentText, ["codex --continue"])
+        XCTAssertEqual(submitCallCount, 1)
+        XCTAssertEqual(focusFailureLogCount, 0)
+    }
+
+    func testFocusTargetDeliveryStopsBeforeSendingWhenFocusFails() {
+        var focusCallCount = 0
+        var sentText: [String] = []
+        var submitCallCount = 0
+        var focusFailureLogCount = 0
+        let delivery = TerminalAutomationInputDelivery(
+            focusPolicy: .focusTarget,
+            focusHostViewIfNeeded: {
+                focusCallCount += 1
+                return false
+            },
+            sendText: { text in
+                sentText.append(text)
+            },
+            sendSubmit: {
+                submitCallCount += 1
+                return true
+            },
+            logFocusFailure: {
+                focusFailureLogCount += 1
+            }
+        )
+
+        XCTAssertFalse(delivery.deliver(text: "agent launch", submit: true))
+        XCTAssertEqual(focusCallCount, 1)
+        XCTAssertTrue(sentText.isEmpty)
+        XCTAssertEqual(submitCallCount, 0)
+        XCTAssertEqual(focusFailureLogCount, 1)
+    }
+
     func testTerminalStateQueryUsesLiveTitleWithoutMutatingPersistedTitle() throws {
         let fixture = try TerminalAppControlFixture()
         fixture.terminalRuntimeRegistry.terminalLiveTitleStore.setTitle(

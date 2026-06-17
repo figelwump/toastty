@@ -488,7 +488,12 @@ final class AppControlExecutor {
             let submit = args.boolValue("submit") ?? false
             let allowUnavailable = args.boolValue("allowUnavailable") ?? false
             let resolved = try resolveTerminalTarget(payload: args)
-            if terminalRuntimeRegistry.sendText(text, submit: submit, panelID: resolved.panelID) {
+            if terminalRuntimeRegistry.sendText(
+                text,
+                submit: submit,
+                panelID: resolved.panelID,
+                focusPolicy: .preserveFirstResponder
+            ) {
                 return .init(
                     didMutateState: false,
                     result: [

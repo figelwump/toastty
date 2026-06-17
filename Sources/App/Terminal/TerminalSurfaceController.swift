@@ -6,6 +6,37 @@ import GhosttyKit
 #endif
 
 @MainActor
+struct TerminalAutomationInputDelivery {
+    let focusPolicy: TerminalInputFocusPolicy
+    let focusHostViewIfNeeded: () -> Bool
+    let sendText: (String) -> Void
+    let sendSubmit: () -> Bool
+    let logFocusFailure: () -> Void
+
+    @discardableResult
+    func deliver(text: String, submit: Bool) -> Bool {
+        if focusPolicy == .focusTarget {
+            guard focusHostViewIfNeeded() else {
+                logFocusFailure()
+                return false
+            }
+        }
+
+        if text.isEmpty == false {
+            sendText(text)
+        }
+
+        if submit {
+            guard sendSubmit() else {
+                return false
+            }
+        }
+
+        return true
+    }
+}
+
+@MainActor
 final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private let panelID: UUID
     private weak var delegate: (any TerminalSurfaceControllerDelegate)?
@@ -756,7 +787,11 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         return didFocus
     }
 
-    func automationSendText(_ text: String, submit: Bool) -> Bool {
+    func automationSendText(
+        _ text: String,
+        submit: Bool,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
         // Automation input should follow actual surface/host readiness. Process
         // cwd inference can lag behind fresh split creation and block panels
@@ -769,22 +804,22 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             logAutomationInputUnavailable(reason: automationInputUnavailableReason())
             return false
         }
-        guard focusHostViewIfNeeded() else {
-            logAutomationInputUnavailable(reason: "focus_host_failed")
-            return false
-        }
-
-        if text.isEmpty == false {
-            sendSurfaceText(text, to: ghosttySurface)
-        }
-
-        if submit {
-            guard sendSurfaceSubmit(to: ghosttySurface) else {
-                return false
+        return TerminalAutomationInputDelivery(
+            focusPolicy: focusPolicy,
+            focusHostViewIfNeeded: { [weak self] in
+                self?.focusHostViewIfNeeded() ?? false
+            },
+            sendText: { [weak self] text in
+                self?.sendSurfaceText(text, to: ghosttySurface)
+            },
+            sendSubmit: { [weak self] in
+                self?.sendSurfaceSubmit(to: ghosttySurface) ?? false
+            },
+            logFocusFailure: { [weak self] in
+                self?.logAutomationInputUnavailable(reason: "focus_host_failed")
             }
-        }
-
-        return true
+        )
+        .deliver(text: text, submit: submit)
         #else
         return false
         #endif

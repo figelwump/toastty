@@ -145,6 +145,12 @@ Scratchpad actions are intended for agent and automation integrations:
 - `panel.scratchpad.rebind` rebinds an existing Scratchpad panel to another active managed session in the same workspace tab. It requires `sessionID` and targets the Scratchpad by `--panel`, workspace/window selectors, or the focused/active Scratchpad.
 - `panel.scratchpad.export` writes a Scratchpad document to an app-chosen local HTML file and returns `filePath`, `workspaceID`, `panelID`, `documentID`, `revision`, and `title`. It can target by `sessionID` or by the normal Scratchpad panel selectors.
 
+`terminal.send-text` writes directly to the resolved terminal surface and does
+not move AppKit keyboard focus. This lets automation prepare or start work in a
+background workspace without causing the user's next physical keystrokes to go
+to that hidden terminal. To make a terminal the interactive keyboard target,
+select/focus the workspace or panel separately before sending text.
+
 Patch JSON uses exact text replacements:
 
 ```json

@@ -245,6 +245,12 @@ Notable action-specific behavior:
   - requires `args.index` and `args.toIndex`, both 1-based tab positions in the
     target workspace.
   - Reorders the workspace's tab list without changing the selected tab ID.
+- `terminal.send-text`
+  - writes directly to the resolved terminal surface without making that
+    terminal the AppKit first responder.
+  - Automation can target a background workspace without rerouting the user's
+    next physical keystrokes to that workspace. Use a separate focus/select
+    action when the terminal should become the interactive keyboard target.
 - `panel.scratchpad.set-content`
   - requires `args.sessionID`.
   - requires exactly one of `args.filePath` or `args.content`.

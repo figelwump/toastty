@@ -6,6 +6,11 @@ import Foundation
 import GhosttyKit
 #endif
 
+enum TerminalInputFocusPolicy: Equatable {
+    case focusTarget
+    case preserveFirstResponder
+}
+
 struct PreparedFileDrop {
     let targetPanelID: UUID
     let fileURLs: [URL]
@@ -100,6 +105,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var searchDispatchTaskByPanelID: [UUID: Task<Void, Never>] = [:]
     private var searchDispatchTokenByPanelID: [UUID: UUID] = [:]
     private var restoredManagedLaunchSubmitterForTesting: ((String, Bool, UUID) -> Bool)?
+    private var automationSendTextHandlerForTesting: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -199,6 +205,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func setRestoredManagedLaunchSubmitterForTesting(_ submitter: ((String, Bool, UUID) -> Bool)?) {
         restoredManagedLaunchSubmitterForTesting = submitter
+    }
+
+    func setAutomationSendTextHandlerForTesting(_ handler: ((String, Bool, UUID, TerminalInputFocusPolicy) -> Bool)?) {
+        automationSendTextHandlerForTesting = handler
     }
 
     func setExternalURLOpenerForTesting(_ opener: @escaping @MainActor (URL) -> Bool) {
@@ -434,7 +444,16 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func sendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
-        automationSendText(text, submit: submit, panelID: panelID)
+        sendText(text, submit: submit, panelID: panelID, focusPolicy: .focusTarget)
+    }
+
+    func sendText(
+        _ text: String,
+        submit: Bool,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> Bool {
+        automationSendText(text, submit: submit, panelID: panelID, focusPolicy: focusPolicy)
     }
 
     func readVisibleText(panelID: UUID) -> String? {
@@ -450,12 +469,25 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
+        automationSendText(text, submit: submit, panelID: panelID, focusPolicy: .focusTarget)
+    }
+
+    func automationSendText(
+        _ text: String,
+        submit: Bool,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> Bool {
+        if let automationSendTextHandlerForTesting {
+            return automationSendTextHandlerForTesting(text, submit, panelID, focusPolicy)
+        }
         guard let controller = runtimeStore.existingController(for: panelID) else {
             return false
         }
         return controller.automationSendText(
             text,
-            submit: submit
+            submit: submit,
+            focusPolicy: focusPolicy
         )
     }
 
