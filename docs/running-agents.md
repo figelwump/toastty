@@ -79,14 +79,18 @@ arguments for automation:
   command, not to `initialCommands`; export values inside `initialCommands` when
   setup commands need them.
 - `env.NAME=value` injects caller-provided environment values before Toastty's
-  managed launch context. Toastty rejects exact-key collisions with its managed
-  context and provider instrumentation keys: `TOASTTY_SESSION_ID`,
-  `TOASTTY_PANEL_ID`, `TOASTTY_SOCKET_PATH`, `TOASTTY_CLI_PATH`, `TOASTTY_CWD`,
+  managed launch context. Environment keys must use shell variable syntax,
+  values must not contain NUL bytes, and duplicate definitions across
+  `env.NAME`, `env`, and `environment` payloads are rejected. Toastty also
+  rejects exact-key collisions with its managed context and provider
+  instrumentation keys: `TOASTTY_SESSION_ID`, `TOASTTY_PANEL_ID`,
+  `TOASTTY_SOCKET_PATH`, `TOASTTY_CLI_PATH`, `TOASTTY_CWD`,
   `TOASTTY_REPO_ROOT`, `TOASTTY_MANAGED_AGENT_SHIM_BYPASS`,
   `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT`, `CODEX_TUI_RECORD_SESSION`,
   `CODEX_TUI_SESSION_LOG_PATH`, and `TOASTTY_PI_TELEMETRY_LOG_PATH`.
 - `initialPrompt` appends the first prompt as a trailing argv argument only when
-  the resolved profile supports it.
+  the resolved profile supports it. Blank values are ignored; nonblank prompts
+  must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
 
 Built-in Codex and Claude automation launches support `initialPrompt` when the
 resolved argv is exactly one direct first-party command (`codex`, `cdx`, or
@@ -241,7 +245,7 @@ When you trigger an agent launch (menu click, top-bar button, command palette su
 1. **Resolve target** — Toastty picks the focused terminal panel in the selected workspace, or falls back to the first terminal panel in the workspace
 2. **Check panel state** — The panel must be at an interactive prompt; Toastty asks Ghostty for the surface prompt state and refuses to launch into a panel that appears busy
 3. **Prepare instrumentation** — Based on the profile ID, Toastty sets up agent-specific scripts, config files, and environment variables in a temporary artifacts directory
-4. **Render shell command** — Toastty builds a single shell command line with all `TOASTTY_*` context variables inline, the instrumentation environment, and the profile's `argv`
+4. **Render shell command** — Toastty builds a single shell command line with any explicit `cd <cwd>` and initial setup commands first, then all `TOASTTY_*` context variables inline, the instrumentation environment, and the profile's `argv`
 5. **Start session** — A session record is created in the session runtime store with initial status "Idle / Ready for prompt"
 6. **Send to terminal** — The rendered command line is sent to the target terminal panel and submitted
 7. **Begin monitoring** — For Codex, installed hooks report primary status, the session log watcher tracks root-turn context, and notify is used only as the no-hooks compatibility fallback; for Claude, hooks report events back through the CLI; for Pi, the bundled extension reports events back through the CLI
@@ -348,8 +352,8 @@ Every agent launched through Toastty receives these environment variables, set i
 | `TOASTTY_PANEL_ID` | UUID of the terminal panel the agent was launched into |
 | `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude, Codex, and Pi helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
 | `TOASTTY_CLI_PATH` | Path to the bundled `toastty` CLI executable |
-| `TOASTTY_CWD` | Panel's working directory (if available) |
-| `TOASTTY_REPO_ROOT` | Inferred git repository root (if available) |
+| `TOASTTY_CWD` | Resolved launch working directory: explicit automation `cwd` when supplied, otherwise the target or restored panel working directory when available |
+| `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |
 
 Agent-specific variables are added on top of these (for example, `CODEX_TUI_RECORD_SESSION` and `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT` for Codex launches).
 

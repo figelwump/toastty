@@ -271,11 +271,14 @@ Notable action-specific behavior:
     performed by these commands.
   - Caller-provided environment values are merged before Toastty's managed
     launch context, so exact reserved context and provider instrumentation keys
-    cannot be overridden.
+    cannot be overridden. Environment keys must use shell variable syntax,
+    values must not contain NUL bytes, and duplicate definitions across
+    `env.NAME`, `env`, and `environment` payloads are rejected.
   - `initialPrompt` is appended only for implicit Codex/Claude automation
     profiles, built-in Codex/Claude profiles whose argv is exactly one direct
     first-party command, or profiles that declare
-    `initialPromptPlacement = "trailing"`.
+    `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
+    prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
 - `panel.scratchpad.set-content`
   - requires `args.sessionID`.
   - requires exactly one of `args.filePath` or `args.content`.
@@ -685,8 +688,10 @@ Launch context environment:
 - `TOASTTY_PANEL_ID`
 - `TOASTTY_SOCKET_PATH` (the resolved live socket path for that launch)
 - `TOASTTY_CLI_PATH`
-- `TOASTTY_CWD` when the target panel has a known working directory
-- `TOASTTY_REPO_ROOT` when Toastty can infer a repository root from that directory
+- `TOASTTY_CWD` for the resolved launch working directory: explicit `cwd` when
+  supplied, otherwise the target or restored panel working directory when known
+- `TOASTTY_REPO_ROOT` when Toastty can infer a repository root from the resolved
+  launch working directory
 
 Request payload:
 
@@ -728,7 +733,11 @@ Validation:
   bytes. The list is capped at 16 entries, and each entry is capped at 4096
   UTF-8 bytes.
 - `initialPrompt` is rejected unless the resolved profile supports trailing
-  prompt arguments.
+  prompt arguments. Blank values are ignored; nonblank prompts must not contain
+  NUL bytes and are capped at 65,536 UTF-8 bytes.
+- environment keys must use shell variable syntax, values must be strings
+  without NUL bytes, and duplicate keys across `environment`, `env`, and
+  `env.NAME` forms are rejected.
 
 ### `automation.terminal_state`
 

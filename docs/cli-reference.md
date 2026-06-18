@@ -154,8 +154,8 @@ Scratchpad actions are intended for agent and automation integrations:
   context on the final agent command and are not exported to
   `initialCommands`; `initialPrompt` is appended only for supported profiles.
   Callers own side effects and trust changes in `initialCommands`, such as
-  `direnv allow`. Built-in `codex` and `claude` automation launches work even
-  when the user has not created `~/.toastty/agents.toml`. CLI/app-control
+  `direnv allow`. Built-in `codex`, `claude`, and `pi` automation launches work
+  even when the user has not created `~/.toastty/agents.toml`. CLI/app-control
   `agent.launch` preserves the current AppKit first responder; focus the target
   workspace or panel separately when it should become the interactive keyboard
   target.
@@ -395,8 +395,8 @@ When Toastty launches an agent, these variables are injected into the agent's en
 | `TOASTTY_SESSION_ID` | Session ID for the current agent run |
 | `TOASTTY_PANEL_ID` | Terminal panel UUID |
 | `TOASTTY_SOCKET_PATH` | Resolved automation socket path for the target app instance |
-| `TOASTTY_CWD` | Panel working directory (if available) |
-| `TOASTTY_REPO_ROOT` | Git repository root (if available) |
+| `TOASTTY_CWD` | Resolved launch working directory: explicit automation `cwd` when supplied, otherwise the target or restored panel working directory when available |
+| `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |
 
 Most CLI flags fall back to their corresponding environment variable when not provided explicitly, so agents launched by Toastty can often omit flags like `--session` and `--panel`.
 
