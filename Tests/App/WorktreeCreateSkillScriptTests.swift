@@ -1,7 +1,135 @@
+import Darwin
 import Foundation
 import XCTest
 
 final class WorktreeCreateSkillScriptTests: XCTestCase {
+    func testCreateWorktreeScriptUsesCurrentRepositoryWithoutBootstrap() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-generic")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let repoURL = try makeGitRepository(named: "emptyos", in: rootURL)
+        let nestedURL = repoURL.appendingPathComponent("packages/app", isDirectory: true)
+        try fileManager.createDirectory(at: nestedURL, withIntermediateDirectories: true)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "create-worktree.sh"),
+            environment: [:],
+            arguments: [
+                "--slug", "POP 1234",
+                "--branch-prefix", "feat",
+                "--parent-dir", rootURL.path,
+                "--json",
+            ],
+            currentDirectoryURL: nestedURL
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stderr, "")
+
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["slug"] as? String, "pop-1234")
+        XCTAssertEqual(payload["branch_name"] as? String, "feat/pop-1234")
+        XCTAssertEqual(payload["worktree_name"] as? String, "emptyos-pop-1234")
+
+        let expectedWorktreeURL = URL(fileURLWithPath: try realPath(rootURL), isDirectory: true)
+            .appendingPathComponent("emptyos-pop-1234", isDirectory: true)
+        let worktreePath = try XCTUnwrap(payload["worktree_path"] as? String)
+        XCTAssertEqual(worktreePath, expectedWorktreeURL.path)
+        XCTAssertEqual(payload["handoff_path"] as? String, "\(worktreePath)/WORKTREE_HANDOFF.md")
+        XCTAssertTrue(fileManager.fileExists(atPath: worktreePath))
+        XCTAssertFalse(result.stderr.contains("bootstrap-worktree.sh"))
+
+        let branch = try runExecutable(
+            "/usr/bin/git",
+            arguments: ["rev-parse", "--abbrev-ref", "HEAD"],
+            currentDirectoryURL: URL(fileURLWithPath: worktreePath, isDirectory: true)
+        )
+        XCTAssertEqual(branch.exitCode, 0)
+        XCTAssertEqual(branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "feat/pop-1234")
+    }
+
+    func testCreateToasttyWorktreeCompatibilityWrapperUsesRequestedRepoRoot() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-wrapper")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let repoURL = try makeGitRepository(named: "emptyos", in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "create-toastty-worktree.sh"),
+            environment: [:],
+            arguments: [
+                "--repo-root", repoURL.path,
+                "--slug", "Review Flow",
+                "--branch-prefix", "debug",
+                "--parent-dir", rootURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertTrue(result.stderr.contains("create-toastty-worktree.sh is deprecated"))
+
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["branch_name"] as? String, "debug/review-flow")
+        XCTAssertEqual(payload["worktree_name"] as? String, "emptyos-review-flow")
+        let expectedWorktreeURL = URL(fileURLWithPath: try realPath(rootURL), isDirectory: true)
+            .appendingPathComponent("emptyos-review-flow", isDirectory: true)
+        XCTAssertEqual(payload["worktree_path"] as? String, expectedWorktreeURL.path)
+    }
+
+    func testCreateWorktreeScriptRejectsMissingSlug() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-missing-slug")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let repoURL = try makeGitRepository(named: "repo", in: rootURL)
+        let result = try runScript(
+            at: skillScriptURL(named: "create-worktree.sh"),
+            environment: [:],
+            arguments: ["--branch-prefix", "feat"],
+            currentDirectoryURL: repoURL
+        )
+
+        XCTAssertEqual(result.exitCode, 64)
+        XCTAssertTrue(result.stderr.contains("--slug is required"))
+    }
+
+    func testCreateWorktreeScriptRejectsNonGitDirectoryWithoutRepoRoot() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-no-git")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let result = try runScript(
+            at: skillScriptURL(named: "create-worktree.sh"),
+            environment: [:],
+            arguments: ["--slug", "no-git"],
+            currentDirectoryURL: rootURL
+        )
+
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertTrue(result.stderr.contains("run inside a git worktree or pass --repo-root"))
+    }
+
+    func testCreateWorktreeScriptRejectsInvalidRepoRoot() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "worktree-create-invalid-root")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let result = try runScript(
+            at: skillScriptURL(named: "create-worktree.sh"),
+            environment: [:],
+            arguments: [
+                "--repo-root", rootURL.path,
+                "--slug", "invalid-root",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertTrue(result.stderr.contains("--repo-root is not inside a git worktree"))
+    }
+
     func testOpenSessionScriptRequiresPanelContextWhenWindowIDIsOmitted() throws {
         let fileManager = FileManager.default
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-script")
@@ -14,7 +142,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
 
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: [
                 "TOASTTY_CLI_PATH": "/usr/bin/true",
                 "TOASTTY_PANEL_ID": "",
@@ -47,7 +175,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
 
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: [
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
@@ -99,7 +227,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
 
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: [
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
@@ -141,7 +269,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
 
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: [
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
@@ -184,7 +312,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
 
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: [
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
@@ -214,7 +342,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
     func testOpenSessionScriptRejectsAgentCommandCombinedWithStartupCommand() throws {
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: ["TOASTTY_CLI_PATH": "/usr/bin/true"],
             arguments: [
                 "--workspace-name", "smoke",
@@ -231,7 +359,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
     func testOpenSessionScriptRejectsInitialCommandCombinedWithStartupCommand() throws {
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: ["TOASTTY_CLI_PATH": "/usr/bin/true"],
             arguments: [
                 "--workspace-name", "smoke",
@@ -248,7 +376,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
     func testOpenSessionScriptRejectsMultilineInitialCommand() throws {
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: ["TOASTTY_CLI_PATH": "/usr/bin/true"],
             arguments: [
                 "--workspace-name", "smoke",
@@ -264,7 +392,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
 
     func testOpenSessionScriptRejectsAgentCommandWithWhitespace() throws {
         let result = try runScript(
-            at: skillScriptURL(),
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
             environment: ["TOASTTY_CLI_PATH": "/usr/bin/true"],
             arguments: [
                 "--workspace-name", "smoke",
@@ -352,12 +480,12 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         )
     }
 
-    private func skillScriptURL() -> URL {
+    private func skillScriptURL(named scriptName: String) -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent(".agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh", isDirectory: false)
+            .appendingPathComponent(".agents/skills/worktree-create/scripts/\(scriptName)", isDirectory: false)
     }
 
     private func makeTemporaryDirectory(prefix: String) throws -> URL {
@@ -381,15 +509,82 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         return scriptURL
     }
 
+    private func makeGitRepository(named name: String, in rootURL: URL) throws -> URL {
+        let repoURL = rootURL.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: repoURL, withIntermediateDirectories: true)
+        try Data("# \(name)\n".utf8).write(
+            to: repoURL.appendingPathComponent("README.md", isDirectory: false),
+            options: .atomic
+        )
+        try assertSuccessful(runExecutable("/usr/bin/git", arguments: ["init"], currentDirectoryURL: repoURL))
+        try assertSuccessful(runExecutable("/usr/bin/git", arguments: ["add", "README.md"], currentDirectoryURL: repoURL))
+        try assertSuccessful(
+            runExecutable(
+                "/usr/bin/git",
+                arguments: [
+                    "-c", "user.name=Toastty Tests",
+                    "-c", "user.email=toastty-tests@example.invalid",
+                    "commit",
+                    "-m", "initial",
+                ],
+                currentDirectoryURL: repoURL
+            )
+        )
+        return repoURL
+    }
+
+    private func realPath(_ url: URL) throws -> String {
+        try url.path.withCString { pathPointer in
+            guard let resolvedPointer = Darwin.realpath(pathPointer, nil) else {
+                throw NSError(
+                    domain: "WorktreeCreateSkillScriptTests",
+                    code: Int(errno),
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to resolve real path for \(url.path)"]
+                )
+            }
+            defer { free(resolvedPointer) }
+            return String(cString: resolvedPointer)
+        }
+    }
+
+    private func assertSuccessful(
+        _ result: (exitCode: Int32, stdout: String, stderr: String),
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        XCTAssertEqual(result.exitCode, 0, "stdout:\n\(result.stdout)\nstderr:\n\(result.stderr)", file: file, line: line)
+    }
+
+    private func jsonObject(from stdout: String) throws -> [String: Any] {
+        let data = try XCTUnwrap(stdout.data(using: .utf8))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
     private func runScript(
         at scriptURL: URL,
         environment: [String: String],
-        arguments: [String]
+        arguments: [String],
+        currentDirectoryURL: URL? = nil
+    ) throws -> (exitCode: Int32, stdout: String, stderr: String) {
+        try runExecutable(
+            scriptURL.path,
+            arguments: arguments,
+            currentDirectoryURL: currentDirectoryURL,
+            environment: environment
+        )
+    }
+
+    private func runExecutable(
+        _ executablePath: String,
+        arguments: [String],
+        currentDirectoryURL: URL? = nil,
+        environment: [String: String] = [:]
     ) throws -> (exitCode: Int32, stdout: String, stderr: String) {
         let process = Process()
-        process.executableURL = scriptURL
+        process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+        process.currentDirectoryURL = currentDirectoryURL
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -406,7 +601,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             throw NSError(
                 domain: "WorktreeCreateSkillScriptTests",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Script timed out: \(scriptURL.path)"]
+                userInfo: [NSLocalizedDescriptionKey: "Process timed out: \(executablePath)"]
             )
         }
 
