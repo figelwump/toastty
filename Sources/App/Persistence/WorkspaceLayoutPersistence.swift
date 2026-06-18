@@ -69,6 +69,7 @@ final class WorkspaceLayoutPersistenceCoordinator {
     private let context: WorkspaceLayoutPersistenceContext
     private let store: WorkspaceLayoutPersistenceStore
     private let persistDropAuditLogger: @MainActor ([String: String]) -> Void
+    private let layoutLifecycleLogger: @MainActor (String, [String: String]) -> Void
     private var pendingPersistTask: Task<Void, Never>?
     private var lastPersistedLayout: WorkspaceLayoutSnapshot?
     private var pendingPersistBaselineLayout: WorkspaceLayoutSnapshot?
@@ -82,10 +83,18 @@ final class WorkspaceLayoutPersistenceCoordinator {
                 category: .state,
                 metadata: metadata
             )
+        },
+        layoutLifecycleLogger: @escaping @MainActor (String, [String: String]) -> Void = { message, metadata in
+            ToasttyLog.info(
+                message,
+                category: .state,
+                metadata: metadata
+            )
         }
     ) {
         self.context = context
         self.persistDropAuditLogger = persistDropAuditLogger
+        self.layoutLifecycleLogger = layoutLifecycleLogger
         store = WorkspaceLayoutPersistenceStore(fileURL: context.fileURL)
     }
 
@@ -97,6 +106,11 @@ final class WorkspaceLayoutPersistenceCoordinator {
         let previousLayout = WorkspaceLayoutSnapshot(state: previousState)
         let nextLayout = WorkspaceLayoutSnapshot(state: nextState)
         guard previousLayout != nextLayout else { return }
+        logTopologyMutationIfNeeded(
+            action,
+            previousLayout: previousLayout,
+            nextLayout: nextLayout
+        )
         logResumeRecordMutationIfNeeded(
             action,
             previousLayout: previousLayout,
@@ -230,13 +244,121 @@ final class WorkspaceLayoutPersistenceCoordinator {
         }
     }
 
+    private func logTopologyMutationIfNeeded(
+        _ action: AppAction,
+        previousLayout: WorkspaceLayoutSnapshot,
+        nextLayout: WorkspaceLayoutSnapshot
+    ) {
+        let previousTabsByID = Dictionary(
+            previousLayout.tabLogEntries.map { ($0.tabID, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        let nextTabsByID = Dictionary(
+            nextLayout.tabLogEntries.map { ($0.tabID, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        let previousPanelEntriesByID = Dictionary(
+            previousLayout.panelLogEntries.map { ($0.panelID, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        let nextPanelEntriesByID = Dictionary(
+            nextLayout.panelLogEntries.map { ($0.panelID, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+
+        for tabID in sortedUnion(previousTabsByID.keys, nextTabsByID.keys) {
+            let previousEntry = previousTabsByID[tabID]
+            let nextEntry = nextTabsByID[tabID]
+
+            switch (previousEntry, nextEntry) {
+            case (nil, let nextEntry?):
+                logTopologyMutation(
+                    action: action,
+                    mutation: "workspace_tab_created",
+                    metadata: nextEntry.metadata
+                )
+
+            case (let previousEntry?, nil):
+                logTopologyMutation(
+                    action: action,
+                    mutation: "workspace_tab_removed",
+                    metadata: previousEntry.metadata
+                )
+
+            case (let previousEntry?, let nextEntry?)
+                where previousEntry.locationKey != nextEntry.locationKey:
+                var metadata = nextEntry.metadata
+                metadata.merge(previousEntry.metadata(prefix: "previous_")) { current, _ in current }
+                logTopologyMutation(
+                    action: action,
+                    mutation: "workspace_tab_moved",
+                    metadata: metadata
+                )
+
+            default:
+                break
+            }
+        }
+
+        for panelID in sortedUnion(previousPanelEntriesByID.keys, nextPanelEntriesByID.keys) {
+            let previousEntry = previousPanelEntriesByID[panelID]
+            let nextEntry = nextPanelEntriesByID[panelID]
+
+            switch (previousEntry, nextEntry) {
+            case (nil, let nextEntry?):
+                var metadata = nextEntry.metadata
+                if let sourcePanelID = sourcePanelID(
+                    for: action,
+                    previousLayout: previousLayout,
+                    nextEntry: nextEntry
+                ) {
+                    metadata["source_panel_id"] = sourcePanelID.uuidString
+                }
+                logTopologyMutation(
+                    action: action,
+                    mutation: "panel_created",
+                    metadata: metadata
+                )
+
+            case (let previousEntry?, nil):
+                logTopologyMutation(
+                    action: action,
+                    mutation: "panel_removed",
+                    metadata: previousEntry.metadata
+                )
+
+            case (let previousEntry?, let nextEntry?)
+                where previousEntry.locationKey != nextEntry.locationKey:
+                var metadata = nextEntry.metadata
+                metadata.merge(previousEntry.metadata(prefix: "previous_")) { current, _ in current }
+                logTopologyMutation(
+                    action: action,
+                    mutation: "panel_moved",
+                    metadata: metadata
+                )
+
+            default:
+                break
+            }
+        }
+    }
+
+    private func logTopologyMutation(
+        action: AppAction,
+        mutation: String,
+        metadata: [String: String]
+    ) {
+        var metadata = metadata
+        metadata["action"] = action.logName
+        metadata["mutation"] = mutation
+        layoutLifecycleLogger("Workspace layout topology changed", metadata)
+    }
+
     private func logResumeRecordMutationIfNeeded(
         _ action: AppAction,
         previousLayout: WorkspaceLayoutSnapshot,
         nextLayout: WorkspaceLayoutSnapshot
     ) {
-        let previousSummary = previousLayout.managedAgentResumeRecordSummary()
-        let nextSummary = nextLayout.managedAgentResumeRecordSummary()
         let explicitResumeRecordAction: (panelID: UUID, resumeRecord: ManagedAgentResumeRecord?)?
         if case .updateTerminalPanelResumeRecord(let panelID, let resumeRecord) = action {
             explicitResumeRecordAction = (panelID, resumeRecord)
@@ -244,27 +366,59 @@ final class WorkspaceLayoutPersistenceCoordinator {
             explicitResumeRecordAction = nil
         }
 
-        guard explicitResumeRecordAction != nil || previousSummary != nextSummary else {
+        let previousEntriesByPanelID = Dictionary(
+            previousLayout.panelLogEntries.map { ($0.panelID, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        let nextEntriesByPanelID = Dictionary(
+            nextLayout.panelLogEntries.map { ($0.panelID, $0) },
+            uniquingKeysWith: { current, _ in current }
+        )
+        let changedPanelIDs = sortedUnion(previousEntriesByPanelID.keys, nextEntriesByPanelID.keys)
+            .filter { panelID in
+                let previousEntry = previousEntriesByPanelID[panelID]
+                let nextEntry = nextEntriesByPanelID[panelID]
+                return previousEntry?.resumeRecord != nextEntry?.resumeRecord
+            }
+
+        guard changedPanelIDs.isEmpty == false || explicitResumeRecordAction != nil else {
             return
         }
-        let hasRecord = explicitResumeRecordAction.map {
-            $0.resumeRecord == nil ? "false" : "true"
-        } ?? "unknown"
 
-        ToasttyLog.info(
-            "Workspace layout managed agent resume record state changed",
-            category: .state,
-            metadata: [
-                "action": action.logName,
-                "panel_id": explicitResumeRecordAction?.panelID.uuidString ?? "none",
-                "agent": explicitResumeRecordAction?.resumeRecord?.agent.rawValue ?? "none",
-                "has_record": hasRecord,
-                "previous_count": String(previousLayout.managedAgentResumeRecordCount),
-                "next_count": String(nextLayout.managedAgentResumeRecordCount),
-                "previous_records": previousSummary,
-                "next_records": nextSummary,
-            ]
-        )
+        let previousCount = String(previousLayout.managedAgentResumeRecordCount)
+        let nextCount = String(nextLayout.managedAgentResumeRecordCount)
+        let previousSummary = previousLayout.managedAgentResumeRecordSummary()
+        let nextSummary = nextLayout.managedAgentResumeRecordSummary()
+        for panelID in changedPanelIDs {
+            let previousEntry = previousEntriesByPanelID[panelID]
+            let nextEntry = nextEntriesByPanelID[panelID]
+            var metadata = (nextEntry ?? previousEntry)?.metadata ?? ["panel_id": panelID.uuidString]
+            metadata["action"] = action.logName
+            metadata["mutation"] = "managed_agent_resume_record_changed"
+            metadata["resume_record_action"] = resumeRecordAction(
+                previousEntry: previousEntry,
+                nextEntry: nextEntry
+            )
+            metadata["explicit_update_panel_id"] = explicitResumeRecordAction?.panelID.uuidString ?? "none"
+            metadata["previous_count"] = previousCount
+            metadata["next_count"] = nextCount
+            metadata["previous_records"] = previousSummary
+            metadata["next_records"] = nextSummary
+            if let previousRecord = previousEntry?.resumeRecord {
+                metadata["previous_agent"] = previousRecord.agent.rawValue
+                metadata["previous_native_session_id"] = previousRecord.nativeSessionID
+                metadata["previous_session_file_basename"] = (previousRecord.sessionFilePath as NSString).lastPathComponent
+                metadata["previous_cwd"] = previousRecord.cwd
+            }
+            if let nextRecord = nextEntry?.resumeRecord {
+                metadata["agent"] = nextRecord.agent.rawValue
+                metadata["native_session_id"] = nextRecord.nativeSessionID
+                metadata["session_file_basename"] = (nextRecord.sessionFilePath as NSString).lastPathComponent
+                metadata["cwd"] = nextRecord.cwd
+            }
+
+            layoutLifecycleLogger("Managed agent resume record changed", metadata)
+        }
     }
 
     private func logResumeRecordPersistenceIfNeeded(
@@ -291,6 +445,64 @@ final class WorkspaceLayoutPersistenceCoordinator {
                 "next_count": String(nextCount),
             ]
         )
+    }
+
+    private func resumeRecordAction(
+        previousEntry: WorkspaceLayoutPanelLogEntry?,
+        nextEntry: WorkspaceLayoutPanelLogEntry?
+    ) -> String {
+        switch (previousEntry?.resumeRecord, nextEntry?.resumeRecord) {
+        case (nil, .some(_)):
+            return "attach"
+        case (.some(_), nil):
+            return nextEntry == nil ? "remove_with_panel" : "clear"
+        case (.some(_), .some(_)):
+            return "change"
+        case (nil, nil):
+            return "none"
+        }
+    }
+
+    private func sourcePanelID(
+        for action: AppAction,
+        previousLayout: WorkspaceLayoutSnapshot,
+        nextEntry: WorkspaceLayoutPanelLogEntry
+    ) -> UUID? {
+        switch action {
+        case .splitFocusedSlot(let workspaceID, _),
+             .splitFocusedSlotInDirection(let workspaceID, _),
+             .splitFocusedSlotInDirectionWithWorkingDirectory(let workspaceID, _, _),
+             .splitFocusedSlotInDirectionWithTerminalProfile(let workspaceID, _, _):
+            guard workspaceID == nextEntry.workspaceID,
+                  let workspace = previousLayout.workspacesByID[workspaceID],
+                  let selectedTabID = workspace.resolvedSelectedTabID,
+                  selectedTabID == nextEntry.tabID,
+                  let selectedTab = workspace.tabsByID[selectedTabID] else {
+                return nil
+            }
+            return selectedTab.focusedPanelID
+
+        case .createTerminalPanel(let workspaceID, let slotID):
+            guard workspaceID == nextEntry.workspaceID,
+                  let workspace = previousLayout.workspacesByID[workspaceID] else {
+                return nil
+            }
+            for tab in workspace.orderedTabs {
+                guard let slot = tab.layoutTree.slotNode(slotID: slotID),
+                      case .slot(_, let panelID) = slot else {
+                    continue
+                }
+                return panelID
+            }
+            return nil
+
+        default:
+            return nil
+        }
+    }
+
+    private func sortedUnion<S: Sequence>(_ lhs: S, _ rhs: S) -> [UUID] where S.Element == UUID {
+        Set(lhs).union(Set(rhs)).sorted { $0.uuidString < $1.uuidString }
     }
 
     private func persistDropMetadata(

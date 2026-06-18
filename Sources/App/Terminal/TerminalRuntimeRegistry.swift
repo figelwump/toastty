@@ -1658,15 +1658,15 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                 surfaceLaunchCompleted: false,
                 commandSubmittedAt: nil
             )
+            let metadata = restoredManagedLaunchMetadata(
+                panelID: panelID,
+                sessionID: plan.sessionID,
+                record: record
+            )
             ToasttyLog.info(
                 "Launching restored pane with managed agent native resume and session sidebar tracking",
                 category: .terminal,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                    "session_id": plan.sessionID,
-                    "agent": record.agent.rawValue,
-                    "native_session_id": record.nativeSessionID,
-                ]
+                metadata: metadata
             )
             return configuration
         } catch {
@@ -1682,6 +1682,30 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
             return nil
         }
+    }
+
+    private func restoredManagedLaunchMetadata(
+        panelID: UUID,
+        sessionID: String,
+        record: ManagedAgentResumeRecord
+    ) -> [String: String] {
+        var metadata: [String: String]
+        if let state = store?.state,
+           let entry = WorkspaceLayoutSnapshot(state: state).panelLogEntry(panelID: panelID) {
+            metadata = entry.metadata
+        } else {
+            metadata = [
+                "panel_id": panelID.uuidString,
+                "agent": record.agent.rawValue,
+                "native_session_id": record.nativeSessionID,
+                "cwd": record.cwd,
+                "session_file_basename": (record.sessionFilePath as NSString).lastPathComponent,
+            ]
+        }
+        metadata["session_id"] = sessionID
+        metadata["launch_reason"] = TerminalLaunchReason.restore.rawValue
+        metadata["will_auto_resume"] = "true"
+        return metadata
     }
 
     private func launchContextEnvironment(for panelID: UUID) -> [String: String] {

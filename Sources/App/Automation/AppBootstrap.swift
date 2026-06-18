@@ -46,6 +46,18 @@ enum AppBootstrap {
                         "restored_managed_agent_resume_records": restoredStateLayout.managedAgentResumeRecordSummary(),
                     ]
                 )
+                for entry in restoredStateLayout.managedAgentResumeRecordLogEntries {
+                    var metadata = entry.metadata
+                    metadata["requested_profile_id"] = layoutPersistenceContext.profileID
+                    metadata["resolved_profile_id"] = restored.resolvedProfileID
+                    metadata["path"] = layoutPersistenceContext.fileURL.path
+                    metadata["restore_candidate"] = "true"
+                    ToasttyLog.info(
+                        "Loaded managed agent resume record from restored workspace layout",
+                        category: .bootstrap,
+                        metadata: metadata
+                    )
+                }
             } else {
                 state = .bootstrap(defaultTerminalProfileID: defaultTerminalProfileID)
                 restoredTerminalPanelIDs = []
