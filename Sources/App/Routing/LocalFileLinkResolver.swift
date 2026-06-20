@@ -137,6 +137,26 @@ enum LocalFileLinkResolver {
         )
     }
 
+    static func existingLocalItemURLForExternalOpen(
+        for url: URL,
+        cwd: String? = nil,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard let localFilePath = resolvedLocalFilePath(for: url, cwd: cwd) else {
+            return nil
+        }
+
+        guard let normalizedPath = normalizedRecoveredPath(
+            for: localFilePath,
+            fileManager: fileManager,
+            exactMatcher: normalizedExistingExternalOpenLocalItemPath
+        ) else {
+            return nil
+        }
+
+        return URL(fileURLWithPath: normalizedPath)
+    }
+
     // Shared by the local-document and local-browser-file resolvers so terminal
     // link handling has one source of truth for cwd-relative path recovery.
     static func resolvedLocalFilePath(for url: URL, cwd: String?) -> String? {
@@ -231,6 +251,53 @@ enum LocalFileLinkResolver {
         }
 
         return false
+    }
+
+    private static func normalizedExistingExternalOpenLocalItemPath(
+        _ path: String,
+        fileManager: FileManager
+    ) -> String? {
+        let standardizedURL = URL(fileURLWithPath: path).standardizedFileURL
+        let standardizedPath = standardizedURL.path
+        guard standardizedPath.isEmpty == false else {
+            return nil
+        }
+        let resolvedURL = standardizedURL.resolvingSymlinksInPath()
+
+        // Preserve the clicked path for external opens so aliases/symlinks keep
+        // the same user-visible identity that appeared in the terminal.
+        var isDirectory = ObjCBool(false)
+        if fileManager.fileExists(atPath: standardizedPath, isDirectory: &isDirectory) {
+            if isDirectory.boolValue {
+                return isPackageDirectory(standardizedURL) || isPackageDirectory(resolvedURL)
+                    ? WebPanelState.normalizedFilePath(standardizedPath)
+                    : nil
+            }
+
+            return WebPanelState.normalizedFilePath(standardizedPath)
+        }
+
+        let resolvedPath = resolvedURL.path
+        guard resolvedPath != standardizedPath,
+              resolvedPath.isEmpty == false else {
+            return nil
+        }
+
+        if fileManager.fileExists(atPath: resolvedPath, isDirectory: &isDirectory) {
+            if isDirectory.boolValue {
+                return isPackageDirectory(standardizedURL) || isPackageDirectory(resolvedURL)
+                    ? WebPanelState.normalizedFilePath(standardizedPath)
+                    : nil
+            }
+
+            return WebPanelState.normalizedFilePath(standardizedPath)
+        }
+
+        return nil
+    }
+
+    private static func isPackageDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isPackageKey]).isPackage) == true
     }
 
     // Applies the same punctuation/prose recovery pass to each local link type;

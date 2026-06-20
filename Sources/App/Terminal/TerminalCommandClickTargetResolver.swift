@@ -5,6 +5,7 @@ enum TerminalCommandClickTarget: Equatable, Sendable {
     case localDocumentFile(path: String, lineNumber: Int?, placement: WebPanelPlacement)
     case localDirectory(path: String)
     case localBrowserFile(URL)
+    case externalLocalItem(URL)
     case unresolvedLocalDocument(URL, LocalFileLinkResolver.UnresolvedLocalDocumentIssue)
     case passthrough(URL)
 }
@@ -32,20 +33,28 @@ enum TerminalCommandClickTargetResolver {
             )
         }
 
-        if let localDirectoryPath = LocalFileLinkResolver.normalizedLocalDirectoryPath(
-            for: hoveredURL,
-            cwd: cwd,
-            fileManager: fileManager
-        ) {
-            return .localDirectory(path: localDirectoryPath)
-        }
-
         if let localBrowserFileURL = LocalBrowserFileLinkResolver.resolvedLocalBrowserFileURL(
             for: hoveredURL,
             cwd: cwd,
             fileManager: fileManager
         ) {
             return .localBrowserFile(localBrowserFileURL)
+        }
+
+        if let externalLocalItemURL = LocalFileLinkResolver.existingLocalItemURLForExternalOpen(
+            for: hoveredURL,
+            cwd: cwd,
+            fileManager: fileManager
+        ) {
+            return .externalLocalItem(externalLocalItemURL)
+        }
+
+        if let localDirectoryPath = LocalFileLinkResolver.normalizedLocalDirectoryPath(
+            for: hoveredURL,
+            cwd: cwd,
+            fileManager: fileManager
+        ) {
+            return .localDirectory(path: localDirectoryPath)
         }
 
         if let issue = LocalFileLinkResolver.unresolvedLocalDocumentIssue(

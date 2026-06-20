@@ -251,7 +251,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         XCTAssertEqual(target, .passthrough(url))
     }
 
-    func testResolveUnsupportedLocalFilePassesThrough() throws {
+    func testResolveUnsupportedFileURLAsExternalLocalItem() throws {
         let fixture = try makeFixture(fileName: "archive.zip")
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -260,7 +260,58 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
+        XCTAssertEqual(
+            target,
+            expectedExternalLocalItemTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveRelativeUnsupportedFileAsExternalLocalItem() throws {
+        let fixture = try makeFixture(fileName: "notification.wav")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/notification.wav")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedExternalLocalItemTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveAppBundleAsExternalLocalItem() throws {
+        let fixture = try makeFixture(
+            fileName: "Preview.app",
+            directoryNamedMarkdownFile: true
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedExternalLocalItemTarget(path: fixture.markdownPath)
+        )
+    }
+
+    func testResolveSymlinkedAppBundleAsExternalLocalItem() throws {
+        let fixture = try makeSymlinkPackageFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.symlinkURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedExternalLocalItemTarget(path: fixture.symlinkPath)
+        )
     }
 
     func testResolveTreatsDirectoryNamedHTMLPathAsLocalDirectory() throws {
@@ -662,7 +713,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         XCTAssertEqual(target, .passthrough(malformedURL))
     }
 
-    func testResolveFallsBackWhenResolvedSymlinkTargetIsNotMarkdown() throws {
+    func testResolveSymlinkedUnsupportedFileAsExternalLocalItem() throws {
         let fixture = try makeFixture(
             fileName: "linked-plan.md",
             symlinkTargetName: "rendered.html"
@@ -674,7 +725,10 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
+        XCTAssertEqual(
+            target,
+            expectedExternalLocalItemTarget(path: fixture.markdownURL.standardizedFileURL.path)
+        )
     }
 
     func testResolveTreatsDirectoryNamedMarkdownPathAsLocalDirectory() throws {
@@ -767,6 +821,26 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    private func makeSymlinkPackageFixture() throws -> (symlinkPath: String, symlinkURL: URL) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-package-symlink-tests-\(UUID().uuidString)", isDirectory: true)
+        let targetURL = rootURL.appendingPathComponent("Target.app", isDirectory: true)
+        let symlinkURL = rootURL.appendingPathComponent("LinkedTarget.app", isDirectory: true)
+
+        try fileManager.createDirectory(at: targetURL, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(at: symlinkURL, withDestinationURL: targetURL)
+
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            symlinkPath: symlinkURL.standardizedFileURL.path,
+            symlinkURL: symlinkURL
+        )
+    }
+
     private func makeNestedChildDocumentFixture() throws -> (rootPath: String, documentPath: String) {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
@@ -829,5 +903,9 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
     private func expectedLocalBrowserFileTarget(path: String) -> TerminalCommandClickTarget {
         .localBrowserFile(URL(fileURLWithPath: path))
+    }
+
+    private func expectedExternalLocalItemTarget(path: String) -> TerminalCommandClickTarget {
+        .externalLocalItem(URL(fileURLWithPath: path))
     }
 }

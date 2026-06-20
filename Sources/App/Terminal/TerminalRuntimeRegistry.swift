@@ -1217,6 +1217,10 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
             openedRightPanelInToastty = result && placement == .rightPanel
             passthroughOpenResult = nil
+        case .externalLocalItem(let fileURL):
+            result = openExternalURL(fileURL)
+            openedRightPanelInToastty = false
+            passthroughOpenResult = nil
         case .unresolvedLocalDocument(let unresolvedURL, let issue):
             presentLocalDocumentLinkAlert(preferredWindowID, unresolvedURL, issue)
             result = false
@@ -1269,6 +1273,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             targetMetadata = [
                 "resolved_url": fileURL.absoluteString,
                 "placement": placement.rawValue,
+            ]
+        case .externalLocalItem(let fileURL):
+            targetKind = "external_local_item"
+            targetMetadata = [
+                "resolved_url": fileURL.absoluteString,
             ]
         case .unresolvedLocalDocument(let unresolvedURL, let issue):
             targetKind = "unresolved_local_document"

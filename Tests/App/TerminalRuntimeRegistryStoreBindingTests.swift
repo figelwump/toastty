@@ -472,6 +472,134 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenCommandClickRelativeUnsupportedFileOpensExternalLocalItem() throws {
+        let fixture = try makeExternalLocalItemFixture(fileName: "notification.wav")
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.slotContaining(panelID: sourcePanelID)?.slotID
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        var externalURL: URL?
+        registry.setExternalURLOpenerForTesting { url in
+            externalURL = url
+            return true
+        }
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/notification.wav")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(externalURL?.scheme, "file")
+        XCTAssertEqual(externalURL?.path, fixture.itemPath)
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 0)
+        XCTAssertTrue(workspaceAfter.focusedPanelModeActive)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickExternalLocalItemFailureDoesNotCreateToasttyPanel() throws {
+        let fixture = try makeExternalLocalItemFixture(fileName: "notification.wav")
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        var externalURL: URL?
+        registry.setExternalURLOpenerForTesting { url in
+            externalURL = url
+            return false
+        }
+        registry.bind(store: store)
+
+        XCTAssertFalse(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/notification.wav")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(externalURL?.scheme, "file")
+        XCTAssertEqual(externalURL?.path, fixture.itemPath)
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 0)
+        XCTAssertEqual(workspaceAfter.focusedPanelID, sourcePanelID)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickAppBundleOpensExternalLocalItemInsteadOfTerminalSplit() throws {
+        let fixture = try makeExternalLocalItemFixture(fileName: "Preview.app", isDirectory: true)
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        var externalURL: URL?
+        registry.setExternalURLOpenerForTesting { url in
+            externalURL = url
+            return true
+        }
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/Preview.app")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(externalURL?.scheme, "file")
+        XCTAssertEqual(externalURL?.path, fixture.itemPath)
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count)
+        XCTAssertEqual(workspaceAfter.rightAuxPanel.tabIDs.count, 0)
+        XCTAssertEqual(workspaceAfter.focusedPanelID, sourcePanelID)
+        try StateValidator.validate(store.state)
+    }
+
     func testOpenCommandClickMarkdownRelativePathOpensMarkdownInRightPanelInTerminalOwningWindow() throws {
         let fixture = try makeMarkdownFixture()
         let firstWorkspace = WorkspaceState(
@@ -1898,6 +2026,35 @@ private extension TerminalRuntimeRegistryStoreBindingTests {
             rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
             htmlPath: normalizedHTMLURL.path,
             htmlURL: normalizedHTMLURL
+        )
+    }
+
+    func makeExternalLocalItemFixture(
+        fileName: String,
+        isDirectory: Bool = false
+    ) throws -> (rootPath: String, itemPath: String, itemURL: URL) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-registry-external-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let itemURL = rootURL
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent(fileName, isDirectory: isDirectory)
+
+        try fileManager.createDirectory(at: itemURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if isDirectory {
+            try fileManager.createDirectory(at: itemURL, withIntermediateDirectories: true)
+        } else {
+            try Data("external fixture\n".utf8).write(to: itemURL)
+        }
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let normalizedItemURL = itemURL.standardizedFileURL
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            itemPath: normalizedItemURL.path,
+            itemURL: normalizedItemURL
         )
     }
 }
