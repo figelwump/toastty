@@ -20,6 +20,21 @@ final class SidebarViewTests: XCTestCase {
         let window: NSWindow
     }
 
+    private func makeWorkspace(
+        title: String,
+        hasBeenVisited: Bool = true
+    ) -> WorkspaceState {
+        let tab = WorkspaceTabState.bootstrap(terminalTitle: "\(title) Terminal")
+        return WorkspaceState(
+            id: UUID(),
+            title: title,
+            hasBeenVisited: hasBeenVisited,
+            selectedTabID: tab.id,
+            tabIDs: [tab.id],
+            tabsByID: [tab.id: tab]
+        )
+    }
+
     func testAbbreviatedPathLabelKeepsOnlyLastPathComponent() {
         XCTAssertEqual(SidebarView.abbreviatedPathLabel("/Users/vishal/GiantThings/repos/toastty-session-status"), ".../toastty-session-status")
         XCTAssertEqual(SidebarView.abbreviatedPathLabel("/"), "/")
@@ -79,6 +94,32 @@ final class SidebarViewTests: XCTestCase {
     func testLaterFlagActionTitleUsesLaterCopy() {
         XCTAssertEqual(SidebarView.laterFlagActionTitle(isFlaggedForLater: false), "Flag for Later")
         XCTAssertEqual(SidebarView.laterFlagActionTitle(isFlaggedForLater: true), "Clear Later Flag")
+    }
+
+    func testWorkspaceAccessibilityLabelIncludesAgentSummary() {
+        let workspace = makeWorkspace(title: "Build")
+
+        XCTAssertEqual(
+            SidebarView.workspaceAccessibilityLabel(
+                for: workspace,
+                isSelected: true,
+                agentSummary: WorkspaceAgentSummary(running: 3, active: 1)
+            ),
+            "Build, 1 active, 3 running"
+        )
+    }
+
+    func testWorkspaceAccessibilityLabelKeepsNewBadgeWordingWithAgentSummary() {
+        let workspace = makeWorkspace(title: "Draft", hasBeenVisited: false)
+
+        XCTAssertEqual(
+            SidebarView.workspaceAccessibilityLabel(
+                for: workspace,
+                isSelected: false,
+                agentSummary: WorkspaceAgentSummary(running: 2, active: 0)
+            ),
+            "Draft New, 0 active, 2 running"
+        )
     }
 
     func testUnreadSessionTypographyUsesEmphasizedWeights() {

@@ -1288,16 +1288,17 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
-    func testWorkspaceAgentSummaryCountsWorkingAsRunning() {
+    func testWorkspaceAgentSummaryCountsLiveAgentsAsRunningAndWorkingAsActive() {
         let summary = WorkspaceAgentSummary.make(from: [
             makeAgentStatus(.claude, .working),
             makeAgentStatus(.codex, .ready),
             makeAgentStatus(.codex, .idle),
+            makeAgentStatus(.codex, .needsApproval),
         ])
-        XCTAssertEqual(summary.total, 3)
-        XCTAssertEqual(summary.running, 1)
-        XCTAssertTrue(summary.hasAgents)
+        XCTAssertEqual(summary.running, 4)
+        XCTAssertEqual(summary.active, 1)
         XCTAssertTrue(summary.hasRunning)
+        XCTAssertTrue(summary.hasActive)
     }
 
     func testWorkspaceAgentSummaryExcludesProcessWatch() {
@@ -1305,28 +1306,55 @@ final class WorkspaceViewTests: XCTestCase {
             makeAgentStatus(.codex, .working),
             makeAgentStatus(.processWatch, .working),
         ])
-        XCTAssertEqual(summary.total, 1)
         XCTAssertEqual(summary.running, 1)
+        XCTAssertEqual(summary.active, 1)
+    }
+
+    func testWorkspaceAgentSummaryProcessWatchOnlyHasNoAgents() {
+        let summary = WorkspaceAgentSummary.make(from: [
+            makeAgentStatus(.processWatch, .working),
+        ])
+        XCTAssertFalse(summary.hasRunning)
+        XCTAssertFalse(summary.hasActive)
+        XCTAssertEqual(summary.running, 0)
+        XCTAssertEqual(summary.active, 0)
+    }
+
+    func testWorkspaceAgentSummaryExcludesInactiveSessions() {
+        let summary = WorkspaceAgentSummary.make(from: [
+            makeAgentStatus(.codex, .working, isActive: false),
+            makeAgentStatus(.claude, .ready),
+        ])
+        XCTAssertEqual(summary.running, 1)
+        XCTAssertEqual(summary.active, 0)
+        XCTAssertTrue(summary.hasRunning)
+        XCTAssertFalse(summary.hasActive)
     }
 
     func testWorkspaceAgentSummaryEmptyHasNoAgents() {
         let summary = WorkspaceAgentSummary.make(from: [])
-        XCTAssertFalse(summary.hasAgents)
         XCTAssertFalse(summary.hasRunning)
-        XCTAssertEqual(summary.total, 0)
+        XCTAssertFalse(summary.hasActive)
+        XCTAssertEqual(summary.running, 0)
+        XCTAssertEqual(summary.active, 0)
     }
 
     func testWorkspaceHeaderSubtitleTextFormats() {
-        let agents = WorkspaceAgentSummary(total: 3, running: 1)
+        let agents = WorkspaceAgentSummary(running: 3, active: 1)
         XCTAssertEqual(
             String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: agents, unreadText: nil).characters),
-            "1/3 running"
+            "1 active / 3 running"
         )
         XCTAssertEqual(
             String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: agents, unreadText: "2 unreads").characters),
-            "1/3 running  ·  2 unreads"
+            "1 active / 3 running  ·  2 unreads"
         )
-        let noAgents = WorkspaceAgentSummary(total: 0, running: 0)
+        let inactiveRunningAgents = WorkspaceAgentSummary(running: 2, active: 0)
+        XCTAssertEqual(
+            String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: inactiveRunningAgents, unreadText: nil).characters),
+            "0 active / 2 running"
+        )
+        let noAgents = WorkspaceAgentSummary(running: 0, active: 0)
         XCTAssertEqual(
             String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: noAgents, unreadText: "1 unread").characters),
             "1 unread"
@@ -1336,17 +1364,28 @@ final class WorkspaceViewTests: XCTestCase {
     func testWorkspaceHeaderSubtitleAccessibilityLabel() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderSubtitleAccessibilityLabel(
-                agentSummary: WorkspaceAgentSummary(total: 3, running: 1),
+                agentSummary: WorkspaceAgentSummary(running: 3, active: 1),
                 unreadText: "2 unreads"
             ),
-            "1 of 3 agents running, 2 unreads"
+            "1 active, 3 running, 2 unreads"
         )
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderSubtitleAccessibilityLabel(
-                agentSummary: WorkspaceAgentSummary(total: 2, running: 0),
+                agentSummary: WorkspaceAgentSummary(running: 2, active: 0),
                 unreadText: nil
             ),
-            "0 of 2 agents running"
+            "0 active, 2 running"
+        )
+    }
+
+    func testWorkspaceHeaderSubtitleAccessibilityIdentifierPreservesUnreadSelector() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: "1 unread"),
+            "topbar.workspace.unreads"
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: nil),
+            "topbar.workspace.summary"
         )
     }
 

@@ -377,9 +377,11 @@ struct SidebarView: View {
         orderedWorkspaceIDs: [UUID]
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        let agentSummary = WorkspaceAgentSummary.make(from: sessionStatuses)
         let accessibilityLabel = Self.workspaceAccessibilityLabel(
             for: workspace,
-            isSelected: isSelected
+            isSelected: isSelected,
+            agentSummary: agentSummary
         )
 
         return workspaceRowChrome(
@@ -394,7 +396,7 @@ struct SidebarView: View {
                         shortcutLabel: shortcutLabel,
                         selectionSubtitle: nil,
                         isSelected: isSelected,
-                        agentSummary: WorkspaceAgentSummary.make(from: sessionStatuses)
+                        agentSummary: agentSummary
                     ) {
                         Self.styledWorkspaceTitleText(
                             workspace.title,
@@ -463,6 +465,7 @@ struct SidebarView: View {
         orderedWorkspaceIDs _: [UUID]
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        let agentSummary = WorkspaceAgentSummary.make(from: sessionStatuses)
 
         return workspaceRowChrome(
             workspaceID: workspaceID,
@@ -476,7 +479,7 @@ struct SidebarView: View {
                         shortcutLabel: shortcutLabel,
                         selectionSubtitle: nil,
                         isSelected: isSelected,
-                        agentSummary: WorkspaceAgentSummary.make(from: sessionStatuses)
+                        agentSummary: agentSummary
                     ) {
                         WorkspaceRenameTextField(
                             text: $renameDraftTitle,
@@ -571,7 +574,7 @@ struct SidebarView: View {
 
                 Spacer(minLength: 0)
 
-                if let agentSummary, agentSummary.hasAgents {
+                if let agentSummary, agentSummary.hasRunning {
                     workspaceAgentCountBadge(agentSummary)
                 }
 
@@ -1544,12 +1547,23 @@ struct SidebarView: View {
 
     static func workspaceAccessibilityLabel(
         for workspace: WorkspaceState,
-        isSelected: Bool
+        isSelected: Bool,
+        agentSummary: WorkspaceAgentSummary? = nil
     ) -> String {
-        guard showsNewWorkspaceBadge(isSelected: isSelected, hasBeenVisited: workspace.hasBeenVisited) else {
-            return workspace.title
+        let baseLabel = if showsNewWorkspaceBadge(isSelected: isSelected, hasBeenVisited: workspace.hasBeenVisited) {
+            "\(workspace.title) \(workspaceNewBadgeLabel)"
+        } else {
+            workspace.title
         }
-        return "\(workspace.title) \(workspaceNewBadgeLabel)"
+        var components = [baseLabel]
+        if let agentSummary, agentSummary.hasRunning {
+            components.append(workspaceAgentSummaryAccessibilityLabel(agentSummary))
+        }
+        return components.joined(separator: ", ")
+    }
+
+    static func workspaceAgentSummaryAccessibilityLabel(_ summary: WorkspaceAgentSummary) -> String {
+        "\(summary.active) active, \(summary.running) running"
     }
 
     static func showsNewWorkspaceBadge(isSelected: Bool, hasBeenVisited: Bool) -> Bool {
@@ -1640,16 +1654,16 @@ struct SidebarView: View {
     }
 
     private func workspaceAgentCountBadge(_ summary: WorkspaceAgentSummary) -> some View {
-        var running = AttributedString("\(summary.running)")
-        running.foregroundColor = summary.hasRunning ? ToastyTheme.accent : ToastyTheme.primaryText
-        var total = AttributedString("/\(summary.total)")
-        total.foregroundColor = ToastyTheme.inactiveText
+        var active = AttributedString("\(summary.active)")
+        active.foregroundColor = summary.hasActive ? ToastyTheme.accent : ToastyTheme.primaryText
+        var running = AttributedString("/\(summary.running)")
+        running.foregroundColor = ToastyTheme.inactiveText
 
         return HStack(spacing: 4) {
             Circle()
-                .fill(summary.hasRunning ? ToastyTheme.accent : ToastyTheme.workspaceAgentCountIdleDot)
+                .fill(summary.hasActive ? ToastyTheme.accent : ToastyTheme.workspaceAgentCountIdleDot)
                 .frame(width: 6, height: 6)
-            Text(running + total)
+            Text(active + running)
                 .font(ToastyTheme.fontWorkspaceAgentCount)
         }
         .padding(.horizontal, 6)
@@ -1657,7 +1671,7 @@ struct SidebarView: View {
         .background(ToastyTheme.hairline, in: Capsule())
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(summary.running) of \(summary.total) agents running")
+        .accessibilityLabel(Self.workspaceAgentSummaryAccessibilityLabel(summary))
         .accessibilityIdentifier("sidebar.workspace.agentCount")
     }
 }

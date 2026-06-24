@@ -56,23 +56,23 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
 }
 
 /// Summary of a workspace's live agent sessions, used for the sidebar/top-bar
-/// "running/total" label (e.g. `1/3 running`). Process-watch monitors are not
-/// counted as agents.
+/// status labels. Process-watch monitors are not counted as agents.
 public struct WorkspaceAgentSummary: Equatable, Sendable {
-    public var total: Int
     public var running: Int
+    public var active: Int
 
-    public init(total: Int, running: Int) {
-        self.total = total
+    public init(running: Int, active: Int) {
         self.running = running
+        self.active = active
     }
 
-    public var hasAgents: Bool { total > 0 }
     public var hasRunning: Bool { running > 0 }
+    public var hasActive: Bool { active > 0 }
 
     public static func make(from statuses: [WorkspaceSessionStatus]) -> WorkspaceAgentSummary {
-        let agents = statuses.filter { $0.agent != .processWatch }
-        let running = agents.filter { $0.status.kind == .working }.count
-        return WorkspaceAgentSummary(total: agents.count, running: running)
+        // `isActive` is session liveness, not the working/active status bucket.
+        let agents = statuses.filter { $0.agent != .processWatch && $0.isActive }
+        let active = agents.filter { $0.status.kind == .working }.count
+        return WorkspaceAgentSummary(running: agents.count, active: active)
     }
 }

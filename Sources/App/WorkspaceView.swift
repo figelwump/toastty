@@ -692,11 +692,11 @@ struct WorkspaceView: View {
         )
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        if agentSummary.hasAgents || unreadText != nil {
+        if agentSummary.hasRunning || unreadText != nil {
             HStack(spacing: 5) {
-                if agentSummary.hasAgents {
+                if agentSummary.hasRunning {
                     Circle()
-                        .fill(agentSummary.hasRunning ? ToastyTheme.accent : ToastyTheme.workspaceAgentCountIdleDot)
+                        .fill(agentSummary.hasActive ? ToastyTheme.accent : ToastyTheme.workspaceAgentCountIdleDot)
                         .frame(width: 6, height: 6)
                 }
                 Text(Self.workspaceHeaderSubtitleText(agentSummary: agentSummary, unreadText: unreadText))
@@ -706,7 +706,7 @@ struct WorkspaceView: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Self.workspaceHeaderSubtitleAccessibilityLabel(agentSummary: agentSummary, unreadText: unreadText))
-            .accessibilityIdentifier("topbar.workspace.summary")
+            .accessibilityIdentifier(Self.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: unreadText))
         } else {
             // Preserve the explicit subtitle layout slot without changing width
             // or height when there is nothing to show.
@@ -716,24 +716,24 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Colored subtitle shown under the workspace title: the agent
-    /// "running/total running" count, with the unread summary appended.
+    /// Colored subtitle shown under the workspace title: the active/running
+    /// agent counts, with the unread summary appended.
     nonisolated static func workspaceHeaderSubtitleText(
         agentSummary: WorkspaceAgentSummary,
         unreadText: String?
     ) -> AttributedString {
         var result = AttributedString("")
-        if agentSummary.hasAgents {
-            var running = AttributedString("\(agentSummary.running)")
-            running.foregroundColor = agentSummary.hasRunning
+        if agentSummary.hasRunning {
+            var active = AttributedString("\(agentSummary.active) active")
+            active.foregroundColor = agentSummary.hasActive
                 ? ToastyTheme.accent
                 : ToastyTheme.inactiveWorkspaceSubtitleText
-            var rest = AttributedString("/\(agentSummary.total) running")
-            rest.foregroundColor = ToastyTheme.inactiveWorkspaceSubtitleText
-            result = running + rest
+            var running = AttributedString(" / \(agentSummary.running) running")
+            running.foregroundColor = ToastyTheme.inactiveWorkspaceSubtitleText
+            result = active + running
         }
         if let unreadText {
-            var unread = AttributedString(agentSummary.hasAgents ? "  ·  \(unreadText)" : unreadText)
+            var unread = AttributedString(agentSummary.hasRunning ? "  ·  \(unreadText)" : unreadText)
             unread.foregroundColor = ToastyTheme.inactiveWorkspaceSubtitleText
             result += unread
         }
@@ -745,13 +745,18 @@ struct WorkspaceView: View {
         unreadText: String?
     ) -> String {
         var parts: [String] = []
-        if agentSummary.hasAgents {
-            parts.append("\(agentSummary.running) of \(agentSummary.total) agents running")
+        if agentSummary.hasRunning {
+            parts.append("\(agentSummary.active) active")
+            parts.append("\(agentSummary.running) running")
         }
         if let unreadText {
             parts.append(unreadText)
         }
         return parts.joined(separator: ", ")
+    }
+
+    nonisolated static func workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: String?) -> String {
+        unreadText == nil ? "topbar.workspace.summary" : "topbar.workspace.unreads"
     }
 
     private var topBarTrailingControls: some View {
