@@ -1271,15 +1271,20 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 2), "2 unreads")
     }
 
-    private func makeAgentStatus(_ agent: AgentKind, _ kind: SessionStatusKind) -> WorkspaceSessionStatus {
+    private func makeAgentStatus(
+        _ agent: AgentKind,
+        _ kind: SessionStatusKind,
+        panelID: UUID = UUID(),
+        isActive: Bool = true
+    ) -> WorkspaceSessionStatus {
         WorkspaceSessionStatus(
             sessionID: UUID().uuidString,
-            panelID: UUID(),
+            panelID: panelID,
             agent: agent,
             status: SessionStatus(kind: kind, summary: ""),
             cwd: nil,
             updatedAt: Date(timeIntervalSince1970: 1),
-            isActive: true
+            isActive: isActive
         )
     }
 
@@ -1427,6 +1432,109 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(
             WorkspaceView.workspaceTabFocusIndicatorStyle(tabWidth: compressedTabWidth),
             .iconOnly
+        )
+    }
+
+    func testWorkspaceTabSessionIndicatorStateHidesWithoutWorkingAgent() {
+        let panelID = UUID()
+        let tab = makeTerminalWorkspaceTab(panelID: panelID)
+
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabSessionIndicatorState(
+                tab: tab,
+                hasUnread: false,
+                panelSessionStatusesByPanelID: [:]
+            ),
+            .hidden
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabSessionIndicatorState(
+                tab: tab,
+                hasUnread: false,
+                panelSessionStatusesByPanelID: [
+                    panelID: makeAgentStatus(.codex, .idle, panelID: panelID)
+                ]
+            ),
+            .hidden
+        )
+    }
+
+    func testWorkspaceTabSessionIndicatorStateShowsSpinnerForWorkingAgent() {
+        let panelID = UUID()
+        let tab = makeTerminalWorkspaceTab(panelID: panelID)
+
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabSessionIndicatorState(
+                tab: tab,
+                hasUnread: false,
+                panelSessionStatusesByPanelID: [
+                    panelID: makeAgentStatus(.codex, .working, panelID: panelID)
+                ]
+            ),
+            .spinner
+        )
+    }
+
+    func testWorkspaceTabSessionIndicatorStateUnreadDotTakesPrecedence() {
+        let panelID = UUID()
+        let tab = makeTerminalWorkspaceTab(panelID: panelID, unreadPanelIDs: [panelID])
+
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabSessionIndicatorState(
+                tab: tab,
+                hasUnread: tab.unreadPanelIDs.isEmpty == false,
+                panelSessionStatusesByPanelID: [
+                    panelID: makeAgentStatus(.codex, .working, panelID: panelID)
+                ]
+            ),
+            .hidden
+        )
+    }
+
+    func testWorkspaceTabSessionIndicatorStateExcludesInactiveAndProcessWatchStatuses() {
+        let panelID = UUID()
+        let tab = makeTerminalWorkspaceTab(panelID: panelID)
+
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabSessionIndicatorState(
+                tab: tab,
+                hasUnread: false,
+                panelSessionStatusesByPanelID: [
+                    panelID: makeAgentStatus(.codex, .working, panelID: panelID, isActive: false)
+                ]
+            ),
+            .hidden
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabSessionIndicatorState(
+                tab: tab,
+                hasUnread: false,
+                panelSessionStatusesByPanelID: [
+                    panelID: makeAgentStatus(.processWatch, .working, panelID: panelID)
+                ]
+            ),
+            .hidden
+        )
+    }
+
+    func testWorkspaceTabSessionIndicatorStateIncludesRightAuxPanelAgents() {
+        let terminalPanelID = UUID()
+        let scratchpadPanelID = UUID()
+        let tab = makeTerminalTabWithScratchpad(
+            terminalPanelID: terminalPanelID,
+            scratchpadPanelID: scratchpadPanelID,
+            sessionLink: nil
+        )
+
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabSessionIndicatorState(
+                tab: tab,
+                hasUnread: false,
+                panelSessionStatusesByPanelID: [
+                    scratchpadPanelID: makeAgentStatus(.claude, .working, panelID: scratchpadPanelID)
+                ]
+            ),
+            .spinner
         )
     }
 
@@ -2251,6 +2359,23 @@ final class WorkspaceViewTests: XCTestCase {
                 ),
             ],
             focusedPanelID: isVisible ? panelID : nil
+        )
+    }
+
+    private func makeTerminalWorkspaceTab(
+        panelID: UUID,
+        unreadPanelIDs: Set<UUID> = []
+    ) -> WorkspaceTabState {
+        WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")
+                ),
+            ],
+            focusedPanelID: panelID,
+            unreadPanelIDs: unreadPanelIDs
         )
     }
 

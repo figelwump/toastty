@@ -272,6 +272,28 @@ struct WorkspaceView: View {
         return tabWidth <= Self.workspaceTabCompactFocusIndicatorThreshold ? .iconOnly : .fullLabel
     }
 
+    nonisolated static func workspaceTabSessionIndicatorState(
+        tab: WorkspaceTabState,
+        hasUnread: Bool,
+        panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus]
+    ) -> SessionStatusIndicatorState {
+        guard hasUnread == false else {
+            return .hidden
+        }
+
+        let hasWorkingAgent = tab.allPanelIDs.contains { panelID in
+            guard let sessionStatus = panelSessionStatusesByPanelID[panelID] else {
+                return false
+            }
+
+            return sessionStatus.isActive &&
+                sessionStatus.agent != .processWatch &&
+                sessionStatus.status.kind == .working
+        }
+
+        return hasWorkingAgent ? .spinner : .hidden
+    }
+
     nonisolated static func workspaceTabReorderTargetIndex(
         orderedTabIDs: [UUID],
         measuredFramesByID: [UUID: CGRect],
@@ -1973,6 +1995,19 @@ struct WorkspaceView: View {
         installsContextMenu: Bool
     ) -> some View {
         let hasUnread = tab.unreadPanelIDs.isEmpty == false
+        let panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus] = Dictionary(
+            uniqueKeysWithValues: tab.allPanelIDs.compactMap { panelID in
+                guard let status = sessionRuntimeStore.panelStatus(for: panelID) else {
+                    return nil
+                }
+                return (panelID, status)
+            }
+        )
+        let sessionIndicatorState = Self.workspaceTabSessionIndicatorState(
+            tab: tab,
+            hasUnread: hasUnread,
+            panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
+        )
         let isAnyTabDragActive = activeTabDrag != nil
         let isDraggedTab = activeTabDrag?.tabID == tab.id
         let isRenaming = renamingTabID == tab.id
@@ -2005,6 +2040,7 @@ struct WorkspaceView: View {
                                 displayTitle: displayTitle,
                                 textColor: chromeSpec.text,
                                 hasUnread: hasUnread,
+                                sessionIndicatorState: sessionIndicatorState,
                                 focusIndicatorStyle: focusIndicatorStyle
                             )
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2111,6 +2147,7 @@ struct WorkspaceView: View {
         displayTitle: String,
         textColor: Color,
         hasUnread: Bool,
+        sessionIndicatorState: SessionStatusIndicatorState,
         focusIndicatorStyle: WorkspaceTabFocusIndicatorStyle
     ) -> some View {
         HStack(spacing: 5) {
@@ -2121,6 +2158,10 @@ struct WorkspaceView: View {
                         width: ToastyTheme.workspaceTabUnreadDotDiameter,
                         height: ToastyTheme.workspaceTabUnreadDotDiameter
                     )
+            }
+
+            if sessionIndicatorState != .hidden {
+                SessionStatusIndicator(state: sessionIndicatorState, size: 8, lineWidth: 1.4)
             }
 
             if let browserPanelID = Self.browserTitleIconPanelID(for: tab) {
