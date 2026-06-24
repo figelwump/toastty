@@ -581,6 +581,62 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
     }
 
+    func testManagedZshSnippetRestoresAgentShimPathAfterLatePathPrepend() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let providerDirectory = "/tmp/toastty-provider-bin"
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; export PATH=\"\(providerDirectory):$PATH\"; _toastty_precmd; print -r -- \"$PATH\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "PATH": "\(shimDirectory):/usr/bin",
+                "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
+        XCTAssertEqual(components.first, shimDirectory)
+        XCTAssertEqual(components.dropFirst().first, providerDirectory)
+        XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedZshPromptHookPreservesLastCommandStatus() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; false; _toastty_precmd; print -r -- \"$?\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "PATH": "\(shimDirectory):/usr/bin",
+                "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "1")
+    }
+
     func testManagedZshSnippetLeavesPathUnchangedWithoutAgentShimDirectory() throws {
         let snippetURL = try writeStandaloneSnippet(
             ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
@@ -1123,6 +1179,64 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
         XCTAssertEqual(components.first, shimDirectory)
         XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedBashSnippetRestoresAgentShimPathAfterLatePathPrepend() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let providerDirectory = "/tmp/toastty-provider-bin"
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; export PATH=\"\(providerDirectory):$PATH\"; _toastty_prompt_command; printf '%s\\n' \"$PATH\"",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "PATH": "\(shimDirectory):/usr/bin",
+                "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+            ]
+        )
+
+        let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
+        XCTAssertEqual(components.first, shimDirectory)
+        XCTAssertEqual(components.dropFirst().first, providerDirectory)
+        XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedBashPromptHookPreservesLastCommandStatus() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; false; _toastty_prompt_command; printf '%s\\n' \"$?\"",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "PATH": "\(shimDirectory):/usr/bin",
+                "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+            ]
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "1")
     }
 
     func testManagedBashSnippetLeavesPathUnchangedWithoutAgentShimDirectory() throws {
@@ -1731,6 +1845,70 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
         XCTAssertEqual(components.first, shimDirectory)
         XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedFishSnippetRestoresAgentShimPathAfterLatePathPrepend() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let providerDirectory = "/tmp/toastty-provider-bin"
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; set --export PATH \(providerDirectory) $PATH; emit fish_prompt; string join ':' $PATH",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [
+                    "PATH": "\(shimDirectory):/usr/bin",
+                    "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+                ]
+            )
+        )
+
+        let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
+        XCTAssertEqual(components.first, shimDirectory)
+        XCTAssertEqual(components.dropFirst().first, providerDirectory)
+        XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedFishPromptHookPreservesLastCommandStatus() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; false; _toastty_on_fish_prompt; printf '%s\\n' $status",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [
+                    "PATH": "\(shimDirectory):/usr/bin",
+                    "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+                ]
+            )
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "1")
     }
 
     func testManagedFishSnippetLeavesPathUnchangedWithoutAgentShimDirectory() throws {

@@ -73,9 +73,11 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \tlocal shim_dir="${TOASTTY_AGENT_SHIM_DIR:-}"
             \t[[ -n "$shim_dir" ]] || return
 
+            \tlocal old_path="$PATH"
             \ttypeset -gaU path
             \tpath=("$shim_dir" "${(@)path:#$shim_dir}")
             \texport PATH
+            \t[[ "$PATH" == "$old_path" ]] || rehash 2>/dev/null || true
             }
 
             _toastty_ensure_pane_journal_directory() {
@@ -209,15 +211,19 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             }
 
             _toastty_precmd() {
+            \tlocal toastty_status=$?
+            \t_toastty_restore_agent_shim_path
             \tif [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
             \t\t_toastty_import_pane_journal_if_needed
             \t\t_toastty_append_pending_history_entry_to_journal
             \tfi
             \tlocal cwd="${PWD/#$HOME/~}"
             \t_toastty_emit_title "$cwd"
+            \treturn $toastty_status
             }
 
             _toastty_preexec() {
+            \tlocal toastty_status=$?
             \tlocal entry="$1"
             \t# Keep multiline commands intact in the journal; titles use the first line.
             \tlocal cmd="${entry%%$'\\n'*}"
@@ -227,6 +233,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\ttypeset -g _TOASTTY_PENDING_JOURNAL_ENTRY="$entry"
             \tfi
             \t_toastty_emit_title "$cmd"
+            \treturn $toastty_status
             }
 
             if [[ -o interactive ]]; then
@@ -260,6 +267,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\tPATH+=":$entry"
             \tdone
             \texport PATH
+            \t[[ "$PATH" == "$old_path" ]] || hash -r 2>/dev/null || true
             }
 
             _toastty_ensure_pane_journal_directory() {
@@ -445,12 +453,15 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             }
 
             _toastty_prompt_command() {
+            \tlocal toastty_status=$?
+            \t_toastty_restore_agent_shim_path
             \tif [[ -n "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]]; then
             \t\t_toastty_prepare_history_for_prompt_if_needed
             \t\t_toastty_append_last_history_entry_to_journal
             \tfi
             \tlocal cwd="${PWD/#$HOME/~}"
             \t_toastty_emit_title "$cwd"
+            \treturn "$toastty_status"
             }
 
             if [[ $- == *i* ]]; then
@@ -675,19 +686,27 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             end
 
             function _toastty_on_fish_prompt --on-event fish_prompt
+            \tset --local toastty_status $status
+            \t_toastty_restore_agent_shim_path
             \t_toastty_emit_title (prompt_pwd)
+            \treturn $toastty_status
             end
 
             function _toastty_on_fish_preexec --on-event fish_preexec --argument-names cmd
+            \tset --local toastty_status $status
+            \t_toastty_restore_agent_shim_path
             \tset --erase _TOASTTY_PENDING_JOURNAL_ENTRY
             \t_toastty_emit_title "$cmd"
 
             \t_toastty_command_should_write_pane_journal "$cmd"
             \tand set --global _TOASTTY_PENDING_JOURNAL_ENTRY "$cmd"
+            \treturn $toastty_status
             end
 
             function _toastty_on_fish_postexec --on-event fish_postexec --argument-names cmd
+            \tset --local toastty_status $status
             \t_toastty_append_pending_history_entry_to_journal
+            \treturn $toastty_status
             end
 
             _toastty_restore_agent_shim_path
