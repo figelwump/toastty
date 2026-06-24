@@ -22,6 +22,7 @@ enum ToastyTheme {
     static let sidebarSessionDetailText = Color(hex: 0xD0C8C0)
     static let sidebarSessionPathText = Color(hex: 0xB7AEA5)
     static let shortcutBadgeText = Color(hex: 0xB8B8B8)
+    static let workspaceAgentCountIdleDot = Color(hex: 0x5A5854)
     static let sidebarSessionActiveBackground = Color(hex: 0x3D3D3D)
     static let sidebarSessionActiveHoverBackground = Color(hex: 0x484848)
     static let sidebarSessionHoverBackground = Color(hex: 0x222222)
@@ -135,6 +136,7 @@ enum ToastyTheme {
     static let fontWorkspaceSessionDetail = Font.system(size: 11, weight: .regular, design: .default)
     static let fontWorkspaceSessionPath = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontShortcutBadge = Font.system(size: 11, weight: .medium, design: .monospaced)
+    static let fontWorkspaceAgentCount = Font.system(size: 10, weight: .medium, design: .monospaced)
     static let fontTerminalProfileBadge = Font.system(size: 10, weight: .semibold, design: .monospaced)
     static let fontWorkspaceNewBadge = Font.system(size: 10, weight: .medium, design: .default)
 

@@ -1271,6 +1271,80 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 2), "2 unreads")
     }
 
+    private func makeAgentStatus(_ agent: AgentKind, _ kind: SessionStatusKind) -> WorkspaceSessionStatus {
+        WorkspaceSessionStatus(
+            sessionID: UUID().uuidString,
+            panelID: UUID(),
+            agent: agent,
+            status: SessionStatus(kind: kind, summary: ""),
+            cwd: nil,
+            updatedAt: Date(timeIntervalSince1970: 1),
+            isActive: true
+        )
+    }
+
+    func testWorkspaceAgentSummaryCountsWorkingAsRunning() {
+        let summary = WorkspaceAgentSummary.make(from: [
+            makeAgentStatus(.claude, .working),
+            makeAgentStatus(.codex, .ready),
+            makeAgentStatus(.codex, .idle),
+        ])
+        XCTAssertEqual(summary.total, 3)
+        XCTAssertEqual(summary.running, 1)
+        XCTAssertTrue(summary.hasAgents)
+        XCTAssertTrue(summary.hasRunning)
+    }
+
+    func testWorkspaceAgentSummaryExcludesProcessWatch() {
+        let summary = WorkspaceAgentSummary.make(from: [
+            makeAgentStatus(.codex, .working),
+            makeAgentStatus(.processWatch, .working),
+        ])
+        XCTAssertEqual(summary.total, 1)
+        XCTAssertEqual(summary.running, 1)
+    }
+
+    func testWorkspaceAgentSummaryEmptyHasNoAgents() {
+        let summary = WorkspaceAgentSummary.make(from: [])
+        XCTAssertFalse(summary.hasAgents)
+        XCTAssertFalse(summary.hasRunning)
+        XCTAssertEqual(summary.total, 0)
+    }
+
+    func testWorkspaceHeaderSubtitleTextFormats() {
+        let agents = WorkspaceAgentSummary(total: 3, running: 1)
+        XCTAssertEqual(
+            String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: agents, unreadText: nil).characters),
+            "1/3 running"
+        )
+        XCTAssertEqual(
+            String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: agents, unreadText: "2 unreads").characters),
+            "1/3 running  ·  2 unreads"
+        )
+        let noAgents = WorkspaceAgentSummary(total: 0, running: 0)
+        XCTAssertEqual(
+            String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: noAgents, unreadText: "1 unread").characters),
+            "1 unread"
+        )
+    }
+
+    func testWorkspaceHeaderSubtitleAccessibilityLabel() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceHeaderSubtitleAccessibilityLabel(
+                agentSummary: WorkspaceAgentSummary(total: 3, running: 1),
+                unreadText: "2 unreads"
+            ),
+            "1 of 3 agents running, 2 unreads"
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceHeaderSubtitleAccessibilityLabel(
+                agentSummary: WorkspaceAgentSummary(total: 2, running: 0),
+                unreadText: nil
+            ),
+            "0 of 2 agents running"
+        )
+    }
+
     func testFocusedUnreadClearCandidateRequiresActiveApp() throws {
         let workspace = try makeFocusedUnreadWorkspace()
 

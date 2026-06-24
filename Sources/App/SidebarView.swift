@@ -393,7 +393,8 @@ struct SidebarView: View {
                         workspace: workspace,
                         shortcutLabel: shortcutLabel,
                         selectionSubtitle: nil,
-                        isSelected: isSelected
+                        isSelected: isSelected,
+                        agentSummary: WorkspaceAgentSummary.make(from: sessionStatuses)
                     ) {
                         Self.styledWorkspaceTitleText(
                             workspace.title,
@@ -474,7 +475,8 @@ struct SidebarView: View {
                         workspace: workspace,
                         shortcutLabel: shortcutLabel,
                         selectionSubtitle: nil,
-                        isSelected: isSelected
+                        isSelected: isSelected,
+                        agentSummary: WorkspaceAgentSummary.make(from: sessionStatuses)
                     ) {
                         WorkspaceRenameTextField(
                             text: $renameDraftTitle,
@@ -549,6 +551,7 @@ struct SidebarView: View {
         shortcutLabel: String?,
         selectionSubtitle: String?,
         isSelected: Bool,
+        agentSummary: WorkspaceAgentSummary?,
         @ViewBuilder titleView: () -> Title
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -567,6 +570,10 @@ struct SidebarView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if let agentSummary, agentSummary.hasAgents {
+                    workspaceAgentCountBadge(agentSummary)
+                }
 
                 // Keyboard shortcut badge pill
                 if let shortcutLabel {
@@ -1630,6 +1637,28 @@ struct SidebarView: View {
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
+    }
+
+    private func workspaceAgentCountBadge(_ summary: WorkspaceAgentSummary) -> some View {
+        var running = AttributedString("\(summary.running)")
+        running.foregroundColor = summary.hasRunning ? ToastyTheme.accent : ToastyTheme.primaryText
+        var total = AttributedString("/\(summary.total)")
+        total.foregroundColor = ToastyTheme.inactiveText
+
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(summary.hasRunning ? ToastyTheme.accent : ToastyTheme.workspaceAgentCountIdleDot)
+                .frame(width: 6, height: 6)
+            Text(running + total)
+                .font(ToastyTheme.fontWorkspaceAgentCount)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(ToastyTheme.hairline, in: Capsule())
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(summary.running) of \(summary.total) agents running")
+        .accessibilityIdentifier("sidebar.workspace.agentCount")
     }
 }
 

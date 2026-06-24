@@ -630,7 +630,7 @@ struct WorkspaceView: View {
                         tabAccessorySpacing: Self.workspaceTabAccessorySpacing
                     ) {
                         workspaceTitleLabel
-                        workspaceUnreadSummaryLabel(for: workspace)
+                        workspaceHeaderSubtitleLabel(for: workspace)
                         workspaceHeaderTabStrip(for: workspace)
                         topBarTrailingControls
                             .fixedSize(horizontal: true, vertical: true)
@@ -664,21 +664,72 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
-    private func workspaceUnreadSummaryLabel(for workspace: WorkspaceState) -> some View {
-        if let summary = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount) {
-            Text(summary)
-                .font(ToastyTheme.fontWorkspaceSubtitle)
-                .foregroundStyle(ToastyTheme.inactiveWorkspaceSubtitleText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityIdentifier("topbar.workspace.unreads")
+    private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
+        let agentSummary = WorkspaceAgentSummary.make(
+            from: sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        )
+        let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
+
+        if agentSummary.hasAgents || unreadText != nil {
+            HStack(spacing: 5) {
+                if agentSummary.hasAgents {
+                    Circle()
+                        .fill(agentSummary.hasRunning ? ToastyTheme.accent : ToastyTheme.workspaceAgentCountIdleDot)
+                        .frame(width: 6, height: 6)
+                }
+                Text(Self.workspaceHeaderSubtitleText(agentSummary: agentSummary, unreadText: unreadText))
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.workspaceHeaderSubtitleAccessibilityLabel(agentSummary: agentSummary, unreadText: unreadText))
+            .accessibilityIdentifier("topbar.workspace.summary")
         } else {
-            // Preserve the explicit unread-summary layout slot without
-            // changing width or height when the label is hidden.
+            // Preserve the explicit subtitle layout slot without changing width
+            // or height when there is nothing to show.
             Color.clear
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         }
+    }
+
+    /// Colored subtitle shown under the workspace title: the agent
+    /// "running/total running" count, with the unread summary appended.
+    nonisolated static func workspaceHeaderSubtitleText(
+        agentSummary: WorkspaceAgentSummary,
+        unreadText: String?
+    ) -> AttributedString {
+        var result = AttributedString("")
+        if agentSummary.hasAgents {
+            var running = AttributedString("\(agentSummary.running)")
+            running.foregroundColor = agentSummary.hasRunning
+                ? ToastyTheme.accent
+                : ToastyTheme.inactiveWorkspaceSubtitleText
+            var rest = AttributedString("/\(agentSummary.total) running")
+            rest.foregroundColor = ToastyTheme.inactiveWorkspaceSubtitleText
+            result = running + rest
+        }
+        if let unreadText {
+            var unread = AttributedString(agentSummary.hasAgents ? "  ·  \(unreadText)" : unreadText)
+            unread.foregroundColor = ToastyTheme.inactiveWorkspaceSubtitleText
+            result += unread
+        }
+        return result
+    }
+
+    nonisolated static func workspaceHeaderSubtitleAccessibilityLabel(
+        agentSummary: WorkspaceAgentSummary,
+        unreadText: String?
+    ) -> String {
+        var parts: [String] = []
+        if agentSummary.hasAgents {
+            parts.append("\(agentSummary.running) of \(agentSummary.total) agents running")
+        }
+        if let unreadText {
+            parts.append(unreadText)
+        }
+        return parts.joined(separator: ", ")
     }
 
     private var topBarTrailingControls: some View {
