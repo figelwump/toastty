@@ -716,19 +716,19 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Colored subtitle shown under the workspace title: the active/running
-    /// agent counts, with the unread summary appended.
+    /// Colored subtitle shown under the workspace title: the agent
+    /// "active/running running" count, with the unread summary appended.
     nonisolated static func workspaceHeaderSubtitleText(
         agentSummary: WorkspaceAgentSummary,
         unreadText: String?
     ) -> AttributedString {
         var result = AttributedString("")
         if agentSummary.hasRunning {
-            var active = AttributedString("\(agentSummary.active) active")
+            var active = AttributedString("\(agentSummary.active)")
             active.foregroundColor = agentSummary.hasActive
                 ? ToastyTheme.accent
                 : ToastyTheme.inactiveWorkspaceSubtitleText
-            var running = AttributedString(" / \(agentSummary.running) running")
+            var running = AttributedString("/\(agentSummary.running) running")
             running.foregroundColor = ToastyTheme.inactiveWorkspaceSubtitleText
             result = active + running
         }
