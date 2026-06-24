@@ -369,7 +369,7 @@ toastty session stop --session <id> [--panel <id>] [--reason <text>]
 
 ### `session ingest-agent-event`
 
-Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, Codex hook/notify events, and provider-native resume-record updates.
+Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, OpenCode, MiMo Code, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, Codex hook/notify events, and provider-native resume-record updates.
 
 ```
 toastty session ingest-agent-event --source <source> [--session <id>] [--panel <id>]
@@ -377,13 +377,13 @@ toastty session ingest-agent-event --source <source> [--session <id>] [--panel <
 
 | Option | Required | Env var fallback | Description |
 |---|---|---|---|
-| `--source <source>` | yes | — | `claude-hooks`, `codex-hooks`, `codex-notify`, or `pi-extension` |
+| `--source <source>` | yes | — | `claude-hooks`, `codex-hooks`, `codex-notify`, `opencode-plugin`, `mimocode-plugin`, or `pi-extension` |
 | `--session <id>` | no | `TOASTTY_SESSION_ID` | Session ID |
 | `--panel <id>` | no | `TOASTTY_PANEL_ID` | Panel UUID |
 
 This command is not intended for third-party integrations. Custom agents should use `session status` and `session stop` directly.
 
-Toastty's built-in Claude, Codex, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If a helper cannot reach the app, it keeps the agent process alive and logs the CLI failure details. Installed Codex status hooks write to `~/.toastty/codex-hooks/telemetry-failures.log`; per-session helpers write to `telemetry-failures.log` in that session's temporary launch artifacts directory. Codex keeps per-session artifacts only while the session is active; Claude can retain hook artifacts briefly after session stop so late hooks fail softly instead of hitting missing-file shell errors.
+Toastty's built-in Claude, Codex, OpenCode, MiMo Code, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If a helper cannot reach the app, it keeps the agent process alive and logs the CLI failure details. Installed Codex status hooks write to `~/.toastty/codex-hooks/telemetry-failures.log`; per-session helpers write to `telemetry-failures.log` in that session's temporary launch artifacts directory. Codex, OpenCode, MiMo Code, and Pi keep per-session artifacts only while the session is active; Claude can retain hook artifacts briefly after session stop so late hooks fail softly instead of hitting missing-file shell errors.
 
 ## Environment variables
 

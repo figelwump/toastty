@@ -6,6 +6,8 @@ struct AgentKindTests {
     func displayNameUsesKnownAgentLabels() {
         #expect(AgentKind.codex.displayName == "Codex")
         #expect(AgentKind.claude.displayName == "Claude Code")
+        #expect(AgentKind.opencode.displayName == "OpenCode")
+        #expect(AgentKind.mimocode.displayName == "MiMo Code")
         #expect(AgentKind.pi.displayName == "Pi")
     }
 
@@ -46,6 +48,24 @@ struct AgentKindTests {
                 argv: ["agent-safehouse", "pi", "--mode", "text"]
             ) == 1
         )
+        #expect(
+            ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .opencode,
+                argv: ["agent-safehouse", "opencode", "--model", "gpt-5"]
+            ) == 1
+        )
+        #expect(
+            ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .mimocode,
+                argv: ["agent-safehouse", "mimo", "--model", "mimo"]
+            ) == 1
+        )
+        #expect(
+            ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .mimocode,
+                argv: ["agent-safehouse", "mimocode"]
+            ) == 1
+        )
     }
 
     @Test
@@ -73,6 +93,30 @@ struct AgentKindTests {
                 commandName: "agent-safehouse",
                 argv: ["agent-safehouse", "--cwd", "/tmp/repo", "pi", "--mode", "text"]
             ) == .pi
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "opencode",
+                argv: ["opencode"]
+            ) == .opencode
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "mimo",
+                argv: ["mimo"]
+            ) == .mimocode
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "mimocode",
+                argv: ["mimocode"]
+            ) == .mimocode
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "agent-safehouse",
+                argv: ["agent-safehouse", "--cwd", "/tmp/repo", "mimo"]
+            ) == .mimocode
         )
         #expect(
             ManagedAgentCommandResolver.inferManagedAgent(
@@ -133,6 +177,18 @@ struct AgentKindTests {
                     manualCommandNames: ["safe-pi"]
                 ),
                 AgentProfile(
+                    id: "opencode",
+                    displayName: "OpenCode",
+                    argv: ["safe-open", "opencode"],
+                    manualCommandNames: ["safe-open"]
+                ),
+                AgentProfile(
+                    id: "mimocode",
+                    displayName: "MiMo Code",
+                    argv: ["safe-mimo", "mimo"],
+                    manualCommandNames: ["safe-mimo"]
+                ),
+                AgentProfile(
                     id: "gemini",
                     displayName: "Gemini",
                     argv: ["sandbox-wrapper", "gemini"],
@@ -148,6 +204,11 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("pi"))
         #expect(shimCommandNames.contains("cdx"))
         #expect(shimCommandNames.contains("safe-pi"))
+        #expect(shimCommandNames.contains("opencode"))
+        #expect(shimCommandNames.contains("mimo"))
+        #expect(shimCommandNames.contains("mimocode"))
+        #expect(shimCommandNames.contains("safe-open"))
+        #expect(shimCommandNames.contains("safe-mimo"))
         #expect(shimCommandNames.contains("agent-safehouse"))
         #expect(shimCommandNames.contains("sandbox-wrapper") == false)
     }
@@ -159,6 +220,9 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("codex"))
         #expect(shimCommandNames.contains("cdx"))
         #expect(shimCommandNames.contains("claude"))
+        #expect(shimCommandNames.contains("opencode"))
+        #expect(shimCommandNames.contains("mimo"))
+        #expect(shimCommandNames.contains("mimocode"))
         #expect(shimCommandNames.contains("pi"))
     }
 

@@ -155,6 +155,97 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
+    func testPrepareOpenCodeLaunchInjectsFilePluginThroughConfigContent() throws {
+        let fileManager = FileManager.default
+        let sessionID = "test-\(UUID().uuidString)"
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .opencode,
+            argv: ["agent-safehouse", "opencode", "--model", "anthropic/claude-sonnet-4"],
+            cliExecutablePath: "/Applications/Toastty.app/Contents/MacOS/toastty",
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        XCTAssertEqual(preparedLaunch.argv, ["agent-safehouse", "opencode", "--model", "anthropic/claude-sonnet-4"])
+        XCTAssertNil(preparedLaunch.environment["MIMOCODE_CONFIG_CONTENT"])
+        let configContent = try XCTUnwrap(preparedLaunch.environment["OPENCODE_CONFIG_CONTENT"])
+        let configObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any])
+        let plugins = try XCTUnwrap(configObject["plugin"] as? [String])
+        let pluginSpec = try XCTUnwrap(plugins.first)
+        XCTAssertTrue(pluginSpec.hasPrefix("file://"))
+        XCTAssertTrue(pluginSpec.hasSuffix("/toastty-opencode-status-plugin.js"))
+
+        let pluginURL = try XCTUnwrap(URL(string: pluginSpec))
+        let plugin = try String(contentsOf: pluginURL, encoding: .utf8)
+        XCTAssertTrue(plugin.contains("export async function ToasttyOpenCodeFamilyStatusPlugin()"))
+        XCTAssertTrue(plugin.contains("const cliPath = "))
+        XCTAssertTrue(plugin.contains("Applications"))
+        XCTAssertTrue(plugin.contains("Toastty.app"))
+        XCTAssertTrue(plugin.contains("Contents"))
+        XCTAssertTrue(plugin.contains("MacOS"))
+        XCTAssertTrue(plugin.contains("toastty"))
+        XCTAssertTrue(plugin.contains(#"const source = "opencode-plugin";"#))
+        XCTAssertTrue(plugin.contains(#""permission.replied""#))
+        XCTAssertTrue(plugin.contains(#""ingest-agent-event""#))
+    }
+
+    func testPrepareMiMoCodeLaunchInjectsMiMoConfigContent() throws {
+        let fileManager = FileManager.default
+        let sessionID = "test-\(UUID().uuidString)"
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .mimocode,
+            argv: ["mimo"],
+            cliExecutablePath: "/Applications/Toastty.app/Contents/MacOS/toastty",
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        XCTAssertEqual(preparedLaunch.argv, ["mimo"])
+        XCTAssertNil(preparedLaunch.environment["OPENCODE_CONFIG_CONTENT"])
+        let configContent = try XCTUnwrap(preparedLaunch.environment["MIMOCODE_CONFIG_CONTENT"])
+        let configObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any])
+        let plugins = try XCTUnwrap(configObject["plugin"] as? [String])
+        let pluginSpec = try XCTUnwrap(plugins.first)
+        XCTAssertTrue(pluginSpec.hasPrefix("file://"))
+        XCTAssertTrue(pluginSpec.hasSuffix("/toastty-mimocode-status-plugin.js"))
+
+        let pluginURL = try XCTUnwrap(URL(string: pluginSpec))
+        let plugin = try String(contentsOf: pluginURL, encoding: .utf8)
+        XCTAssertTrue(plugin.contains(#"const source = "mimocode-plugin";"#))
+    }
+
+    func testPrepareOpenCodeFamilyLaunchRefusesToOverwriteExistingConfigContent() {
+        XCTAssertThrowsError(
+            try AgentLaunchInstrumentation.prepare(
+                agent: .opencode,
+                argv: ["opencode"],
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default,
+                launchEnvironment: ["OPENCODE_CONFIG_CONTENT": #"{"plugin":["user-plugin"]}"#]
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("OPENCODE_CONFIG_CONTENT"))
+        }
+    }
+
     func testPrepareClaudeLaunchInsertsSettingsAfterWrappedClaudeCommand() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"

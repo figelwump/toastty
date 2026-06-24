@@ -401,7 +401,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
-      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|pi-extension [--session <id>] [--panel <id>]
+      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|opencode-plugin|mimocode-plugin|pi-extension [--session <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
@@ -738,7 +738,7 @@ public enum ToasttyCLI {
 
             let sourceValue = try requireValue("--source", in: parsed)
             guard let source = AgentEventSource(rawValue: sourceValue) else {
-                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-hooks, codex-notify, pi-extension")
+                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-hooks, codex-notify, opencode-plugin, mimocode-plugin, pi-extension")
             }
 
             return .sessionIngestAgentEvent(
@@ -1155,6 +1155,10 @@ public enum ToasttyCLI {
 
         case .codexNotify:
             return "type=\(normalizedEventField(object["type"]) ?? "unknown")"
+
+        case .mimocodePlugin, .opencodePlugin:
+            let event = (object["event"] as? [String: Any]) ?? object
+            return "type=\(normalizedEventField(event["type"]) ?? "unknown")"
 
         case .piExtension:
             var components = ["event=\(normalizedEventField(object["event"]) ?? "unknown")"]

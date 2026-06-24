@@ -51,7 +51,7 @@ Profile fields:
 |---|---|---|
 | `displayName` | yes | Label shown in the Agent menu, command palette, and top-bar buttons when enabled |
 | `argv` | yes | The exact command Toastty executes, as a JSON-style string array |
-| `manualCommandNames` | no | For built-in `[codex]` / `[claude]` / `[pi]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
+| `manualCommandNames` | no | For built-in `[codex]` / `[claude]` / `[opencode]` / `[mimocode]` / `[pi]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
 | `initialPromptPlacement` | no | Set to `"trailing"` only for profiles whose command accepts the first prompt as the final argv argument. Automation `agent.launch initialPrompt=...` uses this to opt custom profiles or shell-helper profiles into prompt passing. |
 | `shortcutKey` | no | Single ASCII letter or digit; registers `Cmd+Opt+<key>` |
 
@@ -131,13 +131,13 @@ argv = ["/usr/local/bin/my-codex-wrapper"]
 argv = ["codex"]
 ```
 
-The profile ID is stored as an `AgentKind` internally. When a launch resolves to `AgentKind.codex`, `AgentKind.claude`, or `AgentKind.pi`, Toastty activates the corresponding instrumentation path. When the ID is anything else, the command runs as-is with only the base session context injected.
+The profile ID is stored as an `AgentKind` internally. When a launch resolves to `AgentKind.codex`, `AgentKind.claude`, `AgentKind.opencode`, `AgentKind.mimocode`, or `AgentKind.pi`, Toastty activates the corresponding instrumentation path. When the ID is anything else, the command runs as-is with only the base session context injected.
 
 Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. Add `showTopBarButtons = false` before any profile table to keep agent launch buttons out of the top bar while preserving the menu, command palette, and shortcuts.
 
 ### Wrapper-compatible launch commands
 
-Built-in Codex, Claude, and Pi instrumentation also works when the configured
+Built-in Codex, Claude, OpenCode, MiMo Code, and Pi instrumentation also works when the configured
 command uses a wrapper or prefix command, as long as the actual agent command
 still appears as its own `argv` element somewhere in the list. For predictable
 manual tracking of those wrapper executables when you type them into a Toastty
@@ -168,6 +168,22 @@ argv = [
 ]
 manualCommandNames = ["run-sandboxed.sh"]
 
+[opencode]
+displayName = "OpenCode"
+argv = [
+  "agent-safehouse",
+  "opencode",
+]
+manualCommandNames = ["agent-safehouse"]
+
+[mimocode]
+displayName = "MiMo Code"
+argv = [
+  "agent-safehouse",
+  "mimo",
+]
+manualCommandNames = ["agent-safehouse"]
+
 [pi]
 displayName = "Pi"
 argv = [
@@ -177,8 +193,9 @@ argv = [
 manualCommandNames = ["agent-safehouse"]
 ```
 
-Toastty inserts its agent-specific flags after the actual `codex`, `claude`, or
-`pi` command in those examples, not after the wrapper binary.
+Toastty inserts its agent-specific flags or environment after resolving the actual
+`codex`, `claude`, `opencode`, `mimo` / `mimocode`, or `pi` command in those
+examples, not after the wrapper binary.
 
 If you prefer shell helpers, menu launches can also target a shell function or
 wrapper script directly:
@@ -227,6 +244,18 @@ When the profile ID is `claude`, Toastty:
 These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). `SessionStart` also persists Claude native resume metadata so restored managed Claude panels can run `claude --resume <session-id>` instead of starting a fresh session. Non-actionable notifications such as `auth_success` are ignored.
 When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the temporary launch artifacts directory, but still exits successfully so Claude keeps running. Claude can retain those hook artifacts briefly after session stop so late hook invocations turn into no-op delivery instead of missing-file shell errors.
 
+### What `opencode` and `mimocode` enable
+
+When the profile ID is `opencode` or `mimocode`, Toastty:
+
+1. **Creates a temporary OpenCode-compatible plugin** inside the per-session launch artifacts directory. Toastty does not write to `.opencode`, `.mimocode`, or global provider config files.
+2. **Injects the plugin through provider config content**. OpenCode launches receive `OPENCODE_CONFIG_CONTENT`; MiMo Code launches receive `MIMOCODE_CONFIG_CONTENT`. If a launch environment already sets the matching config-content variable, Toastty does not overwrite it and launches without status instrumentation.
+3. **Reports status through** `toastty session ingest-agent-event --source opencode-plugin` or `--source mimocode-plugin`. Toastty maps `session.status`, `session.idle`, `permission.asked`, `permission.replied`, and `session.error` into sidebar **Working**, **Ready**, **Needs approval**, and **Error** states.
+4. **Keeps the first slice status-only**. Toastty does not currently record OpenCode or MiMo Code native resume metadata, and it ignores tool-progress plugin events.
+5. **Logs helper delivery failures** to `telemetry-failures.log` inside the temporary launch artifacts directory. The plugin logs event type, session context, exit status, and CLI stderr; it does not write full provider event payloads to the failure log.
+
+Typed `opencode`, `mimo`, and `mimocode` launches use the same instrumentation path when Toastty's managed command shims are enabled. The built-in `mimocode` shim falls back to the real `mimo` executable when no `mimocode` executable exists on `PATH`.
+
 ### What `pi` enables
 
 When the profile ID is `pi`, Toastty:
@@ -248,9 +277,9 @@ When you trigger an agent launch (menu click, top-bar button, command palette su
 4. **Render shell command** — Toastty builds a single shell command line with any explicit `cd <cwd>` and initial setup commands first, then all `TOASTTY_*` context variables inline, the instrumentation environment, and the profile's `argv`
 5. **Start session** — A session record is created in the session runtime store with initial status "Idle / Ready for prompt"
 6. **Send to terminal** — The rendered command line is sent to the target terminal panel and submitted
-7. **Begin monitoring** — For Codex, installed hooks report primary status, the session log watcher tracks root-turn context, and notify is used only as the no-hooks compatibility fallback; for Claude, hooks report events back through the CLI; for Pi, the bundled extension reports events back through the CLI
+7. **Begin monitoring** — For Codex, installed hooks report primary status, the session log watcher tracks root-turn context, and notify is used only as the no-hooks compatibility fallback; for Claude, hooks report events back through the CLI; for OpenCode and MiMo Code, the temporary plugin reports status events back through the CLI; for Pi, the bundled extension reports events back through the CLI
 
-When the agent process exits and the session is stopped, Toastty cleans up Codex and Pi launch artifacts immediately. Claude hook artifacts can remain after session stop so late hook invocations do not fail at the shell layer before they turn into no-op telemetry delivery.
+When the agent process exits and the session is stopped, Toastty cleans up Codex, OpenCode, MiMo Code, and Pi launch artifacts immediately. Claude hook artifacts can remain after session stop so late hook invocations do not fail at the shell layer before they turn into no-op telemetry delivery.
 
 ### Restore and native resume
 
@@ -274,7 +303,8 @@ than replacing it with an uncertain session.
 
 ## Manual command shims
 
-Outside the Agent menu, Toastty can also track manual `codex`, `cdx`, `claude`, and `pi`
+Outside the Agent menu, Toastty can also track manual `codex`, `cdx`, `claude`,
+`opencode`, `mimo`, `mimocode`, and `pi`
 invocations typed directly into Toastty terminals. By default, Toastty prepends
 managed wrappers for those commands into the terminal `PATH`, and those wrappers
 prepare the same managed-session context before handing off to the real binary.
@@ -289,21 +319,26 @@ If you are setting this up from inside the app, the top-bar `Get Started…`
 button, when visible, routes to the same shell-integration flow as
 `Toastty > Install Shell Integration…`.
 
-If a built-in `[codex]`, `[claude]`, or `[pi]` profile uses extra wrapper executables for
+If a built-in `[codex]`, `[claude]`, `[opencode]`, `[mimocode]`, or `[pi]` profile uses extra wrapper executables for
 typed launches, list those wrapper basenames in `manualCommandNames`. Entries
-must be basenames only, with no paths or spaces, and must not be `codex`,
-`claude`, or `pi`. Toastty installs managed wrappers for those names too, so commands such as
-`run-sandboxed.sh claude ...`, `agent-safehouse codex ...`, or `agent-safehouse pi ...` can start managed
-sessions when typed directly in a Toastty terminal.
+must be basenames only, with no paths or spaces, and must not be built-in
+profile IDs such as `codex`, `claude`, `opencode`, `mimocode`, or `pi`. Toastty
+installs managed wrappers for those names too, so commands such as
+`run-sandboxed.sh claude ...`, `agent-safehouse codex ...`,
+`agent-safehouse opencode ...`, `agent-safehouse mimo ...`, or
+`agent-safehouse pi ...` can start managed sessions when typed directly in a
+Toastty terminal.
 
 If you leave `manualCommandNames` empty, Toastty still keeps recognizing simple
 built-in wrapper-prefix profiles for compatibility, such as
-`run-sandboxed.sh claude ...` or `agent-safehouse codex ...`.
+`run-sandboxed.sh claude ...`, `agent-safehouse codex ...`, or
+`agent-safehouse mimo ...`.
 
-`manualCommandNames` is limited to built-in `[codex]`, `[claude]`, and `[pi]` profiles,
-and the wrapper command still needs to leave the real `codex`, `claude`, or `pi`
-command visible later in `argv`. Toastty uses that later `argv` element to pick
-the correct built-in instrumentation path.
+`manualCommandNames` is limited to built-in `[codex]`, `[claude]`, `[opencode]`,
+`[mimocode]`, and `[pi]` profiles, and the wrapper command still needs to leave
+the real `codex`, `claude`, `opencode`, `mimo` / `mimocode`, or `pi` command
+visible later in `argv`. Toastty uses that later `argv` element to pick the
+correct built-in instrumentation path.
 
 Shell functions and aliases are different: they are resolved by the shell before
 `PATH` lookup, so Toastty's managed command shims cannot intercept them.
@@ -317,7 +352,8 @@ This means:
 - A shell helper can still lead to a managed session if its body calls a
   shimmed executable by bare name on `PATH`, such as
   `run-sandboxed.sh claude ...`.
-- Standalone wrapper executables that hide `codex`, `claude`, or `pi` inside the
+- Standalone wrapper executables that hide `codex`, `claude`, `opencode`, `mimo`,
+  `mimocode`, or `pi` inside the
   wrapper implementation are not supported for manual typed launches. For
   manual tracking, keep the real agent command as its own `argv` element in the
   configured wrapper chain.
@@ -477,4 +513,4 @@ If the user confirms, you can create or update `~/.toastty/agents.toml` with the
 
 **Claude settings conflict** — If your Claude profile includes `--settings` pointing to a file, Toastty merges its hooks into those settings. If the settings argument is malformed or the file cannot be read, Toastty logs a warning and launches without instrumentation.
 
-**Telemetry helper failures** — For installed Codex hooks, inspect `~/.toastty/codex-hooks/telemetry-failures.log`. For per-session helpers, inspect `telemetry-failures.log` inside the managed session's temporary launch artifacts directory if the sidebar stops updating. Codex per-session artifacts exist only while the session is active. Claude can retain hook artifacts briefly after session stop, so the same log may still be available for late-hook failures. Pi also writes compact JSONL telemetry to `pi-telemetry.jsonl` while the session is active. The helper scripts keep the agent process running, but they preserve socket and CLI stderr instead of discarding it.
+**Telemetry helper failures** — For installed Codex hooks, inspect `~/.toastty/codex-hooks/telemetry-failures.log`. For per-session helpers, inspect `telemetry-failures.log` inside the managed session's temporary launch artifacts directory if the sidebar stops updating. Codex, OpenCode, and MiMo Code per-session artifacts exist only while the session is active. Claude can retain hook artifacts briefly after session stop, so the same log may still be available for late-hook failures. Pi also writes compact JSONL telemetry to `pi-telemetry.jsonl` while the session is active. The helper scripts keep the agent process running, but they preserve socket and CLI stderr instead of discarding it.

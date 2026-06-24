@@ -119,6 +119,16 @@ struct AgentProfilesFileTests {
         displayName = "Pi"
         argv = ["agent-safehouse", "pi"]
         manualCommandNames = ["agent-safehouse", "pi-safe"]
+
+        [opencode]
+        displayName = "OpenCode"
+        argv = ["agent-safehouse", "opencode"]
+        manualCommandNames = ["safe-open"]
+
+        [mimocode]
+        displayName = "MiMo Code"
+        argv = ["agent-safehouse", "mimo"]
+        manualCommandNames = ["safe-mimo"]
         """
 
         let fileManager = InMemoryFileManager(templateContents: contents)
@@ -127,7 +137,11 @@ struct AgentProfilesFileTests {
             homeDirectoryPath: fileManager.rootURL.path
         )
 
-        #expect(catalog.profiles.first?.manualCommandNames == ["agent-safehouse", "pi-safe"])
+        #expect(catalog.profiles.map(\.manualCommandNames) == [
+            ["agent-safehouse", "pi-safe"],
+            ["safe-open"],
+            ["safe-mimo"],
+        ])
     }
 
     @Test
@@ -260,7 +274,7 @@ struct AgentProfilesFileTests {
         #expect(
             throws: AgentProfilesParseError(
                 line: 1,
-                message: "[gemini] manualCommandNames is supported only for [codex], [claude], and [pi]"
+                message: "[gemini] manualCommandNames is supported only for [codex], [claude], [opencode], [mimocode], and [pi]"
             )
         ) {
             _ = try AgentProfilesFile.load(

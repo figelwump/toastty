@@ -42,12 +42,15 @@ struct PreparedAgentLaunchArtifacts {
 }
 
 enum AgentLaunchInstrumentationError: LocalizedError {
+    case agentConfigContentEnvironmentAlreadySet(agent: AgentKind, key: String)
     case invalidClaudeSettingsArgument
     case unsupportedClaudeSettingsFormat
     case missingPiExtensionResource
 
     var errorDescription: String? {
         switch self {
+        case .agentConfigContentEnvironmentAlreadySet(let agent, let key):
+            return "\(agent.displayName) launch profile already sets \(key); Toastty will not overwrite it for status instrumentation."
         case .invalidClaudeSettingsArgument:
             return "Claude launch profile has an invalid --settings argument."
         case .unsupportedClaudeSettingsFormat:
@@ -68,6 +71,7 @@ enum AgentLaunchInstrumentation {
         sessionID: String,
         workingDirectory: String?,
         fileManager: FileManager,
+        launchEnvironment: [String: String] = [:],
         codexStatusTrackingSource: CodexStatusTrackingSource = .sessionLogFallback(reason: "default")
     ) throws -> PreparedAgentLaunchCommand {
         if agent == .claude {
@@ -87,6 +91,28 @@ enum AgentLaunchInstrumentation {
                 sessionID: sessionID,
                 fileManager: fileManager,
                 statusTrackingSource: codexStatusTrackingSource
+            )
+        }
+
+        if agent == .opencode {
+            return try prepareOpenCodeFamilyLaunch(
+                runtime: .opencode,
+                argv: argv,
+                cliExecutablePath: cliExecutablePath,
+                sessionID: sessionID,
+                fileManager: fileManager,
+                launchEnvironment: launchEnvironment
+            )
+        }
+
+        if agent == .mimocode {
+            return try prepareOpenCodeFamilyLaunch(
+                runtime: .mimocode,
+                argv: argv,
+                cliExecutablePath: cliExecutablePath,
+                sessionID: sessionID,
+                fileManager: fileManager,
+                launchEnvironment: launchEnvironment
             )
         }
 
@@ -222,6 +248,63 @@ enum AgentLaunchInstrumentation {
         }
     }
 
+    private static func prepareOpenCodeFamilyLaunch(
+        runtime: OpenCodeFamilyRuntime,
+        argv: [String],
+        cliExecutablePath: String,
+        sessionID: String,
+        fileManager: FileManager,
+        launchEnvironment: [String: String]
+    ) throws -> PreparedAgentLaunchCommand {
+        if normalizedNonEmptyValue(launchEnvironment[runtime.configContentEnvironmentKey]) != nil {
+            throw AgentLaunchInstrumentationError.agentConfigContentEnvironmentAlreadySet(
+                agent: runtime.agent,
+                key: runtime.configContentEnvironmentKey
+            )
+        }
+
+        let artifactsDirectoryURL = try makeArtifactsDirectory(
+            prefix: runtime.artifactsDirectoryPrefix,
+            sessionID: sessionID,
+            fileManager: fileManager
+        )
+
+        do {
+            let pluginURL = artifactsDirectoryURL.appendingPathComponent(runtime.pluginFilename, isDirectory: false)
+            let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
+            try Data(
+                makeOpenCodeFamilyStatusPlugin(
+                    cliExecutablePath: cliExecutablePath,
+                    source: runtime.eventSource,
+                    telemetryErrorLogURL: telemetryErrorLogURL
+                ).appending("\n").utf8
+            ).write(to: pluginURL, options: .atomic)
+
+            let configContent: [String: Any] = [
+                "plugin": [
+                    pluginURL.absoluteURL.standardizedFileURL.absoluteString,
+                ],
+            ]
+            let configData = try JSONSerialization.data(withJSONObject: configContent, options: [.sortedKeys])
+            let configString = String(decoding: configData, as: UTF8.self)
+
+            return PreparedAgentLaunchCommand(
+                argv: argv,
+                environment: [
+                    runtime.configContentEnvironmentKey: configString,
+                ],
+                artifacts: PreparedAgentLaunchArtifacts(
+                    directoryURL: artifactsDirectoryURL,
+                    codexSessionLogURL: nil,
+                    cleanupPolicy: .deleteImmediately
+                )
+            )
+        } catch {
+            try? fileManager.removeItem(at: artifactsDirectoryURL)
+            throw error
+        }
+    }
+
     private static func preparePiLaunch(
         argv: [String],
         sessionID: String,
@@ -276,6 +359,56 @@ private extension AgentLaunchInstrumentation {
     enum TelemetryInputMode {
         case none
         case stdinOrFirstArgument
+    }
+
+    enum OpenCodeFamilyRuntime {
+        case mimocode
+        case opencode
+
+        var agent: AgentKind {
+            switch self {
+            case .mimocode:
+                return .mimocode
+            case .opencode:
+                return .opencode
+            }
+        }
+
+        var configContentEnvironmentKey: String {
+            switch self {
+            case .mimocode:
+                return "MIMOCODE_CONFIG_CONTENT"
+            case .opencode:
+                return "OPENCODE_CONFIG_CONTENT"
+            }
+        }
+
+        var eventSource: String {
+            switch self {
+            case .mimocode:
+                return "mimocode-plugin"
+            case .opencode:
+                return "opencode-plugin"
+            }
+        }
+
+        var artifactsDirectoryPrefix: String {
+            switch self {
+            case .mimocode:
+                return "toastty-mimocode-launch"
+            case .opencode:
+                return "toastty-opencode-launch"
+            }
+        }
+
+        var pluginFilename: String {
+            switch self {
+            case .mimocode:
+                return "toastty-mimocode-status-plugin.js"
+            case .opencode:
+                return "toastty-opencode-status-plugin.js"
+            }
+        }
     }
 
     struct ResolvedClaudeSettings {
@@ -422,6 +555,150 @@ private extension AgentLaunchInstrumentation {
         artifactsDirectoryURL.appendingPathComponent("telemetry-failures.log", isDirectory: false)
     }
 
+    static func makeOpenCodeFamilyStatusPlugin(
+        cliExecutablePath: String,
+        source: String,
+        telemetryErrorLogURL: URL
+    ) -> String {
+        let cliLiteral = jsonStringLiteral(cliExecutablePath)
+        let sourceLiteral = jsonStringLiteral(source)
+        let logLiteral = jsonStringLiteral(telemetryErrorLogURL.path)
+
+        return """
+        export async function ToasttyOpenCodeFamilyStatusPlugin() {
+          const cliPath = \(cliLiteral);
+          const source = \(sourceLiteral);
+          const logPath = \(logLiteral);
+          const allowedTypes = new Set([
+            "session.status",
+            "session.idle",
+            "session.error",
+            "permission.asked",
+            "permission.replied",
+          ]);
+          let queue = Promise.resolve();
+
+          function envValue(name) {
+            const value = process.env[name];
+            return typeof value === "string" && value.trim() ? value : "";
+          }
+
+          function normalizeEvent(input) {
+            const candidate = input && typeof input === "object" && "event" in input ? input.event : input;
+            if (!candidate || typeof candidate !== "object") return;
+            if (typeof candidate.type !== "string" || !candidate.type) return;
+            const properties = candidate.properties && typeof candidate.properties === "object"
+              ? candidate.properties
+              : {};
+            const event = { type: candidate.type, properties };
+            if (typeof candidate.id === "string" && candidate.id) event.id = candidate.id;
+            return event;
+          }
+
+          function errorText(error) {
+            if (!error) return "";
+            if (typeof error === "string") return error;
+            if (error.stack) return String(error.stack);
+            if (error.message) return String(error.message);
+            return String(error);
+          }
+
+          async function appendFailure(reason, eventType, details) {
+            try {
+              const fs = await import("node:fs/promises");
+              const timestamp = new Date().toISOString();
+              const socketPath = envValue("TOASTTY_SOCKET_PATH") || "<unset>";
+              const sessionID = envValue("TOASTTY_SESSION_ID") || "<unset>";
+              const panelID = envValue("TOASTTY_PANEL_ID") || "<unset>";
+              const lines = [
+                `[${timestamp}] source=${source} reason=${reason} event_type=${eventType || "<unknown>"} socket_path=${socketPath} session_id=${sessionID} panel_id=${panelID}`,
+              ];
+              const trimmed = String(details || "").slice(0, 4096).trim();
+              if (trimmed) {
+                for (const line of trimmed.split("\\n")) lines.push(`stderr: ${line}`);
+              }
+              await fs.appendFile(logPath, `${lines.join("\\n")}\\n`);
+            } catch {
+              // Telemetry must never break the provider process.
+            }
+          }
+
+          async function runToasttyCLI(args, payload) {
+            if (typeof Bun !== "undefined" && Bun.spawn) {
+              const child = Bun.spawn([cliPath, ...args], {
+                stdin: "pipe",
+                stdout: "ignore",
+                stderr: "pipe",
+                env: process.env,
+              });
+              child.stdin.write(payload);
+              child.stdin.end();
+              const stderr = await new Response(child.stderr).text();
+              const exitCode = await child.exited;
+              return { exitCode, stderr };
+            }
+
+            const childProcess = await import("node:child_process");
+            return await new Promise((resolve) => {
+              const child = childProcess.spawn(cliPath, args, {
+                stdio: ["pipe", "ignore", "pipe"],
+                env: process.env,
+              });
+              let stderr = "";
+              child.stderr.on("data", (chunk) => {
+                stderr += chunk.toString();
+              });
+              child.on("error", (error) => {
+                resolve({ exitCode: 1, stderr: errorText(error) });
+              });
+              child.on("close", (code) => {
+                resolve({ exitCode: code ?? 1, stderr });
+              });
+              child.stdin.end(payload);
+            });
+          }
+
+          async function forward(event) {
+            const sessionID = envValue("TOASTTY_SESSION_ID");
+            const panelID = envValue("TOASTTY_PANEL_ID");
+            const socketPath = envValue("TOASTTY_SOCKET_PATH");
+            if (!sessionID || !panelID || !socketPath || !cliPath) {
+              await appendFailure("missing_environment", event.type, "");
+              return;
+            }
+
+            const args = [
+              "--socket-path",
+              socketPath,
+              "session",
+              "ingest-agent-event",
+              "--source",
+              source,
+              "--session",
+              sessionID,
+              "--panel",
+              panelID,
+            ];
+            const result = await runToasttyCLI(args, JSON.stringify(event));
+            if (result.exitCode !== 0) {
+              await appendFailure(`exit_code_${result.exitCode}`, event.type, result.stderr);
+            }
+          }
+
+          return {
+            event(input) {
+              const event = normalizeEvent(input);
+              if (!event || !allowedTypes.has(event.type)) return;
+              queue = queue
+                .then(() => forward(event))
+                .catch((error) => appendFailure("forward_exception", event.type, errorText(error)));
+              return queue;
+            },
+          };
+        }
+        """
+    }
+
     static func makeTelemetryForwarderScript(
         cliExecutablePath: String,
         source: String,
@@ -487,6 +764,14 @@ private extension AgentLaunchInstrumentation {
                 "exit 0",
             ]
         ).joined(separator: "\n")
+    }
+
+    static func jsonStringLiteral(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let string = String(data: data, encoding: .utf8) else {
+            return "\"\""
+        }
+        return string
     }
 
     static func tomlStringArrayLiteral(_ values: [String]) -> String {

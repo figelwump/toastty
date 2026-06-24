@@ -688,6 +688,37 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             fixture.panelID.uuidString
         )
     }
+
+    func testOpenCodeLaunchPlanPreservesUserConfigContentWhenInstrumentationIsSkipped() throws {
+        let fixture = try makePlannerFixture()
+        let userConfigContent = #"{"plugin":["user-plugin"]}"#
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .opencode,
+                panelID: fixture.panelID,
+                argv: ["opencode"],
+                cwd: "/tmp/repo",
+                environment: [
+                    "OPENCODE_CONFIG_CONTENT": userConfigContent,
+                ]
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        }
+
+        XCTAssertEqual(plan.argv, ["opencode"])
+        XCTAssertEqual(plan.environment["OPENCODE_CONFIG_CONTENT"], userConfigContent)
+        XCTAssertNil(plan.environment["MIMOCODE_CONFIG_CONTENT"])
+        XCTAssertEqual(
+            plan.environment["TOASTTY_PANEL_ID"],
+            fixture.panelID.uuidString
+        )
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.agent,
+            .opencode
+        )
+    }
 }
 
 @MainActor

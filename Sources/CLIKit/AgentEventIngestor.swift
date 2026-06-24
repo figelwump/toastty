@@ -26,6 +26,12 @@ enum AgentEventIngestor {
                 panelID: panelID,
                 payload: payload
             )
+        case .mimocodePlugin, .opencodePlugin:
+            try OpenCodeFamilyEventParser.parse(
+                sessionID: sessionID,
+                panelID: panelID,
+                payload: payload
+            )
         case .piExtension:
             try PiExtensionEventParser.parse(
                 sessionID: sessionID,

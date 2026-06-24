@@ -45,6 +45,24 @@ struct AgentShimExecutableTests {
         #expect(cliLog.contains("session stop") == false)
         #expect(try fixture.agentLogContents().isEmpty)
     }
+
+    @Test
+    func typedMiMoCodeShimResolvesRealMimoBinaryWithoutProfileConfiguration() throws {
+        let fixture = try AgentShimExecutableFixture.make(shimCommandName: "mimocode", realBinaryName: "mimo")
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(preflightDecision: .runAnyway)
+
+        #expect(result.exitStatus == 7)
+        #expect(result.stderr.isEmpty)
+
+        let cliLog = try fixture.cliLogContents()
+        #expect(cliLog.contains("agent prepare-managed-launch --agent mimocode"))
+
+        let agentLog = try fixture.agentLogContents()
+        #expect(agentLog.contains("agent --managed-plan"))
+        #expect(agentLog.contains("session=sess-preflight"))
+    }
 }
 
 private struct AgentShimExecutableFixture {
@@ -56,7 +74,10 @@ private struct AgentShimExecutableFixture {
     private let agentLogURL: URL
     private let realBinURL: URL
 
-    static func make() throws -> Self {
+    static func make(
+        shimCommandName: String = "cdx",
+        realBinaryName: String? = nil
+    ) throws -> Self {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
             .appendingPathComponent("toastty-agent-shim-executable-\(UUID().uuidString)", isDirectory: true)
@@ -65,7 +86,8 @@ private struct AgentShimExecutableFixture {
         let fakeCLIURL = rootURL.appendingPathComponent("fake-toastty", isDirectory: false)
         let cliLogURL = rootURL.appendingPathComponent("cli.log", isDirectory: false)
         let agentLogURL = rootURL.appendingPathComponent("agent.log", isDirectory: false)
-        let shimLinkURL = shimDirectoryURL.appendingPathComponent("cdx", isDirectory: false)
+        let shimLinkURL = shimDirectoryURL.appendingPathComponent(shimCommandName, isDirectory: false)
+        let realBinaryName = realBinaryName ?? shimCommandName
 
         try fileManager.createDirectory(at: shimDirectoryURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: realBinURL, withIntermediateDirectories: true)
@@ -81,7 +103,7 @@ private struct AgentShimExecutableFixture {
             contents: fakeCLIScript()
         )
         try writeExecutableScript(
-            at: realBinURL.appendingPathComponent("cdx", isDirectory: false),
+            at: realBinURL.appendingPathComponent(realBinaryName, isDirectory: false),
             contents: fakeAgentScript()
         )
 

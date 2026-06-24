@@ -858,4 +858,170 @@ struct AgentEventParsersTests {
 
         #expect(commands.isEmpty)
     }
+
+    @Test
+    func opencodeStatusBusyMapsToWorkingStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"session.status","properties":{"sessionID":"ses_provider","status":{"type":"busy"}}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: nil
+            )
+        ])
+    }
+
+    @Test
+    func mimocodeStatusBusyUsesOptionalMessage() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .mimocodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"event":{"type":"session.status","properties":{"sessionID":"ses_provider","status":{"type":"busy","message":"Editing files"}}}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Editing files"
+            )
+        ])
+    }
+
+    @Test
+    func opencodeStatusRetryMapsToRetryingStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"session.status","properties":{"status":{"type":"retry","attempt":2,"message":"Provider overloaded","next":1500}}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Retrying",
+                detail: "Provider overloaded"
+            )
+        ])
+    }
+
+    @Test
+    func opencodeIdleEventsMapToReadyStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"type":"session.idle","properties":{"sessionID":"ses_provider"}}"#.utf8)
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: nil
+            )
+        ])
+    }
+
+    @Test
+    func opencodePermissionAskedMapsToApprovalStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"permission.asked","properties":{"id":"per_123","sessionID":"ses_provider","permission":"bash","patterns":["git status"],"metadata":{"tool":"bash","input":{"command":"git status --short"}},"always":[]}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .needsApproval,
+                summary: "Needs approval",
+                detail: "Approve git status --short"
+            )
+        ])
+    }
+
+    @Test
+    func opencodePermissionRepliedClearsApprovalStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"permission.replied","properties":{"sessionID":"ses_provider","requestID":"per_123","reply":"once"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Approval resolved"
+            )
+        ])
+    }
+
+    @Test
+    func opencodeSessionErrorMapsToErrorStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"session.error","properties":{"sessionID":"ses_provider","error":{"name":"ProviderError","data":{"message":"rate limited"}}}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .error,
+                summary: "Error",
+                detail: "rate limited"
+            )
+        ])
+    }
+
+    @Test
+    func opencodeFamilyParserRejectsOversizedPayload() throws {
+        let payload = Data(String(repeating: "x", count: 64 * 1024 + 1).utf8)
+
+        #expect(throws: OpenCodeFamilyEventParserError.payloadTooLarge) {
+            _ = try AgentEventIngestor.commands(
+                for: .opencodePlugin,
+                sessionID: "sess-123",
+                panelID: nil,
+                payload: payload
+            )
+        }
+    }
 }

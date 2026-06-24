@@ -87,6 +87,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             cliExecutablePath: cliExecutablePath,
             sessionID: sessionID,
             workingDirectory: resolvedCWD,
+            launchEnvironment: request.environment,
             codexStatusTrackingSource: codexStatusTrackingSource
         )
         let launchStart = nowProvider()
@@ -267,6 +268,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         cliExecutablePath: String,
         sessionID: String,
         workingDirectory: String?,
+        launchEnvironment: [String: String],
         codexStatusTrackingSource: CodexStatusTrackingSource
     ) -> PreparedAgentLaunchCommand {
         do {
@@ -277,6 +279,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 sessionID: sessionID,
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
+                launchEnvironment: launchEnvironment,
                 codexStatusTrackingSource: codexStatusTrackingSource
             )
         } catch {

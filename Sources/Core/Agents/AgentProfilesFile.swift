@@ -75,8 +75,8 @@ public enum AgentProfilesFile {
         #   argv         — the exact command Toastty runs for that profile.
         #   manualCommandNames — (optional) extra executable basenames Toastty
         #                        should shim for typed launches of built-in
-        #                        Codex/Claude/Pi wrappers. Use basenames only,
-        #                        with no paths or spaces.
+        #                        Codex/Claude/OpenCode/MiMo/Pi wrappers. Use
+        #                        basenames only, with no paths or spaces.
         #   initialPromptPlacement — (optional) set to "trailing" only when
         #                            automation may pass the first prompt as
         #                            the final argv argument for this profile.
@@ -94,6 +94,16 @@ public enum AgentProfilesFile {
         # displayName = "Claude Code"
         # argv = ["claude"]
         # manualCommandNames = ["run-sandboxed.sh"]
+        #
+        # [opencode]
+        # displayName = "OpenCode"
+        # argv = ["opencode"]
+        # manualCommandNames = ["agent-safehouse"]
+        #
+        # [mimocode]
+        # displayName = "MiMo Code"
+        # argv = ["mimo"]
+        # manualCommandNames = ["agent-safehouse"]
         #
         # [pi]
         # displayName = "Pi"
@@ -485,7 +495,7 @@ private enum AgentProfilesParser {
             guard rawNames.isEmpty else {
                 throw AgentProfilesParseError(
                     line: line,
-                    message: "[\(profileID)] manualCommandNames is supported only for [codex], [claude], and [pi]"
+                    message: "[\(profileID)] manualCommandNames is supported only for [codex], [claude], [opencode], [mimocode], and [pi]"
                 )
             }
             return []
@@ -538,6 +548,8 @@ private enum AgentProfilesParser {
     private static let builtInAgentIDsSupportingManualCommandNames: Set<String> = [
         AgentKind.codex.rawValue,
         AgentKind.claude.rawValue,
+        AgentKind.opencode.rawValue,
+        AgentKind.mimocode.rawValue,
         AgentKind.pi.rawValue,
     ]
 

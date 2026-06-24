@@ -244,16 +244,25 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     }
 
     private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {
-        agent == .codex || agent == .claude || agent == .pi
+        agent == .codex || agent == .claude || agent == .mimocode || agent == .opencode || agent == .pi
     }
 
     private static func implicitProfile(for agent: AgentKind) -> AgentProfile {
         AgentProfile(
             id: agent.rawValue,
             displayName: agent.displayName,
-            argv: [agent.rawValue],
+            argv: [implicitExecutableName(for: agent)],
             initialPromptPlacement: (agent == .codex || agent == .claude) ? .trailing : nil
         )
+    }
+
+    private static func implicitExecutableName(for agent: AgentKind) -> String {
+        switch agent {
+        case .mimocode:
+            return "mimo"
+        default:
+            return agent.rawValue
+        }
     }
 
     private func normalizedExplicitWorkingDirectory(_ cwd: String?) throws -> String? {
