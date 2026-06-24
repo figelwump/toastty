@@ -1654,25 +1654,19 @@ struct SidebarView: View {
     }
 
     private func workspaceAgentCountBadge(_ summary: WorkspaceAgentSummary) -> some View {
-        var active = AttributedString("\(summary.active)")
-        active.foregroundColor = summary.hasActive ? ToastyTheme.accent : ToastyTheme.primaryText
-        var running = AttributedString("/\(summary.running)")
-        running.foregroundColor = ToastyTheme.inactiveText
-
-        return HStack(spacing: 4) {
-            Circle()
-                .fill(summary.hasActive ? ToastyTheme.accent : ToastyTheme.workspaceAgentCountIdleDot)
-                .frame(width: 6, height: 6)
-            Text(active + running)
-                .font(ToastyTheme.fontWorkspaceAgentCount)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(ToastyTheme.hairline, in: Capsule())
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.workspaceAgentSummaryAccessibilityLabel(summary))
-        .accessibilityIdentifier("sidebar.workspace.agentCount")
+        Text("\(summary.active)/\(summary.running)")
+            .font(ToastyTheme.fontWorkspaceAgentCount)
+            .foregroundStyle(summary.hasActive ? ToastyTheme.accent : ToastyTheme.inactiveText)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(
+                summary.hasActive ? ToastyTheme.workspaceAgentCountActiveBackground : ToastyTheme.hairline,
+                in: Capsule()
+            )
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.workspaceAgentSummaryAccessibilityLabel(summary))
+            .accessibilityIdentifier("sidebar.workspace.agentCount")
     }
 }
 

@@ -693,20 +693,12 @@ struct WorkspaceView: View {
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
         if agentSummary.hasRunning || unreadText != nil {
-            HStack(spacing: 5) {
-                if agentSummary.hasRunning {
-                    Circle()
-                        .fill(agentSummary.hasActive ? ToastyTheme.accent : ToastyTheme.workspaceAgentCountIdleDot)
-                        .frame(width: 6, height: 6)
-                }
-                Text(Self.workspaceHeaderSubtitleText(agentSummary: agentSummary, unreadText: unreadText))
-                    .font(ToastyTheme.fontWorkspaceSubtitle)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Self.workspaceHeaderSubtitleAccessibilityLabel(agentSummary: agentSummary, unreadText: unreadText))
-            .accessibilityIdentifier(Self.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: unreadText))
+            Text(Self.workspaceHeaderSubtitleText(agentSummary: agentSummary, unreadText: unreadText))
+                .font(ToastyTheme.fontWorkspaceSubtitle)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityLabel(Self.workspaceHeaderSubtitleAccessibilityLabel(agentSummary: agentSummary, unreadText: unreadText))
+                .accessibilityIdentifier(Self.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: unreadText))
         } else {
             // Preserve the explicit subtitle layout slot without changing width
             // or height when there is nothing to show.
@@ -724,13 +716,11 @@ struct WorkspaceView: View {
     ) -> AttributedString {
         var result = AttributedString("")
         if agentSummary.hasRunning {
-            var active = AttributedString("\(agentSummary.active)")
-            active.foregroundColor = agentSummary.hasActive
+            var running = AttributedString("\(agentSummary.active)/\(agentSummary.running) running")
+            running.foregroundColor = agentSummary.hasActive
                 ? ToastyTheme.accent
                 : ToastyTheme.inactiveWorkspaceSubtitleText
-            var running = AttributedString("/\(agentSummary.running) running")
-            running.foregroundColor = ToastyTheme.inactiveWorkspaceSubtitleText
-            result = active + running
+            result = running
         }
         if let unreadText {
             var unread = AttributedString(agentSummary.hasRunning ? "  ·  \(unreadText)" : unreadText)
