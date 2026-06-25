@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 enum OpenCodeFamilyEventParser {
@@ -18,6 +19,15 @@ enum OpenCodeFamilyEventParser {
             return []
         }
         let properties = event["properties"] as? [String: Any] ?? [:]
+
+        if let commands = normalizedToasttyCommands(
+            eventType: eventType,
+            properties: properties,
+            sessionID: sessionID,
+            panelID: panelID
+        ) {
+            return commands
+        }
 
         switch eventType {
         case "session.status":
@@ -49,7 +59,7 @@ enum OpenCodeFamilyEventParser {
                 ),
             ]
 
-        case "permission.asked":
+        case "permission.asked", "permission.v2.asked":
             return [
                 .sessionStatus(
                     sessionID: sessionID,
@@ -60,7 +70,7 @@ enum OpenCodeFamilyEventParser {
                 ),
             ]
 
-        case "permission.replied":
+        case "permission.replied", "permission.v2.replied":
             return [
                 .sessionStatus(
                     sessionID: sessionID,
@@ -89,6 +99,59 @@ enum OpenCodeFamilyEventParserError: LocalizedError, Equatable {
 }
 
 private extension OpenCodeFamilyEventParser {
+    static func normalizedToasttyCommands(
+        eventType: String,
+        properties: [String: Any],
+        sessionID: String,
+        panelID: UUID?
+    ) -> [CLICommand]? {
+        switch eventType {
+        case "toastty.status":
+            return toasttyStatusCommands(
+                sessionID: sessionID,
+                panelID: panelID,
+                properties: properties
+            )
+
+        case "toastty.final":
+            return [
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .ready,
+                    summary: normalizedString(properties["summary"], limit: 80) ?? "Ready",
+                    detail: normalizedString(properties["text"], limit: 240)
+                        ?? normalizedString(properties["detail"], limit: 240)
+                ),
+            ]
+
+        default:
+            return nil
+        }
+    }
+
+    static func toasttyStatusCommands(
+        sessionID: String,
+        panelID: UUID?,
+        properties: [String: Any]
+    ) -> [CLICommand] {
+        guard let rawKind = normalizedString(properties["kind"], limit: 80)
+                ?? normalizedString(properties["status"], limit: 80),
+              let kind = normalizedStatusKind(rawKind) else {
+            return []
+        }
+
+        return [
+            .sessionStatus(
+                sessionID: sessionID,
+                panelID: panelID,
+                kind: kind,
+                summary: normalizedString(properties["summary"], limit: 80) ?? defaultSummary(for: kind),
+                detail: normalizedString(properties["detail"], limit: 240)
+            ),
+        ]
+    }
+
     static func statusCommands(
         sessionID: String,
         panelID: UUID?,
@@ -135,6 +198,41 @@ private extension OpenCodeFamilyEventParser {
 
         default:
             return []
+        }
+    }
+
+    static func normalizedStatusKind(_ value: String) -> SessionStatusKind? {
+        switch value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "-", with: "_")
+            .lowercased() {
+        case "idle":
+            return .idle
+        case "working", "busy", "running":
+            return .working
+        case "needs_approval", "needsapproval", "approval", "awaiting_approval":
+            return .needsApproval
+        case "ready", "complete", "completed", "done":
+            return .ready
+        case "error", "failed", "failure":
+            return .error
+        default:
+            return nil
+        }
+    }
+
+    static func defaultSummary(for kind: SessionStatusKind) -> String {
+        switch kind {
+        case .idle:
+            return "Waiting"
+        case .working:
+            return "Working"
+        case .needsApproval:
+            return "Needs approval"
+        case .ready:
+            return "Ready"
+        case .error:
+            return "Error"
         }
     }
 

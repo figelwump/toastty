@@ -882,6 +882,72 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func opencodeNormalizedToolStatusMapsToWorkingStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"toastty.status","properties":{"kind":"working","summary":"Working","detail":"Bash completed"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Bash completed"
+            )
+        ])
+    }
+
+    @Test
+    func mimocodeNormalizedFinalMapsToReadyStatusWithResponseText() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .mimocodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"toastty.final","properties":{"text":"Done editing files."}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Done editing files."
+            )
+        ])
+    }
+
+    @Test
+    func opencodeNormalizedApprovalStatusMapsToNeedsApproval() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"toastty.status","properties":{"kind":"needs_approval","summary":"Needs approval","detail":"Approve git status"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .needsApproval,
+                summary: "Needs approval",
+                detail: "Approve git status"
+            )
+        ])
+    }
+
+    @Test
     func mimocodeStatusBusyUsesOptionalMessage() throws {
         let commands = try AgentEventIngestor.commands(
             for: .mimocodePlugin,

@@ -569,21 +569,37 @@ private extension AgentLaunchInstrumentation {
           const cliPath = \(cliLiteral);
           const source = \(sourceLiteral);
           const logPath = \(logLiteral);
-          const allowedTypes = new Set([
-            "session.status",
-            "session.idle",
-            "session.error",
-            "permission.asked",
-            "permission.replied",
-          ]);
+          const isMiMoCode = source === "mimocode-plugin";
           let queue = Promise.resolve();
+          let lastFinalText = "";
+          let lastForwardedStatusKey = "";
+          let lastForwardedFinalText = "";
+          const pendingStatusKeys = new Set();
+          const pendingFinalTexts = new Set();
 
           function envValue(name) {
             const value = process.env[name];
             return typeof value === "string" && value.trim() ? value : "";
           }
 
-          function normalizeEvent(input) {
+          function objectValue(value) {
+            return value && typeof value === "object" ? value : {};
+          }
+
+          function stringValue(value, limit) {
+            let string = "";
+            if (typeof value === "string") {
+              string = value;
+            } else if (typeof value === "number" || typeof value === "boolean") {
+              string = String(value);
+            }
+            const collapsed = string.split(/\\s+/).filter(Boolean).join(" ");
+            if (!collapsed) return "";
+            if (!limit || collapsed.length <= limit) return collapsed;
+            return `${collapsed.slice(0, Math.max(0, limit - 3))}...`;
+          }
+
+          function normalizeProviderEvent(input) {
             const candidate = input && typeof input === "object" && "event" in input ? input.event : input;
             if (!candidate || typeof candidate !== "object") return;
             if (typeof candidate.type !== "string" || !candidate.type) return;
@@ -593,6 +609,160 @@ private extension AgentLaunchInstrumentation {
             const event = { type: candidate.type, properties };
             if (typeof candidate.id === "string" && candidate.id) event.id = candidate.id;
             return event;
+          }
+
+          function toasttyStatus(kind, summary, detail) {
+            const properties = { kind, summary };
+            const normalizedDetail = stringValue(detail, 240);
+            if (normalizedDetail) properties.detail = normalizedDetail;
+            return { type: "toastty.status", properties };
+          }
+
+          function toasttyFinal(text) {
+            const normalizedText = stringValue(text, 240);
+            if (!normalizedText) return toasttyStatus("ready", "Ready", lastFinalText);
+            lastFinalText = normalizedText;
+            return { type: "toastty.final", properties: { text: normalizedText } };
+          }
+
+          function displayToolName(toolName) {
+            const raw = stringValue(toolName, 80);
+            if (!raw) return "Tool";
+            return raw
+              .split(/[_-]+/)
+              .filter(Boolean)
+              .map((component) => component.slice(0, 1).toUpperCase() + component.slice(1))
+              .join(" ");
+          }
+
+          function firstToolName(value) {
+            if (typeof value === "string") return stringValue(value, 80);
+            const object = objectValue(value);
+            return stringValue(object.name, 80)
+              || stringValue(object.tool, 80)
+              || stringValue(object.id, 80)
+              || stringValue(object.callID, 80);
+          }
+
+          function commandPreview(metadata) {
+            const command = stringValue(metadata.command, 120);
+            if (command) return command;
+            return stringValue(objectValue(metadata.input).command, 120);
+          }
+
+          function permissionDetail(properties) {
+            const metadata = objectValue(properties.metadata);
+            const description = stringValue(metadata.description, 160);
+            if (description) return description;
+
+            const command = commandPreview(metadata);
+            if (command) return `Approve ${command}`;
+
+            const metadataTool = stringValue(metadata.tool, 80);
+            if (metadataTool) return `Approve ${displayToolName(metadataTool)}`;
+
+            if (Array.isArray(metadata.tools) && metadata.tools.length > 0) {
+              if (metadata.tools.length === 1) {
+                const tool = firstToolName(metadata.tools[0]);
+                if (tool) return `Approve ${displayToolName(tool)}`;
+              }
+              return `Approve ${metadata.tools.length} tools`;
+            }
+
+            const permission = stringValue(properties.permission, 80);
+            if (permission) {
+              const firstPattern = Array.isArray(properties.patterns)
+                ? stringValue(properties.patterns.find((pattern) => stringValue(pattern, 80)), 80)
+                : "";
+              return firstPattern ? `Approve ${permission} ${firstPattern}` : `Approve ${permission}`;
+            }
+
+            return "Agent is waiting for approval";
+          }
+
+          function errorDetail(value) {
+            if (!value) return "";
+            if (typeof value === "string") return stringValue(value, 240);
+            const object = objectValue(value);
+            return stringValue(object.message, 240)
+              || errorDetail(object.data)
+              || errorDetail(object.cause)
+              || stringValue(object.name, 240);
+          }
+
+          function toolNameFromInput(input) {
+            const object = objectValue(input);
+            return stringValue(object.tool, 80)
+              || stringValue(object.name, 80)
+              || stringValue(object.id, 80)
+              || stringValue(object.callID, 80);
+          }
+
+          function toolAfterDetail(input, output) {
+            const title = stringValue(objectValue(output).title, 160);
+            if (title) return title;
+            return `${displayToolName(toolNameFromInput(input))} completed`;
+          }
+
+          function messagePartDetail(properties) {
+            const part = objectValue(properties.part);
+            const partType = stringValue(part.type, 80) || stringValue(properties.type, 80);
+            const tool = stringValue(part.tool, 80)
+              || stringValue(part.name, 80)
+              || stringValue(part.callID, 80)
+              || stringValue(properties.tool, 80);
+            if (tool || partType === "tool") return `Using ${displayToolName(tool)}`;
+            if (partType === "reasoning" || partType === "thinking") return "Reasoning";
+            if (partType === "text" || stringValue(part.text, 1) || stringValue(properties.text, 1)) return "Writing response";
+            return "";
+          }
+
+          function finalTextFrom(input, output) {
+            const inputObject = objectValue(input);
+            const outputObject = objectValue(output);
+            return stringValue(outputObject.text, 240)
+              || stringValue(outputObject.finalText, 240)
+              || stringValue(inputObject.finalText, 240)
+              || stringValue(inputObject.text, 240);
+          }
+
+          function statusFromProviderEvent(event) {
+            if (!event) return;
+            const properties = objectValue(event.properties);
+
+            switch (event.type) {
+              case "session.status": {
+                const status = objectValue(properties.status);
+                const statusType = stringValue(status.type, 80);
+                if (statusType === "busy") return toasttyStatus("working", "Working", status.message);
+                if (statusType === "retry") return toasttyStatus("working", "Retrying", status.message);
+                if (statusType === "idle") return toasttyStatus("ready", "Ready", lastFinalText);
+                return;
+              }
+
+              case "session.idle":
+                return toasttyStatus("ready", "Ready", lastFinalText);
+
+              case "session.error":
+                return toasttyStatus("error", "Error", errorDetail(properties.error) || properties.message);
+
+              case "permission.asked":
+              case "permission.v2.asked":
+                return toasttyStatus("needs_approval", "Needs approval", permissionDetail(properties));
+
+              case "permission.replied":
+              case "permission.v2.replied":
+                return toasttyStatus("working", "Working", "Approval resolved");
+
+              case "message.part.delta":
+              case "message.part.updated": {
+                const detail = messagePartDetail(properties);
+                return detail ? toasttyStatus("working", "Working", detail) : undefined;
+              }
+
+              default:
+                return;
+            }
           }
 
           function errorText(error) {
@@ -664,7 +834,7 @@ private extension AgentLaunchInstrumentation {
             const socketPath = envValue("TOASTTY_SOCKET_PATH");
             if (!sessionID || !panelID || !socketPath || !cliPath) {
               await appendFailure("missing_environment", event.type, "");
-              return;
+              return false;
             }
 
             const args = [
@@ -682,19 +852,136 @@ private extension AgentLaunchInstrumentation {
             const result = await runToasttyCLI(args, JSON.stringify(event));
             if (result.exitCode !== 0) {
               await appendFailure(`exit_code_${result.exitCode}`, event.type, result.stderr);
+              return false;
             }
+            return true;
           }
 
-          return {
+          function enqueue(event) {
+            if (!event) return;
+            let statusKey = "";
+            let finalText = "";
+            if (event.type === "toastty.status") {
+              const properties = objectValue(event.properties);
+              statusKey = [
+                stringValue(properties.kind, 80),
+                stringValue(properties.summary, 80),
+                stringValue(properties.detail, 240),
+              ].join("|");
+              if (statusKey === lastForwardedStatusKey || pendingStatusKeys.has(statusKey)) return;
+              pendingStatusKeys.add(statusKey);
+            } else if (event.type === "toastty.final") {
+              lastForwardedStatusKey = "";
+              finalText = stringValue(objectValue(event.properties).text, 240);
+              if (finalText && (finalText === lastForwardedFinalText || pendingFinalTexts.has(finalText))) return;
+              if (finalText) pendingFinalTexts.add(finalText);
+            }
+            queue = queue
+              .then(async () => {
+                const forwarded = await forward(event);
+                if (forwarded && statusKey) lastForwardedStatusKey = statusKey;
+                if (forwarded && finalText) lastForwardedFinalText = finalText;
+              })
+              .catch((error) => appendFailure("forward_exception", event.type, errorText(error)))
+              .finally(() => {
+                if (statusKey) pendingStatusKeys.delete(statusKey);
+                if (finalText) pendingFinalTexts.delete(finalText);
+              });
+          }
+
+          function hookFailure(hookName, error) {
+            queue = queue
+              .then(() => appendFailure("hook_exception", hookName, errorText(error)))
+              .catch(() => {});
+          }
+
+          const hooks = {
             event(input) {
-              const event = normalizeEvent(input);
-              if (!event || !allowedTypes.has(event.type)) return;
-              queue = queue
-                .then(() => forward(event))
-                .catch((error) => appendFailure("forward_exception", event.type, errorText(error)));
-              return queue;
+              try {
+                enqueue(statusFromProviderEvent(normalizeProviderEvent(input)));
+              } catch (error) {
+                hookFailure("event", error);
+              }
+            },
+
+            "permission.ask"(input) {
+              try {
+                enqueue(toasttyStatus("needs_approval", "Needs approval", permissionDetail(objectValue(input))));
+              } catch (error) {
+                hookFailure("permission.ask", error);
+              }
+            },
+
+            "tool.execute.before"(input) {
+              try {
+                enqueue(toasttyStatus("working", "Working", `Using ${displayToolName(toolNameFromInput(input))}`));
+              } catch (error) {
+                hookFailure("tool.execute.before", error);
+              }
+            },
+
+            "tool.execute.after"(input, output) {
+              try {
+                enqueue(toasttyStatus("working", "Working", toolAfterDetail(input, output)));
+              } catch (error) {
+                hookFailure("tool.execute.after", error);
+              }
+            },
+
+            "experimental.text.complete"(input, output) {
+              try {
+                enqueue(toasttyFinal(finalTextFrom(input, output)));
+              } catch (error) {
+                hookFailure("experimental.text.complete", error);
+              }
             },
           };
+
+          if (isMiMoCode) {
+            hooks["session.pre"] = function () {
+              try {
+                enqueue(toasttyStatus("working", "Working", "Starting"));
+              } catch (error) {
+                hookFailure("session.pre", error);
+              }
+            };
+
+            hooks["session.userQuery.pre"] = function () {
+              try {
+                enqueue(toasttyStatus("working", "Working", "Running query"));
+              } catch (error) {
+                hookFailure("session.userQuery.pre", error);
+              }
+            };
+
+            hooks["session.userQuery.post"] = function (input, output) {
+              try {
+                const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
+                if (detail) {
+                  enqueue(toasttyStatus("error", "Error", detail));
+                  return;
+                }
+                enqueue(toasttyFinal(finalTextFrom(input, output)));
+              } catch (error) {
+                hookFailure("session.userQuery.post", error);
+              }
+            };
+
+            hooks["session.post"] = function (input, output) {
+              try {
+                const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
+                if (detail) {
+                  enqueue(toasttyStatus("error", "Error", detail));
+                  return;
+                }
+                enqueue(toasttyFinal(finalTextFrom(input, output)));
+              } catch (error) {
+                hookFailure("session.post", error);
+              }
+            };
+          }
+
+          return hooks;
         }
         """
     }

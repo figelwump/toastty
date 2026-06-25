@@ -151,6 +151,7 @@ struct ToasttyCLITests {
         #expect(request.panelID == panelID)
         #expect(request.cwd == "/tmp/repo")
         #expect(request.argv == ["codex", "--model", "gpt-5.4"])
+        #expect(request.environment.isEmpty)
         #expect(request.preflightPolicy == .skip)
     }
 
@@ -174,6 +175,61 @@ struct ToasttyCLITests {
         }
 
         #expect(request.preflightPolicy == .interactive)
+    }
+
+    @Test
+    func agentPrepareManagedLaunchCapturesOpenCodeConfigContentEnvironment() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "agent", "prepare-managed-launch",
+                "--agent", "opencode",
+                "--panel", panelID.uuidString,
+                "--arg", "opencode",
+            ],
+            environment: [
+                "OPENCODE_CONFIG_CONTENT": #"{"plugin":["user-plugin"]}"#,
+                "MIMOCODE_CONFIG_CONTENT": #"{"plugin":["mimo-plugin"]}"#,
+                "PATH": "/usr/bin",
+            ]
+        )
+
+        guard case .agentPrepareManagedLaunch(let request) = invocation.command else {
+            Issue.record("expected managed launch preparation command")
+            return
+        }
+
+        #expect(request.agent == .opencode)
+        #expect(request.environment == [
+            "OPENCODE_CONFIG_CONTENT": #"{"plugin":["user-plugin"]}"#,
+        ])
+    }
+
+    @Test
+    func agentPrepareManagedLaunchCapturesMiMoConfigContentEnvironment() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "agent", "prepare-managed-launch",
+                "--agent", "mimocode",
+                "--panel", panelID.uuidString,
+                "--arg", "mimo",
+            ],
+            environment: [
+                "MIMOCODE_CONFIG_CONTENT": #"{"plugin":["mimo-plugin"]}"#,
+                "OPENCODE_CONFIG_CONTENT": #"{"plugin":["open-plugin"]}"#,
+            ]
+        )
+
+        guard case .agentPrepareManagedLaunch(let request) = invocation.command else {
+            Issue.record("expected managed launch preparation command")
+            return
+        }
+
+        #expect(request.agent == .mimocode)
+        #expect(request.environment == [
+            "MIMOCODE_CONFIG_CONTENT": #"{"plugin":["mimo-plugin"]}"#,
+        ])
     }
 
     @Test

@@ -194,7 +194,13 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains("toastty"))
         XCTAssertTrue(plugin.contains(#"const source = "opencode-plugin";"#))
         XCTAssertTrue(plugin.contains(#""permission.replied""#))
+        XCTAssertTrue(plugin.contains(#""tool.execute.after""#))
+        XCTAssertTrue(plugin.contains(#""experimental.text.complete""#))
+        XCTAssertTrue(plugin.contains(#""toastty.final""#))
         XCTAssertTrue(plugin.contains(#""ingest-agent-event""#))
+        XCTAssertTrue(plugin.contains(#"enqueue(toasttyFinal(finalTextFrom(input, output)))"#))
+        XCTAssertTrue(plugin.contains(#"lastForwardedStatusKey = """#))
+        XCTAssertFalse(plugin.contains("return enqueue("))
     }
 
     func testPrepareMiMoCodeLaunchInjectsMiMoConfigContent() throws {
@@ -228,6 +234,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let pluginURL = try XCTUnwrap(URL(string: pluginSpec))
         let plugin = try String(contentsOf: pluginURL, encoding: .utf8)
         XCTAssertTrue(plugin.contains(#"const source = "mimocode-plugin";"#))
+        XCTAssertTrue(plugin.contains(#"hooks["session.userQuery.post"]"#))
+        XCTAssertTrue(plugin.contains(#"hooks["session.post"]"#))
+        XCTAssertTrue(plugin.contains(#""tool.execute.after""#))
     }
 
     func testPrepareOpenCodeFamilyLaunchRefusesToOverwriteExistingConfigContent() {

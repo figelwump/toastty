@@ -567,6 +567,7 @@ public enum ToasttyCLI {
                     ),
                     argv: argv,
                     cwd: parsed.singleValue("--cwd"),
+                    environment: managedLaunchPlanningEnvironment(for: agent, from: environment),
                     preflightPolicy: preflightPolicy
                 )
             )
@@ -958,6 +959,28 @@ public enum ToasttyCLI {
             return nil
         }
         return ResolvedArgumentValue(value: environmentValue, source: environmentKey)
+    }
+
+    private static func managedLaunchPlanningEnvironment(
+        for agent: AgentKind,
+        from environment: [String: String]
+    ) -> [String: String] {
+        let key: String?
+        switch agent {
+        case .mimocode:
+            key = "MIMOCODE_CONFIG_CONTENT"
+        case .opencode:
+            key = "OPENCODE_CONFIG_CONTENT"
+        default:
+            key = nil
+        }
+
+        guard let key,
+              let value = environment[key],
+              value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return [:]
+        }
+        return [key: value]
     }
 
     private static func jsonString(for response: AutomationResponseEnvelope) throws -> String {
