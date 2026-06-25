@@ -687,62 +687,28 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceHeaderSubtitleLabel(for workspace: WorkspaceState) -> some View {
-        let agentSummary = WorkspaceAgentSummary.make(
-            from: sessionRuntimeStore.workspaceStatuses(for: workspace.id)
-        )
         let unreadText = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount)
 
-        if agentSummary.hasRunning || unreadText != nil {
-            Text(Self.workspaceHeaderSubtitleText(agentSummary: agentSummary, unreadText: unreadText))
-                .font(ToastyTheme.fontWorkspaceSubtitle)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityLabel(Self.workspaceHeaderSubtitleAccessibilityLabel(agentSummary: agentSummary, unreadText: unreadText))
+        if let unreadText {
+            // Unreads take priority over the running count in the top bar; show
+            // one pill, never both, so the title column never overflows.
+            WorkspaceUnreadPill(text: unreadText)
                 .accessibilityIdentifier(Self.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: unreadText))
         } else {
-            // Preserve the explicit subtitle layout slot without changing width
-            // or height when there is nothing to show.
-            Color.clear
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
+            let agentSummary = WorkspaceAgentSummary.make(
+                from: sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+            )
+            if agentSummary.hasRunning {
+                WorkspaceRunningPill(summary: agentSummary)
+                    .accessibilityIdentifier(Self.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: nil))
+            } else {
+                // Preserve the explicit subtitle layout slot without changing
+                // width or height when there is nothing to show.
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
         }
-    }
-
-    /// Colored subtitle shown under the workspace title: the agent
-    /// "active/running running" count, with the unread summary appended.
-    nonisolated static func workspaceHeaderSubtitleText(
-        agentSummary: WorkspaceAgentSummary,
-        unreadText: String?
-    ) -> AttributedString {
-        var result = AttributedString("")
-        if agentSummary.hasRunning {
-            var running = AttributedString("\(agentSummary.active)/\(agentSummary.running) running")
-            running.foregroundColor = agentSummary.hasActive
-                ? ToastyTheme.accent
-                : ToastyTheme.inactiveWorkspaceSubtitleText
-            result = running
-        }
-        if let unreadText {
-            var unread = AttributedString(agentSummary.hasRunning ? "  ·  \(unreadText)" : unreadText)
-            unread.foregroundColor = ToastyTheme.inactiveWorkspaceSubtitleText
-            result += unread
-        }
-        return result
-    }
-
-    nonisolated static func workspaceHeaderSubtitleAccessibilityLabel(
-        agentSummary: WorkspaceAgentSummary,
-        unreadText: String?
-    ) -> String {
-        var parts: [String] = []
-        if agentSummary.hasRunning {
-            parts.append("\(agentSummary.active) active")
-            parts.append("\(agentSummary.running) running")
-        }
-        if let unreadText {
-            parts.append(unreadText)
-        }
-        return parts.joined(separator: ", ")
     }
 
     nonisolated static func workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: String?) -> String {

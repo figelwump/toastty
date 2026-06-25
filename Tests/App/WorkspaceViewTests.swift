@@ -1339,45 +1339,6 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(summary.active, 0)
     }
 
-    func testWorkspaceHeaderSubtitleTextFormats() {
-        let agents = WorkspaceAgentSummary(running: 3, active: 1)
-        XCTAssertEqual(
-            String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: agents, unreadText: nil).characters),
-            "1/3 running"
-        )
-        XCTAssertEqual(
-            String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: agents, unreadText: "2 unreads").characters),
-            "1/3 running  ·  2 unreads"
-        )
-        let inactiveRunningAgents = WorkspaceAgentSummary(running: 2, active: 0)
-        XCTAssertEqual(
-            String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: inactiveRunningAgents, unreadText: nil).characters),
-            "0/2 running"
-        )
-        let noAgents = WorkspaceAgentSummary(running: 0, active: 0)
-        XCTAssertEqual(
-            String(WorkspaceView.workspaceHeaderSubtitleText(agentSummary: noAgents, unreadText: "1 unread").characters),
-            "1 unread"
-        )
-    }
-
-    func testWorkspaceHeaderSubtitleAccessibilityLabel() {
-        XCTAssertEqual(
-            WorkspaceView.workspaceHeaderSubtitleAccessibilityLabel(
-                agentSummary: WorkspaceAgentSummary(running: 3, active: 1),
-                unreadText: "2 unreads"
-            ),
-            "1 active, 3 running, 2 unreads"
-        )
-        XCTAssertEqual(
-            WorkspaceView.workspaceHeaderSubtitleAccessibilityLabel(
-                agentSummary: WorkspaceAgentSummary(running: 2, active: 0),
-                unreadText: nil
-            ),
-            "0 active, 2 running"
-        )
-    }
-
     func testWorkspaceHeaderSubtitleAccessibilityIdentifierPreservesUnreadSelector() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: "1 unread"),

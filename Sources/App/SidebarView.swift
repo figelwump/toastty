@@ -584,6 +584,10 @@ struct SidebarView: View {
                 }
             }
 
+            if let agentSummary, agentSummary.hasRunning {
+                WorkspaceRunningPill(summary: agentSummary, animated: true)
+            }
+
             if let selectionSubtitle {
                 Text(selectionSubtitle)
                     .font(ToastyTheme.fontWorkspaceSubtitle)
@@ -1673,6 +1677,61 @@ struct SidebarView: View {
 private struct SidebarRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+    }
+}
+
+/// Pill showing the workspace agent count ("active/running running"), used
+/// below the sidebar workspace title and in the top bar. It becomes an accent
+/// chip while an agent is working, and gently breathes when `animated`.
+struct WorkspaceRunningPill: View {
+    let summary: WorkspaceAgentSummary
+    var animated: Bool = false
+
+    var body: some View {
+        if animated && summary.hasActive {
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+                pill(fill: ToastyTheme.accent.opacity(breatheOpacity(at: context.date)))
+            }
+        } else {
+            pill(fill: summary.hasActive ? ToastyTheme.workspaceAgentCountActiveBackground : ToastyTheme.hairline)
+        }
+    }
+
+    private func pill(fill: Color) -> some View {
+        Text("\(summary.active)/\(summary.running) running")
+            .font(ToastyTheme.fontWorkspaceAgentCount)
+            .foregroundStyle(summary.hasActive ? ToastyTheme.accent : ToastyTheme.inactiveText)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 1.5)
+            .background(fill, in: Capsule())
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(summary.active) active, \(summary.running) running")
+    }
+
+    private func breatheOpacity(at date: Date) -> Double {
+        let period = 2.1
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+        let triangle = 1 - abs(phase * 2 - 1)
+        let eased = triangle * triangle * (3 - 2 * triangle)
+        return 0.10 + eased * 0.14
+    }
+}
+
+/// Teal pill used for the unread summary in the top bar.
+struct WorkspaceUnreadPill: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(ToastyTheme.fontWorkspaceAgentCount)
+            .foregroundStyle(ToastyTheme.badgeBlue)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 1.5)
+            .background(ToastyTheme.workspaceUnreadPillBackground, in: Capsule())
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
     }
 }
 
