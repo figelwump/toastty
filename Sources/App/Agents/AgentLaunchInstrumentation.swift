@@ -572,8 +572,11 @@ private extension AgentLaunchInstrumentation {
           const isMiMoCode = source === "mimocode-plugin";
           let queue = Promise.resolve();
           let lastFinalText = "";
+          let lastCompletedTextCandidate = "";
           let lastForwardedStatusKey = "";
           let lastForwardedFinalText = "";
+          let suppressWorkingUntil = 0;
+          const terminalWorkingSuppressMs = 2000;
           const pendingStatusKeys = new Set();
           const pendingFinalTexts = new Set();
 
@@ -620,9 +623,66 @@ private extension AgentLaunchInstrumentation {
 
           function toasttyFinal(text) {
             const normalizedText = stringValue(text, 240);
-            if (!normalizedText) return toasttyStatus("ready", "Ready", lastFinalText);
+            if (!normalizedText) return toasttyStatus("ready", "Ready");
             lastFinalText = normalizedText;
             return { type: "toastty.final", properties: { text: normalizedText } };
+          }
+
+          function nowMilliseconds() {
+            const milliseconds = typeof Date.now === "function" ? Date.now() : new Date().getTime();
+            return Number.isFinite(milliseconds) ? milliseconds : 0;
+          }
+
+          function resetTurnState() {
+            suppressWorkingUntil = 0;
+            lastFinalText = "";
+            lastCompletedTextCandidate = "";
+          }
+
+          function rememberFinalTextCandidate(input, output) {
+            const text = finalTextFrom(input, output);
+            if (text) lastCompletedTextCandidate = text;
+            return text;
+          }
+
+          function statusKind(event) {
+            if (!event || event.type !== "toastty.status") return "";
+            return stringValue(objectValue(event.properties).kind, 80);
+          }
+
+          function isWorkingStatus(event) {
+            return statusKind(event) === "working";
+          }
+
+          function isTerminalStatus(event) {
+            if (!event) return false;
+            if (event.type === "toastty.final") return true;
+            const kind = statusKind(event);
+            return kind === "ready" || kind === "idle" || kind === "error";
+          }
+
+          function shouldSuppressWorkingAfterTerminal(event) {
+            if (!isWorkingStatus(event) || !suppressWorkingUntil) return false;
+            const now = nowMilliseconds();
+            if (!now) {
+              suppressWorkingUntil = 0;
+              return false;
+            }
+            if (now <= suppressWorkingUntil) return true;
+            suppressWorkingUntil = 0;
+            return false;
+          }
+
+          function noteAcceptedEventState(event, options) {
+            if (event.type === "toastty.final") {
+              lastForwardedStatusKey = "";
+            }
+            if (options.suppressFollowingWorking && isTerminalStatus(event)) {
+              suppressWorkingUntil = nowMilliseconds() + terminalWorkingSuppressMs;
+            } else if (isWorkingStatus(event)) {
+              suppressWorkingUntil = 0;
+              lastFinalText = "";
+            }
           }
 
           function displayToolName(toolName) {
@@ -857,8 +917,9 @@ private extension AgentLaunchInstrumentation {
             return true;
           }
 
-          function enqueue(event) {
-            if (!event) return;
+          function enqueue(event, options = {}) {
+            if (!event) return queue;
+            if (shouldSuppressWorkingAfterTerminal(event)) return queue;
             let statusKey = "";
             let finalText = "";
             if (event.type === "toastty.status") {
@@ -868,14 +929,14 @@ private extension AgentLaunchInstrumentation {
                 stringValue(properties.summary, 80),
                 stringValue(properties.detail, 240),
               ].join("|");
-              if (statusKey === lastForwardedStatusKey || pendingStatusKeys.has(statusKey)) return;
+              if (statusKey === lastForwardedStatusKey || pendingStatusKeys.has(statusKey)) return queue;
               pendingStatusKeys.add(statusKey);
             } else if (event.type === "toastty.final") {
-              lastForwardedStatusKey = "";
               finalText = stringValue(objectValue(event.properties).text, 240);
-              if (finalText && (finalText === lastForwardedFinalText || pendingFinalTexts.has(finalText))) return;
+              if (finalText && (finalText === lastForwardedFinalText || pendingFinalTexts.has(finalText))) return queue;
               if (finalText) pendingFinalTexts.add(finalText);
             }
+            noteAcceptedEventState(event, options);
             queue = queue
               .then(async () => {
                 const forwarded = await forward(event);
@@ -887,6 +948,15 @@ private extension AgentLaunchInstrumentation {
                 if (statusKey) pendingStatusKeys.delete(statusKey);
                 if (finalText) pendingFinalTexts.delete(finalText);
               });
+            return queue;
+          }
+
+          function fire(event, options) {
+            enqueue(event, options);
+          }
+
+          function flush(event, options) {
+            return enqueue(event, options);
           }
 
           function hookFailure(hookName, error) {
@@ -898,7 +968,7 @@ private extension AgentLaunchInstrumentation {
           const hooks = {
             event(input) {
               try {
-                enqueue(statusFromProviderEvent(normalizeProviderEvent(input)));
+                fire(statusFromProviderEvent(normalizeProviderEvent(input)));
               } catch (error) {
                 hookFailure("event", error);
               }
@@ -906,7 +976,7 @@ private extension AgentLaunchInstrumentation {
 
             "permission.ask"(input) {
               try {
-                enqueue(toasttyStatus("needs_approval", "Needs approval", permissionDetail(objectValue(input))));
+                fire(toasttyStatus("needs_approval", "Needs approval", permissionDetail(objectValue(input))));
               } catch (error) {
                 hookFailure("permission.ask", error);
               }
@@ -914,7 +984,7 @@ private extension AgentLaunchInstrumentation {
 
             "tool.execute.before"(input) {
               try {
-                enqueue(toasttyStatus("working", "Working", `Using ${displayToolName(toolNameFromInput(input))}`));
+                fire(toasttyStatus("working", "Working", `Using ${displayToolName(toolNameFromInput(input))}`));
               } catch (error) {
                 hookFailure("tool.execute.before", error);
               }
@@ -922,7 +992,7 @@ private extension AgentLaunchInstrumentation {
 
             "tool.execute.after"(input, output) {
               try {
-                enqueue(toasttyStatus("working", "Working", toolAfterDetail(input, output)));
+                fire(toasttyStatus("working", "Working", toolAfterDetail(input, output)));
               } catch (error) {
                 hookFailure("tool.execute.after", error);
               }
@@ -930,7 +1000,8 @@ private extension AgentLaunchInstrumentation {
 
             "experimental.text.complete"(input, output) {
               try {
-                enqueue(toasttyFinal(finalTextFrom(input, output)));
+                const text = rememberFinalTextCandidate(input, output);
+                if (!isMiMoCode) return flush(toasttyFinal(text));
               } catch (error) {
                 hookFailure("experimental.text.complete", error);
               }
@@ -940,7 +1011,8 @@ private extension AgentLaunchInstrumentation {
           if (isMiMoCode) {
             hooks["session.pre"] = function () {
               try {
-                enqueue(toasttyStatus("working", "Working", "Starting"));
+                resetTurnState();
+                fire(toasttyStatus("working", "Working", "Starting"));
               } catch (error) {
                 hookFailure("session.pre", error);
               }
@@ -948,7 +1020,8 @@ private extension AgentLaunchInstrumentation {
 
             hooks["session.userQuery.pre"] = function () {
               try {
-                enqueue(toasttyStatus("working", "Working", "Running query"));
+                resetTurnState();
+                fire(toasttyStatus("working", "Working", "Running query"));
               } catch (error) {
                 hookFailure("session.userQuery.pre", error);
               }
@@ -958,10 +1031,9 @@ private extension AgentLaunchInstrumentation {
               try {
                 const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
                 if (detail) {
-                  enqueue(toasttyStatus("error", "Error", detail));
-                  return;
+                  return flush(toasttyStatus("error", "Error", detail), { suppressFollowingWorking: true });
                 }
-                enqueue(toasttyFinal(finalTextFrom(input, output)));
+                rememberFinalTextCandidate(input, output);
               } catch (error) {
                 hookFailure("session.userQuery.post", error);
               }
@@ -971,10 +1043,9 @@ private extension AgentLaunchInstrumentation {
               try {
                 const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
                 if (detail) {
-                  enqueue(toasttyStatus("error", "Error", detail));
-                  return;
+                  return flush(toasttyStatus("error", "Error", detail), { suppressFollowingWorking: true });
                 }
-                enqueue(toasttyFinal(finalTextFrom(input, output)));
+                return flush(toasttyFinal(finalTextFrom(input, output) || lastCompletedTextCandidate), { suppressFollowingWorking: true });
               } catch (error) {
                 hookFailure("session.post", error);
               }

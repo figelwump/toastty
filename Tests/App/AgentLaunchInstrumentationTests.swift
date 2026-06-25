@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import CoreState
 @testable import ToasttyApp
 
 final class AgentLaunchInstrumentationTests: XCTestCase {
@@ -198,9 +199,15 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains(#""experimental.text.complete""#))
         XCTAssertTrue(plugin.contains(#""toastty.final""#))
         XCTAssertTrue(plugin.contains(#""ingest-agent-event""#))
-        XCTAssertTrue(plugin.contains(#"enqueue(toasttyFinal(finalTextFrom(input, output)))"#))
+        XCTAssertTrue(plugin.contains(#"const terminalWorkingSuppressMs = 2000;"#))
+        XCTAssertTrue(plugin.contains(#"function shouldSuppressWorkingAfterTerminal(event)"#))
+        XCTAssertTrue(plugin.contains(#"function flush(event, options)"#))
+        XCTAssertTrue(plugin.contains(#"return enqueue(event, options);"#))
+        XCTAssertTrue(plugin.contains(#"fire(toasttyStatus("working", "Working", toolAfterDetail(input, output)))"#))
+        XCTAssertTrue(plugin.contains(#"if (!isMiMoCode) return flush(toasttyFinal(text));"#))
         XCTAssertTrue(plugin.contains(#"lastForwardedStatusKey = """#))
-        XCTAssertFalse(plugin.contains("return enqueue("))
+        XCTAssertTrue(plugin.contains(#"suppressFollowingWorking: true"#))
+        XCTAssertFalse(plugin.contains(#"enqueue(toasttyFinal(finalTextFrom(input, output)))"#))
     }
 
     func testPrepareMiMoCodeLaunchInjectsMiMoConfigContent() throws {
@@ -237,6 +244,70 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains(#"hooks["session.userQuery.post"]"#))
         XCTAssertTrue(plugin.contains(#"hooks["session.post"]"#))
         XCTAssertTrue(plugin.contains(#""tool.execute.after""#))
+        XCTAssertTrue(plugin.contains(#"resetTurnState();"#))
+        XCTAssertTrue(plugin.contains(#"rememberFinalTextCandidate(input, output);"#))
+        XCTAssertTrue(plugin.contains(#"return flush(toasttyFinal(finalTextFrom(input, output) || lastCompletedTextCandidate), { suppressFollowingWorking: true });"#))
+
+        let userQueryPostStart = try XCTUnwrap(plugin.range(of: #"hooks["session.userQuery.post"]"#))
+        let sessionPostStart = try XCTUnwrap(plugin.range(of: #"hooks["session.post"]"#))
+        let userQueryPostHook = String(plugin[userQueryPostStart.lowerBound..<sessionPostStart.lowerBound])
+        XCTAssertFalse(userQueryPostHook.contains("toasttyFinal"))
+    }
+
+    func testMiMoCodePluginFlushesSessionPostFinalAndSuppressesLateWorking() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .mimocode,
+            commandName: "mimo",
+            configContentEnvironmentKey: "MIMOCODE_CONFIG_CONTENT",
+            runnerBody: """
+            await hooks["session.pre"]?.({}, {});
+            await hooks["session.userQuery.post"]?.({ finalText: "per-step text" }, {});
+            hooks["tool.execute.before"]?.({ tool: "bash" });
+            await hooks["session.post"]?.({}, {});
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "text", text: "late text" } },
+            });
+            """
+        )
+
+        XCTAssertEqual(events.count, 3)
+        XCTAssertEqual(events[0]["type"] as? String, "toastty.status")
+        let firstProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(firstProperties["kind"] as? String, "working")
+        XCTAssertEqual(firstProperties["detail"] as? String, "Starting")
+
+        XCTAssertEqual(events[1]["type"] as? String, "toastty.status")
+        let secondProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+        XCTAssertEqual(secondProperties["kind"] as? String, "working")
+        XCTAssertEqual(secondProperties["detail"] as? String, "Using Bash")
+
+        XCTAssertEqual(events[2]["type"] as? String, "toastty.final")
+        let finalProperties = try XCTUnwrap(events[2]["properties"] as? [String: Any])
+        XCTAssertEqual(finalProperties["text"] as? String, "per-step text")
+        XCTAssertFalse(String(describing: events).contains("Writing response"))
+    }
+
+    func testOpenCodePluginAllowsWorkingAfterTextComplete() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            runnerBody: """
+            await hooks["experimental.text.complete"]?.({}, { text: "complete text" });
+            hooks["tool.execute.before"]?.({ tool: "bash" });
+            """
+        )
+
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events[0]["type"] as? String, "toastty.final")
+        let finalProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(finalProperties["text"] as? String, "complete text")
+
+        XCTAssertEqual(events[1]["type"] as? String, "toastty.status")
+        let workingProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+        XCTAssertEqual(workingProperties["kind"] as? String, "working")
+        XCTAssertEqual(workingProperties["detail"] as? String, "Using Bash")
     }
 
     func testPrepareOpenCodeFamilyLaunchRefusesToOverwriteExistingConfigContent() {
@@ -560,6 +631,90 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
+    private func runOpenCodeFamilyPluginScenario(
+        agent: AgentKind,
+        commandName: String,
+        configContentEnvironmentKey: String,
+        runnerBody: String
+    ) throws -> [[String: Any]] {
+        let fileManager = FileManager.default
+        guard let nodeURL = nodeExecutableURLForTests(fileManager: fileManager) else {
+            throw XCTSkip("node is unavailable")
+        }
+        let nodeCheck = try runScript(
+            at: nodeURL,
+            environment: [:],
+            arguments: ["--version"]
+        )
+        guard nodeCheck.exitCode == 0 else {
+            throw XCTSkip("node is unavailable")
+        }
+
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-opencode-family-plugin-test-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer {
+            try? fileManager.removeItem(at: directoryURL)
+        }
+
+        let captureURL = directoryURL.appendingPathComponent("events.ndjson", isDirectory: false)
+        let cliURL = directoryURL.appendingPathComponent("toastty-test-cli", isDirectory: false)
+        let runnerURL = directoryURL.appendingPathComponent("runner.mjs", isDirectory: false)
+
+        let fakeCLI = """
+        #!/bin/sh
+        cat >> "$TOASTTY_CAPTURE_PATH"
+        printf '\\n' >> "$TOASTTY_CAPTURE_PATH"
+        """
+        try Data(fakeCLI.appending("\n").utf8).write(to: cliURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cliURL.path)
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: agent,
+            argv: [commandName],
+            cliExecutablePath: cliURL.path,
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+        let configContent = try XCTUnwrap(preparedLaunch.environment[configContentEnvironmentKey])
+        let configObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any])
+        let plugins = try XCTUnwrap(configObject["plugin"] as? [String])
+        let pluginSpec = try XCTUnwrap(plugins.first)
+
+        let runner = """
+        import { ToasttyOpenCodeFamilyStatusPlugin } from "\(pluginSpec)";
+
+        process.env.TOASTTY_SESSION_ID = "sess";
+        process.env.TOASTTY_PANEL_ID = "11111111-1111-1111-1111-111111111111";
+        process.env.TOASTTY_SOCKET_PATH = "/tmp/toastty-test.sock";
+
+        const hooks = await ToasttyOpenCodeFamilyStatusPlugin();
+        \(runnerBody)
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        """
+        try Data(runner.utf8).write(to: runnerURL)
+
+        let result = try runScript(
+            at: nodeURL,
+            environment: ["TOASTTY_CAPTURE_PATH": captureURL.path],
+            arguments: [runnerURL.path]
+        )
+        XCTAssertEqual(result.exitCode, 0, result.stderr)
+
+        let lines = try String(contentsOf: captureURL, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        return try lines.map { line in
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+    }
+
     private func runScript(
         at scriptURL: URL,
         environment: [String: String],
@@ -588,6 +743,38 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         return (process.terminationStatus, stdout, stderr)
+    }
+
+    private func nodeExecutableURLForTests(fileManager: FileManager) -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        var candidates: [String] = []
+
+        if let explicitNodePath = environment["TOASTTY_NODE_EXECUTABLE"] {
+            candidates.append(explicitNodePath)
+        }
+        if let path = environment["PATH"] {
+            candidates.append(contentsOf: path.split(separator: ":").map { "\($0)/node" })
+        }
+        candidates.append(contentsOf: [
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/usr/bin/node",
+        ])
+        if let home = environment["HOME"] {
+            let nvmVersionsURL = URL(fileURLWithPath: home, isDirectory: true)
+                .appendingPathComponent(".nvm/versions/node", isDirectory: true)
+            if let versionURLs = try? fileManager.contentsOfDirectory(
+                at: nvmVersionsURL,
+                includingPropertiesForKeys: nil
+            ) {
+                candidates.append(contentsOf: versionURLs
+                    .sorted { $0.lastPathComponent > $1.lastPathComponent }
+                    .map { $0.appendingPathComponent("bin/node", isDirectory: false).path })
+            }
+        }
+
+        return candidates.first { fileManager.isExecutableFile(atPath: $0) }
+            .map { URL(fileURLWithPath: $0, isDirectory: false) }
     }
 }
 
