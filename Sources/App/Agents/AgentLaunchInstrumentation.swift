@@ -576,7 +576,9 @@ private extension AgentLaunchInstrumentation {
           let lastForwardedStatusKey = "";
           let lastForwardedFinalText = "";
           let suppressWorkingUntil = 0;
+          let blankWorkingSuppressUntil = 0;
           const terminalWorkingSuppressMs = 2000;
+          const blankWorkingSuppressMs = 750;
           let pendingOpenCodeFinalTimer;
           const openCodeFinalQuietMs = 250;
           const pendingStatusKeys = new Set();
@@ -639,6 +641,7 @@ private extension AgentLaunchInstrumentation {
             suppressWorkingUntil = 0;
             lastFinalText = "";
             lastCompletedTextCandidate = "";
+            blankWorkingSuppressUntil = 0;
             clearPendingOpenCodeFinal();
           }
 
@@ -701,6 +704,17 @@ private extension AgentLaunchInstrumentation {
             return true;
           }
 
+          function shouldSuppressBlankWorkingAfterVisibleDetail(event) {
+            if (!isWorkingStatus(event) || workingStatusDetail(event)) return false;
+            if (!blankWorkingSuppressUntil) return false;
+            const now = nowMilliseconds();
+            if (!now || now > blankWorkingSuppressUntil) {
+              blankWorkingSuppressUntil = 0;
+              return false;
+            }
+            return true;
+          }
+
           function shouldSuppressWorkingAfterTerminal(event) {
             if (!isWorkingStatus(event) || !suppressWorkingUntil) return false;
             const now = nowMilliseconds();
@@ -714,6 +728,9 @@ private extension AgentLaunchInstrumentation {
           }
 
           function noteAcceptedEventState(event, options) {
+            if (isTerminalStatus(event)) {
+              blankWorkingSuppressUntil = 0;
+            }
             if (event.type === "toastty.final") {
               lastForwardedStatusKey = "";
             }
@@ -721,6 +738,11 @@ private extension AgentLaunchInstrumentation {
               suppressWorkingUntil = nowMilliseconds() + terminalWorkingSuppressMs;
             } else if (isWorkingStatus(event)) {
               suppressWorkingUntil = 0;
+              const detail = workingStatusDetail(event);
+              if (detail) {
+                const now = nowMilliseconds();
+                blankWorkingSuppressUntil = now ? now + blankWorkingSuppressMs : 0;
+              }
               if (!isMiMoCode && (pendingOpenCodeFinalTimer || !isGenericOpenCodeWorkingStatus(event))) {
                 clearPendingOpenCodeFinal();
                 lastCompletedTextCandidate = "";
@@ -975,6 +997,7 @@ private extension AgentLaunchInstrumentation {
             if (!event) return queue;
             if (shouldSuppressWorkingAfterTerminal(event)) return queue;
             if (shouldSuppressGenericOpenCodeWorkingAfterTextComplete(event)) return queue;
+            if (shouldSuppressBlankWorkingAfterVisibleDetail(event)) return queue;
             if (!isMiMoCode && isWorkingStatus(event) && !isGenericOpenCodeWorkingStatus(event)) {
               clearPendingOpenCodeFinal();
               lastCompletedTextCandidate = "";

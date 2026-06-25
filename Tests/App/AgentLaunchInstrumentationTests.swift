@@ -290,6 +290,110 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertFalse(String(describing: events).contains("Writing response"))
     }
 
+    func testOpenCodeFamilyPluginAllowsInitialBlankBusyStatus() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            runnerBody: """
+            hooks.event?.({
+              type: "session.status",
+              properties: { status: { type: "busy" } },
+            });
+            """
+        )
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events[0]["type"] as? String, "toastty.status")
+        let properties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(properties["kind"] as? String, "working")
+        XCTAssertNil(properties["detail"])
+    }
+
+    func testOpenCodeFamilyPluginSuppressesBlankBusyAfterVisibleWorkingDetail() throws {
+        for scenario in [
+            (agent: AgentKind.opencode, commandName: "opencode", environmentKey: "OPENCODE_CONFIG_CONTENT"),
+            (agent: AgentKind.mimocode, commandName: "mimo", environmentKey: "MIMOCODE_CONFIG_CONTENT"),
+        ] {
+            let events = try runOpenCodeFamilyPluginScenario(
+                agent: scenario.agent,
+                commandName: scenario.commandName,
+                configContentEnvironmentKey: scenario.environmentKey,
+                runnerBody: """
+                hooks["tool.execute.before"]?.({ tool: "bash" });
+                hooks.event?.({
+                  type: "session.status",
+                  properties: { status: { type: "busy" } },
+                });
+                hooks.event?.({
+                  type: "message.part.updated",
+                  properties: { part: { type: "reasoning" } },
+                });
+                """
+            )
+
+            XCTAssertEqual(events.count, 2, scenario.commandName)
+            let properties = try events.map { event in
+                try XCTUnwrap(event["properties"] as? [String: Any])
+            }
+            XCTAssertEqual(properties.compactMap { $0["kind"] as? String }, ["working", "working"], scenario.commandName)
+            XCTAssertEqual(properties.compactMap { $0["detail"] as? String }, ["Using Bash", "Reasoning"], scenario.commandName)
+        }
+    }
+
+    func testOpenCodeFamilyPluginAllowsBlankBusyAfterSuppressionWindow() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            runnerBody: """
+            hooks["tool.execute.before"]?.({ tool: "bash" });
+            await new Promise((resolve) => setTimeout(resolve, 850));
+            hooks.event?.({
+              type: "session.status",
+              properties: { status: { type: "busy" } },
+            });
+            """
+        )
+
+        XCTAssertEqual(events.count, 2)
+        let firstProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(firstProperties["kind"] as? String, "working")
+        XCTAssertEqual(firstProperties["detail"] as? String, "Using Bash")
+        let secondProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+        XCTAssertEqual(secondProperties["kind"] as? String, "working")
+        XCTAssertNil(secondProperties["detail"])
+    }
+
+    func testOpenCodeFamilyPluginAllowsBlankBusyAfterTerminalStatusClearsSuppression() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            runnerBody: """
+            hooks["tool.execute.before"]?.({ tool: "bash" });
+            hooks.event?.({
+              type: "session.status",
+              properties: { status: { type: "idle" } },
+            });
+            hooks.event?.({
+              type: "session.status",
+              properties: { status: { type: "busy" } },
+            });
+            """
+        )
+
+        XCTAssertEqual(events.count, 3)
+        let firstProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(firstProperties["kind"] as? String, "working")
+        XCTAssertEqual(firstProperties["detail"] as? String, "Using Bash")
+        let secondProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+        XCTAssertEqual(secondProperties["kind"] as? String, "ready")
+        let thirdProperties = try XCTUnwrap(events[2]["properties"] as? [String: Any])
+        XCTAssertEqual(thirdProperties["kind"] as? String, "working")
+        XCTAssertNil(thirdProperties["detail"])
+    }
+
     func testOpenCodePluginDelaysFinalUntilIdleAndSuppressesLateGenericWorking() throws {
         let events = try runOpenCodeFamilyPluginScenario(
             agent: .opencode,
