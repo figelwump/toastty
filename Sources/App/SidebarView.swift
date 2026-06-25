@@ -1664,27 +1664,16 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func workspaceAgentCountBadge(_ summary: WorkspaceAgentSummary) -> some View {
-        if summary.hasActive {
-            TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
-                workspaceAgentCountBadgeContent(
-                    summary,
-                    activeOpacity: WorkspaceAgentActivityBreath.opacity(at: context.date)
-                )
-            }
-        } else {
-            workspaceAgentCountBadgeContent(summary, activeOpacity: 1)
-        }
+        workspaceAgentCountBadgeContent(summary)
     }
 
-    private func workspaceAgentCountBadgeContent(
-        _ summary: WorkspaceAgentSummary,
-        activeOpacity: Double
-    ) -> some View {
-        HStack(spacing: 0) {
-            Text("\(summary.active)")
-                .foregroundStyle(summary.hasActive ? ToastyTheme.accent.opacity(activeOpacity) : ToastyTheme.inactiveText)
+    private func workspaceAgentCountBadgeContent(_ summary: WorkspaceAgentSummary) -> some View {
+        HStack(spacing: summary.hasActive ? 4 : 0) {
+            if summary.hasActive {
+                SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.4)
+            }
 
-            Text("/\(summary.running)")
+            Text("\(summary.active)/\(summary.running)")
                 .foregroundStyle(ToastyTheme.inactiveText)
         }
         .font(ToastyTheme.fontWorkspaceAgentCount)
@@ -1704,16 +1693,6 @@ struct SidebarView: View {
 private struct SidebarRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-    }
-}
-
-struct WorkspaceAgentActivityBreath {
-    static func opacity(at date: Date) -> Double {
-        let period = 2.1
-        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
-        let triangle = 1 - abs(phase * 2 - 1)
-        let eased = triangle * triangle * (3 - 2 * triangle)
-        return 0.42 + eased * 0.58
     }
 }
 
