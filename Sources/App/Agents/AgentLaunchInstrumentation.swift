@@ -577,8 +577,10 @@ private extension AgentLaunchInstrumentation {
           let lastForwardedFinalText = "";
           let suppressWorkingUntil = 0;
           let blankWorkingSuppressUntil = 0;
+          let questionApprovalResolvedUntil = 0;
           const terminalWorkingSuppressMs = 2000;
           const blankWorkingSuppressMs = 750;
+          const questionApprovalResolvedSuppressMs = 2000;
           let pendingOpenCodeFinalTimer;
           const openCodeFinalQuietMs = 250;
           const pendingStatusKeys = new Set();
@@ -642,6 +644,7 @@ private extension AgentLaunchInstrumentation {
             lastFinalText = "";
             lastCompletedTextCandidate = "";
             blankWorkingSuppressUntil = 0;
+            questionApprovalResolvedUntil = 0;
             clearPendingOpenCodeFinal();
           }
 
@@ -730,6 +733,7 @@ private extension AgentLaunchInstrumentation {
           function noteAcceptedEventState(event, options) {
             if (isTerminalStatus(event)) {
               blankWorkingSuppressUntil = 0;
+              questionApprovalResolvedUntil = 0;
             }
             if (event.type === "toastty.final") {
               lastForwardedStatusKey = "";
@@ -759,6 +763,30 @@ private extension AgentLaunchInstrumentation {
               .filter(Boolean)
               .map((component) => component.slice(0, 1).toUpperCase() + component.slice(1))
               .join(" ");
+          }
+
+          function isQuestionToolName(toolName) {
+            return stringValue(toolName, 80).toLowerCase() === "question";
+          }
+
+          function questionApprovalStatus() {
+            return toasttyStatus("needs_approval", "Needs approval", permissionDetail({}));
+          }
+
+          function questionResolvedStatus() {
+            const now = nowMilliseconds();
+            questionApprovalResolvedUntil = now ? now + questionApprovalResolvedSuppressMs : 0;
+            return toasttyStatus("working", "Working", "Approval resolved");
+          }
+
+          function shouldSuppressQuestionApprovalAfterResolution() {
+            if (!questionApprovalResolvedUntil) return false;
+            const now = nowMilliseconds();
+            if (!now || now > questionApprovalResolvedUntil) {
+              questionApprovalResolvedUntil = 0;
+              return false;
+            }
+            return true;
           }
 
           function firstToolName(value) {
@@ -830,17 +858,62 @@ private extension AgentLaunchInstrumentation {
             return `${displayToolName(toolNameFromInput(input))} completed`;
           }
 
+          function messagePartToolName(properties) {
+            const part = objectValue(properties.part);
+            return stringValue(part.tool, 80)
+              || stringValue(part.name, 80)
+              || stringValue(properties.tool, 80)
+              || stringValue(properties.name, 80);
+          }
+
+          function messagePartStateStatus(properties) {
+            const part = objectValue(properties.part);
+            const state = objectValue(part.state);
+            return stringValue(state.status, 80)
+              || stringValue(part.status, 80)
+              || stringValue(properties.status, 80);
+          }
+
+          function isResolvedQuestionPart(properties) {
+            switch (messagePartStateStatus(properties).toLowerCase()) {
+              case "complete":
+              case "completed":
+              case "done":
+              case "success":
+              case "resolved":
+              case "accepted":
+              case "rejected":
+              case "canceled":
+              case "cancelled":
+              case "error":
+              case "failed":
+              case "failure":
+                return true;
+              default:
+                return false;
+            }
+          }
+
           function messagePartDetail(properties) {
             const part = objectValue(properties.part);
             const partType = stringValue(part.type, 80) || stringValue(properties.type, 80);
-            const tool = stringValue(part.tool, 80)
-              || stringValue(part.name, 80)
-              || stringValue(part.callID, 80)
-              || stringValue(properties.tool, 80);
+            const tool = messagePartToolName(properties);
+            if (isQuestionToolName(tool)) return "";
             if (tool || partType === "tool") return `Using ${displayToolName(tool)}`;
             if (partType === "reasoning" || partType === "thinking") return "Reasoning";
             if (partType === "text" || stringValue(part.text, 1) || stringValue(properties.text, 1)) return "Writing response";
             return "";
+          }
+
+          function messagePartStatus(properties) {
+            const tool = messagePartToolName(properties);
+            if (isQuestionToolName(tool)) {
+              if (isResolvedQuestionPart(properties)) return questionResolvedStatus();
+              if (shouldSuppressQuestionApprovalAfterResolution()) return;
+              return questionApprovalStatus();
+            }
+            const detail = messagePartDetail(properties);
+            return detail ? toasttyStatus("working", "Working", detail) : undefined;
           }
 
           function finalTextFrom(input, output) {
@@ -892,8 +965,7 @@ private extension AgentLaunchInstrumentation {
 
               case "message.part.delta":
               case "message.part.updated": {
-                const detail = messagePartDetail(properties);
-                return detail ? toasttyStatus("working", "Working", detail) : undefined;
+                return messagePartStatus(properties);
               }
 
               default:
@@ -1066,7 +1138,10 @@ private extension AgentLaunchInstrumentation {
 
             "tool.execute.before"(input) {
               try {
-                fire(toasttyStatus("working", "Working", `Using ${displayToolName(toolNameFromInput(input))}`));
+                const toolName = toolNameFromInput(input);
+                fire(isQuestionToolName(toolName)
+                  ? questionApprovalStatus()
+                  : toasttyStatus("working", "Working", `Using ${displayToolName(toolName)}`));
               } catch (error) {
                 hookFailure("tool.execute.before", error);
               }
@@ -1074,7 +1149,9 @@ private extension AgentLaunchInstrumentation {
 
             "tool.execute.after"(input, output) {
               try {
-                fire(toasttyStatus("working", "Working", toolAfterDetail(input, output)));
+                fire(isQuestionToolName(toolNameFromInput(input))
+                  ? questionResolvedStatus()
+                  : toasttyStatus("working", "Working", toolAfterDetail(input, output)));
               } catch (error) {
                 hookFailure("tool.execute.after", error);
               }

@@ -203,7 +203,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains(#"function shouldSuppressWorkingAfterTerminal(event)"#))
         XCTAssertTrue(plugin.contains(#"function flush(event, options)"#))
         XCTAssertTrue(plugin.contains(#"return enqueue(event, options);"#))
-        XCTAssertTrue(plugin.contains(#"fire(toasttyStatus("working", "Working", toolAfterDetail(input, output)))"#))
+        XCTAssertTrue(plugin.contains(#"function questionApprovalStatus()"#))
+        XCTAssertTrue(plugin.contains(#"toolAfterDetail(input, output)"#))
+        XCTAssertTrue(plugin.contains(#""Approval resolved""#))
         XCTAssertTrue(plugin.contains(#"const openCodeFinalQuietMs = 250;"#))
         XCTAssertTrue(plugin.contains(#"function scheduleOpenCodeFinal(text)"#))
         XCTAssertTrue(plugin.contains(#"if (!isMiMoCode) return;"#))
@@ -288,6 +290,106 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let finalProperties = try XCTUnwrap(events[2]["properties"] as? [String: Any])
         XCTAssertEqual(finalProperties["text"] as? String, "per-step text")
         XCTAssertFalse(String(describing: events).contains("Writing response"))
+    }
+
+    func testOpenCodeFamilyPluginMapsQuestionToolHooksToApprovalStatus() throws {
+        for scenario in [
+            (agent: AgentKind.opencode, commandName: "opencode", environmentKey: "OPENCODE_CONFIG_CONTENT"),
+            (agent: AgentKind.mimocode, commandName: "mimo", environmentKey: "MIMOCODE_CONFIG_CONTENT"),
+        ] {
+            let events = try runOpenCodeFamilyPluginScenario(
+                agent: scenario.agent,
+                commandName: scenario.commandName,
+                configContentEnvironmentKey: scenario.environmentKey,
+                runnerBody: """
+                hooks["tool.execute.before"]?.({ name: "question" });
+                hooks["tool.execute.after"]?.({ name: "question" }, {});
+                """
+            )
+
+            XCTAssertEqual(events.count, 2, scenario.commandName)
+            let firstProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+            XCTAssertEqual(firstProperties["kind"] as? String, "needs_approval", scenario.commandName)
+            XCTAssertEqual(firstProperties["summary"] as? String, "Needs approval", scenario.commandName)
+            XCTAssertEqual(firstProperties["detail"] as? String, "Agent is waiting for approval", scenario.commandName)
+
+            let secondProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+            XCTAssertEqual(secondProperties["kind"] as? String, "working", scenario.commandName)
+            XCTAssertEqual(secondProperties["detail"] as? String, "Approval resolved", scenario.commandName)
+            XCTAssertFalse(String(describing: events).contains("Using Question"), scenario.commandName)
+        }
+    }
+
+    func testOpenCodeFamilyPluginMapsQuestionMessagePartToApprovalStatus() throws {
+        for scenario in [
+            (agent: AgentKind.opencode, commandName: "opencode", environmentKey: "OPENCODE_CONFIG_CONTENT"),
+            (agent: AgentKind.mimocode, commandName: "mimo", environmentKey: "MIMOCODE_CONFIG_CONTENT"),
+        ] {
+            let events = try runOpenCodeFamilyPluginScenario(
+                agent: scenario.agent,
+                commandName: scenario.commandName,
+                configContentEnvironmentKey: scenario.environmentKey,
+                runnerBody: """
+                hooks.event?.({
+                  type: "message.part.updated",
+                  properties: { part: { type: "tool", tool: "question" } },
+                });
+                """
+            )
+
+            XCTAssertEqual(events.count, 1, scenario.commandName)
+            let properties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+            XCTAssertEqual(properties["kind"] as? String, "needs_approval", scenario.commandName)
+            XCTAssertEqual(properties["summary"] as? String, "Needs approval", scenario.commandName)
+            XCTAssertEqual(properties["detail"] as? String, "Agent is waiting for approval", scenario.commandName)
+            XCTAssertFalse(String(describing: events).contains("Using Question"), scenario.commandName)
+        }
+    }
+
+    func testOpenCodeFamilyPluginMapsCompletedQuestionMessagePartToResolvedStatus() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            runnerBody: """
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "tool", tool: "question", state: { status: "completed" } } },
+            });
+            """
+        )
+
+        XCTAssertEqual(events.count, 1)
+        let properties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(properties["kind"] as? String, "working")
+        XCTAssertEqual(properties["detail"] as? String, "Approval resolved")
+        XCTAssertFalse(String(describing: events).contains("needs_approval"))
+        XCTAssertFalse(String(describing: events).contains("Using Question"))
+    }
+
+    func testOpenCodeFamilyPluginSuppressesTrailingQuestionMessagePartAfterToolResolution() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            runnerBody: """
+            hooks["tool.execute.before"]?.({ tool: "question" });
+            hooks["tool.execute.after"]?.({ tool: "question" }, {});
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "tool", tool: "question" } },
+            });
+            """
+        )
+
+        XCTAssertEqual(events.count, 2)
+        let firstProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(firstProperties["kind"] as? String, "needs_approval")
+        let secondProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+        XCTAssertEqual(secondProperties["kind"] as? String, "working")
+        XCTAssertEqual(secondProperties["detail"] as? String, "Approval resolved")
+        XCTAssertEqual(String(describing: events).components(separatedBy: "needs_approval").count - 1, 1)
+        XCTAssertFalse(String(describing: events).contains("Using Question"))
     }
 
     func testOpenCodeFamilyPluginAllowsInitialBlankBusyStatus() throws {
