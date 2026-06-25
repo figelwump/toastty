@@ -94,6 +94,7 @@ struct SidebarView: View {
     @State private var activeWorkspaceDrag: WorkspaceDragState?
     @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
     @State private var sidebarSessionRowDiagnosticsByPanelID: [UUID: SidebarSessionRowDiagnosticState] = [:]
+    @State private var optionKeyPressed = false
 
     /// Fixed height for the session detail text area (1 line at the detail
     /// font size). Reserving a constant height prevents the sidebar from
@@ -310,6 +311,12 @@ struct SidebarView: View {
             cancelWorkspaceDrag()
             sidebarFlashClearWorkItem?.cancel()
             sidebarFlashResetWorkItem?.cancel()
+            optionKeyPressed = false
+        }
+        .background {
+            ModifierKeyPressObserver(modifier: .option, isPressed: $optionKeyPressed)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
     }
 
@@ -578,14 +585,9 @@ struct SidebarView: View {
                     workspaceAgentCountBadge(agentSummary)
                 }
 
-                // Keyboard shortcut badge pill
                 if let shortcutLabel {
-                    shortcutBadge(shortcutLabel)
+                    shortcutBadge(shortcutLabel, highlighted: optionKeyPressed)
                 }
-            }
-
-            if let agentSummary, agentSummary.hasRunning {
-                WorkspaceRunningPill(summary: agentSummary, animated: true)
             }
 
             if let selectionSubtitle {
@@ -1647,30 +1649,55 @@ struct SidebarView: View {
         return pathString.abbreviatingWithTildeInPath
     }
 
-    /// Reusable keyboard shortcut badge pill (e.g. "⌥1", "⌘⇧N").
-    private func shortcutBadge(_ label: String) -> some View {
+    private func shortcutBadge(_ label: String, highlighted: Bool) -> some View {
         Text(label)
             .font(ToastyTheme.fontShortcutBadge)
-            .foregroundStyle(ToastyTheme.shortcutBadgeText)
+            .foregroundStyle(highlighted ? ToastyTheme.shortcutBadgeText : ToastyTheme.subtleText)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
-            .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
+            .background(
+                ToastyTheme.hairline.opacity(highlighted ? 1 : 0.55),
+                in: RoundedRectangle(cornerRadius: 3)
+            )
+            .animation(.easeOut(duration: 0.12), value: highlighted)
     }
 
+    @ViewBuilder
     private func workspaceAgentCountBadge(_ summary: WorkspaceAgentSummary) -> some View {
-        Text("\(summary.active)/\(summary.running)")
-            .font(ToastyTheme.fontWorkspaceAgentCount)
-            .foregroundStyle(summary.hasActive ? ToastyTheme.accent : ToastyTheme.inactiveText)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(
-                summary.hasActive ? ToastyTheme.workspaceAgentCountActiveBackground : ToastyTheme.hairline,
-                in: Capsule()
-            )
-            .fixedSize()
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Self.workspaceAgentSummaryAccessibilityLabel(summary))
-            .accessibilityIdentifier("sidebar.workspace.agentCount")
+        if summary.hasActive {
+            TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
+                workspaceAgentCountBadgeContent(
+                    summary,
+                    activeOpacity: WorkspaceAgentActivityBreath.opacity(at: context.date)
+                )
+            }
+        } else {
+            workspaceAgentCountBadgeContent(summary, activeOpacity: 1)
+        }
+    }
+
+    private func workspaceAgentCountBadgeContent(
+        _ summary: WorkspaceAgentSummary,
+        activeOpacity: Double
+    ) -> some View {
+        HStack(spacing: 0) {
+            Text("\(summary.active)")
+                .foregroundStyle(summary.hasActive ? ToastyTheme.accent.opacity(activeOpacity) : ToastyTheme.inactiveText)
+
+            Text("/\(summary.running)")
+                .foregroundStyle(ToastyTheme.inactiveText)
+        }
+        .font(ToastyTheme.fontWorkspaceAgentCount)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(
+            summary.hasActive ? ToastyTheme.workspaceAgentCountActiveBackground : ToastyTheme.hairline,
+            in: Capsule()
+        )
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.workspaceAgentSummaryAccessibilityLabel(summary))
+        .accessibilityIdentifier("sidebar.workspace.agentCount")
     }
 }
 
@@ -1680,55 +1707,24 @@ private struct SidebarRowButtonStyle: ButtonStyle {
     }
 }
 
-/// Pill showing the workspace agent count ("active/running running"), used
-/// below the sidebar workspace title and in the top bar. It becomes an accent
-/// chip while an agent is working, and gently breathes when `animated`.
-struct WorkspaceRunningPill: View {
-    let summary: WorkspaceAgentSummary
-    var animated: Bool = false
-
-    var body: some View {
-        if animated && summary.hasActive {
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
-                pill(fill: ToastyTheme.accent.opacity(breatheOpacity(at: context.date)))
-            }
-        } else {
-            pill(fill: summary.hasActive ? ToastyTheme.workspaceAgentCountActiveBackground : ToastyTheme.hairline)
-        }
-    }
-
-    private func pill(fill: Color) -> some View {
-        Text("\(summary.active)/\(summary.running) running")
-            .font(ToastyTheme.fontWorkspaceAgentCount)
-            .foregroundStyle(summary.hasActive ? ToastyTheme.accent : ToastyTheme.inactiveText)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 1.5)
-            .background(fill, in: Capsule())
-            .fixedSize()
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(summary.active) active, \(summary.running) running")
-    }
-
-    private func breatheOpacity(at date: Date) -> Double {
+struct WorkspaceAgentActivityBreath {
+    static func opacity(at date: Date) -> Double {
         let period = 2.1
         let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
         let triangle = 1 - abs(phase * 2 - 1)
         let eased = triangle * triangle * (3 - 2 * triangle)
-        return 0.10 + eased * 0.14
+        return 0.42 + eased * 0.58
     }
 }
 
-/// Teal pill used for the unread summary in the top bar.
-struct WorkspaceUnreadPill: View {
+struct WorkspaceHeaderSubtitleText: View {
     let text: String
 
     var body: some View {
         Text(text)
             .font(ToastyTheme.fontWorkspaceAgentCount)
-            .foregroundStyle(ToastyTheme.badgeBlue)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 1.5)
-            .background(ToastyTheme.workspaceUnreadPillBackground, in: Capsule())
+            .foregroundStyle(ToastyTheme.inactiveText)
+            .lineLimit(1)
             .fixedSize()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)

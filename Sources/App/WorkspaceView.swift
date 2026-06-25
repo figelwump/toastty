@@ -189,6 +189,11 @@ struct WorkspaceView: View {
         return unreadPanelCount == 1 ? "1 unread" : "\(unreadPanelCount) unreads"
     }
 
+    nonisolated static func workspaceRunningSummaryText(agentSummary: WorkspaceAgentSummary) -> String? {
+        guard agentSummary.hasRunning else { return nil }
+        return "\(agentSummary.active)/\(agentSummary.running) running"
+    }
+
     nonisolated static func workspaceHeaderTitleColumnPreferredWidth(
         titleWidth: CGFloat,
         unreadSummaryWidth: CGFloat
@@ -691,15 +696,15 @@ struct WorkspaceView: View {
 
         if let unreadText {
             // Unreads take priority over the running count in the top bar; show
-            // one pill, never both, so the title column never overflows.
-            WorkspaceUnreadPill(text: unreadText)
+            // one summary, never both, so the title column never overflows.
+            WorkspaceHeaderSubtitleText(text: unreadText)
                 .accessibilityIdentifier(Self.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: unreadText))
         } else {
             let agentSummary = WorkspaceAgentSummary.make(
                 from: sessionRuntimeStore.workspaceStatuses(for: workspace.id)
             )
-            if agentSummary.hasRunning {
-                WorkspaceRunningPill(summary: agentSummary)
+            if let runningText = Self.workspaceRunningSummaryText(agentSummary: agentSummary) {
+                WorkspaceHeaderSubtitleText(text: runningText)
                     .accessibilityIdentifier(Self.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: nil))
             } else {
                 // Preserve the explicit subtitle layout slot without changing

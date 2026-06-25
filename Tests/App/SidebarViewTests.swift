@@ -122,6 +122,16 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceAgentActivityBreathStaysWithinVisibleRange() {
+        let samples = stride(from: 0.0, through: 2.1, by: 0.1).map {
+            WorkspaceAgentActivityBreath.opacity(at: Date(timeIntervalSinceReferenceDate: $0))
+        }
+
+        XCTAssertGreaterThanOrEqual(samples.min() ?? 0, 0.42)
+        XCTAssertLessThanOrEqual(samples.max() ?? 1, 1.0)
+        XCTAssertGreaterThan((samples.max() ?? 0) - (samples.min() ?? 0), 0.45)
+    }
+
     func testUnreadSessionTypographyUsesEmphasizedWeights() {
         XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: false), .medium)
         XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: true), .heavy)

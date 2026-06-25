@@ -1271,6 +1271,23 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 2), "2 unreads")
     }
 
+    func testWorkspaceRunningSummaryTextHidesZeroCount() {
+        XCTAssertNil(
+            WorkspaceView.workspaceRunningSummaryText(
+                agentSummary: WorkspaceAgentSummary(running: 0, active: 0)
+            )
+        )
+    }
+
+    func testWorkspaceRunningSummaryTextUsesActiveAndRunningCounts() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceRunningSummaryText(
+                agentSummary: WorkspaceAgentSummary(running: 4, active: 1)
+            ),
+            "1/4 running"
+        )
+    }
+
     private func makeAgentStatus(
         _ agent: AgentKind,
         _ kind: SessionStatusKind,
