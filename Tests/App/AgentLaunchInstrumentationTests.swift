@@ -204,7 +204,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains(#"function flush(event, options)"#))
         XCTAssertTrue(plugin.contains(#"return enqueue(event, options);"#))
         XCTAssertTrue(plugin.contains(#"fire(toasttyStatus("working", "Working", toolAfterDetail(input, output)))"#))
-        XCTAssertTrue(plugin.contains(#"if (!isMiMoCode) return flush(toasttyFinal(text));"#))
+        XCTAssertTrue(plugin.contains(#"const openCodeFinalQuietMs = 250;"#))
+        XCTAssertTrue(plugin.contains(#"function scheduleOpenCodeFinal(text)"#))
+        XCTAssertTrue(plugin.contains(#"if (!isMiMoCode) return;"#))
         XCTAssertTrue(plugin.contains(#"lastForwardedStatusKey = """#))
         XCTAssertTrue(plugin.contains(#"suppressFollowingWorking: true"#))
         XCTAssertFalse(plugin.contains(#"enqueue(toasttyFinal(finalTextFrom(input, output)))"#))
@@ -288,13 +290,22 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertFalse(String(describing: events).contains("Writing response"))
     }
 
-    func testOpenCodePluginAllowsWorkingAfterTextComplete() throws {
+    func testOpenCodePluginDelaysFinalUntilIdleAndSuppressesLateGenericWorking() throws {
         let events = try runOpenCodeFamilyPluginScenario(
             agent: .opencode,
             commandName: "opencode",
             configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
             runnerBody: """
             await hooks["experimental.text.complete"]?.({}, { text: "complete text" });
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "text", text: "late text" } },
+            });
+            hooks.event?.({
+              type: "session.status",
+              properties: { status: { type: "idle" } },
+            });
+            await new Promise((resolve) => setTimeout(resolve, 300));
             hooks["tool.execute.before"]?.({ tool: "bash" });
             """
         )
@@ -308,6 +319,40 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let workingProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
         XCTAssertEqual(workingProperties["kind"] as? String, "working")
         XCTAssertEqual(workingProperties["detail"] as? String, "Using Bash")
+        XCTAssertFalse(String(describing: events).contains("Writing response"))
+    }
+
+    func testOpenCodePluginSurfacesMeaningfulWorkingAfterIntermediateTextComplete() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .opencode,
+            commandName: "opencode",
+            configContentEnvironmentKey: "OPENCODE_CONFIG_CONTENT",
+            runnerBody: """
+            await hooks["experimental.text.complete"]?.({}, { text: "intermediate text" });
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "text", text: "late text" } },
+            });
+            hooks["tool.execute.before"]?.({ tool: "bash" });
+            hooks.event?.({
+              type: "session.status",
+              properties: { status: { type: "idle" } },
+            });
+            """
+        )
+
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events[0]["type"] as? String, "toastty.status")
+        let workingProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(workingProperties["kind"] as? String, "working")
+        XCTAssertEqual(workingProperties["detail"] as? String, "Using Bash")
+
+        XCTAssertEqual(events[1]["type"] as? String, "toastty.status")
+        let readyProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+        XCTAssertEqual(readyProperties["kind"] as? String, "ready")
+        XCTAssertNil(readyProperties["detail"])
+        XCTAssertFalse(String(describing: events).contains("Writing response"))
+        XCTAssertFalse(String(describing: events).contains("intermediate text"))
     }
 
     func testPrepareOpenCodeFamilyLaunchRefusesToOverwriteExistingConfigContent() {

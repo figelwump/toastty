@@ -577,6 +577,8 @@ private extension AgentLaunchInstrumentation {
           let lastForwardedFinalText = "";
           let suppressWorkingUntil = 0;
           const terminalWorkingSuppressMs = 2000;
+          let pendingOpenCodeFinalTimer;
+          const openCodeFinalQuietMs = 250;
           const pendingStatusKeys = new Set();
           const pendingFinalTexts = new Set();
 
@@ -637,12 +639,30 @@ private extension AgentLaunchInstrumentation {
             suppressWorkingUntil = 0;
             lastFinalText = "";
             lastCompletedTextCandidate = "";
+            clearPendingOpenCodeFinal();
           }
 
           function rememberFinalTextCandidate(input, output) {
             const text = finalTextFrom(input, output);
             if (text) lastCompletedTextCandidate = text;
             return text;
+          }
+
+          function clearPendingOpenCodeFinal() {
+            if (pendingOpenCodeFinalTimer) {
+              clearTimeout(pendingOpenCodeFinalTimer);
+              pendingOpenCodeFinalTimer = undefined;
+            }
+          }
+
+          function scheduleOpenCodeFinal(text) {
+            const normalizedText = stringValue(text, 240);
+            if (!normalizedText) return;
+            clearPendingOpenCodeFinal();
+            pendingOpenCodeFinalTimer = setTimeout(() => {
+              pendingOpenCodeFinalTimer = undefined;
+              flush(toasttyFinal(normalizedText));
+            }, openCodeFinalQuietMs);
           }
 
           function statusKind(event) {
@@ -654,11 +674,31 @@ private extension AgentLaunchInstrumentation {
             return statusKind(event) === "working";
           }
 
+          function workingStatusDetail(event) {
+            if (!event || event.type !== "toastty.status") return "";
+            return stringValue(objectValue(event.properties).detail, 240);
+          }
+
+          function isGenericOpenCodeWorkingStatus(event) {
+            const detail = workingStatusDetail(event);
+            return !detail || detail === "Writing response";
+          }
+
           function isTerminalStatus(event) {
             if (!event) return false;
             if (event.type === "toastty.final") return true;
             const kind = statusKind(event);
             return kind === "ready" || kind === "idle" || kind === "error";
+          }
+
+          function shouldSuppressGenericOpenCodeWorkingAfterTextComplete(event) {
+            if (isMiMoCode || !isWorkingStatus(event) || !lastCompletedTextCandidate) return false;
+            if (!isGenericOpenCodeWorkingStatus(event)) return false;
+            if (pendingOpenCodeFinalTimer) {
+              clearPendingOpenCodeFinal();
+              lastCompletedTextCandidate = "";
+            }
+            return true;
           }
 
           function shouldSuppressWorkingAfterTerminal(event) {
@@ -681,6 +721,10 @@ private extension AgentLaunchInstrumentation {
               suppressWorkingUntil = nowMilliseconds() + terminalWorkingSuppressMs;
             } else if (isWorkingStatus(event)) {
               suppressWorkingUntil = 0;
+              if (!isMiMoCode && (pendingOpenCodeFinalTimer || !isGenericOpenCodeWorkingStatus(event))) {
+                clearPendingOpenCodeFinal();
+                lastCompletedTextCandidate = "";
+              }
               lastFinalText = "";
             }
           }
@@ -796,11 +840,21 @@ private extension AgentLaunchInstrumentation {
                 const statusType = stringValue(status.type, 80);
                 if (statusType === "busy") return toasttyStatus("working", "Working", status.message);
                 if (statusType === "retry") return toasttyStatus("working", "Retrying", status.message);
-                if (statusType === "idle") return toasttyStatus("ready", "Ready", lastFinalText);
+                if (statusType === "idle") {
+                  if (!isMiMoCode && lastCompletedTextCandidate) {
+                    scheduleOpenCodeFinal(lastCompletedTextCandidate);
+                    return;
+                  }
+                  return toasttyStatus("ready", "Ready", lastFinalText);
+                }
                 return;
               }
 
               case "session.idle":
+                if (!isMiMoCode && lastCompletedTextCandidate) {
+                  scheduleOpenCodeFinal(lastCompletedTextCandidate);
+                  return;
+                }
                 return toasttyStatus("ready", "Ready", lastFinalText);
 
               case "session.error":
@@ -920,6 +974,11 @@ private extension AgentLaunchInstrumentation {
           function enqueue(event, options = {}) {
             if (!event) return queue;
             if (shouldSuppressWorkingAfterTerminal(event)) return queue;
+            if (shouldSuppressGenericOpenCodeWorkingAfterTextComplete(event)) return queue;
+            if (!isMiMoCode && isWorkingStatus(event) && !isGenericOpenCodeWorkingStatus(event)) {
+              clearPendingOpenCodeFinal();
+              lastCompletedTextCandidate = "";
+            }
             let statusKey = "";
             let finalText = "";
             if (event.type === "toastty.status") {
@@ -1001,7 +1060,7 @@ private extension AgentLaunchInstrumentation {
             "experimental.text.complete"(input, output) {
               try {
                 const text = rememberFinalTextCandidate(input, output);
-                if (!isMiMoCode) return flush(toasttyFinal(text));
+                if (!isMiMoCode) return;
               } catch (error) {
                 hookFailure("experimental.text.complete", error);
               }
