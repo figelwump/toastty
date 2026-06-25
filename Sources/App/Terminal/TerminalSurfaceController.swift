@@ -1609,6 +1609,16 @@ extension TerminalSurfaceController {
         guard lastDisplayID != displayID else {
             return
         }
+        ToasttyLog.debug(
+            "Updating Ghostty surface display ID",
+            category: .ghostty,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "previous_display_id": lastDisplayID.map(String.init) ?? "nil",
+                "next_display_id": String(displayID),
+                "source_container_id": describeObjectIdentity(sourceContainer),
+            ]
+        )
         ghostty_surface_set_display_id(surface, displayID)
         lastDisplayID = displayID
     }
@@ -1779,9 +1789,7 @@ extension TerminalSurfaceController {
         resumedFromViewportDeferral: Bool,
         reason: SurfaceSizeDispatchReason
     ) -> ghostty_surface_size_s {
-        ghostty_surface_set_size(surface, UInt32(requestedWidth), UInt32(requestedHeight))
-        let measuredSize = ghostty_surface_size(surface)
-        let presentationChangedEstimate = SurfacePresentationSignature(
+        let nextPresentationSignature = SurfacePresentationSignature(
             logicalWidth: logicalWidth,
             logicalHeight: logicalHeight,
             pixelWidth: pixelWidth,
@@ -1789,7 +1797,25 @@ extension TerminalSurfaceController {
             scaleThousandths: Int((scale * 1000).rounded()),
             focused: focused,
             pixelSizingEnabled: reason.usesPixelUnits
-        ) != lastPresentationSignature
+        )
+        let presentationChangedEstimate = nextPresentationSignature != lastPresentationSignature
+        logPotentialSimultaneousShrinkResizeBeforeDispatch(
+            requestedWidth: requestedWidth,
+            requestedHeight: requestedHeight,
+            logicalWidth: logicalWidth,
+            logicalHeight: logicalHeight,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            scale: scale,
+            focused: focused,
+            sourceContainer: sourceContainer,
+            attachment: attachment,
+            resumedFromViewportDeferral: resumedFromViewportDeferral,
+            reason: reason,
+            presentationChangedEstimate: presentationChangedEstimate
+        )
+        ghostty_surface_set_size(surface, UInt32(requestedWidth), UInt32(requestedHeight))
+        let measuredSize = ghostty_surface_size(surface)
         ToasttyLog.debug(
             "Dispatched Ghostty surface size update",
             category: .ghostty,
@@ -1835,6 +1861,114 @@ extension TerminalSurfaceController {
             ]
         )
         return measuredSize
+    }
+
+    private func logPotentialSimultaneousShrinkResizeBeforeDispatch(
+        requestedWidth: Int,
+        requestedHeight: Int,
+        logicalWidth: Int,
+        logicalHeight: Int,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        scale: Double,
+        focused: Bool,
+        sourceContainer: NSView,
+        attachment: PanelHostAttachmentToken,
+        resumedFromViewportDeferral: Bool,
+        reason: SurfaceSizeDispatchReason,
+        presentationChangedEstimate: Bool
+    ) {
+        guard let previousPresentation = lastPresentationSignature else { return }
+
+        let logicalWidthShrank = logicalWidth < previousPresentation.logicalWidth
+        let logicalHeightShrank = logicalHeight < previousPresentation.logicalHeight
+        let pixelWidthShrank = pixelWidth < previousPresentation.pixelWidth
+        let pixelHeightShrank = pixelHeight < previousPresentation.pixelHeight
+
+        var estimatedColumns: Int?
+        var estimatedRows: Int?
+        var estimatedColumnsShrank = false
+        var estimatedRowsShrank = false
+        if let lastRenderMetrics {
+            estimatedColumns = estimatedGridDimension(
+                pixelCount: pixelWidth,
+                cellPixelCount: lastRenderMetrics.cellWidthPx
+            )
+            estimatedRows = estimatedGridDimension(
+                pixelCount: pixelHeight,
+                cellPixelCount: lastRenderMetrics.cellHeightPx
+            )
+            if let estimatedColumns {
+                estimatedColumnsShrank = estimatedColumns < lastRenderMetrics.columns
+            }
+            if let estimatedRows {
+                estimatedRowsShrank = estimatedRows < lastRenderMetrics.rows
+            }
+        }
+
+        let simultaneousLogicalShrink = logicalWidthShrank && logicalHeightShrank
+        let simultaneousPixelShrink = pixelWidthShrank && pixelHeightShrank
+        let simultaneousGridShrink = estimatedColumnsShrank && estimatedRowsShrank
+        guard simultaneousLogicalShrink || simultaneousPixelShrink || simultaneousGridShrink else {
+            return
+        }
+
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "reason": reason.rawValue,
+            "requested_units": reason.usesPixelUnits ? "pixels" : "logical",
+            "requested_width": String(requestedWidth),
+            "requested_height": String(requestedHeight),
+            "logical_width": String(logicalWidth),
+            "logical_height": String(logicalHeight),
+            "pixel_width": String(pixelWidth),
+            "pixel_height": String(pixelHeight),
+            "scale": String(format: "%.3f", scale),
+            "focused": focused ? "true" : "false",
+            "attachment_id": attachment.rawValue.uuidString,
+            "source_container_id": describeObjectIdentity(sourceContainer),
+            "display_id": resolvedDisplayID(sourceContainer: sourceContainer).map(String.init) ?? "nil",
+            "resumed_from_viewport_deferral": resumedFromViewportDeferral ? "true" : "false",
+            "presentation_changed_estimate": presentationChangedEstimate ? "true" : "false",
+            "previous_logical_width": String(previousPresentation.logicalWidth),
+            "previous_logical_height": String(previousPresentation.logicalHeight),
+            "previous_pixel_width": String(previousPresentation.pixelWidth),
+            "previous_pixel_height": String(previousPresentation.pixelHeight),
+            "previous_scale_thousandths": String(previousPresentation.scaleThousandths),
+            "previous_focused": previousPresentation.focused ? "true" : "false",
+            "previous_pixel_sizing": previousPresentation.pixelSizingEnabled ? "true" : "false",
+            "logical_width_shrank": logicalWidthShrank ? "true" : "false",
+            "logical_height_shrank": logicalHeightShrank ? "true" : "false",
+            "pixel_width_shrank": pixelWidthShrank ? "true" : "false",
+            "pixel_height_shrank": pixelHeightShrank ? "true" : "false",
+            "estimated_columns": estimatedColumns.map(String.init) ?? "nil",
+            "estimated_rows": estimatedRows.map(String.init) ?? "nil",
+            "estimated_columns_shrank": estimatedColumnsShrank ? "true" : "false",
+            "estimated_rows_shrank": estimatedRowsShrank ? "true" : "false",
+        ]
+
+        if let lastRenderMetrics {
+            metadata["previous_reported_columns"] = String(lastRenderMetrics.columns)
+            metadata["previous_reported_rows"] = String(lastRenderMetrics.rows)
+            metadata["previous_reported_width_px"] = String(lastRenderMetrics.widthPx)
+            metadata["previous_reported_height_px"] = String(lastRenderMetrics.heightPx)
+            metadata["previous_reported_cell_width_px"] = String(lastRenderMetrics.cellWidthPx)
+            metadata["previous_reported_cell_height_px"] = String(lastRenderMetrics.cellHeightPx)
+            metadata["previous_reported_scale_thousandths"] = String(lastRenderMetrics.scaleThousandths)
+        }
+
+        ToasttyLog.debug(
+            "Preparing Ghostty simultaneous shrink surface size update",
+            category: .ghostty,
+            metadata: metadata
+        )
+    }
+
+    private func estimatedGridDimension(pixelCount: Int, cellPixelCount: Int) -> Int? {
+        guard pixelCount > 0, cellPixelCount > 0 else {
+            return nil
+        }
+        return max(pixelCount / cellPixelCount, 1)
     }
 
     private func describeObjectIdentity(_ object: AnyObject) -> String {
