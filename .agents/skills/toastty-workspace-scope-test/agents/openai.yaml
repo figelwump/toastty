@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Workspace Scope Test"
+  short_description: "Smoke-test workspace-scoped automation"
+  default_prompt: "Use $toastty-workspace-scope-test to verify cooperative workspace-scoped automation in this Toastty worktree."
