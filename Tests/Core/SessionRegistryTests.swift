@@ -92,6 +92,131 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func sessionRecordDecodesLegacyPayloadWithoutScopeKeyAsUnrestricted() throws {
+        let record = SessionRecord(
+            sessionID: "legacy-scope",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            scopedWorkspaceIDs: [UUID()],
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_001)
+        )
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let data = try encoder.encode(record)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "scopedWorkspaceIDs")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try decoder.decode(SessionRecord.self, from: legacyData)
+
+        #expect(decoded.scopedWorkspaceIDs == nil)
+        #expect(decoded.sessionID == record.sessionID)
+        #expect(decoded.workspaceID == record.workspaceID)
+    }
+
+    @Test
+    func workspaceScopeAccessFollowsCooperativeTruthTable() throws {
+        var registry = SessionRegistry()
+        let now = Date(timeIntervalSince1970: 1_200)
+        let scopedWorkspaceID = UUID()
+        let movedWorkspaceID = UUID()
+        let explicitWorkspaceID = UUID()
+        let outOfScopeWorkspaceID = UUID()
+        let scopedPanelID = UUID()
+
+        registry.startSession(
+            sessionID: "unscoped",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.startSession(
+            sessionID: "scoped",
+            agent: .codex,
+            panelID: scopedPanelID,
+            windowID: UUID(),
+            workspaceID: scopedWorkspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [explicitWorkspaceID],
+            at: now
+        )
+        registry.startSession(
+            sessionID: "own-only",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: scopedWorkspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [],
+            at: now
+        )
+
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: nil, of: outOfScopeWorkspaceID))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "missing", of: outOfScopeWorkspaceID))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "unscoped", of: outOfScopeWorkspaceID))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "scoped", of: scopedWorkspaceID))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "scoped", of: explicitWorkspaceID))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "scoped", of: outOfScopeWorkspaceID) == false)
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "own-only", of: scopedWorkspaceID))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "own-only", of: explicitWorkspaceID) == false)
+
+        registry.updatePanelLocation(
+            panelID: scopedPanelID,
+            windowID: UUID(),
+            workspaceID: movedWorkspaceID,
+            at: now.addingTimeInterval(1)
+        )
+
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "scoped", of: movedWorkspaceID))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "scoped", of: scopedWorkspaceID) == false)
+        #expect(registry.effectiveWorkspaceScope(sessionID: "scoped") == [explicitWorkspaceID, movedWorkspaceID])
+
+        registry.stopSession(sessionID: "scoped", at: now.addingTimeInterval(2))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "scoped", of: outOfScopeWorkspaceID))
+    }
+
+    @Test
+    func clearingScopeRestoresUnrestrictedWhileEmptyScopeStaysOwnOnly() throws {
+        var registry = SessionRegistry()
+        let now = Date(timeIntervalSince1970: 1_250)
+        let ownWorkspaceID = UUID()
+        let otherWorkspaceID = UUID()
+
+        registry.startSession(
+            sessionID: "session",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: ownWorkspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [],
+            at: now
+        )
+
+        #expect(registry.isWorkspaceScoped(sessionID: "session"))
+        #expect(registry.effectiveWorkspaceScope(sessionID: "session") == [ownWorkspaceID])
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "session", of: ownWorkspaceID))
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "session", of: otherWorkspaceID) == false)
+
+        let didClearScope = registry.clearScope(sessionID: "session")
+        #expect(didClearScope)
+        #expect(registry.isWorkspaceScoped(sessionID: "session") == false)
+        #expect(registry.scope(ofSessionID: "session") == nil)
+        #expect(registry.effectiveWorkspaceScope(sessionID: "session") == nil)
+        #expect(registry.allowsWorkspaceAutomation(callerSessionID: "session", of: otherWorkspaceID))
+    }
+
+    @Test
     func laterFlagMutatorsAreNoOpForProcessWatchSessions() throws {
         var registry = SessionRegistry()
         let panelID = UUID()

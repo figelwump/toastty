@@ -853,6 +853,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private var notificationStore = NotificationStore()
     private var sessionUpdateCoalescer = SessionUpdateCoalescer()
     private var pendingManagedLaunchPreflights: [String: PendingManagedLaunchPreflight] = [:]
+    private var loggedUnrestrictedScopeCallerSessionIDs = Set<String>()
     @MainActor
     private lazy var appControlExecutor = AppControlExecutor(
         store: store,
@@ -898,7 +899,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
             switch envelope {
             case .request(let request):
-                result = try executeCommand(named: request.command, payload: request.payload)
+                let context = AutomationRequestContext(
+                    callerSessionID: normalizedOptionalText(request.callerSessionID),
+                    commandName: request.command
+                )
+                result = try executeCommand(
+                    named: request.command,
+                    payload: request.payload,
+                    context: context
+                )
             case .event(let event):
                 result = try executeEvent(event)
             }
@@ -942,8 +951,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     @MainActor
     private func executeCommand(
         named command: String,
-        payload: [String: AutomationJSONValue]
+        payload: [String: AutomationJSONValue],
+        context: AutomationRequestContext
     ) throws -> [String: AutomationJSONValue]? {
+        logUnrestrictedUnknownCallerIfNeeded(context)
+
         switch command {
         case "agent.prepare_managed_launch":
             guard let agentRaw = normalizedOptionalText(payload.string("agent")),
@@ -955,6 +967,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
             guard let panelID = UUID(uuidString: rawPanelID) else {
                 throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            if let location = locatePanel(panelID) {
+                try enforceWorkspaceAutomationAccess(location.workspaceID, context: context)
             }
 
             let argv = payload.stringArray("argv")
@@ -977,7 +992,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
 
             let plan = try agentLaunchService.prepareManagedLaunch(
-                request
+                request,
+                inheritedScopedWorkspaceIDs: inheritedWorkspaceScope(for: context)
             )
             store.recordSuccessfulAgentLaunch()
             stateVersion += 1
@@ -1002,7 +1018,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
             let outcome = try appControlExecutor.runAction(
                 id: actionID,
-                args: try parseArgsPayload(payload)
+                args: try parseArgsPayload(payload),
+                context: context
             )
             guard outcome.didMutateState || outcome.result != nil else {
                 throw AutomationSocketError.invalidPayload("action could not be applied: \(actionID)")
@@ -1025,8 +1042,69 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
             return try appControlExecutor.runQuery(
                 id: queryID,
-                args: try parseArgsPayload(payload)
+                args: try parseArgsPayload(payload),
+                context: context
             )
+
+        case "session.scope.show":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            return try sessionScopeResponse(sessionID: sessionID)
+
+        case "session.scope.set_current":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            if let callerSessionID = context.callerSessionID, callerSessionID != sessionID {
+                throw AutomationSocketError.invalidPayload("session.scope.set_current can only target the caller session")
+            }
+            let panelID = try resolveScopeCommandPanelID(payload: payload)
+            let sessionRecord = try requireActiveScopeCommandSession(sessionID)
+            guard sessionRecord.panelID == panelID else {
+                throw AutomationSocketError.invalidPayload("panelID does not match sessionID")
+            }
+            guard locatePanel(panelID) != nil else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard sessionRuntimeStore.setScope(sessionID: sessionID, workspaceIDs: []) else {
+                return try sessionScopeResponse(sessionID: sessionID)
+            }
+            stateVersion += 1
+            var response = try sessionScopeResponse(sessionID: sessionID)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "session.scope.set":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            let workspaceIDs = try resolveScopeCommandWorkspaceIDs(payload: payload)
+            guard sessionRuntimeStore.setScope(sessionID: sessionID, workspaceIDs: workspaceIDs) else {
+                _ = try requireActiveScopeCommandSession(sessionID)
+                return try sessionScopeResponse(sessionID: sessionID)
+            }
+            stateVersion += 1
+            var response = try sessionScopeResponse(sessionID: sessionID)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "session.scope.add":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            let workspaceIDs = try resolveScopeCommandWorkspaceIDs(payload: payload)
+            guard sessionRuntimeStore.addScope(sessionID: sessionID, workspaceIDs: workspaceIDs) else {
+                _ = try requireActiveScopeCommandSession(sessionID)
+                return try sessionScopeResponse(sessionID: sessionID)
+            }
+            stateVersion += 1
+            var response = try sessionScopeResponse(sessionID: sessionID)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "session.scope.clear":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            guard sessionRuntimeStore.clearScope(sessionID: sessionID) else {
+                _ = try requireActiveScopeCommandSession(sessionID)
+                return try sessionScopeResponse(sessionID: sessionID)
+            }
+            stateVersion += 1
+            var response = try sessionScopeResponse(sessionID: sessionID)
+            response["stateVersion"] = .int(stateVersion)
+            return response
 
         case "automation.ping":
             return [
@@ -1076,7 +1154,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
             let outcome = try appControlExecutor.runAction(
                 id: actionID,
-                args: try parseArgsPayload(payload)
+                args: try parseArgsPayload(payload),
+                context: context
             )
             guard outcome.didMutateState || outcome.result != nil else {
                 throw AutomationSocketError.invalidPayload("action could not be applied: \(actionID)")
@@ -1093,21 +1172,24 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
             return try appControlExecutor.runAction(
                 id: AppControlActionID.terminalSendText.rawValue,
-                args: payload
+                args: payload,
+                context: context
             ).result ?? [:]
 
         case "automation.terminal_drop_image_files":
             try requireAutomationMode(for: command)
             return try appControlExecutor.runAction(
                 id: AppControlActionID.terminalDropImageFiles.rawValue,
-                args: payload
+                args: payload,
+                context: context
             ).result ?? [:]
 
         case "automation.terminal_visible_text":
             try requireAutomationMode(for: command)
             return try appControlExecutor.runQuery(
                 id: AppControlQueryID.terminalVisibleText.rawValue,
-                args: payload
+                args: payload,
+                context: context
             )
 
         case "automation.launch_agent":
@@ -1118,7 +1200,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
             let result = try appControlExecutor.runAction(
                 id: AppControlActionID.agentLaunch.rawValue,
-                args: args
+                args: args,
+                context: context
             )
             stateVersion += 1
             var response = result.result ?? [:]
@@ -1129,7 +1212,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             try requireAutomationMode(for: command)
             return try appControlExecutor.runQuery(
                 id: AppControlQueryID.terminalState.rawValue,
-                args: payload
+                args: payload,
+                context: context
             )
 
         case "automation.local_document_panel_state",
@@ -1137,21 +1221,24 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             try requireAutomationMode(for: command)
             return try appControlExecutor.runQuery(
                 id: AppControlQueryID.panelLocalDocumentState.rawValue,
-                args: payload
+                args: payload,
+                context: context
             )
 
         case "automation.browser_panel_state":
             try requireAutomationMode(for: command)
             return try appControlExecutor.runQuery(
                 id: AppControlQueryID.panelBrowserState.rawValue,
-                args: payload
+                args: payload,
+                context: context
             )
 
         case "automation.scratchpad_panel_state":
             try requireAutomationMode(for: command)
             return try appControlExecutor.runQuery(
                 id: AppControlQueryID.panelScratchpadState.rawValue,
-                args: payload
+                args: payload,
+                context: context
             )
 
         case "automation.dump_state":
@@ -1172,7 +1259,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             try requireAutomationMode(for: command)
             return try appControlExecutor.runQuery(
                 id: AppControlQueryID.workspaceSnapshot.rawValue,
-                args: payload
+                args: payload,
+                context: context
             )
 
         case "automation.workspace_render_snapshot":
@@ -1206,6 +1294,121 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         guard automationConfig != nil else {
             throw AutomationSocketError.invalidPayload("\(command) requires automation mode")
         }
+    }
+
+    @MainActor
+    private func logUnrestrictedUnknownCallerIfNeeded(_ context: AutomationRequestContext) {
+        guard let callerSessionID = context.callerSessionID,
+              sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID) == nil,
+              loggedUnrestrictedScopeCallerSessionIDs.insert(callerSessionID).inserted else {
+            return
+        }
+        ToasttyLog.warning(
+            "Automation request caller session is not active; treating workspace scope as unrestricted",
+            category: .automation,
+            metadata: [
+                "caller_session_id": callerSessionID,
+                "command": context.commandName,
+            ]
+        )
+    }
+
+    @MainActor
+    private func inheritedWorkspaceScope(for context: AutomationRequestContext) -> Set<UUID>? {
+        guard let callerSessionID = context.callerSessionID,
+              sessionRuntimeStore.isWorkspaceScoped(sessionID: callerSessionID) else {
+            return nil
+        }
+        return sessionRuntimeStore.effectiveWorkspaceScope(sessionID: callerSessionID)
+    }
+
+    @MainActor
+    private func enforceWorkspaceAutomationAccess(
+        _ workspaceID: UUID,
+        context: AutomationRequestContext
+    ) throws {
+        guard sessionRuntimeStore.allowsWorkspaceAutomation(
+            callerSessionID: context.callerSessionID,
+            of: workspaceID
+        ) else {
+            ToasttyLog.warning(
+                "Denied workspace-scoped automation request",
+                category: .automation,
+                metadata: [
+                    "caller_session_id": context.callerSessionID ?? "none",
+                    "command": context.commandName,
+                    "workspace_id": workspaceID.uuidString,
+                ]
+            )
+            throw AutomationSocketError.scopeDenied(workspaceID: workspaceID)
+        }
+    }
+
+    private func resolveScopeCommandSessionID(
+        payload: [String: AutomationJSONValue],
+        context: AutomationRequestContext
+    ) throws -> String {
+        if let sessionID = normalizedOptionalText(payload.string("sessionID")) {
+            return sessionID
+        }
+        if let callerSessionID = context.callerSessionID {
+            return callerSessionID
+        }
+        throw AutomationSocketError.invalidPayload("--session is required when TOASTTY_SESSION_ID is unavailable")
+    }
+
+    private func resolveScopeCommandWorkspaceIDs(
+        payload: [String: AutomationJSONValue]
+    ) throws -> Set<UUID> {
+        let rawWorkspaceIDs = payload.stringArray("workspaceIDs")
+        guard rawWorkspaceIDs.isEmpty == false else {
+            throw AutomationSocketError.invalidPayload("at least one --workspace is required")
+        }
+        var workspaceIDs = Set<UUID>()
+        for rawWorkspaceID in rawWorkspaceIDs {
+            guard let workspaceID = UUID(uuidString: rawWorkspaceID) else {
+                throw AutomationSocketError.invalidPayload("--workspace values must be UUIDs")
+            }
+            workspaceIDs.insert(workspaceID)
+        }
+        return workspaceIDs
+    }
+
+    private func resolveScopeCommandPanelID(
+        payload: [String: AutomationJSONValue]
+    ) throws -> UUID {
+        guard let panelID = payload.uuid("panelID") else {
+            throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+        }
+        return panelID
+    }
+
+    @MainActor
+    private func requireActiveScopeCommandSession(_ sessionID: String) throws -> SessionRecord {
+        guard let sessionRecord = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            throw AutomationSocketError.invalidPayload("sessionID does not refer to an active session")
+        }
+        return sessionRecord
+    }
+
+    @MainActor
+    private func sessionScopeResponse(sessionID: String) throws -> [String: AutomationJSONValue] {
+        _ = try requireActiveScopeCommandSession(sessionID)
+        let explicitScope = sessionRuntimeStore.scope(ofSessionID: sessionID)
+        let effectiveScope = sessionRuntimeStore.effectiveWorkspaceScope(sessionID: sessionID)
+        return [
+            "sessionID": .string(sessionID),
+            "isScoped": .bool(explicitScope != nil),
+            "workspaceIDs": .array(
+                (explicitScope ?? [])
+                    .map(\.uuidString)
+                    .sorted()
+                    .map(AutomationJSONValue.string)
+            ),
+            "effectiveWorkspaceIDs": effectiveScope.map { scope in
+                .array(scope.map(\.uuidString).sorted().map(AutomationJSONValue.string))
+            } ?? .null,
+        ]
     }
 
     @MainActor

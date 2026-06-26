@@ -17,6 +17,7 @@ final class AppControlExecutor {
     private let agentLaunchService: AgentLaunchService
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let scratchpadDocumentStore: ScratchpadDocumentStore
+    private var currentRequestContext: AutomationRequestContext?
 
     init(
         store: AppStore,
@@ -51,7 +52,12 @@ final class AppControlExecutor {
         AppControlQueryID.allCases.map(\.descriptor)
     }
 
-    func runAction(id rawID: String, args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
+    func runAction(
+        id rawID: String,
+        args: [String: AutomationJSONValue],
+        context: AutomationRequestContext = AutomationRequestContext(callerSessionID: nil, commandName: "app_control.run_action")
+    ) throws -> AppControlActionOutcome {
+        try withRequestContext(context) {
         guard let action = AppControlActionID.resolve(rawID) else {
             throw AutomationSocketError.invalidPayload("unsupported action: \(rawID)")
         }
@@ -87,6 +93,7 @@ final class AppControlExecutor {
                   let workspaceID = updatedWindow.workspaceIDs.last(where: { existingWorkspaceIDs.contains($0) == false }) else {
                 throw AutomationSocketError.invalidPayload("workspace.create did not return a created workspace")
             }
+            try bindWorkspaceToScopedCallerIfNeeded(workspaceID, operation: action.rawValue)
             return .init(
                 didMutateState: true,
                 result: [
@@ -111,6 +118,7 @@ final class AppControlExecutor {
             } else {
                 throw AutomationSocketError.invalidPayload("workspaceID or index is required")
             }
+            try enforceWorkspaceAutomationAccess(targetWorkspaceID)
 
             return .init(
                 didMutateState: try requiredStore().selectWorkspace(
@@ -127,22 +135,26 @@ final class AppControlExecutor {
             guard let window = store.state.window(id: windowID) else {
                 throw AutomationSocketError.invalidPayload("windowID does not exist")
             }
+            let fromIndex = try resolveRequiredIndex(
+                name: "index",
+                args: args,
+                upperBound: window.workspaceIDs.count,
+                missingMessage: "index is required"
+            )
+            let toIndex = try resolveRequiredIndex(
+                name: "toIndex",
+                args: args,
+                upperBound: window.workspaceIDs.count,
+                missingMessage: "toIndex is required"
+            )
+            try enforceWorkspaceAutomationAccess(window.workspaceIDs[fromIndex - 1])
+            try enforceWorkspaceAutomationAccess(window.workspaceIDs[toIndex - 1])
             return .init(
                 didMutateState: store.send(
                     .moveWorkspace(
                         windowID: windowID,
-                        fromIndex: try resolveRequiredIndex(
-                            name: "index",
-                            args: args,
-                            upperBound: window.workspaceIDs.count,
-                            missingMessage: "index is required"
-                        ) - 1,
-                        toIndex: try resolveRequiredIndex(
-                            name: "toIndex",
-                            args: args,
-                            upperBound: window.workspaceIDs.count,
-                            missingMessage: "toIndex is required"
-                        ) - 1
+                        fromIndex: fromIndex - 1,
+                        toIndex: toIndex - 1
                     )
                 ),
                 result: nil
@@ -206,18 +218,22 @@ final class AppControlExecutor {
             )
 
         case .workspaceTabSelectPrevious:
+            let windowID = try resolveWindowID(args: args)
+            try enforceSelectedWorkspaceAutomationAccess(windowID: windowID)
             return .init(
                 didMutateState: try requiredStore().selectAdjacentWorkspaceTab(
-                    preferredWindowID: try resolveWindowID(args: args),
+                    preferredWindowID: windowID,
                     direction: .previous
                 ),
                 result: nil
             )
 
         case .workspaceTabSelectNext:
+            let windowID = try resolveWindowID(args: args)
+            try enforceSelectedWorkspaceAutomationAccess(windowID: windowID)
             return .init(
                 didMutateState: try requiredStore().selectAdjacentWorkspaceTab(
-                    preferredWindowID: try resolveWindowID(args: args),
+                    preferredWindowID: windowID,
                     direction: .next
                 ),
                 result: nil
@@ -255,9 +271,16 @@ final class AppControlExecutor {
             )
 
         case .panelFocusNextUnreadOrActive:
+            let windowID = try resolveWindowID(args: args)
+            if let target = try requiredStore().nextUnreadOrActivePanelTargetFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionRuntimeStore
+            ) {
+                try enforceWorkspaceAutomationAccess(target.workspaceID)
+            }
             return .init(
                 didMutateState: try requiredStore().focusNextUnreadOrActivePanelFromCommand(
-                    preferredWindowID: try resolveWindowID(args: args),
+                    preferredWindowID: windowID,
                     sessionRuntimeStore: sessionRuntimeStore
                 ),
                 result: nil
@@ -451,6 +474,9 @@ final class AppControlExecutor {
             guard let profileID = normalizedOptionalText(args.stringValue("profileID")) else {
                 throw AutomationSocketError.invalidPayload("profileID is required")
             }
+            if let targetWorkspaceID = try resolveAgentLaunchExistingWorkspaceID(args: args) {
+                try enforceWorkspaceAutomationAccess(targetWorkspaceID)
+            }
             let result = try agentLaunchService.launch(
                 profileID: profileID,
                 workspaceID: args.uuid("workspaceID"),
@@ -459,8 +485,10 @@ final class AppControlExecutor {
                 environment: try agentLaunchEnvironment(args: args),
                 initialPrompt: args.stringValue("initialPrompt"),
                 initialCommands: try agentLaunchInitialCommands(args: args),
+                inheritedScopedWorkspaceIDs: inheritedWorkspaceScopeForChildLaunch(),
                 focusPolicy: .preserveFirstResponder
             )
+            try bindWorkspaceToScopedCallerIfNeeded(result.workspaceID, operation: action.rawValue)
             var response: [String: AutomationJSONValue] = [
                 "profileID": .string(result.agent.rawValue),
                 "agent": .string(result.agent.rawValue),
@@ -570,9 +598,15 @@ final class AppControlExecutor {
                 throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
             }
         }
+        }
     }
 
-    func runQuery(id rawID: String, args: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
+    func runQuery(
+        id rawID: String,
+        args: [String: AutomationJSONValue],
+        context: AutomationRequestContext = AutomationRequestContext(callerSessionID: nil, commandName: "app_control.run_query")
+    ) throws -> [String: AutomationJSONValue] {
+        try withRequestContext(context) {
         guard let query = AppControlQueryID.resolve(rawID) else {
             throw AutomationSocketError.invalidPayload("unsupported query: \(rawID)")
         }
@@ -637,6 +671,7 @@ final class AppControlExecutor {
                 runtimeState: runtime.automationState()
             )
         }
+        }
     }
 }
 
@@ -652,6 +687,129 @@ private extension AppControlExecutor {
             throw AutomationSocketError.internalError("app store unavailable")
         }
         return store
+    }
+
+    func withRequestContext<T>(
+        _ context: AutomationRequestContext,
+        _ body: () throws -> T
+    ) rethrows -> T {
+        let previousContext = currentRequestContext
+        currentRequestContext = context
+        defer { currentRequestContext = previousContext }
+        return try body()
+    }
+
+    func requestContext() -> AutomationRequestContext {
+        currentRequestContext ?? AutomationRequestContext(
+            callerSessionID: nil,
+            commandName: "app_control"
+        )
+    }
+
+    func enforceWorkspaceAutomationAccess(_ workspaceID: UUID) throws {
+        let context = requestContext()
+        guard sessionRuntimeStore.allowsWorkspaceAutomation(
+            callerSessionID: context.callerSessionID,
+            of: workspaceID
+        ) else {
+            ToasttyLog.warning(
+                "Denied workspace-scoped app-control request",
+                category: .automation,
+                metadata: [
+                    "caller_session_id": context.callerSessionID ?? "none",
+                    "command": context.commandName,
+                    "workspace_id": workspaceID.uuidString,
+                ]
+            )
+            throw AutomationSocketError.scopeDenied(workspaceID: workspaceID)
+        }
+    }
+
+    func enforceSelectedWorkspaceAutomationAccess(windowID: UUID) throws {
+        let store = try requiredStore()
+        guard let workspaceID = store.state.selectedWorkspaceID(in: windowID) else {
+            throw AutomationSocketError.invalidPayload("windowID does not have a selected workspace")
+        }
+        try enforceWorkspaceAutomationAccess(workspaceID)
+    }
+
+    func enforceWorkspaceAutomationAccessForSession(_ sessionID: String) throws {
+        guard let record = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            throw AutomationSocketError.invalidPayload("sessionID does not refer to an active session")
+        }
+        try enforceWorkspaceAutomationAccess(record.workspaceID)
+    }
+
+    func resolveAgentLaunchExistingWorkspaceID(args: [String: AutomationJSONValue]) throws -> UUID? {
+        let store = try requiredStore()
+        if let panelID = args.uuid("panelID") {
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            if let workspaceID = args.uuid("workspaceID"),
+               workspaceID != location.workspaceID {
+                throw AutomationSocketError.invalidPayload("panelID does not belong to workspaceID")
+            }
+            return location.workspaceID
+        }
+
+        if let workspaceID = args.uuid("workspaceID") {
+            guard store.state.workspacesByID[workspaceID] != nil else {
+                throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+            }
+            return workspaceID
+        }
+
+        return store.selectedWorkspace?.id
+    }
+
+    func inheritedWorkspaceScopeForChildLaunch() -> Set<UUID>? {
+        guard let callerSessionID = requestContext().callerSessionID,
+              sessionRuntimeStore.isWorkspaceScoped(sessionID: callerSessionID) else {
+            return nil
+        }
+        return sessionRuntimeStore.effectiveWorkspaceScope(sessionID: callerSessionID)
+    }
+
+    func bindWorkspaceToScopedCallerIfNeeded(
+        _ workspaceID: UUID,
+        operation: String
+    ) throws {
+        guard let callerSessionID = requestContext().callerSessionID,
+              sessionRuntimeStore.isWorkspaceScoped(sessionID: callerSessionID),
+              sessionRuntimeStore.allowsWorkspaceAutomation(
+                  callerSessionID: callerSessionID,
+                  of: workspaceID
+              ) == false else {
+            return
+        }
+        guard sessionRuntimeStore.addScope(sessionID: callerSessionID, workspaceIDs: [workspaceID]) else {
+            if sessionRuntimeStore.allowsWorkspaceAutomation(
+                callerSessionID: callerSessionID,
+                of: workspaceID
+            ) {
+                return
+            }
+            throw AutomationSocketError.internalError("\(operation) created or resolved workspace \(workspaceID.uuidString) but failed to bind it to caller scope")
+        }
+    }
+
+    func scopedTerminalTarget(
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID
+    ) throws -> (windowID: UUID, workspaceID: UUID, panelID: UUID) {
+        try enforceWorkspaceAutomationAccess(workspaceID)
+        return (windowID, workspaceID, panelID)
+    }
+
+    func scopedWebPanelTarget(
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState
+    ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
+        try enforceWorkspaceAutomationAccess(workspaceID)
+        return (workspaceID, panelID, webState)
     }
 
     func splitInDirection(_ direction: SlotSplitDirection, args: [String: AutomationJSONValue]) throws -> AppControlActionOutcome {
@@ -714,6 +872,7 @@ private extension AppControlExecutor {
         guard let sessionID = normalizedOptionalText(args.stringValue("sessionID")) else {
             throw AutomationSocketError.invalidPayload("sessionID is required")
         }
+        try enforceWorkspaceAutomationAccessForSession(sessionID)
         let content = try scratchpadContent(args: args, sessionID: sessionID)
 
         let outcome: ScratchpadPanelSetContentOutcome
@@ -753,6 +912,7 @@ private extension AppControlExecutor {
         guard let sessionID = normalizedOptionalText(args.stringValue("sessionID")) else {
             throw AutomationSocketError.invalidPayload("sessionID is required")
         }
+        try enforceWorkspaceAutomationAccessForSession(sessionID)
         guard let patch = args.stringValue("patch") else {
             throw AutomationSocketError.invalidPayload("patch is required")
         }
@@ -1064,7 +1224,9 @@ private extension AppControlExecutor {
     }
 
     func resolveWorkspaceID(args: [String: AutomationJSONValue]) throws -> UUID {
-        try resolveWorkspaceSelection(args: args).workspaceID
+        let workspaceID = try resolveWorkspaceSelection(args: args).workspaceID
+        try enforceWorkspaceAutomationAccess(workspaceID)
+        return workspaceID
     }
 
     func resolveWorkspaceTabID(
@@ -1141,7 +1303,11 @@ private extension AppControlExecutor {
                   case .terminal = panelState else {
                 throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
             }
-            return (location.windowID, location.workspaceID, panelID)
+            return try scopedTerminalTarget(
+                windowID: location.windowID,
+                workspaceID: location.workspaceID,
+                panelID: panelID
+            )
         }
 
         let selection = try resolveWorkspaceSelection(args: payload)
@@ -1150,12 +1316,20 @@ private extension AppControlExecutor {
         if let focusedPanelID = workspace.focusedPanelID,
            let panelState = workspace.panels[focusedPanelID],
            case .terminal = panelState {
-            return (selection.windowID, workspaceID, focusedPanelID)
+            return try scopedTerminalTarget(
+                windowID: selection.windowID,
+                workspaceID: workspaceID,
+                panelID: focusedPanelID
+            )
         }
         for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
             if let panelState = workspace.panels[panelID], case .terminal = panelState {
-                return (selection.windowID, workspaceID, panelID)
+                return try scopedTerminalTarget(
+                    windowID: selection.windowID,
+                    workspaceID: workspaceID,
+                    panelID: panelID
+                )
             }
         }
         throw AutomationSocketError.invalidPayload("workspace has no terminal panel to target")
@@ -1178,7 +1352,11 @@ private extension AppControlExecutor {
                   webState.definition == .localDocument else {
                 throw AutomationSocketError.invalidPayload("panelID is not a local document panel")
             }
-            return (location.workspaceID, panelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: location.workspaceID,
+                panelID: panelID,
+                webState: webState
+            )
         }
 
         let workspaceID = try resolveWorkspaceID(args: payload)
@@ -1189,17 +1367,29 @@ private extension AppControlExecutor {
            let panelState = workspace.panels[focusedPanelID],
            case .web(let webState) = panelState,
            webState.definition == .localDocument {
-            return (workspaceID, focusedPanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: focusedPanelID,
+                webState: webState
+            )
         }
         if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
            case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
            webState.definition == .localDocument {
-            return (workspaceID, focusedPanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: focusedPanelID,
+                webState: webState
+            )
         }
         if let activePanelID = workspace.rightAuxPanel.activePanelID,
            case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
            webState.definition == .localDocument {
-            return (workspaceID, activePanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: activePanelID,
+                webState: webState
+            )
         }
         for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
@@ -1208,7 +1398,11 @@ private extension AppControlExecutor {
                   webState.definition == .localDocument else {
                 continue
             }
-            return (workspaceID, panelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: panelID,
+                webState: webState
+            )
         }
         throw AutomationSocketError.invalidPayload("workspace has no local document panel to target")
     }
@@ -1230,7 +1424,11 @@ private extension AppControlExecutor {
                   webState.definition == .browser else {
                 throw AutomationSocketError.invalidPayload("panelID is not a browser panel")
             }
-            return (location.workspaceID, panelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: location.workspaceID,
+                panelID: panelID,
+                webState: webState
+            )
         }
 
         let workspaceID = try resolveWorkspaceID(args: payload)
@@ -1241,17 +1439,29 @@ private extension AppControlExecutor {
            let panelState = workspace.panels[focusedPanelID],
            case .web(let webState) = panelState,
            webState.definition == .browser {
-            return (workspaceID, focusedPanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: focusedPanelID,
+                webState: webState
+            )
         }
         if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
            case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
            webState.definition == .browser {
-            return (workspaceID, focusedPanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: focusedPanelID,
+                webState: webState
+            )
         }
         if let activePanelID = workspace.rightAuxPanel.activePanelID,
            case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
            webState.definition == .browser {
-            return (workspaceID, activePanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: activePanelID,
+                webState: webState
+            )
         }
         for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
@@ -1260,7 +1470,11 @@ private extension AppControlExecutor {
                   webState.definition == .browser else {
                 continue
             }
-            return (workspaceID, panelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: panelID,
+                webState: webState
+            )
         }
         throw AutomationSocketError.invalidPayload("workspace has no browser panel to target")
     }
@@ -1282,7 +1496,11 @@ private extension AppControlExecutor {
                   webState.definition == .scratchpad else {
                 throw AutomationSocketError.invalidPayload("panelID is not a Scratchpad panel")
             }
-            return (location.workspaceID, panelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: location.workspaceID,
+                panelID: panelID,
+                webState: webState
+            )
         }
 
         let workspaceID = try resolveWorkspaceID(args: payload)
@@ -1293,24 +1511,40 @@ private extension AppControlExecutor {
            let panelState = workspace.panels[focusedPanelID],
            case .web(let webState) = panelState,
            webState.definition == .scratchpad {
-            return (workspaceID, focusedPanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: focusedPanelID,
+                webState: webState
+            )
         }
         if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
            case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
            webState.definition == .scratchpad {
-            return (workspaceID, focusedPanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: focusedPanelID,
+                webState: webState
+            )
         }
         if let activePanelID = workspace.rightAuxPanel.activePanelID,
            case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
            webState.definition == .scratchpad {
-            return (workspaceID, activePanelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: activePanelID,
+                webState: webState
+            )
         }
         for rightAuxTab in workspace.rightAuxPanel.orderedTabs {
             guard case .web(let webState) = rightAuxTab.panelState,
                   webState.definition == .scratchpad else {
                 continue
             }
-            return (workspaceID, rightAuxTab.panelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: rightAuxTab.panelID,
+                webState: webState
+            )
         }
         for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
@@ -1319,7 +1553,11 @@ private extension AppControlExecutor {
                   webState.definition == .scratchpad else {
                 continue
             }
-            return (workspaceID, panelID, webState)
+            return try scopedWebPanelTarget(
+                workspaceID: workspaceID,
+                panelID: panelID,
+                webState: webState
+            )
         }
         throw AutomationSocketError.invalidPayload("workspace has no Scratchpad panel to target")
     }
@@ -1355,7 +1593,11 @@ private extension AppControlExecutor {
                     throw AutomationSocketError.invalidPayload("panelID does not match sessionID Scratchpad")
                 }
             }
-            return (target.workspaceID, target.panelID, target.webState)
+            return try scopedWebPanelTarget(
+                workspaceID: target.workspaceID,
+                panelID: target.panelID,
+                webState: target.webState
+            )
         }
 
         return try resolveScratchpadTarget(payload: payload)

@@ -106,6 +106,8 @@ struct SidebarView: View {
         return lineHeight
     }()
     private static let sessionStatusesTopSpacing: CGFloat = 0
+    private static let workspaceScopeTagLabel = "scoped"
+    private static let workspaceScopeHelpText = "Automation limited to assigned workspaces. Sessions in the same workspace share access."
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
     private nonisolated static let workspaceDragActivationDistance: CGFloat = 4
@@ -666,7 +668,8 @@ struct SidebarView: View {
             chipKind: chipKind,
             detailText: normalizedSessionDetail(status.detail),
             cwd: Self.abbreviatedPathLabel(workspaceSessionStatus.cwd),
-            isLaterFlagged: isLaterFlagged
+            isLaterFlagged: isLaterFlagged,
+            isWorkspaceScoped: workspaceSessionStatus.isWorkspaceScoped
         )
         let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
         let selectedWorkspaceID = store.selectedWorkspaceID(in: windowID)
@@ -804,6 +807,10 @@ struct SidebarView: View {
 
                 if let chipKind {
                     sessionStatusChip(kind: chipKind)
+                }
+
+                if workspaceSessionStatus.isWorkspaceScoped {
+                    sessionWorkspaceScopeTag()
                 }
 
                 Spacer(minLength: 0)
@@ -1255,6 +1262,21 @@ struct SidebarView: View {
             )
     }
 
+    private func sessionWorkspaceScopeTag() -> some View {
+        Text(Self.workspaceScopeTagLabel)
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                ToastyTheme.sidebarSessionPathText.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+            .help(Self.workspaceScopeHelpText)
+            .accessibilityLabel("workspace-scoped")
+            .accessibilityHint(Self.workspaceScopeHelpText)
+    }
+
     @ViewBuilder
     private func sessionDetailLabel(
         _ text: String,
@@ -1495,11 +1517,16 @@ struct SidebarView: View {
         chipKind: SessionStatusKind?,
         detailText: String?,
         cwd: String?,
-        isLaterFlagged: Bool
+        isLaterFlagged: Bool,
+        isWorkspaceScoped: Bool = false
     ) -> String {
         var components = [agentName]
         if let chipKind {
             components.append(sessionStatusChipLabel(for: chipKind))
+        }
+        if isWorkspaceScoped {
+            components.append("workspace-scoped")
+            components.append(workspaceScopeHelpText)
         }
         if let detailText {
             components.append(detailText)

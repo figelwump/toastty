@@ -4,8 +4,17 @@ import Foundation
 
 @MainActor
 protocol ManagedAgentLaunchPlanning: AnyObject {
-    func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan
+    func prepareManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>?
+    ) throws -> ManagedAgentLaunchPlan
     func discardManagedLaunch(sessionID: String)
+}
+
+extension ManagedAgentLaunchPlanning {
+    func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan {
+        try prepareManagedLaunch(request, inheritedScopedWorkspaceIDs: nil)
+    }
 }
 
 @MainActor
@@ -63,7 +72,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         }
     }
 
-    func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan {
+    func prepareManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
         guard let sessionRuntimeStore else {
             throw AgentLaunchError.serviceUnavailable
         }
@@ -102,6 +114,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             codexStatusTrackingSource: request.agent == .codex ? codexStatusTrackingSource : nil,
             cwd: resolvedCWD,
             repoRoot: repoRoot,
+            scopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             at: launchStart
         )
         sessionRuntimeStore.updateStatus(

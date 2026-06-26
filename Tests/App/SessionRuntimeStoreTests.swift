@@ -6,6 +6,38 @@ import Testing
 @MainActor
 struct SessionRuntimeStoreTests {
     @Test
+    func scopeMutationUpdatesWorkspaceStatusProjection() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-scope",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "sess-scope",
+            status: SessionStatus(kind: .idle, summary: "Waiting"),
+            at: startedAt
+        )
+
+        #expect(store.workspaceStatuses(for: workspaceID).first?.isWorkspaceScoped == false)
+
+        #expect(store.setScope(sessionID: "sess-scope", workspaceIDs: []))
+        #expect(store.workspaceStatuses(for: workspaceID).first?.isWorkspaceScoped == true)
+
+        #expect(store.clearScope(sessionID: "sess-scope"))
+        #expect(store.workspaceStatuses(for: workspaceID).first?.isWorkspaceScoped == false)
+    }
+
+    @Test
     func stopSessionForPanelIfActiveStopsCurrentSession() {
         let store = SessionRuntimeStore()
         let panelID = UUID()

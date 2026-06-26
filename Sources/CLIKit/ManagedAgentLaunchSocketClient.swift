@@ -7,12 +7,14 @@ enum ManagedAgentLaunchSocketClient {
 
     static func prepareManagedLaunch(
         _ request: ManagedAgentLaunchRequest,
-        socketPath: String
+        socketPath: String,
+        callerSessionID: String? = nil
     ) throws -> ManagedAgentLaunchPreparation {
         let response = try ToasttySocketClient(socketPath: socketPath).send(
             AutomationRequestEnvelope(
                 requestID: UUID().uuidString,
                 command: commandName,
+                callerSessionID: callerSessionID,
                 payload: payload(for: request)
             )
         )
@@ -44,12 +46,14 @@ enum ManagedAgentLaunchSocketClient {
 
     static func managedLaunchPreflightDecision(
         token: String,
-        socketPath: String
+        socketPath: String,
+        callerSessionID: String? = nil
     ) throws -> ManagedAgentLaunchPreflightDecision {
         let response = try ToasttySocketClient(socketPath: socketPath).send(
             AutomationRequestEnvelope(
                 requestID: UUID().uuidString,
                 command: preflightDecisionCommandName,
+                callerSessionID: callerSessionID,
                 payload: ["token": .string(token)]
             )
         )

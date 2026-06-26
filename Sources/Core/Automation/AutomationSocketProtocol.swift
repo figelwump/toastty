@@ -61,6 +61,7 @@ public struct AutomationRequestEnvelope: Codable, Equatable, Sendable {
     public let kind: String
     public let requestID: String
     public let command: String
+    public let callerSessionID: String?
     public let payload: [String: AutomationJSONValue]
 
     private enum CodingKeys: String, CodingKey {
@@ -68,18 +69,21 @@ public struct AutomationRequestEnvelope: Codable, Equatable, Sendable {
         case kind
         case requestID
         case command
+        case callerSessionID
         case payload
     }
 
     public init(
         requestID: String,
         command: String,
+        callerSessionID: String? = nil,
         payload: [String: AutomationJSONValue] = [:]
     ) {
         self.protocolVersion = AutomationSocketProtocol.version
         self.kind = "request"
         self.requestID = requestID
         self.command = command
+        self.callerSessionID = callerSessionID
         self.payload = payload
     }
 
@@ -89,7 +93,22 @@ public struct AutomationRequestEnvelope: Codable, Equatable, Sendable {
         kind = try container.decode(String.self, forKey: .kind)
         requestID = try container.decode(String.self, forKey: .requestID)
         command = try container.decode(String.self, forKey: .command)
+        callerSessionID = try container.decodeIfPresent(String.self, forKey: .callerSessionID)
         payload = try container.decodeIfPresent([String: AutomationJSONValue].self, forKey: .payload) ?? [:]
+    }
+}
+
+public struct AutomationRequestContext: Equatable, Sendable {
+    public let callerSessionID: String?
+    public let commandName: String
+
+    public init(callerSessionID: String?, commandName: String) {
+        self.callerSessionID = callerSessionID
+        self.commandName = commandName
+    }
+
+    public static func unidentified(commandName: String) -> AutomationRequestContext {
+        AutomationRequestContext(callerSessionID: nil, commandName: commandName)
     }
 }
 

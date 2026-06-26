@@ -683,6 +683,24 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("Process Watch"))
     }
 
+    func testWorkspaceScopedSessionRendersScopedTag() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "scoped-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            scopedWorkspaceIDs: []
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(
+            textValues.contains(where: { $0.localizedCaseInsensitiveContains("scoped") }),
+            "Sidebar text values should include scoped tag text: \(textValues)"
+        )
+        XCTAssertTrue(
+            textValues.contains(where: { $0.localizedCaseInsensitiveContains("Automation limited to assigned workspaces") }),
+            "Sidebar accessibility text should describe workspace scope: \(textValues)"
+        )
+    }
+
     func testSidebarUnreadBackgroundUsesReadyGreenTint() throws {
         let unreadColor = try XCTUnwrap(
             NSColor(ToastyTheme.sidebarSessionUnreadBackground).usingColorSpace(.deviceRGB)
@@ -989,6 +1007,7 @@ final class SidebarViewTests: XCTestCase {
         agent: AgentKind = .codex,
         sessionStatus: SessionStatus,
         displayTitleOverride: String? = nil,
+        scopedWorkspaceIDs: Set<UUID>? = nil,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> NSView {
         try makeSidebarHarness(
@@ -996,6 +1015,7 @@ final class SidebarViewTests: XCTestCase {
             agent: agent,
             sessionStatus: sessionStatus,
             displayTitleOverride: displayTitleOverride,
+            scopedWorkspaceIDs: scopedWorkspaceIDs,
             sessionPanelPlacement: sessionPanelPlacement
         ).hostingView
     }
@@ -1012,6 +1032,7 @@ final class SidebarViewTests: XCTestCase {
         agent: AgentKind = .codex,
         sessionStatus: SessionStatus,
         displayTitleOverride: String? = nil,
+        scopedWorkspaceIDs: Set<UUID>? = nil,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
@@ -1035,6 +1056,7 @@ final class SidebarViewTests: XCTestCase {
             displayTitleOverride: displayTitleOverride,
             cwd: "/repo/sidebar",
             repoRoot: "/repo",
+            scopedWorkspaceIDs: scopedWorkspaceIDs,
             at: Date(timeIntervalSince1970: 1_700_000_000)
         )
         sessionRuntimeStore.updateStatus(

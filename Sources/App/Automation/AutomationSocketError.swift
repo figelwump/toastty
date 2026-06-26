@@ -1,4 +1,5 @@
 import CoreState
+import Foundation
 
 enum AutomationSocketError: Error {
     case invalidJSON
@@ -7,6 +8,7 @@ enum AutomationSocketError: Error {
     case unknownEventType
     case unknownCommand
     case invalidPayload(String)
+    case scopeDenied(workspaceID: UUID)
     case internalError(String)
 
     var response: AutomationResponseEnvelope {
@@ -32,6 +34,11 @@ enum AutomationSocketError: Error {
             return AutomationResponseError(code: "UNKNOWN_COMMAND", message: "command is not supported")
         case .invalidPayload(let message):
             return AutomationResponseError(code: "INVALID_PAYLOAD", message: message)
+        case .scopeDenied:
+            return AutomationResponseError(
+                code: "scope_denied",
+                message: "This workspace is outside your assigned scope. If the user explicitly assigned it, run toastty session scope add; otherwise stop and report."
+            )
         case .internalError(let message):
             return AutomationResponseError(code: "INTERNAL_ERROR", message: message)
         }

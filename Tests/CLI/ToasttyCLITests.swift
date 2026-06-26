@@ -105,6 +105,43 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func appControlRequestEnvelopeStampsCallerSessionID() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "query", "run", "terminal.visible-text",
+                "contains=needle",
+            ],
+            environment: ["TOASTTY_SESSION_ID": "caller-session"]
+        )
+
+        let request = try #require(
+            invocation.command.makeRequestEnvelope(
+                callerSessionID: "caller-session",
+                requestID: "req-1"
+            )
+        )
+
+        #expect(request.requestID == "req-1")
+        #expect(request.command == "app_control.run_query")
+        #expect(request.callerSessionID == "caller-session")
+        #expect(request.payload.string("id") == "terminal.visible-text")
+    }
+
+    @Test
+    func automationRequestEnvelopeDecodesLegacyPayloadWithoutCallerSessionID() throws {
+        let data = Data(
+            #"{"protocolVersion":"1.0","kind":"request","requestID":"req-legacy","command":"automation.ping","payload":{}}"#.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(AutomationRequestEnvelope.self, from: data)
+
+        #expect(decoded.requestID == "req-legacy")
+        #expect(decoded.command == "automation.ping")
+        #expect(decoded.callerSessionID == nil)
+        #expect(decoded.payload.isEmpty)
+    }
+
+    @Test
     func actionRunRejectsMalformedKeyValueArguments() {
         do {
             _ = try ToasttyCLI.parse(
@@ -397,6 +434,90 @@ struct ToasttyCLITests {
         #expect(sessionID == "sess-env")
         #expect(panelID == nil)
         #expect(reason == nil)
+    }
+
+    @Test
+    func sessionScopeCommandsDefaultSessionFromEnvironment() throws {
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "scope", "set",
+                "--workspace", workspaceID.uuidString,
+            ],
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-env",
+            ]
+        )
+
+        guard case .sessionScopeSet(let sessionID, let workspaceIDs) = invocation.command else {
+            Issue.record("expected session scope set command")
+            return
+        }
+
+        #expect(sessionID == "sess-env")
+        #expect(workspaceIDs == [workspaceID])
+
+        let request = try #require(
+            invocation.command.makeRequestEnvelope(
+                callerSessionID: "sess-env",
+                requestID: "scope-req"
+            )
+        )
+        #expect(request.command == "session.scope.set")
+        #expect(request.callerSessionID == "sess-env")
+        #expect(request.payload.string("sessionID") == "sess-env")
+        #expect(request.payload.stringArray("workspaceIDs") == [workspaceID.uuidString])
+
+        let setCurrentInvocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "scope", "set-current",
+            ],
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-env",
+                "TOASTTY_PANEL_ID": panelID.uuidString,
+            ]
+        )
+
+        guard case .sessionScopeSetCurrent(let currentSessionID, let currentPanelID) = setCurrentInvocation.command else {
+            Issue.record("expected session scope set-current command")
+            return
+        }
+
+        #expect(currentSessionID == "sess-env")
+        #expect(currentPanelID == panelID)
+
+        let setCurrentRequest = try #require(
+            setCurrentInvocation.command.makeRequestEnvelope(
+                callerSessionID: "sess-env",
+                requestID: "scope-current-req"
+            )
+        )
+        #expect(setCurrentRequest.command == "session.scope.set_current")
+        #expect(setCurrentRequest.callerSessionID == "sess-env")
+        #expect(setCurrentRequest.payload.string("sessionID") == "sess-env")
+        #expect(setCurrentRequest.payload.string("panelID") == panelID.uuidString)
+    }
+
+    @Test
+    func sessionScopeRejectsMissingSessionWhenEnvironmentUnavailable() {
+        do {
+            _ = try ToasttyCLI.parse(
+                arguments: [
+                    "session", "scope", "show",
+                ],
+                environment: [:]
+            )
+            Issue.record("expected parse failure")
+        } catch let error as ToasttyCLIError {
+            guard case .usage(let message) = error else {
+                Issue.record("expected usage error")
+                return
+            }
+            #expect(message.contains("--session is required"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
     }
 
     @Test

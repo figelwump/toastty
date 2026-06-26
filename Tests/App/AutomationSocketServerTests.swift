@@ -55,6 +55,97 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func sessionScopeCommandsMutateActiveSessionScope() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-scope-socket"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let setCurrentResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: "scope-set-current",
+                command: "session.scope.set_current",
+                callerSessionID: sessionID,
+                payload: [
+                    "sessionID": .string(sessionID),
+                    "panelID": .string(server.panelID.uuidString),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(setCurrentResponse.ok)
+        #expect(setCurrentResponse.result?.bool("isScoped") == true)
+        #expect(setCurrentResponse.result?.stringArray("workspaceIDs") == [])
+        #expect(setCurrentResponse.result?.stringArray("effectiveWorkspaceIDs") == [server.workspaceID.uuidString])
+        let currentOnlyScope = await MainActor.run {
+            server.sessionRuntimeStore.scope(ofSessionID: sessionID)
+        }
+        #expect(currentOnlyScope == Optional(Set<UUID>()))
+
+        let extraWorkspaceID = UUID()
+        let setResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: "scope-set",
+                command: "session.scope.set",
+                callerSessionID: sessionID,
+                payload: [
+                    "sessionID": .string(sessionID),
+                    "workspaceIDs": .array([.string(extraWorkspaceID.uuidString)]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(setResponse.ok)
+        #expect(setResponse.result?.bool("isScoped") == true)
+        #expect(setResponse.result?.stringArray("workspaceIDs") == [extraWorkspaceID.uuidString])
+        let storedScope = await MainActor.run {
+            server.sessionRuntimeStore.scope(ofSessionID: sessionID)
+        }
+        #expect(storedScope == Optional(Set([extraWorkspaceID])))
+
+        let clearResponse = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: "scope-clear",
+                command: "session.scope.clear",
+                callerSessionID: sessionID,
+                payload: [
+                    "sessionID": .string(sessionID),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(clearResponse.ok)
+        #expect(clearResponse.result?.bool("isScoped") == false)
+        let clearedScope = await MainActor.run {
+            server.sessionRuntimeStore.scope(ofSessionID: sessionID)
+        }
+        #expect(clearedScope == nil)
+    }
+
+    @Test
     func sessionStatusCanResolveActiveSessionWithoutPanelID() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
