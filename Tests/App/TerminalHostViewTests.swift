@@ -2110,6 +2110,48 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertFalse(usedAlternatePlacement)
     }
 
+    func testCommandClickHoveredLinkAllowsSmallDragJitter() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var openedURL: URL?
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { url, _ in
+            openedURL = url
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                location: NSPoint(x: 12, y: 12),
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseDragged(
+            with: try makeMouseEvent(
+                type: .leftMouseDragged,
+                window: window,
+                location: NSPoint(x: 14, y: 13),
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                location: NSPoint(x: 14, y: 13),
+                modifierFlags: [.command]
+            )
+        )
+
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+    }
+
     func testCommandClickHoveredLinkDragCancelsOpen() throws {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -2128,6 +2170,7 @@ final class TerminalHostViewTests: XCTestCase {
             with: try makeMouseEvent(
                 type: .leftMouseDown,
                 window: window,
+                location: NSPoint(x: 12, y: 12),
                 modifierFlags: [.command]
             )
         )
@@ -2135,6 +2178,7 @@ final class TerminalHostViewTests: XCTestCase {
             with: try makeMouseEvent(
                 type: .leftMouseDragged,
                 window: window,
+                location: NSPoint(x: 18, y: 12),
                 modifierFlags: [.command]
             )
         )
@@ -2142,6 +2186,41 @@ final class TerminalHostViewTests: XCTestCase {
             with: try makeMouseEvent(
                 type: .leftMouseUp,
                 window: window,
+                location: NSPoint(x: 18, y: 12),
+                modifierFlags: [.command]
+            )
+        )
+
+        XCTAssertEqual(openCallCount, 0)
+    }
+
+    func testCommandClickHoveredLinkMouseUpMovementCancelsOpenWithoutDragEvent() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var openCallCount = 0
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { _, _ in
+            openCallCount += 1
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                location: NSPoint(x: 12, y: 12),
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                location: NSPoint(x: 18, y: 12),
                 modifierFlags: [.command]
             )
         )

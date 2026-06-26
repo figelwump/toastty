@@ -38,15 +38,21 @@ final class TerminalHostView: NSView {
     private var trackedPressedModifierKeyCodes: [UInt16] = []
     private var markedText = NSMutableAttributedString(string: "")
     private var keyTextAccumulator: [String]?
-    private var pendingCommandClickLinkURL: URL?
-    private var pendingCommandClickLinkUsesAlternatePlacement = false
+    private var pendingCommandClickLinkOpen: PendingCommandClickLinkOpen?
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
+
+    private struct PendingCommandClickLinkOpen {
+        var url: URL
+        var usesAlternatePlacement: Bool
+        var initialEventWindowLocation: NSPoint
+    }
 
     private static let fileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
         .urlReadingFileURLsOnly: true,
     ]
     private static let searchWithGoogleMenuItemTitle = "Search with Google"
+    private static let commandClickDragCancellationDistance: CGFloat = 4
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     enum GhosttyMouseCursorStyle: Equatable {
@@ -1053,8 +1059,28 @@ final class TerminalHostView: NSView {
         if suppressFocusTransferLeftMouseSequence {
             return
         }
-        if pendingCommandClickLinkURL != nil {
-            clearPendingCommandClickLinkOpen()
+        if let pendingCommandClickLinkOpen {
+            if Self.commandClickDragCancellationExceeded(
+                from: pendingCommandClickLinkOpen.initialEventWindowLocation,
+                to: event.locationInWindow
+            ) {
+                ToasttyLog.info(
+                    "Canceled terminal command-click link open after drag movement",
+                    category: .input,
+                    metadata: commandClickLogMetadata(
+                        phase: "mouseDragged",
+                        event: event,
+                        url: pendingCommandClickLinkOpen.url,
+                        extraMetadata: [
+                            "alternate_placement": pendingCommandClickLinkOpen.usesAlternatePlacement ? "true" : "false",
+                            "initialEventWindowLocation": DraggableInteractionLog.pointDescription(
+                                pendingCommandClickLinkOpen.initialEventWindowLocation
+                            ),
+                        ]
+                    )
+                )
+                clearPendingCommandClickLinkOpen()
+            }
             return
         }
         guard forwardMousePosition(event) else {
@@ -1547,8 +1573,7 @@ final class TerminalHostView: NSView {
     }
 
     private func clearPendingCommandClickLinkOpen() {
-        pendingCommandClickLinkURL = nil
-        pendingCommandClickLinkUsesAlternatePlacement = false
+        pendingCommandClickLinkOpen = nil
     }
 
     private enum CommandClickLinkResolution {
@@ -1663,8 +1688,12 @@ final class TerminalHostView: NSView {
 
         // Reclaim explicit terminal Command-clicks before Ghostty sees the
         // mouse press so we do not leave its internal button state half-forwarded.
-        pendingCommandClickLinkURL = url
-        pendingCommandClickLinkUsesAlternatePlacement = event.modifierFlags.contains(.shift)
+        let usesAlternatePlacement = event.modifierFlags.contains(.shift)
+        pendingCommandClickLinkOpen = PendingCommandClickLinkOpen(
+            url: url,
+            usesAlternatePlacement: usesAlternatePlacement,
+            initialEventWindowLocation: event.locationInWindow
+        )
         ToasttyLog.info(
             "Armed terminal command-click link open",
             category: .input,
@@ -1673,7 +1702,7 @@ final class TerminalHostView: NSView {
                 event: event,
                 url: url,
                 extraMetadata: [
-                    "alternate_placement": pendingCommandClickLinkUsesAlternatePlacement ? "true" : "false",
+                    "alternate_placement": usesAlternatePlacement ? "true" : "false",
                 ]
             )
         )
@@ -1681,11 +1710,34 @@ final class TerminalHostView: NSView {
     }
 
     private func performPendingCommandClickLinkOpen(with event: NSEvent) -> Bool {
-        guard let url = pendingCommandClickLinkURL else {
+        guard let pendingCommandClickLinkOpen else {
             return false
         }
-        let useAlternatePlacement = pendingCommandClickLinkUsesAlternatePlacement
+        let url = pendingCommandClickLinkOpen.url
+        let useAlternatePlacement = pendingCommandClickLinkOpen.usesAlternatePlacement
+        let initialEventWindowLocation = pendingCommandClickLinkOpen.initialEventWindowLocation
         clearPendingCommandClickLinkOpen()
+        if Self.commandClickDragCancellationExceeded(
+            from: initialEventWindowLocation,
+            to: event.locationInWindow
+        ) {
+            ToasttyLog.info(
+                "Canceled terminal command-click link open after mouse-up movement",
+                category: .input,
+                metadata: commandClickLogMetadata(
+                    phase: "mouseUp",
+                    event: event,
+                    url: url,
+                    extraMetadata: [
+                        "alternate_placement": useAlternatePlacement ? "true" : "false",
+                        "initialEventWindowLocation": DraggableInteractionLog.pointDescription(
+                            initialEventWindowLocation
+                        ),
+                    ]
+                )
+            )
+            return true
+        }
         // Once the press is reclaimed for app-owned Command-click handling, the
         // matching release must stay local too, even if Command is released first.
         guard event.modifierFlags.contains(.command) else {
@@ -1734,6 +1786,13 @@ final class TerminalHostView: NSView {
         return true
     }
 
+    private static func commandClickDragCancellationExceeded(from start: NSPoint, to current: NSPoint) -> Bool {
+        let deltaX = current.x - start.x
+        let deltaY = current.y - start.y
+        let distanceSquared = (deltaX * deltaX) + (deltaY * deltaY)
+        return distanceSquared >= commandClickDragCancellationDistance * commandClickDragCancellationDistance
+    }
+
     private func currentHoveredGhosttyLinkResolution() -> CommandClickLinkResolution? {
         guard let ghosttyMouseOverLinkURL else {
             return nil
@@ -1763,7 +1822,7 @@ final class TerminalHostView: NSView {
             "shift": event.modifierFlags.contains(.shift) ? "true" : "false",
             "hasGhosttySurface": ghosttySurface == nil ? "false" : "true",
             "cachedHoverURL": ghosttyMouseOverLinkURL ?? "nil",
-            "pendingURL": pendingCommandClickLinkURL?.absoluteString ?? "nil",
+            "pendingURL": pendingCommandClickLinkOpen?.url.absoluteString ?? "nil",
             "syntheticLinkHoverRefreshSuppressionCount": "\(syntheticLinkHoverRefreshSuppressionCount)",
         ]
         if let url {
