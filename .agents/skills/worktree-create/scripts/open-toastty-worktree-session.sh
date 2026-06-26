@@ -275,7 +275,9 @@ fi
 
 terminal_available="false"
 panel_id=""
+session_id=""
 launch_command=""
+scope_set="false"
 
 if [[ -z "$startup_command" ]]; then
   launch_output=""
@@ -307,9 +309,28 @@ if [[ -z "$startup_command" ]]; then
 
   if [[ "$launch_succeeded" == "true" ]]; then
     panel_id="$(extract_json_result_field "panelID" <<<"$launch_output")"
+    if ! session_id="$(extract_json_result_field "sessionID" <<<"$launch_output" 2>/dev/null)"; then
+      echo "error: agent.launch response did not include sessionID; cannot scope workspace handoff" >&2
+      echo "warning: workspace $workspace_id and panel $panel_id were already created; the child may be running unscoped" >&2
+      printf '%s\n' "$launch_output" >&2
+      exit 1
+    fi
     launch_command="$(extract_json_result_field "command" <<<"$launch_output")"
     startup_command="$launch_command"
     terminal_available="true"
+
+    scope_output=""
+    if ! scope_output="$(
+      run_cli_json session scope set \
+        --session "$session_id" \
+        --workspace "$workspace_id" 2>&1
+    )"; then
+      echo "error: failed to scope session $session_id to workspace $workspace_id" >&2
+      echo "warning: workspace $workspace_id and session $session_id were already created; the child may be running unscoped" >&2
+      printf '%s\n' "$scope_output" >&2
+      exit 1
+    fi
+    scope_set="true"
   elif [[ "$agent_command" == "codex" || "$agent_command" == "claude" ]]; then
     echo "error: failed to launch managed agent with agent.launch: $launch_output" >&2
     exit 1
@@ -356,11 +377,11 @@ if [[ "$terminal_available" != "true" ]]; then
 fi
 
 if [[ "$json_output" == "1" ]]; then
-  python3 - "$workspace_name" "$worktree_path" "$handoff_file" "$window_id" "$workspace_id" "$panel_id" "$startup_command" "$terminal_available" <<'PY'
+  python3 - "$workspace_name" "$worktree_path" "$handoff_file" "$window_id" "$workspace_id" "$panel_id" "$session_id" "$scope_set" "$startup_command" "$terminal_available" <<'PY'
 import json
 import sys
 
-workspace_name, worktree_path, handoff_file, window_id, workspace_id, panel_id, startup_command, terminal_available = sys.argv[1:]
+workspace_name, worktree_path, handoff_file, window_id, workspace_id, panel_id, session_id, scope_set, startup_command, terminal_available = sys.argv[1:]
 payload = {
     "workspace_name": workspace_name,
     "worktree_path": worktree_path,
@@ -368,6 +389,8 @@ payload = {
     "window_id": window_id or None,
     "workspace_id": workspace_id,
     "panel_id": panel_id,
+    "session_id": session_id or None,
+    "scope_set": scope_set == "true",
     "startup_command": startup_command,
     "terminal_available": terminal_available == "true",
 }
@@ -381,6 +404,8 @@ handoff_file=$handoff_file
 window_id=$window_id
 workspace_id=$workspace_id
 panel_id=$panel_id
+session_id=$session_id
+scope_set=$scope_set
 terminal_available=$terminal_available
 EOF
 fi

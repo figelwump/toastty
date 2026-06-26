@@ -53,6 +53,7 @@ Use this workflow when the current thread should continue in a fresh git worktre
    - If there is no durable plan file yet and no detailed plan exists in-thread, put a concise task-specific plan directly in `WORKTREE_HANDOFF.md`.
 9. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
    - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and starts the new terminal command in the left terminal pane.
+   - For the structured `agent.launch` path, the helper immediately scopes the launched child session to the newly created workspace with `session scope set --session <child-session-id> --workspace <new-workspace-id>`. This is a cooperative post-launch scope; treat a scope failure as a launch failure, but report that the workspace/session may already exist.
    - Background-created workspaces stay marked as new in the sidebar until the user visits them once.
    - The startup command launches `codex` by default. If the user explicitly requested a different agent for the new session, pass it with `--agent-command <name>` (for example `--agent-command claude`); otherwise omit the flag.
    - If the user explicitly requested commands that must run inside the launched terminal immediately before the agent starts, pass each command with `--initial-command <command>` so the helper keeps the structured `agent.launch` path. For example, `--initial-command "direnv allow"` runs after `cd <worktree>` and before the agent prompt. If an initial command fails, the agent command is stopped in the terminal, but the workspace creation helper may already have reported launch success.
@@ -65,7 +66,10 @@ Use this workflow when the current thread should continue in a fresh git worktre
   --json
 ```
 
-10. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, handoff file path, and whether setup was skipped or which explicit setup commands ran.
+10. Parse the launch helper output to get `workspace_id`, `panel_id`, `session_id`, and `scope_set`.
+    - `session_id` is present and `scope_set` is `true` for structured managed launches.
+    - `session_id` is absent and `scope_set` is `false` only for `--startup-command` or fallback `terminal.send-text` launches; use those paths only for explicit validation or fully custom shell setup.
+11. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, scope status, handoff file path, and whether setup was skipped or which explicit setup commands ran.
 
 ## Handoff file contents
 
@@ -106,6 +110,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 - The handoff file must exist before launching the new agent session.
 - The default workspace layout is terminal on the left and the handoff markdown file in the right panel.
 - The default launch should use `agent.launch` with structured `cwd`, `initialCommands`, environment, and `initialPrompt` arguments so the new background workspace starts without a separate `terminal.send-text` injection. The launched command still `cd`s into the new worktree, runs any `--initial-command` single-line shell snippets in order with `&&`, and starts the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. The agent CLI is `codex` unless the user explicitly requested a different agent; honor an explicit request with `--agent-command`.
+- After a structured `agent.launch` succeeds, scope the child session to the created workspace by calling `session scope set --session <sessionID> --workspace <workspaceID>` from the parent. Do not use `session scope set-current` for this handoff; that command can only target the current session and panel. The helper performs this scope call automatically and reports `scope_set`. Because the scope API runs after launch returns the child `sessionID`, this is cooperative workspace isolation, not a hard pre-exec sandbox.
 - `--startup-command` is the explicit escape hatch for validation or fully custom shell setup. It replaces the structured agent launch path and uses `terminal.send-text` after resolving the terminal panel. Do not combine it with `--agent-command` or `--initial-command`.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
@@ -118,7 +123,13 @@ When the parent thread already has a full implementation plan, prefer the follow
 
 ## Validation
 
-- After launch, confirm the helper returned the new `workspaceID` and terminal `panelID`.
+- After launch, confirm the helper returned the new workspace ID, terminal panel ID, child session ID, and `scope_set=true` for the default structured launch.
+- If debugging lower-level calls, verify scope directly:
+
+```bash
+"$TOASTTY_CLI_PATH" --json session scope show --session "$SESSION_ID"
+```
+
 - Confirm the original workspace stayed visible while the new workspace was provisioned.
 - Confirm the handoff document opened in the right panel of the new workspace.
 - Confirm setup was handled according to the current repo's instructions: either explicit setup commands ran successfully, or no clear setup requirement was found and setup was skipped.

@@ -195,6 +195,8 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("\"window_id\": \"11111111-1111-1111-1111-111111111111\""))
         XCTAssertTrue(result.stdout.contains("\"workspace_id\": \"44444444-4444-4444-4444-444444444444\""))
         XCTAssertTrue(result.stdout.contains("\"panel_id\": \"55555555-5555-5555-5555-555555555555\""))
+        XCTAssertTrue(result.stdout.contains("\"session_id\": null"))
+        XCTAssertTrue(result.stdout.contains("\"scope_set\": false"))
 
         let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
         let invocationLines = invocations
@@ -204,6 +206,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(invocationLines.contains("--json query run terminal.state --panel 33333333-3333-3333-3333-333333333333"))
         XCTAssertTrue(invocationLines.contains("--json action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke activate=false"))
         XCTAssertFalse(invocationLines.contains(where: { $0.contains("workspace.snapshot") }))
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("session scope set") }))
         XCTAssertTrue(invocationLines.contains("action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path)"))
         XCTAssertTrue(invocationLines.contains("--json query run terminal.state --workspace 44444444-4444-4444-4444-444444444444"))
 
@@ -244,6 +247,10 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertEqual(result.stderr, "")
 
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["session_id"] as? String, "66666666-6666-6666-6666-666666666666")
+        XCTAssertEqual(payload["scope_set"] as? Bool, true)
+
         let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
         XCTAssertTrue(agentLaunchLine.contains("profileID=codex"))
         XCTAssertTrue(agentLaunchLine.contains("cwd=\(worktreeURL.path)"))
@@ -252,6 +259,96 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(agentLaunchLine.contains("initialPrompt=Read WORKTREE_HANDOFF.md in the repo"))
         XCTAssertFalse(agentLaunchLine.contains("profileID=cdx"))
         XCTAssertFalse(try hasSendTextInvocation(invocationLogURL: invocationLogURL))
+
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        let invocationLines = invocations
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+    }
+
+    func testOpenSessionScriptFailsClearlyWhenAgentLaunchOmitsSessionID() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-missing-session")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_AGENT_LAUNCH_MISSING_SESSION": "1",
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertTrue(result.stderr.contains("agent.launch response did not include sessionID"))
+        XCTAssertTrue(result.stderr.contains("may be running unscoped"))
+
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        let invocationLines = invocations
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("session scope set") }))
+    }
+
+    func testOpenSessionScriptFailsClearlyWhenScopeSetFails() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-scope-failure")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_SCOPE_FAILURE": "1",
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertTrue(result.stderr.contains("failed to scope session 66666666-6666-6666-6666-666666666666"))
+        XCTAssertTrue(result.stderr.contains("may be running unscoped"))
+
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        let invocationLines = invocations
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
     }
 
     func testOpenSessionScriptHonorsAgentCommandOverride() throws {
@@ -462,8 +559,25 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             EOF
                 ;;
               \"action run agent.launch\")
+                if [ "${FAKE_AGENT_LAUNCH_MISSING_SESSION:-0}" = "1" ]; then
+                  cat <<'EOF'
+            {"result":{"profileID":"codex","agent":"codex","displayName":"Codex","windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444","panelID":"55555555-5555-5555-5555-555555555555","command":"cd /tmp/worktree && codex prompt","cwd":"/tmp/worktree"}}
+            EOF
+                  exit 0
+                fi
                 cat <<'EOF'
             {"result":{"profileID":"codex","agent":"codex","displayName":"Codex","sessionID":"66666666-6666-6666-6666-666666666666","windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444","panelID":"55555555-5555-5555-5555-555555555555","command":"cd /tmp/worktree && codex prompt","cwd":"/tmp/worktree"}}
+            EOF
+                ;;
+              \"session scope set\")
+                if [ "${FAKE_SCOPE_FAILURE:-0}" = "1" ]; then
+                  cat <<'EOF'
+            {"error":{"code":"scope_failed","message":"scope failure"}}
+            EOF
+                  exit 1
+                fi
+                cat <<'EOF'
+            {"result":{"sessionID":"66666666-6666-6666-6666-666666666666","isScoped":true,"workspaceIDs":["44444444-4444-4444-4444-444444444444"],"effectiveWorkspaceIDs":["44444444-4444-4444-4444-444444444444"]}}
             EOF
                 ;;
               \"action run terminal.send-text\")
