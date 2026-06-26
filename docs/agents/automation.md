@@ -14,6 +14,7 @@ Use `--require-remote` when the remote path itself must succeed. Supported smoke
 
 - `smoke-ui`
 - `workspace-tabs`
+- `workspace-scope`
 - `shortcut-hints`
 - `shortcut-trace`
 
@@ -47,6 +48,7 @@ Use local smoke helpers only when the user explicitly wants a local run, the che
 
 - `smoke-ui.sh`: builds/runs app in automation mode, drives socket actions, emits screenshots/state dumps, and restores the previously frontmost app after Toastty is ready.
 - `smoke-cli-live-control.sh`: builds/runs app in a normal runtime-isolated launch, then validates the CLI's always-on `action`/`query` surface against that exact instance via `instance.json`.
+- `workspace-scope-smoke.sh`: builds/runs app in a normal runtime-isolated launch, then validates cooperative workspace scope through the CLI and socket path, including `scope_denied`, `session scope add`, and `session scope clear`.
 - `shortcut-hints-smoke.sh`: builds/runs app in automation mode, captures one screenshot focused on visible shortcut hints, emits a matching state dump, and restores the previously frontmost app.
 - `shortcut-trace.sh`: drives real keyboard shortcuts through AppKit and verifies split/focus/resize workflows.
 
@@ -97,6 +99,8 @@ Artifacts are stored in `artifacts/` (gitignored). Manual captures go in `artifa
 Common smoke env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
 
 CLI live-control env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `ARCH`, `TOASTTY_CLI_LIVE_RESTORE_FRONT_APP`.
+
+Workspace-scope env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `ARCH`, `TOASTTY_WORKSPACE_SCOPE_RESTORE_FRONT_APP`.
 
 Shortcut-hints env: `RUN_ID`, `FIXTURE`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`, `TOASTTY_SHORTCUT_HINTS_RESTORE_FRONT_APP`.
 

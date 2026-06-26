@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd -P)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 source "$ROOT_DIR/scripts/automation/runtime-ownership.sh"
 
 RUN_ID="${RUN_ID:-workspace-scope-smoke-$(date +%Y%m%d-%H%M%S)}"

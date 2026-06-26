@@ -155,6 +155,18 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_WORKSPACE_TABS_SCREENSHOT_TIMEOUT` | `10` | Timeout in seconds for screenshot capture socket requests, which can take longer than ordinary state queries. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
+### `scripts/automation/workspace-scope-smoke.sh`
+
+| Variable | Default | Effect |
+|---|---|---|
+| `RUN_ID` | timestamped `workspace-scope-smoke-*` value | Run ID passed through to the app and used for the smoke session ID. |
+| `TOASTTY_WORKSPACE_SCOPE_RESTORE_FRONT_APP` | `1` | When truthy, the script restores the previously frontmost app after Toastty is ready so local CLI/socket runs minimize focus theft. |
+| `DEV_RUN_ROOT` | `artifacts/dev-runs/<RUN_ID>` | Root directory for this workspace-scope smoke run's isolated derived data, runtime home, and artifacts. |
+| `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
+| `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
+| `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs, including the captured `scope_denied` response. |
+| `ARCH` | `arm64` | Build destination architecture. |
+
 ### `scripts/automation/shortcut-trace.sh`
 
 | Variable | Default | Effect |
@@ -195,7 +207,7 @@ Shortcut-trace permissions note:
 
 CLI notes:
 
-- `--smoke-test smoke-ui|workspace-tabs|shortcut-hints|shortcut-trace` is the primary supported mode. It runs that smoke test on the remote host after syncing the requested scope.
+- `--smoke-test smoke-ui|workspace-tabs|workspace-scope|shortcut-hints|shortcut-trace` is the primary supported mode. It runs that smoke test on the remote host after syncing the requested scope.
 - `--scope working-tree` syncs the current local working tree, including uncommitted changes, into a disposable remote worktree.
 - `--scope head` exports the current checked-out commit without uncommitted changes.
 - `--scope ref --ref <rev>` exports an explicit local git ref.
