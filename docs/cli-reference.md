@@ -154,7 +154,7 @@ Scratchpad actions are intended for agent and automation integrations:
   context on the final agent command and are not exported to
   `initialCommands`; `initialPrompt` is appended only for supported profiles.
   Callers own side effects and trust changes in `initialCommands`, such as
-  `direnv allow`. Built-in `codex`, `claude`, and `pi` automation launches work
+  `direnv allow`. Built-in `codex`, `claude`, `opencode`, `mimocode`, and `pi` automation launches work
   even when the user has not created `~/.toastty/agents.toml`. CLI/app-control
   `agent.launch` preserves the current AppKit first responder; focus the target
   workspace or panel separately when it should become the interactive keyboard
@@ -369,7 +369,7 @@ toastty session stop --session <id> [--panel <id>] [--reason <text>]
 
 ### `session ingest-agent-event`
 
-Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, OpenCode, MiMo Code, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, Codex hook/notify events, and provider-native resume-record updates.
+Process agent lifecycle events from stdin. This is a CLI-local command used by the built-in Claude, Codex, OpenCode, MiMo Code, and Pi instrumentation. It reads structured event JSON from stdin and translates it into source-specific socket events, including status updates, stops, file updates, Codex hook/notify events, and provider-native resume-record updates when the source supports them.
 
 ```
 toastty session ingest-agent-event --source <source> [--session <id>] [--panel <id>]

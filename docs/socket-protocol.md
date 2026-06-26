@@ -16,7 +16,7 @@ Important scope note:
 CLI note:
 
 - The repo ships a `toastty` CLI wrapper for app control (`action` / `query`), notifications, and the `session` subcommands.
-- Toastty-managed Claude, Codex, and Pi launches primarily use
+- Toastty-managed Claude, Codex, OpenCode, MiMo Code, and Pi launches primarily use
   `session ingest-agent-event` to translate provider events into session
   events. Most provider events become `session.status` updates. Codex status
   hooks become `session.codex_hook_event`, and Codex notify completions become
@@ -675,12 +675,12 @@ Behavior:
 
 Launches a configured agent profile into a resolved terminal panel. Toastty
 records the baseline session in-app before injecting the provider command and
-passes `TOASTTY_*` launch context with the command. For first-party Claude and
-Codex launches, Toastty also generates or uses helper scripts that call
-`toastty session ingest-agent-event` so provider events become session updates
-automatically. If the agent does not emit `session.stop`, Toastty falls back to
-stopping the session when the panel returns to an interactive shell prompt or
-the panel closes.
+passes `TOASTTY_*` launch context with the command. For first-party Claude,
+Codex, OpenCode, MiMo Code, and Pi launches, Toastty also generates or uses
+helpers that call `toastty session ingest-agent-event` so provider events become
+session updates automatically. If the agent does not emit `session.stop`,
+Toastty falls back to stopping the session when the panel returns to an
+interactive shell prompt or the panel closes.
 
 Launch context environment:
 

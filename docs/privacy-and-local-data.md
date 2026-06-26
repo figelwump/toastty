@@ -9,7 +9,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/config-reference`
   - Generated commented reference for every supported Toastty config key. Toastty rewrites this file on launch and when you open `Toastty > Open Config Reference…`.
 - `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/bin/` when runtime isolation is enabled and agent command shims are enabled
-  - Managed `codex`, `claude`, and `pi` wrapper symlinks used to track manual agent invocations inside Toastty terminals.
+  - Managed `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, and `pi` wrapper symlinks used to track manual agent invocations inside Toastty terminals.
 - macOS `UserDefaults` for Toastty
   - Small UI-managed settings such as the post-agent-launch sidebar default latch, plus any one-time legacy migration state.
 - `~/.toastty/terminal-profiles.toml`

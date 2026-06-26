@@ -4,7 +4,7 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 ## Quick start
 
-1. If you want to type `codex`, `cdx`, `claude`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
+1. If you want to type `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
 2. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…` or open `Get Started…` and choose `Set Up Agent Status Hooks`
 3. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
 4. Uncomment or add a profile in `~/.toastty/agents.toml`
@@ -13,7 +13,7 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 Toastty sends the configured command into the focused terminal panel and starts tracking the session automatically.
 
-Automation can also launch managed `codex`, `claude`, or `pi` sessions through
+Automation can also launch managed `codex`, `claude`, `opencode`, `mimocode`, or `pi` sessions through
 `agent.launch` without an `agents.toml` profile. Configure `agents.toml` when
 you want manual UI launch entries, shortcuts, custom argv, wrapper shim names,
 or custom initial-prompt support.
@@ -31,6 +31,14 @@ shortcutKey = "c"
 [claude]
 displayName = "Claude Code"
 argv = ["claude"]
+
+[opencode]
+displayName = "OpenCode"
+argv = ["opencode"]
+
+[mimocode]
+displayName = "MiMo Code"
+argv = ["mimo"]
 
 [pi]
 displayName = "Pi"
@@ -114,7 +122,7 @@ If two agent profiles share the same `shortcutKey`, or an agent shortcut conflic
 
 ## Well-known profile IDs
 
-Toastty recognizes three well-known profile IDs that receive first-party instrumentation: `codex`, `claude`, and `pi`. Any other ID launches the configured command without agent-specific wiring.
+Toastty recognizes five well-known profile IDs that receive first-party instrumentation: `codex`, `claude`, `opencode`, `mimocode`, and `pi`. Any other ID launches the configured command without agent-specific wiring.
 
 ### How matching works
 
@@ -386,7 +394,7 @@ Every agent launched through Toastty receives these environment variables, set i
 |---|---|
 | `TOASTTY_SESSION_ID` | Unique session UUID |
 | `TOASTTY_PANEL_ID` | UUID of the terminal panel the agent was launched into |
-| `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude, Codex, and Pi helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
+| `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude, Codex, OpenCode, MiMo Code, and Pi helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
 | `TOASTTY_CLI_PATH` | Path to the bundled `toastty` CLI executable |
 | `TOASTTY_CWD` | Resolved launch working directory: explicit automation `cwd` when supplied, otherwise the target or restored panel working directory when available |
 | `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |
@@ -420,7 +428,7 @@ Watched commands are intentionally not later-flaggable. The watch itself is alre
 
 ## Custom and third-party agents
 
-For agents that are not `codex`, `claude`, or `pi`, Toastty still provides the base `TOASTTY_*` session context. Toastty has already created the session before your command starts, so the agent (or a wrapper script) should update and stop that existing session via the injected `TOASTTY_CLI_PATH`:
+For agents that are not one of Toastty's built-in instrumented IDs (`codex`, `claude`, `opencode`, `mimocode`, or `pi`), Toastty still provides the base `TOASTTY_*` session context. Toastty has already created the session before your command starts, so the agent (or a wrapper script) should update and stop that existing session via the injected `TOASTTY_CLI_PATH`:
 
 ```bash
 "$TOASTTY_CLI_PATH" session status --session "$TOASTTY_SESSION_ID" --kind working --summary "Thinking"
@@ -431,7 +439,7 @@ For agents that are not `codex`, `claude`, or `pi`, Toastty still provides the b
 
 Manual integrations can report any supported session state, including `error`, through `session status --kind ...`.
 
-The `toastty session ingest-agent-event` subcommand is a CLI-local helper for the built-in Claude, Codex, and Pi instrumentation. It is not a general-purpose integration point.
+The `toastty session ingest-agent-event` subcommand is a CLI-local helper for built-in Claude, Codex, OpenCode, MiMo Code, and Pi instrumentation. It is not a general-purpose integration point.
 
 ## Instructions for agents
 
@@ -444,6 +452,8 @@ If a user asks you to help configure Toastty agent profiles, your goal is to pro
 3. Prefer Toastty's well-known profile IDs when they apply:
    - Use profile ID `codex` when the launch command is Codex
    - Use profile ID `claude` when the launch command is Claude Code
+   - Use profile ID `opencode` when the launch command is OpenCode
+   - Use profile ID `mimocode` when the launch command is MiMo Code, even when the executable is `mimo`
    - Use profile ID `pi` when the launch command is Pi
 4. For any other agent, choose a lowercase ID that matches Toastty's ID rules and reflects the command being launched, such as `gemini` or `amp`.
 5. Propose the exact `agents.toml` contents to the user before writing the file. Confirm profile IDs, display names, launch commands, and optional shortcuts.
@@ -466,12 +476,14 @@ Common launch commands you may encounter include:
 |---|---|---|
 | Codex | `codex` | `codex` |
 | Claude Code | `claude` | `claude` |
+| OpenCode | `opencode` | `opencode` |
+| MiMo Code | `mimo` or `mimocode` | `mimocode` |
 | Pi | `pi` | `pi` |
 | Gemini CLI | `gemini` or `gemini-cli` | match the executable name |
 | Aider | `aider` | `aider` |
 | Custom wrapper | absolute path or script name | stable lowercase ID that matches the wrapper |
 
-The command you detect should usually become the first element of `argv`. For agents other than `codex`, `claude`, and `pi`, prefer using the executable name as the profile ID when that produces a valid Toastty ID. Include additional fixed flags in later array entries only when the user wants them every time Toastty launches that profile.
+The command you detect should usually become the first element of `argv`. For agents other than Toastty's built-in instrumented IDs, prefer using the executable name as the profile ID when that produces a valid Toastty ID. Include additional fixed flags in later array entries only when the user wants them every time Toastty launches that profile.
 
 ### Generation rules
 
@@ -481,7 +493,7 @@ Generate TOML that follows the same schema documented above:
 - `argv` must be a TOML string array
 - `shortcutKey` is optional and must be a single ASCII letter or digit
 
-Remember that only the profile IDs `codex`, `claude`, and `pi` receive first-party Toastty instrumentation. If you launch one of those agents under another ID, the command still runs, but Toastty will not inject the built-in session hooks for that agent.
+Remember that only the profile IDs `codex`, `claude`, `opencode`, `mimocode`, and `pi` receive first-party Toastty instrumentation. If you launch one of those agents under another ID, the command still runs, but Toastty will not inject the built-in session hooks for that agent.
 
 ### Example suggestion
 
@@ -507,7 +519,7 @@ If the user confirms, you can create or update `~/.toastty/agents.toml` with the
 
 **"The target terminal is not at an interactive prompt"** — Toastty asks Ghostty whether the terminal surface is currently at a prompt. Wait for the current command to finish, or use a different panel.
 
-**Agent launches but sidebar does not update** — If the profile ID is not `codex`, `claude`, or `pi`, Toastty does not inject instrumentation automatically. Either use a well-known profile ID or report status manually via the `toastty` CLI. For Pi, `--no-extensions` and `-ne` intentionally disable Toastty's injected extension for that launch.
+**Agent launches but sidebar does not update** — If the profile ID is not `codex`, `claude`, `opencode`, `mimocode`, or `pi`, Toastty does not inject instrumentation automatically. Either use a well-known profile ID or report status manually via the `toastty` CLI. For OpenCode and MiMo Code, an existing `OPENCODE_CONFIG_CONTENT` or `MIMOCODE_CONFIG_CONTENT` value makes Toastty preserve the caller's config and skip its status plugin. For Pi, `--no-extensions` and `-ne` intentionally disable Toastty's injected extension for that launch.
 
 **Shortcut does not work** — Check for conflicts with other agent or terminal-profile shortcuts. Toastty logs a warning when it detects a conflict.
 

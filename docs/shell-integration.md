@@ -16,9 +16,9 @@ If you keep shell startup files in version control, the installer is still the e
 
 This is command-history restore only. It does not restore running programs, SSH sessions, REPL state, shell-local variables, or half-typed input.
 
-The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `cdx`, `claude`, `pi`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
+The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
 
-Source the Toastty snippet after other `PATH`, history, and prompt-hook changes. It does not need to be the literal last line, but anything that rewrites `PATH`, replaces `PROMPT_COMMAND`, or overwrites prompt hooks after it can undo Toastty's shim ordering or prompt-time journal/title hooks.
+Source the Toastty snippet after other `PATH`, history, and prompt-hook changes. It does not need to be the literal last line. Toastty reasserts its shim directory from prompt/preexec hooks when possible, but anything that replaces `PROMPT_COMMAND` or overwrites prompt hooks after it can still undo Toastty's journal/title hooks.
 
 Shell integration installation is disabled while runtime isolation is enabled, because sandboxed dev/test runs must not rewrite your login shell files.
 
@@ -131,20 +131,29 @@ _toastty_emit_title() {
 }
 
 _toastty_precmd() {
+	local toastty_status=$?
+	_toastty_restore_agent_shim_path
 	if [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
 		_toastty_import_pane_journal_if_needed
 		_toastty_append_pending_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"
 	_toastty_emit_title "$cwd"
+	return $toastty_status
 }
 
 _toastty_preexec() {
+	local toastty_status=$?
 	local entry="$1"
+	# Keep multiline commands intact in the journal; titles use the first line.
 	local cmd="${entry%%$'\n'*}"
+
 	unset _TOASTTY_PENDING_JOURNAL_ENTRY
-	_toastty_command_should_write_pane_journal "$entry" && typeset -g _TOASTTY_PENDING_JOURNAL_ENTRY="$entry"
+	if _toastty_command_should_write_pane_journal "$entry"; then
+		typeset -g _TOASTTY_PENDING_JOURNAL_ENTRY="$entry"
+	fi
 	_toastty_emit_title "$cmd"
+	return $toastty_status
 }
 
 if [[ -o interactive ]]; then
@@ -191,6 +200,7 @@ _toastty_restore_agent_shim_path() {
 		PATH+=":$entry"
 	done
 	export PATH
+	[[ "$PATH" == "$old_path" ]] || hash -r 2>/dev/null || true
 }
 
 _toastty_ensure_pane_journal_directory() {
@@ -328,12 +338,15 @@ _toastty_emit_title() {
 }
 
 _toastty_prompt_command() {
+	local toastty_status=$?
+	_toastty_restore_agent_shim_path
 	if [[ -n "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]]; then
 		_toastty_prepare_history_for_prompt_if_needed
 		_toastty_append_last_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"
 	_toastty_emit_title "$cwd"
+	return "$toastty_status"
 }
 
 if [[ $- == *i* ]]; then
