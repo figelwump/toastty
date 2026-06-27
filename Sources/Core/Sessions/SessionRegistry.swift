@@ -300,7 +300,8 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             cwd: record.cwd,
             updatedAt: record.updatedAt,
             isActive: record.isActive,
-            isWorkspaceScoped: record.scopedWorkspaceIDs != nil
+            scopedWorkspaceIDs: record.scopedWorkspaceIDs,
+            effectiveScopedWorkspaceIDs: record.scopedWorkspaceIDs.map { $0.union([record.workspaceID]) }
         )
     }
 

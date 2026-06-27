@@ -29,7 +29,12 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
     public var cwd: String?
     public var updatedAt: Date
     public var isActive: Bool
-    public var isWorkspaceScoped: Bool
+    public var scopedWorkspaceIDs: Set<UUID>?
+    public var effectiveScopedWorkspaceIDs: Set<UUID>?
+
+    public var isWorkspaceScoped: Bool {
+        scopedWorkspaceIDs != nil
+    }
 
     public init(
         sessionID: String,
@@ -40,7 +45,8 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         cwd: String?,
         updatedAt: Date,
         isActive: Bool,
-        isWorkspaceScoped: Bool = false
+        scopedWorkspaceIDs: Set<UUID>? = nil,
+        effectiveScopedWorkspaceIDs: Set<UUID>? = nil
     ) {
         self.sessionID = sessionID
         self.panelID = panelID
@@ -50,7 +56,8 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         self.cwd = cwd
         self.updatedAt = updatedAt
         self.isActive = isActive
-        self.isWorkspaceScoped = isWorkspaceScoped
+        self.scopedWorkspaceIDs = scopedWorkspaceIDs
+        self.effectiveScopedWorkspaceIDs = effectiveScopedWorkspaceIDs
     }
 
     public var displayTitle: String {

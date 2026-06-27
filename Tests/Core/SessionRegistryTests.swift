@@ -571,6 +571,38 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func workspaceStatusesCarryExplicitAndEffectiveWorkspaceScope() throws {
+        var registry = SessionRegistry()
+        let ownWorkspaceID = UUID()
+        let extraWorkspaceID = UUID()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 701)
+
+        registry.startSession(
+            sessionID: "scoped-status",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: ownWorkspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            scopedWorkspaceIDs: [extraWorkspaceID],
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "scoped-status",
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+
+        let workspaceStatus = try #require(registry.workspaceStatuses(for: ownWorkspaceID).first)
+        #expect(workspaceStatus.scopedWorkspaceIDs == [extraWorkspaceID])
+        #expect(workspaceStatus.effectiveScopedWorkspaceIDs == [ownWorkspaceID, extraWorkspaceID])
+        #expect(workspaceStatus.effectiveScopedWorkspaceIDs == registry.effectiveWorkspaceScope(sessionID: "scoped-status"))
+        #expect(workspaceStatus.isWorkspaceScoped)
+    }
+
+    @Test
     func workspaceStatusesRemainInCreationOrderAcrossStatusUpdates() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()

@@ -696,8 +696,31 @@ final class SidebarViewTests: XCTestCase {
             "Sidebar text values should include scoped tag text: \(textValues)"
         )
         XCTAssertTrue(
-            textValues.contains(where: { $0.localizedCaseInsensitiveContains("Automation limited to assigned workspaces") }),
+            textValues.contains(where: { $0.localizedCaseInsensitiveContains("Scoped to: Workspace 1") }),
             "Sidebar accessibility text should describe workspace scope: \(textValues)"
+        )
+    }
+
+    func testWorkspaceScopedSessionTooltipListsEffectiveWorkspaceNames() throws {
+        let additionalWorkspaceID = UUID()
+        let additionalWorkspace = makeSinglePanelWorkspace(
+            id: additionalWorkspaceID,
+            title: "workspace-scope-diagnostic"
+        )
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "multi-scope-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            scopedWorkspaceIDs: [additionalWorkspaceID],
+            additionalWorkspaces: [additionalWorkspace],
+            prependAdditionalWorkspaces: true
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(
+            textValues.contains(where: {
+                $0.contains("Scoped to: Workspace 1 and workspace-scope-diagnostic")
+            }),
+            "Sidebar accessibility text should list effective workspace scope names: \(textValues)"
         )
     }
 
@@ -1008,6 +1031,8 @@ final class SidebarViewTests: XCTestCase {
         sessionStatus: SessionStatus,
         displayTitleOverride: String? = nil,
         scopedWorkspaceIDs: Set<UUID>? = nil,
+        additionalWorkspaces: [WorkspaceState] = [],
+        prependAdditionalWorkspaces: Bool = false,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> NSView {
         try makeSidebarHarness(
@@ -1016,6 +1041,8 @@ final class SidebarViewTests: XCTestCase {
             sessionStatus: sessionStatus,
             displayTitleOverride: displayTitleOverride,
             scopedWorkspaceIDs: scopedWorkspaceIDs,
+            additionalWorkspaces: additionalWorkspaces,
+            prependAdditionalWorkspaces: prependAdditionalWorkspaces,
             sessionPanelPlacement: sessionPanelPlacement
         ).hostingView
     }
@@ -1033,13 +1060,27 @@ final class SidebarViewTests: XCTestCase {
         sessionStatus: SessionStatus,
         displayTitleOverride: String? = nil,
         scopedWorkspaceIDs: Set<UUID>? = nil,
+        additionalWorkspaces: [WorkspaceState] = [],
+        prependAdditionalWorkspaces: Bool = false,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
-        let state = harnessState.state
+        var state = harnessState.state
         let windowID = harnessState.windowID
         let workspaceID = harnessState.workspaceID
         let panelID = harnessState.sessionPanelID
+        if additionalWorkspaces.isEmpty == false,
+           let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) {
+            let additionalWorkspaceIDs = additionalWorkspaces.map(\.id)
+            if prependAdditionalWorkspaces {
+                state.windows[windowIndex].workspaceIDs.insert(contentsOf: additionalWorkspaceIDs, at: 0)
+            } else {
+                state.windows[windowIndex].workspaceIDs.append(contentsOf: additionalWorkspaceIDs)
+            }
+            for workspace in additionalWorkspaces {
+                state.workspacesByID[workspace.id] = workspace
+            }
+        }
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -1242,6 +1283,19 @@ final class SidebarViewTests: XCTestCase {
             selectedWindowID: windowID
         )
         return (state, windowID)
+    }
+
+    private func makeSinglePanelWorkspace(id: UUID, title: String) -> WorkspaceState {
+        let panelID = UUID()
+        return WorkspaceState(
+            id: id,
+            title: title,
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))
+            ],
+            focusedPanelID: panelID
+        )
     }
 
     private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {

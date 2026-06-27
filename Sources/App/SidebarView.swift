@@ -107,7 +107,7 @@ struct SidebarView: View {
     }()
     private static let sessionStatusesTopSpacing: CGFloat = 0
     private static let workspaceScopeTagLabel = "scoped"
-    private static let workspaceScopeHelpText = "Automation limited to assigned workspaces. Sessions in the same workspace share access."
+    private static let workspaceScopeFallbackHelpText = "Workspace-scoped automation is limited to assigned workspaces."
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
     private nonisolated static let workspaceDragActivationDistance: CGFloat = 4
@@ -663,13 +663,17 @@ struct SidebarView: View {
             for: status,
             showsUnreadSessionAccent: showsUnreadSessionAccent
         )
+        let scopeHelpText = sessionWorkspaceScopeHelpText(
+            for: workspaceSessionStatus,
+            fallbackWorkspace: workspace
+        )
         let accessibilityLabel = Self.sessionAccessibilityLabel(
             agentName: workspaceSessionStatus.displayTitle,
             chipKind: chipKind,
             detailText: normalizedSessionDetail(status.detail),
             cwd: Self.abbreviatedPathLabel(workspaceSessionStatus.cwd),
             isLaterFlagged: isLaterFlagged,
-            isWorkspaceScoped: workspaceSessionStatus.isWorkspaceScoped
+            workspaceScopeHelpText: scopeHelpText
         )
         let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
         let selectedWorkspaceID = store.selectedWorkspaceID(in: windowID)
@@ -710,7 +714,8 @@ struct SidebarView: View {
                         showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isActivePanel: isActivePanel,
                         isHovered: isHovered,
-                        isFlashing: isFlashing
+                        isFlashing: isFlashing,
+                        scopeHelpText: scopeHelpText
                     )
                 }
                 .buttonStyle(.plain)
@@ -733,7 +738,8 @@ struct SidebarView: View {
                     showsUnreadSessionAccent: showsUnreadSessionAccent,
                     isActivePanel: isActivePanel,
                     isHovered: false,
-                    isFlashing: isFlashing
+                    isFlashing: isFlashing,
+                    scopeHelpText: scopeHelpText
                 )
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilityLabel)
@@ -777,7 +783,8 @@ struct SidebarView: View {
         showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
         isHovered: Bool,
-        isFlashing: Bool
+        isFlashing: Bool,
+        scopeHelpText: String?
     ) -> some View {
         let indicatorState = Self.sessionIndicatorState(for: status.kind)
         let chipKind = Self.sessionStatusChipKind(
@@ -810,7 +817,7 @@ struct SidebarView: View {
                 }
 
                 if workspaceSessionStatus.isWorkspaceScoped {
-                    sessionWorkspaceScopeTag()
+                    sessionWorkspaceScopeTag(helpText: scopeHelpText)
                 }
 
                 Spacer(minLength: 0)
@@ -1262,8 +1269,85 @@ struct SidebarView: View {
             )
     }
 
-    private func sessionWorkspaceScopeTag() -> some View {
-        Text(Self.workspaceScopeTagLabel)
+    private func sessionWorkspaceScopeHelpText(
+        for workspaceSessionStatus: WorkspaceSessionStatus,
+        fallbackWorkspace: WorkspaceState
+    ) -> String? {
+        guard workspaceSessionStatus.isWorkspaceScoped else { return nil }
+
+        guard let scopeIDs = workspaceSessionStatus.effectiveScopedWorkspaceIDs,
+              scopeIDs.isEmpty == false else {
+            return Self.workspaceScopeFallbackHelpText
+        }
+        let workspaceNames = workspaceScopeWorkspaceNames(
+            for: scopeIDs,
+            fallbackWorkspace: fallbackWorkspace
+        )
+        guard workspaceNames.isEmpty == false else {
+            return Self.workspaceScopeFallbackHelpText
+        }
+
+        let joinedNames = Self.joinedWorkspaceScopeNames(workspaceNames)
+        let workspaceNoun = workspaceNames.count == 1 ? "this workspace" : "these workspaces"
+        return "Scoped to: \(joinedNames). Automation from this session is limited to \(workspaceNoun)."
+    }
+
+    private func workspaceScopeWorkspaceNames(
+        for workspaceIDs: Set<UUID>,
+        fallbackWorkspace: WorkspaceState
+    ) -> [String] {
+        let state = store.state
+        var orderedIDs: [UUID] = []
+
+        if workspaceIDs.contains(fallbackWorkspace.id) {
+            orderedIDs.append(fallbackWorkspace.id)
+        }
+
+        for window in state.windows {
+            for workspaceID in window.workspaceIDs
+                where workspaceIDs.contains(workspaceID) &&
+                orderedIDs.contains(workspaceID) == false {
+                orderedIDs.append(workspaceID)
+            }
+        }
+
+        for workspaceID in workspaceIDs.sorted(by: { $0.uuidString < $1.uuidString })
+            where orderedIDs.contains(workspaceID) == false {
+            orderedIDs.append(workspaceID)
+        }
+
+        return orderedIDs.map { workspaceID in
+            let title = state.workspacesByID[workspaceID]?.title
+            return Self.normalizedWorkspaceScopeName(title, fallbackID: workspaceID)
+        }
+    }
+
+    private static func normalizedWorkspaceScopeName(_ title: String?, fallbackID: UUID) -> String {
+        guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
+              title.isEmpty == false else {
+            return "Workspace \(fallbackID.uuidString.prefix(8))"
+        }
+        return title
+    }
+
+    private static func joinedWorkspaceScopeNames(_ names: [String]) -> String {
+        switch names.count {
+        case 0:
+            return ""
+        case 1:
+            return names[0]
+        case 2:
+            return "\(names[0]) and \(names[1])"
+        default:
+            let leadingNames = names.dropLast().joined(separator: ", ")
+            return "\(leadingNames), and \(names[names.count - 1])"
+        }
+    }
+
+    private func sessionWorkspaceScopeTag(helpText: String?) -> some View {
+        let resolvedHelpText = helpText ?? Self.workspaceScopeFallbackHelpText
+
+        return Text(Self.workspaceScopeTagLabel)
             .font(ToastyTheme.fontWorkspaceSessionChip)
             .foregroundStyle(ToastyTheme.sidebarSessionPathText)
             .padding(.horizontal, 5)
@@ -1272,9 +1356,9 @@ struct SidebarView: View {
                 ToastyTheme.sidebarSessionPathText.opacity(0.12),
                 in: RoundedRectangle(cornerRadius: 4)
             )
-            .help(Self.workspaceScopeHelpText)
+            .help(resolvedHelpText)
             .accessibilityLabel("workspace-scoped")
-            .accessibilityHint(Self.workspaceScopeHelpText)
+            .accessibilityHint(resolvedHelpText)
     }
 
     @ViewBuilder
@@ -1518,13 +1602,13 @@ struct SidebarView: View {
         detailText: String?,
         cwd: String?,
         isLaterFlagged: Bool,
-        isWorkspaceScoped: Bool = false
+        workspaceScopeHelpText: String? = nil
     ) -> String {
         var components = [agentName]
         if let chipKind {
             components.append(sessionStatusChipLabel(for: chipKind))
         }
-        if isWorkspaceScoped {
+        if let workspaceScopeHelpText {
             components.append("workspace-scoped")
             components.append(workspaceScopeHelpText)
         }
