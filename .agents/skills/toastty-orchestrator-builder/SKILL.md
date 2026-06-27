@@ -33,8 +33,9 @@ Use this skill to turn a user's workflow into repeatable agent instructions that
    - Keep the generated skill trigger precise so agents do not invoke it for unrelated Toastty tasks.
 5. Create or update the generated skill.
    - If creating a new skill, use the active runtime's skill-creation workflow when available.
-   - Place personal generated skills under `${CODEX_HOME:-$HOME/.codex}/skills` unless the user asks for a repo-local skill.
-   - For repo-shipped generated skills, place them under the repo's `.agents/skills/`.
+   - Ask whether the generated skill should target Codex, Claude, or both.
+   - For global generated skills, suggest Codex under `${CODEX_HOME:-$HOME/.codex}/skills` and Claude under `${CLAUDE_HOME:-$HOME/.claude}/skills`.
+   - For repo-local generated skills, suggest Codex/agent skills under the repo's `.agents/skills/` and Claude skills under the repo's `.claude/skills/`.
 6. Validate the generated skill.
    - Run the skill validator when available.
    - Check that `agents/openai.yaml` default prompt names the generated skill with `$skill-name`.
@@ -49,6 +50,7 @@ Ask a compact set. Use these as defaults:
 - Which agents, tools, or roles should it coordinate?
 - What workspace or panel layout should it create or assume?
 - What outputs should it produce: terminal summary, Scratchpad, notifications, files, or child sessions?
+- Should it create a Codex skill, a Claude skill, or both; and should it be global or repo-local?
 - What should be scoped by default, and when may scope expand?
 - What approval, stop, cleanup, and handoff rules should it follow?
 
