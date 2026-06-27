@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--initial-command <command>]... [--startup-command <command>] [--json]
+usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path <path> --handoff-file <path> [--window-id <uuid>] [--agent-command <name>] [--initial-command <command>]... [--startup-command <command>] [--no-scope-parent] [--json]
 
 Creates a new Toastty workspace for a worktree and starts a new terminal command in it.
 By default the helper calls agent.launch with structured cwd, environment, and
@@ -12,6 +12,8 @@ Repeat --initial-command to run single-line shell commands after cwd setup and
 before the agent command in the structured launch path.
 --startup-command replaces the structured launch with a literal terminal command
 and cannot be combined with --agent-command or --initial-command.
+Structured launches scope the current parent session before creating the child
+workspace unless --no-scope-parent is passed.
 EOF
 }
 
@@ -36,6 +38,7 @@ agent_command="codex"
 agent_command_overridden=0
 startup_command=""
 initial_commands=()
+scope_parent="true"
 json_output=0
 
 while [[ $# -gt 0 ]]; do
@@ -80,6 +83,10 @@ while [[ $# -gt 0 ]]; do
     --startup-command)
       startup_command="${2:-}"
       shift 2
+      ;;
+    --no-scope-parent)
+      scope_parent="false"
+      shift
       ;;
     --json)
       json_output=1
@@ -174,6 +181,23 @@ run_cli_json() {
   "$TOASTTY_CLI_PATH" --json "$@"
 }
 
+parent_session_id=""
+parent_scope_set="false"
+parent_scope_rollback_on_error="false"
+
+rollback_parent_scope_if_needed() {
+  local exit_code="$?"
+  if [[ "$exit_code" -ne 0 && "$parent_scope_rollback_on_error" == "true" && "$parent_scope_set" == "true" && -n "$parent_session_id" ]]; then
+    local rollback_output
+    if ! rollback_output="$(run_cli_json session scope clear --session "$parent_session_id" 2>&1)"; then
+      echo "warning: failed to restore parent session unrestricted scope after launch failure" >&2
+      printf '%s\n' "$rollback_output" >&2
+    fi
+  fi
+}
+
+trap rollback_parent_scope_if_needed EXIT
+
 extract_json_result_field() {
   local field_name="$1"
   python3 -c '
@@ -186,6 +210,21 @@ value = data.get("result", {}).get(field_name)
 if not isinstance(value, str) or value == "":
     raise SystemExit(f"missing {field_name}")
 print(value)
+' "$field_name"
+}
+
+extract_json_result_bool() {
+  local field_name="$1"
+  python3 -c '
+import json
+import sys
+
+field_name = sys.argv[1]
+data = json.load(sys.stdin)
+value = data.get("result", {}).get(field_name)
+if not isinstance(value, bool):
+    raise SystemExit(f"missing {field_name}")
+print("true" if value else "false")
 ' "$field_name"
 }
 
@@ -242,6 +281,60 @@ fi
 
 if [[ -z "$window_id" ]]; then
   window_id="$(resolve_current_window_id)"
+fi
+
+parent_scope_status="startup_command"
+
+if [[ -z "$startup_command" ]]; then
+  if [[ "$scope_parent" == "true" ]]; then
+    parent_session_id="${TOASTTY_SESSION_ID:-}"
+    if [[ -z "$parent_session_id" ]]; then
+      echo "error: TOASTTY_SESSION_ID is required to scope the parent session; pass --no-scope-parent to leave the parent unrestricted" >&2
+      exit 1
+    fi
+    if [[ -z "${TOASTTY_PANEL_ID:-}" ]]; then
+      echo "error: TOASTTY_PANEL_ID is required to scope the parent session; pass --no-scope-parent to leave the parent unrestricted" >&2
+      exit 1
+    fi
+
+    parent_scope_output=""
+    parent_scope_stderr_file="$(mktemp "${TMPDIR:-/tmp}/toastty-parent-scope-show.XXXXXX")"
+    if ! parent_scope_output="$(run_cli_json session scope show --session "$parent_session_id" 2>"$parent_scope_stderr_file")"; then
+      echo "error: failed to inspect parent session scope for $parent_session_id" >&2
+      if [[ -s "$parent_scope_stderr_file" ]]; then
+        cat "$parent_scope_stderr_file" >&2
+      fi
+      printf '%s\n' "$parent_scope_output" >&2
+      rm -f "$parent_scope_stderr_file"
+      exit 1
+    fi
+    if [[ -s "$parent_scope_stderr_file" ]]; then
+      cat "$parent_scope_stderr_file" >&2
+    fi
+    rm -f "$parent_scope_stderr_file"
+
+    if ! parent_is_scoped="$(extract_json_result_bool "isScoped" <<<"$parent_scope_output" 2>/dev/null)"; then
+      echo "error: Toastty returned an invalid session scope payload for parent session $parent_session_id" >&2
+      printf '%s\n' "$parent_scope_output" >&2
+      exit 1
+    fi
+
+    if [[ "$parent_is_scoped" == "true" ]]; then
+      parent_scope_status="already_scoped"
+    else
+      parent_scope_set_output=""
+      if ! parent_scope_set_output="$(run_cli_json session scope set-current --session "$parent_session_id" 2>&1)"; then
+        echo "error: failed to scope parent session $parent_session_id to its current workspace" >&2
+        printf '%s\n' "$parent_scope_set_output" >&2
+        exit 1
+      fi
+      parent_scope_status="set_current"
+      parent_scope_set="true"
+      parent_scope_rollback_on_error="true"
+    fi
+  else
+    parent_scope_status="disabled"
+  fi
 fi
 
 create_output=""
@@ -311,7 +404,7 @@ if [[ -z "$startup_command" ]]; then
     panel_id="$(extract_json_result_field "panelID" <<<"$launch_output")"
     if ! session_id="$(extract_json_result_field "sessionID" <<<"$launch_output" 2>/dev/null)"; then
       echo "error: agent.launch response did not include sessionID; cannot scope workspace handoff" >&2
-      echo "warning: workspace $workspace_id and panel $panel_id were already created; the child may be running unscoped" >&2
+      echo "warning: workspace $workspace_id and panel $panel_id were already created; the child may be running without the intended workspace-only scope" >&2
       printf '%s\n' "$launch_output" >&2
       exit 1
     fi
@@ -326,7 +419,7 @@ if [[ -z "$startup_command" ]]; then
         --workspace "$workspace_id" 2>&1
     )"; then
       echo "error: failed to scope session $session_id to workspace $workspace_id" >&2
-      echo "warning: workspace $workspace_id and session $session_id were already created; the child may be running unscoped" >&2
+      echo "warning: workspace $workspace_id and session $session_id were already created; the child may be running without the intended workspace-only scope" >&2
       printf '%s\n' "$scope_output" >&2
       exit 1
     fi
@@ -377,11 +470,11 @@ if [[ "$terminal_available" != "true" ]]; then
 fi
 
 if [[ "$json_output" == "1" ]]; then
-  python3 - "$workspace_name" "$worktree_path" "$handoff_file" "$window_id" "$workspace_id" "$panel_id" "$session_id" "$scope_set" "$startup_command" "$terminal_available" <<'PY'
+  python3 - "$workspace_name" "$worktree_path" "$handoff_file" "$window_id" "$workspace_id" "$panel_id" "$session_id" "$scope_set" "$startup_command" "$terminal_available" "$parent_scope_status" "$parent_scope_set" <<'PY'
 import json
 import sys
 
-workspace_name, worktree_path, handoff_file, window_id, workspace_id, panel_id, session_id, scope_set, startup_command, terminal_available = sys.argv[1:]
+workspace_name, worktree_path, handoff_file, window_id, workspace_id, panel_id, session_id, scope_set, startup_command, terminal_available, parent_scope_status, parent_scope_set = sys.argv[1:]
 payload = {
     "workspace_name": workspace_name,
     "worktree_path": worktree_path,
@@ -393,6 +486,8 @@ payload = {
     "scope_set": scope_set == "true",
     "startup_command": startup_command,
     "terminal_available": terminal_available == "true",
+    "parent_scope_status": parent_scope_status,
+    "parent_scope_set": parent_scope_set == "true",
 }
 print(json.dumps(payload, indent=2, sort_keys=True))
 PY
@@ -406,6 +501,8 @@ workspace_id=$workspace_id
 panel_id=$panel_id
 session_id=$session_id
 scope_set=$scope_set
+parent_scope_status=$parent_scope_status
+parent_scope_set=$parent_scope_set
 terminal_available=$terminal_available
 EOF
 fi

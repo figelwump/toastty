@@ -21,7 +21,8 @@ Use this workflow when the current thread should continue in a fresh git worktre
    - If the user explicitly provides a prefix or branch name, honor it when it fits the repo's branch naming style.
 3. Confirm the Toastty-managed environment is present before using the launch helper.
    - `TOASTTY_CLI_PATH` must be set.
-   - `TOASTTY_PANEL_ID` should be set unless you are explicitly overriding `--window-id`.
+   - `TOASTTY_PANEL_ID` must be set for the default structured launch because parent `set-current` needs the current panel. It may be omitted only when using `--startup-command`, or when combining `--window-id` with `--no-scope-parent`.
+   - `TOASTTY_SESSION_ID` must be set for the default structured launch because the helper scopes the current parent session before it creates the child workspace.
    - The skill is designed for a Toastty-managed agent session, not an arbitrary shell.
 4. Resolve the current repository root and identify any explicit setup requirement.
    - Run `git rev-parse --show-toplevel` from the current task repo; this repo, not the Toastty repo that owns the skill source, is the worktree target.
@@ -53,10 +54,12 @@ Use this workflow when the current thread should continue in a fresh git worktre
    - If there is no durable plan file yet and no detailed plan exists in-thread, put a concise task-specific plan directly in `WORKTREE_HANDOFF.md`.
 9. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
    - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and starts the new terminal command in the left terminal pane.
+   - For the structured `agent.launch` path, the helper first inspects the current parent session with `session scope show --session "$TOASTTY_SESSION_ID"`. If the parent is unscoped, it runs `session scope set-current --session "$TOASTTY_SESSION_ID"` before workspace creation so the newly created workspace is auto-bound into the parent's effective scope. If the parent is already scoped, the helper preserves that scope and relies on workspace creation to add the new workspace. If the helper scoped an unscoped parent and later fails, it attempts to restore the parent to unrestricted automation before exiting.
    - For the structured `agent.launch` path, the helper immediately scopes the launched child session to the newly created workspace with `session scope set --session <child-session-id> --workspace <new-workspace-id>`. This is a cooperative post-launch scope; treat a scope failure as a launch failure, but report that the workspace/session may already exist.
    - Background-created workspaces stay marked as new in the sidebar until the user visits them once.
    - The startup command launches `codex` by default. If the user explicitly requested a different agent for the new session, pass it with `--agent-command <name>` (for example `--agent-command claude`); otherwise omit the flag.
    - If the user explicitly requested commands that must run inside the launched terminal immediately before the agent starts, pass each command with `--initial-command <command>` so the helper keeps the structured `agent.launch` path. For example, `--initial-command "direnv allow"` runs after `cd <worktree>` and before the agent prompt. If an initial command fails, the agent command is stopped in the terminal, but the workspace creation helper may already have reported launch success.
+   - If you intentionally need to leave the parent session unrestricted, pass `--no-scope-parent` and mention that exception in the handoff.
 
 ```bash
 .agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh \
@@ -66,10 +69,11 @@ Use this workflow when the current thread should continue in a fresh git worktre
   --json
 ```
 
-10. Parse the launch helper output to get `workspace_id`, `panel_id`, `session_id`, and `scope_set`.
+10. Parse the launch helper output to get `workspace_id`, `panel_id`, `session_id`, `scope_set`, and `parent_scope_status`.
     - `session_id` is present and `scope_set` is `true` for structured managed launches.
+    - `parent_scope_status` is `set_current` when the helper scoped an unscoped parent, `already_scoped` when it preserved an existing parent scope, `disabled` when `--no-scope-parent` was used, and `startup_command` for explicit startup-command launches.
     - `session_id` is absent and `scope_set` is `false` only for `--startup-command` or fallback `terminal.send-text` launches; use those paths only for explicit validation or fully custom shell setup.
-11. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, scope status, handoff file path, and whether setup was skipped or which explicit setup commands ran.
+11. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, parent scope status, child scope status, handoff file path, and whether setup was skipped or which explicit setup commands ran.
 
 ## Handoff file contents
 
@@ -110,8 +114,10 @@ When the parent thread already has a full implementation plan, prefer the follow
 - The handoff file must exist before launching the new agent session.
 - The default workspace layout is terminal on the left and the handoff markdown file in the right panel.
 - The default launch should use `agent.launch` with structured `cwd`, `initialCommands`, environment, and `initialPrompt` arguments so the new background workspace starts without a separate `terminal.send-text` injection. The launched command still `cd`s into the new worktree, runs any `--initial-command` single-line shell snippets in order with `&&`, and starts the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. The agent CLI is `codex` unless the user explicitly requested a different agent; honor an explicit request with `--agent-command`.
-- After a structured `agent.launch` succeeds, scope the child session to the created workspace by calling `session scope set --session <sessionID> --workspace <workspaceID>` from the parent. Do not use `session scope set-current` for this handoff; that command can only target the current session and panel. The helper performs this scope call automatically and reports `scope_set`. Because the scope API runs after launch returns the child `sessionID`, this is cooperative workspace isolation, not a hard pre-exec sandbox.
+- Before the default structured launch creates the workspace, scope the parent if needed with `session scope set-current --session "$TOASTTY_SESSION_ID"`. Do not reset an already scoped parent; preserving the existing scope lets `workspace.create` auto-bind the new workspace without dropping prior explicit workspace assignments.
+- After a structured `agent.launch` succeeds, scope the child session to the created workspace by calling `session scope set --session <sessionID> --workspace <workspaceID>` from the parent. Do not use `session scope set-current` for the child handoff; that command can only target the current parent session and panel. The helper performs this scope call automatically and reports `scope_set`. Because the scope API runs after launch returns the child `sessionID`, this is cooperative workspace isolation, not a hard pre-exec sandbox.
 - `--startup-command` is the explicit escape hatch for validation or fully custom shell setup. It replaces the structured agent launch path and uses `terminal.send-text` after resolving the terminal panel. Do not combine it with `--agent-command` or `--initial-command`.
+- `--no-scope-parent` is the explicit escape hatch for leaving the parent session unrestricted during a structured launch. Use it only when unrestricted parent automation is intentional.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
 ## Window targeting
@@ -119,11 +125,11 @@ When the parent thread already has a full implementation plan, prefer the follow
 - `open-toastty-worktree-session.sh` accepts `--window-id` when you know the target Toastty window.
 - If `--window-id` is omitted, the helper resolves the current window by querying `terminal.state` for `TOASTTY_PANEL_ID`, then creates the new workspace in that window.
 - Use the explicit override only when you intentionally want to create the worktree workspace in a different Toastty window from the current thread.
-- For non-Toastty-managed shells, keep passing `--window-id` explicitly instead of relying on `TOASTTY_PANEL_ID`.
+- For non-Toastty-managed shells, keep passing `--window-id` explicitly instead of relying on `TOASTTY_PANEL_ID`, and pass `--no-scope-parent` unless you are intentionally providing valid current-session context.
 
 ## Validation
 
-- After launch, confirm the helper returned the new workspace ID, terminal panel ID, child session ID, and `scope_set=true` for the default structured launch.
+- After launch, confirm the helper returned the new workspace ID, terminal panel ID, child session ID, `parent_scope_status` of `set_current` or `already_scoped`, and `scope_set=true` for the default structured launch.
 - If debugging lower-level calls, verify scope directly:
 
 ```bash

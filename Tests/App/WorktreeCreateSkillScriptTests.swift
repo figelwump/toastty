@@ -197,6 +197,8 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("\"panel_id\": \"55555555-5555-5555-5555-555555555555\""))
         XCTAssertTrue(result.stdout.contains("\"session_id\": null"))
         XCTAssertTrue(result.stdout.contains("\"scope_set\": false"))
+        XCTAssertTrue(result.stdout.contains("\"parent_scope_status\": \"startup_command\""))
+        XCTAssertTrue(result.stdout.contains("\"parent_scope_set\": false"))
 
         let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
         let invocationLines = invocations
@@ -206,7 +208,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(invocationLines.contains("--json query run terminal.state --panel 33333333-3333-3333-3333-333333333333"))
         XCTAssertTrue(invocationLines.contains("--json action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke activate=false"))
         XCTAssertFalse(invocationLines.contains(where: { $0.contains("workspace.snapshot") }))
-        XCTAssertFalse(invocationLines.contains(where: { $0.contains("session scope set") }))
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("session scope") }))
         XCTAssertTrue(invocationLines.contains("action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path)"))
         XCTAssertTrue(invocationLines.contains("--json query run terminal.state --workspace 44444444-4444-4444-4444-444444444444"))
 
@@ -235,6 +237,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
                 "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
             ],
             arguments: [
                 "--workspace-name", "smoke",
@@ -250,6 +253,8 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let payload = try jsonObject(from: result.stdout)
         XCTAssertEqual(payload["session_id"] as? String, "66666666-6666-6666-6666-666666666666")
         XCTAssertEqual(payload["scope_set"] as? Bool, true)
+        XCTAssertEqual(payload["parent_scope_status"] as? String, "set_current")
+        XCTAssertEqual(payload["parent_scope_set"] as? Bool, true)
 
         let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
         XCTAssertTrue(agentLaunchLine.contains("profileID=codex"))
@@ -264,7 +269,273 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let invocationLines = invocations
             .split(whereSeparator: \.isNewline)
             .map(String.init)
+        XCTAssertTrue(invocationLines.contains("--json session scope show --session 77777777-7777-7777-7777-777777777777"))
+        XCTAssertTrue(invocationLines.contains("--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
         XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+
+        let showIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope show --session 77777777-7777-7777-7777-777777777777"))
+        let parentScopeIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
+        let workspaceCreateIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke activate=false"))
+        let childScopeIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertLessThan(showIndex, parentScopeIndex)
+        XCTAssertLessThan(parentScopeIndex, workspaceCreateIndex)
+        XCTAssertLessThan(workspaceCreateIndex, childScopeIndex)
+    }
+
+    func testOpenSessionScriptPreservesAlreadyScopedParentSession() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-scoped-parent")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_PARENT_ALREADY_SCOPED": "1",
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stderr, "")
+
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["parent_scope_status"] as? String, "already_scoped")
+        XCTAssertEqual(payload["parent_scope_set"] as? Bool, false)
+        XCTAssertEqual(payload["scope_set"] as? Bool, true)
+
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        let invocationLines = invocations
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        XCTAssertTrue(invocationLines.contains("--json session scope show --session 77777777-7777-7777-7777-777777777777"))
+        XCTAssertFalse(invocationLines.contains("--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
+        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+    }
+
+    func testOpenSessionScriptCanSkipParentSessionScoping() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-no-parent-scope")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--no-scope-parent",
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stderr, "")
+
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["parent_scope_status"] as? String, "disabled")
+        XCTAssertEqual(payload["parent_scope_set"] as? Bool, false)
+        XCTAssertEqual(payload["scope_set"] as? Bool, true)
+
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        let invocationLines = invocations
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("session scope show") }))
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("session scope set-current") }))
+        XCTAssertTrue(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
+    }
+
+    func testOpenSessionScriptRequiresSessionContextForDefaultParentScoping() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-parent-context")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertTrue(result.stderr.contains("TOASTTY_SESSION_ID is required to scope the parent session"))
+
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        XCTAssertFalse(invocations.contains("action run workspace.create"))
+    }
+
+    func testOpenSessionScriptRequiresPanelContextForDefaultParentScopingWithWindowOverride() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-parent-panel-context")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--window-id", "11111111-1111-1111-1111-111111111111",
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertTrue(result.stderr.contains("TOASTTY_PANEL_ID is required to scope the parent session"))
+        XCTAssertFalse(fileManager.fileExists(atPath: invocationLogURL.path))
+    }
+
+    func testOpenSessionScriptParsesParentScopeShowWhenCommandWritesStderr() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-parent-scope-stderr")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_PARENT_SCOPE_SHOW_STDERR": "1",
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertTrue(result.stderr.contains("scope show warning"))
+
+        let payload = try jsonObject(from: result.stdout)
+        XCTAssertEqual(payload["parent_scope_status"] as? String, "set_current")
+        XCTAssertEqual(payload["parent_scope_set"] as? Bool, true)
+        XCTAssertEqual(payload["scope_set"] as? Bool, true)
+    }
+
+    func testOpenSessionScriptRestoresParentScopeWhenWorkspaceCreateFails() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-parent-rollback")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_WORKSPACE_CREATE_FAILURE": "1",
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertTrue(result.stderr.contains("failed to create workspace"))
+
+        let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
+        let invocationLines = invocations
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        let parentScopeIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
+        let workspaceCreateIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke activate=false"))
+        let rollbackIndex = try XCTUnwrap(invocationLines.firstIndex(of: "--json session scope clear --session 77777777-7777-7777-7777-777777777777"))
+        XCTAssertLessThan(parentScopeIndex, workspaceCreateIndex)
+        XCTAssertLessThan(workspaceCreateIndex, rollbackIndex)
+        XCTAssertFalse(invocationLines.contains(where: { $0.contains("action run agent.launch") }))
     }
 
     func testOpenSessionScriptFailsClearlyWhenAgentLaunchOmitsSessionID() throws {
@@ -288,6 +559,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
                 "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
             ],
             arguments: [
                 "--workspace-name", "smoke",
@@ -300,13 +572,14 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 1)
         XCTAssertEqual(result.stdout, "")
         XCTAssertTrue(result.stderr.contains("agent.launch response did not include sessionID"))
-        XCTAssertTrue(result.stderr.contains("may be running unscoped"))
+        XCTAssertTrue(result.stderr.contains("without the intended workspace-only scope"))
 
         let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
         let invocationLines = invocations
             .split(whereSeparator: \.isNewline)
             .map(String.init)
-        XCTAssertFalse(invocationLines.contains(where: { $0.contains("session scope set") }))
+        XCTAssertTrue(invocationLines.contains("--json session scope set-current --session 77777777-7777-7777-7777-777777777777"))
+        XCTAssertFalse(invocationLines.contains("--json session scope set --session 66666666-6666-6666-6666-666666666666 --workspace 44444444-4444-4444-4444-444444444444"))
     }
 
     func testOpenSessionScriptFailsClearlyWhenScopeSetFails() throws {
@@ -330,6 +603,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
                 "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
             ],
             arguments: [
                 "--workspace-name", "smoke",
@@ -342,7 +616,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 1)
         XCTAssertEqual(result.stdout, "")
         XCTAssertTrue(result.stderr.contains("failed to scope session 66666666-6666-6666-6666-666666666666"))
-        XCTAssertTrue(result.stderr.contains("may be running unscoped"))
+        XCTAssertTrue(result.stderr.contains("without the intended workspace-only scope"))
 
         let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
         let invocationLines = invocations
@@ -371,6 +645,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
                 "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
             ],
             arguments: [
                 "--workspace-name", "smoke",
@@ -414,6 +689,7 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 "FAKE_TOASTTY_LOG": invocationLogURL.path,
                 "TOASTTY_CLI_PATH": fakeCLIURL.path,
                 "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
             ],
             arguments: [
                 "--workspace-name", "smoke",
@@ -554,6 +830,12 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 fi
                 ;;
               \"action run workspace.create\")
+                if [ "${FAKE_WORKSPACE_CREATE_FAILURE:-0}" = "1" ]; then
+                  cat <<'EOF'
+            {"error":{"code":"workspace_failed","message":"workspace create failure"}}
+            EOF
+                  exit 1
+                fi
                 cat <<'EOF'
             {"result":{"windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444"}}
             EOF
@@ -567,6 +849,30 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
                 fi
                 cat <<'EOF'
             {"result":{"profileID":"codex","agent":"codex","displayName":"Codex","sessionID":"66666666-6666-6666-6666-666666666666","windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444","panelID":"55555555-5555-5555-5555-555555555555","command":"cd /tmp/worktree && codex prompt","cwd":"/tmp/worktree"}}
+            EOF
+                ;;
+              \"session scope show\")
+                if [ "${FAKE_PARENT_SCOPE_SHOW_STDERR:-0}" = "1" ]; then
+                  printf 'scope show warning\\n' >&2
+                fi
+                if [ "${FAKE_PARENT_ALREADY_SCOPED:-0}" = "1" ]; then
+                  cat <<'EOF'
+            {"result":{"sessionID":"77777777-7777-7777-7777-777777777777","isScoped":true,"workspaceIDs":["88888888-8888-8888-8888-888888888888"],"effectiveWorkspaceIDs":["22222222-2222-2222-2222-222222222222","88888888-8888-8888-8888-888888888888"]}}
+            EOF
+                  exit 0
+                fi
+                cat <<'EOF'
+            {"result":{"sessionID":"77777777-7777-7777-7777-777777777777","isScoped":false,"workspaceIDs":[],"effectiveWorkspaceIDs":null}}
+            EOF
+                ;;
+              \"session scope set-current\")
+                cat <<'EOF'
+            {"result":{"sessionID":"77777777-7777-7777-7777-777777777777","isScoped":true,"workspaceIDs":[],"effectiveWorkspaceIDs":["22222222-2222-2222-2222-222222222222"]}}
+            EOF
+                ;;
+              \"session scope clear\")
+                cat <<'EOF'
+            {"result":{"sessionID":"77777777-7777-7777-7777-777777777777","isScoped":false,"workspaceIDs":[],"effectiveWorkspaceIDs":null}}
             EOF
                 ;;
               \"session scope set\")
