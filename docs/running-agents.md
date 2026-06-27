@@ -293,13 +293,15 @@ When the agent process exits and the session is stopped, Toastty cleans up Codex
 
 For managed Codex, Claude, and Pi launches, Toastty also records the provider's
 native session ID, session file path, working directory, and capture time in the
-workspace layout. Codex records are reported by hooks when available and can
-fall back to provider session-file discovery; Claude records are reported by
-the per-launch `SessionStart` hook and can fall back to provider session-file
-discovery; Pi records come from the bundled Pi extension. When a restored
-terminal panel has a valid record, Toastty runs the provider resume command for
-that native session instead of starting a fresh profile command. Claude resumes
-with `claude --resume <session-id>` and Pi resumes with
+workspace layout. If the managed session is workspace-scoped, Toastty stores the
+explicit scope with the same native resume record so app restart restores the
+scoped session instead of widening it. Codex records are reported by hooks when
+available and can fall back to provider session-file discovery; Claude records
+are reported by the per-launch `SessionStart` hook and can fall back to provider
+session-file discovery; Pi records come from the bundled Pi extension. When a
+restored terminal panel has a valid record, Toastty runs the provider resume
+command for that native session instead of starting a fresh profile command.
+Claude resumes with `claude --resume <session-id>` and Pi resumes with
 `pi --session <session-file-path>`.
 
 Before resuming, Toastty validates that both the recorded session file and

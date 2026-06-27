@@ -38,6 +38,86 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func scopeMutationUpdatesPersistedResumeRecordScope() throws {
+        let appStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let panelID = try #require(selection.workspace.focusedPanelID)
+        let scopedWorkspaceID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/repo",
+            capturedAt: startedAt
+        )
+
+        #expect(appStore.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord)))
+
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        sessionStore.startSession(
+            sessionID: "sess-scope-record",
+            agent: .codex,
+            panelID: panelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        #expect(sessionStore.setScope(sessionID: "sess-scope-record", workspaceIDs: []))
+        #expect(persistedResumeRecord(panelID: panelID, in: appStore.state)?.scopedWorkspaceIDs == Set<UUID>())
+
+        #expect(sessionStore.addScope(sessionID: "sess-scope-record", workspaceIDs: [scopedWorkspaceID]))
+        #expect(
+            persistedResumeRecord(panelID: panelID, in: appStore.state)?.scopedWorkspaceIDs ==
+                Set([scopedWorkspaceID])
+        )
+
+        #expect(sessionStore.clearScope(sessionID: "sess-scope-record"))
+        #expect(persistedResumeRecord(panelID: panelID, in: appStore.state)?.scopedWorkspaceIDs == nil)
+    }
+
+    @Test
+    func stoppingSessionClearsPersistedResumeRecordScope() throws {
+        let appStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let panelID = try #require(selection.workspace.focusedPanelID)
+        let scopedWorkspaceID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/repo",
+            capturedAt: startedAt,
+            scopedWorkspaceIDs: [scopedWorkspaceID]
+        )
+
+        #expect(appStore.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord)))
+
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        sessionStore.startSession(
+            sessionID: "sess-stop-record",
+            agent: .codex,
+            panelID: panelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            scopedWorkspaceIDs: [scopedWorkspaceID],
+            at: startedAt
+        )
+
+        sessionStore.stopSession(sessionID: "sess-stop-record", at: startedAt.addingTimeInterval(1))
+
+        #expect(persistedResumeRecord(panelID: panelID, in: appStore.state) == nil)
+    }
+
+    @Test
     func stopSessionForPanelIfActiveStopsCurrentSession() {
         let store = SessionRuntimeStore()
         let panelID = UUID()
@@ -5218,6 +5298,15 @@ struct SessionRuntimeStoreTests {
             configuredTerminalFontPoints: nil
         )
     }
+}
+
+private func persistedResumeRecord(panelID: UUID, in state: AppState) -> ManagedAgentResumeRecord? {
+    guard let selection = state.workspaceSelection(containingPanelID: panelID),
+          case .terminal(let terminalState)? = selection.workspace.panelState(for: panelID) else {
+        return nil
+    }
+
+    return terminalState.resumeRecord
 }
 
 private struct RecordedSessionNotification: Equatable {

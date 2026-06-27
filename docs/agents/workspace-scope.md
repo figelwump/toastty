@@ -10,6 +10,8 @@ Toastty supports opt-in cooperative workspace scoping for orchestration automati
 - The current-workspace allowance is live. If the session moves to another workspace, that implicit allowance follows the session.
 - An empty explicit scope means the session is scoped to its current workspace only.
 - Sessions in the same workspace share automation access to that workspace.
+- Restored managed sessions keep their explicit scope across app restart while their native resume record remains valid.
+- When the managed session exits, stops, or its terminal panel is closed, its scope is cleared with the session. A later unrelated session starts unscoped unless it inherits scope from a scoped parent or is explicitly scoped again.
 - Requests without a caller session ID are unrestricted.
 - Requests from an unknown or stopped caller session are unrestricted in v1, and Toastty logs a warning once for that caller.
 

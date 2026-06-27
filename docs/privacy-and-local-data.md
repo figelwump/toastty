@@ -22,7 +22,9 @@ Toastty is designed to run locally on your machine. The app itself does not send
     text-size overrides, per-browser page zoom overrides, and managed agent
     native-resume metadata for restored Codex, Claude, and Pi panels. Native-resume
     metadata can include the provider, provider-native session ID, provider
-    session file path, working directory, and capture timestamp.
+    session file path, working directory, capture timestamp, and any explicit
+    workspace-scope identifiers needed to restore a scoped session after app
+    restart.
 - `~/.toastty/scratchpad-documents/`
   - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)

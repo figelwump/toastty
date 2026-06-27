@@ -1520,9 +1520,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                     activeSession: activeSession,
                     capturedAt: now
                 ) {
+                    var scopedResumeRecord = resumeRecord
+                    scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
                     let didMutate = store.send(.updateTerminalPanelResumeRecord(
                         panelID: activeSession.panelID,
-                        resumeRecord: resumeRecord
+                        resumeRecord: scopedResumeRecord
                     ))
                     if didMutate {
                         stateVersion += 1
@@ -1600,7 +1602,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                     nativeSessionID: nativeSessionID,
                     sessionFilePath: sessionFilePath,
                     cwd: cwd,
-                    capturedAt: now
+                    capturedAt: now,
+                    scopedWorkspaceIDs: activeSession.scopedWorkspaceIDs
                 )
             ))
             if didMutate {

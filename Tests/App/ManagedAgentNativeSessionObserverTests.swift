@@ -6,6 +6,61 @@ import Testing
 @MainActor
 struct ManagedAgentNativeSessionObserverTests {
     @Test
+    func resumeRecordAppliesCurrentScopedSessionScope() {
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let record = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        sessionRuntimeStore.startSession(
+            sessionID: "managed-1",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/tmp/repo",
+            repoRoot: "/tmp/repo",
+            scopedWorkspaceIDs: [],
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let scopedRecord = ManagedAgentNativeSessionObserverRegistry.resumeRecord(
+            record,
+            applyingScopeFrom: sessionRuntimeStore,
+            managedSessionID: "managed-1",
+            panelID: panelID
+        )
+
+        #expect(scopedRecord?.scopedWorkspaceIDs == Set<UUID>())
+    }
+
+    @Test
+    func resumeRecordIsDroppedWhenManagedSessionIsMissing() {
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let record = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scopedWorkspaceIDs: []
+        )
+
+        let scopedRecord = ManagedAgentNativeSessionObserverRegistry.resumeRecord(
+            record,
+            applyingScopeFrom: sessionRuntimeStore,
+            managedSessionID: "managed-1",
+            panelID: UUID()
+        )
+
+        #expect(scopedRecord == nil)
+    }
+
+    @Test
     func scannerFindsExistingCodexSessionDuringCatchUp() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -41,7 +96,7 @@ struct ManagedAgentNativeSessionObserverTests {
                 timeout: 10
             ),
             nowProvider: { capturedAt },
-            recordHandler: { panelID, record in
+            recordHandler: { _, panelID, record in
                 recordsByPanelID[panelID] = record
             }
         )
@@ -503,7 +558,7 @@ struct ManagedAgentNativeSessionObserverTests {
                 timeout: 30
             ),
             nowProvider: { launchStart.addingTimeInterval(31) },
-            recordHandler: { _, _ in
+            recordHandler: { _, _, _ in
                 recordCount += 1
             }
         )
@@ -543,7 +598,7 @@ struct ManagedAgentNativeSessionObserverTests {
         let registry = ManagedAgentNativeSessionObserverRegistry(
             scanner: scanner,
             nowProvider: { launchStart.addingTimeInterval(2) },
-            recordHandler: { _, _ in
+            recordHandler: { _, _, _ in
                 recordCount += 1
             }
         )

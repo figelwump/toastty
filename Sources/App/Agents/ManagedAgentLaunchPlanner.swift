@@ -61,6 +61,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.nativeSessionObserverRegistry = nativeSessionObserverRegistry
             ?? ManagedAgentNativeSessionObserverRegistry(
                 store: store,
+                sessionRuntimeStore: sessionRuntimeStore,
                 fileManager: fileManager,
                 nowProvider: nowProvider
             )
@@ -429,8 +430,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         }
 
         nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
+        var scopedRecord = record
+        scopedRecord.scopedWorkspaceIDs = currentActiveSession.scopedWorkspaceIDs
         let didUpdate = store.send(
-            .updateTerminalPanelResumeRecord(panelID: currentActiveSession.panelID, resumeRecord: record)
+            .updateTerminalPanelResumeRecord(panelID: currentActiveSession.panelID, resumeRecord: scopedRecord)
         )
         guard didUpdate else { return }
         ToasttyLog.info(
@@ -439,7 +442,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             metadata: [
                 "session_id": sessionID,
                 "panel_id": currentActiveSession.panelID.uuidString,
-                "native_session_id": record.nativeSessionID,
+                "native_session_id": scopedRecord.nativeSessionID,
             ]
         )
     }

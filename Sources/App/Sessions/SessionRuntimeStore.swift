@@ -131,6 +131,7 @@ final class SessionRuntimeStore: ObservableObject {
             )
         )
         publish(nextRegistry, reason: "start_session")
+        synchronizePersistedResumeRecordScope(sessionID: sessionID, in: nextRegistry)
     }
 
     func startProcessWatch(
@@ -1035,7 +1036,8 @@ final class SessionRuntimeStore: ObservableObject {
         reason: ManagedSessionStopReason = .explicit,
         at now: Date
     ) {
-        if let record = sessionRegistry.sessionsByID[sessionID], record.isActive {
+        let activeRecord = sessionRegistry.sessionsByID[sessionID].flatMap { $0.isActive ? $0 : nil }
+        if let record = activeRecord {
             logSessionStop(record, reason: reason, at: now)
         }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
@@ -1049,6 +1051,9 @@ final class SessionRuntimeStore: ObservableObject {
             nextRegistry.stopSession(sessionID: sessionID, at: now)
         }
         publish(nextRegistry, reason: "stop_session")
+        if let activeRecord {
+            clearPersistedResumeRecord(panelID: activeRecord.panelID)
+        }
     }
 
     func stopSessionForPanel(
@@ -1056,7 +1061,8 @@ final class SessionRuntimeStore: ObservableObject {
         reason: ManagedSessionStopReason = .explicit,
         at now: Date
     ) {
-        if let record = sessionRegistry.activeSession(for: panelID) {
+        let activeRecord = sessionRegistry.activeSession(for: panelID)
+        if let record = activeRecord {
             logSessionStop(record, reason: reason, at: now)
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
             codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
@@ -1071,6 +1077,9 @@ final class SessionRuntimeStore: ObservableObject {
             nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
         }
         publish(nextRegistry, reason: "stop_session_for_panel")
+        if activeRecord != nil {
+            clearPersistedResumeRecord(panelID: panelID)
+        }
     }
 
     func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
@@ -1314,7 +1323,43 @@ final class SessionRuntimeStore: ObservableObject {
             ]
         )
         publish(nextRegistry, reason: reason)
+        synchronizePersistedResumeRecordScope(sessionID: sessionID, in: nextRegistry)
         return true
+    }
+
+    private func synchronizePersistedResumeRecordScope(sessionID: String, in registry: SessionRegistry) {
+        guard let record = registry.activeSession(sessionID: sessionID) else { return }
+        updatePersistedResumeRecordScope(
+            panelID: record.panelID,
+            scopedWorkspaceIDs: record.scopedWorkspaceIDs
+        )
+    }
+
+    private func updatePersistedResumeRecordScope(
+        panelID: UUID,
+        scopedWorkspaceIDs: Set<UUID>?
+    ) {
+        guard let store,
+              let selection = store.state.workspaceSelection(containingPanelID: panelID),
+              case .terminal(let terminalState)? = selection.workspace.panelState(for: panelID),
+              var resumeRecord = terminalState.resumeRecord,
+              resumeRecord.scopedWorkspaceIDs != scopedWorkspaceIDs else {
+            return
+        }
+
+        resumeRecord.scopedWorkspaceIDs = scopedWorkspaceIDs
+        _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord))
+    }
+
+    private func clearPersistedResumeRecord(panelID: UUID) {
+        guard let store,
+              let selection = store.state.workspaceSelection(containingPanelID: panelID),
+              case .terminal(let terminalState)? = selection.workspace.panelState(for: panelID),
+              terminalState.resumeRecord != nil else {
+            return
+        }
+
+        _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
     }
 
     private func scopeMetadata(_ scope: Set<UUID>?) -> String {

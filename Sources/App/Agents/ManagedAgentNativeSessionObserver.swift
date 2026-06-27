@@ -110,7 +110,7 @@ struct ManagedAgentNativeSessionObserverTiming {
 
 @MainActor
 final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSessionObserving {
-    typealias ResumeRecordHandler = @MainActor (UUID, ManagedAgentResumeRecord) -> Void
+    typealias ResumeRecordHandler = @MainActor (String, UUID, ManagedAgentResumeRecord) -> Void
 
     private var observationsBySessionID: [String: ManagedAgentNativeSessionObservationContext] = [:]
     private var scanCountBySessionID: [String: Int] = [:]
@@ -135,17 +135,43 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
 
     convenience init(
         store: AppStore,
+        sessionRuntimeStore: SessionRuntimeStore? = nil,
         fileManager: FileManager = .default,
         nowProvider: @escaping @Sendable () -> Date = Date.init
     ) {
         self.init(
             scanner: ManagedAgentNativeSessionFileScanner(nowProvider: nowProvider),
             nowProvider: nowProvider,
-            recordHandler: { [weak store] panelID, record in
-                _ = store?.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: record))
+            recordHandler: { [weak store, weak sessionRuntimeStore] managedSessionID, panelID, record in
+                guard let scopedRecord = Self.resumeRecord(
+                    record,
+                    applyingScopeFrom: sessionRuntimeStore,
+                    managedSessionID: managedSessionID,
+                    panelID: panelID
+                ) else {
+                    return
+                }
+                _ = store?.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: scopedRecord))
             }
         )
         _ = fileManager
+    }
+
+    static func resumeRecord(
+        _ record: ManagedAgentResumeRecord,
+        applyingScopeFrom sessionRuntimeStore: SessionRuntimeStore?,
+        managedSessionID: String,
+        panelID: UUID
+    ) -> ManagedAgentResumeRecord? {
+        guard let sessionRuntimeStore else { return record }
+        guard let activeSession = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: managedSessionID),
+              activeSession.panelID == panelID else {
+            return nil
+        }
+
+        var scopedRecord = record
+        scopedRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        return scopedRecord
     }
 
     deinit {
@@ -295,7 +321,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
                 cwd: candidate.cwd,
                 capturedAt: nowProvider()
             )
-            recordHandler(observation.panelID, record)
+            recordHandler(managedSessionID, observation.panelID, record)
             ToasttyLog.info(
                 "Captured managed agent native resume record",
                 category: .terminal,
