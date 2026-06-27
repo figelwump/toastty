@@ -683,7 +683,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("Process Watch"))
     }
 
-    func testWorkspaceScopedSessionRendersScopedTag() throws {
+    func testWorkspaceScopedSessionRendersScopeCountTag() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "scoped-row",
             sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
@@ -692,8 +692,8 @@ final class SidebarViewTests: XCTestCase {
 
         let textValues = renderedTextValues(in: hostingView)
         XCTAssertTrue(
-            textValues.contains(where: { $0.localizedCaseInsensitiveContains("scoped") }),
-            "Sidebar text values should include scoped tag text: \(textValues)"
+            textValues.contains("1 scope"),
+            "Sidebar text values should include single-scope tag text: \(textValues)"
         )
         XCTAssertTrue(
             textValues.contains(where: { $0.localizedCaseInsensitiveContains("Scoped to: Workspace 1") }),
@@ -716,6 +716,10 @@ final class SidebarViewTests: XCTestCase {
         )
 
         let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(
+            textValues.contains("2 scopes"),
+            "Sidebar text values should include multi-scope tag text: \(textValues)"
+        )
         XCTAssertTrue(
             textValues.contains(where: {
                 $0.contains("Scoped to: Workspace 1 and workspace-scope-diagnostic")

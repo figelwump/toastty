@@ -121,7 +121,7 @@ struct SidebarView: View {
         return lineHeight
     }()
     private static let sessionStatusesTopSpacing: CGFloat = 0
-    private static let workspaceScopeTagLabel = "scoped"
+    private static let workspaceScopeFallbackTagLabel = "scoped"
     private static let workspaceScopeFallbackHelpText = "Workspace-scoped automation is limited to assigned workspaces."
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
@@ -682,6 +682,9 @@ struct SidebarView: View {
             for: workspaceSessionStatus,
             fallbackWorkspace: workspace
         )
+        let scopeTagLabel = Self.workspaceScopeTagLabel(
+            effectiveWorkspaceCount: workspaceSessionStatus.effectiveScopedWorkspaceIDs?.count
+        )
         let accessibilityLabel = Self.sessionAccessibilityLabel(
             agentName: workspaceSessionStatus.displayTitle,
             chipKind: chipKind,
@@ -730,6 +733,7 @@ struct SidebarView: View {
                         isActivePanel: isActivePanel,
                         isHovered: isHovered,
                         isFlashing: isFlashing,
+                        scopeTagLabel: scopeTagLabel,
                         scopeHelpText: scopeHelpText
                     )
                 }
@@ -754,6 +758,7 @@ struct SidebarView: View {
                     isActivePanel: isActivePanel,
                     isHovered: false,
                     isFlashing: isFlashing,
+                    scopeTagLabel: scopeTagLabel,
                     scopeHelpText: scopeHelpText
                 )
                 .accessibilityElement(children: .ignore)
@@ -799,6 +804,7 @@ struct SidebarView: View {
         isActivePanel: Bool,
         isHovered: Bool,
         isFlashing: Bool,
+        scopeTagLabel: String,
         scopeHelpText: String?
     ) -> some View {
         let indicatorState = Self.sessionIndicatorState(for: status.kind)
@@ -832,7 +838,7 @@ struct SidebarView: View {
                 }
 
                 if workspaceSessionStatus.isWorkspaceScoped {
-                    sessionWorkspaceScopeTag(helpText: scopeHelpText)
+                    sessionWorkspaceScopeTag(label: scopeTagLabel, helpText: scopeHelpText)
                 }
 
                 Spacer(minLength: 0)
@@ -1359,10 +1365,21 @@ struct SidebarView: View {
         }
     }
 
-    private func sessionWorkspaceScopeTag(helpText: String?) -> some View {
+    private static func workspaceScopeTagLabel(effectiveWorkspaceCount: Int?) -> String {
+        guard let effectiveWorkspaceCount,
+              effectiveWorkspaceCount > 0 else {
+            return workspaceScopeFallbackTagLabel
+        }
+
+        return effectiveWorkspaceCount == 1
+            ? "1 scope"
+            : "\(effectiveWorkspaceCount) scopes"
+    }
+
+    private func sessionWorkspaceScopeTag(label: String, helpText: String?) -> some View {
         let resolvedHelpText = helpText ?? Self.workspaceScopeFallbackHelpText
 
-        return Text(Self.workspaceScopeTagLabel)
+        return Text(label)
             .font(ToastyTheme.fontWorkspaceSessionChip)
             .foregroundStyle(ToastyTheme.sidebarSessionPathText)
             .padding(.horizontal, 5)
@@ -1372,7 +1389,11 @@ struct SidebarView: View {
                 in: RoundedRectangle(cornerRadius: 4)
             )
             .background {
-                SidebarTooltipBridge(text: resolvedHelpText)
+                ZStack {
+                    SidebarTooltipBridge(text: resolvedHelpText)
+                    SidebarSemanticTextBridge(text: label)
+                        .frame(width: 0, height: 0)
+                }
             }
             .accessibilityLabel("workspace-scoped")
             .accessibilityHint(resolvedHelpText)
