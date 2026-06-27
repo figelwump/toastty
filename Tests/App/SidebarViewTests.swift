@@ -722,6 +722,44 @@ final class SidebarViewTests: XCTestCase {
             }),
             "Sidebar accessibility text should list effective workspace scope names: \(textValues)"
         )
+
+        let tooltipValues = renderedTooltipValues(in: hostingView)
+        XCTAssertTrue(
+            tooltipValues.contains(where: {
+                $0.contains("Scoped to: Workspace 1 and workspace-scope-diagnostic")
+            }),
+            "Sidebar scoped tag should expose a native tooltip with effective workspace names: \(tooltipValues)"
+        )
+    }
+
+    func testWorkspaceScopedSessionTooltipBridgeDoesNotSwallowRowClick() throws {
+        let harness = try makeSidebarHarness(
+            sessionID: "scoped-click-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            scopedWorkspaceIDs: [],
+            sessionPanelPlacement: .backgroundUnread
+        )
+        XCTAssertNotEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
+
+        let tooltipView = try XCTUnwrap(
+            tooltipView(
+                in: harness.hostingView,
+                containing: "Scoped to: Workspace 1"
+            )
+        )
+        let clickLocation = tooltipView.convert(
+            NSPoint(x: tooltipView.bounds.midX, y: tooltipView.bounds.midY),
+            to: nil
+        )
+        try click(window: harness.window, at: clickLocation)
+        pumpMainRunLoop()
+
+        XCTAssertEqual(
+            harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID,
+            harness.panelID
+        )
+
+        harness.window.orderOut(nil)
     }
 
     func testSidebarUnreadBackgroundUsesReadyGreenTint() throws {
@@ -1396,6 +1434,42 @@ final class SidebarViewTests: XCTestCase {
         view.mouseUp(with: mouseUp)
     }
 
+    private func click(
+        window: NSWindow,
+        at location: NSPoint,
+        clickCount: Int = 1
+    ) throws {
+        guard let mouseDown = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: clickCount,
+            pressure: 1
+        ) else {
+            throw NSError(domain: "SidebarViewTests", code: 3, userInfo: nil)
+        }
+        guard let mouseUp = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0.05,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: clickCount,
+            pressure: 0
+        ) else {
+            throw NSError(domain: "SidebarViewTests", code: 4, userInfo: nil)
+        }
+
+        window.sendEvent(mouseDown)
+        window.sendEvent(mouseUp)
+    }
+
     private func pointerInteractionView(in rootView: NSView, workspaceID: UUID) -> PointerInteractionView? {
         if let pointerView = rootView as? PointerInteractionView,
            pointerView.logMetadata["workspaceID"] == workspaceID.uuidString {
@@ -1435,6 +1509,39 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return values
+    }
+
+    private func renderedTooltipValues(in rootView: NSView) -> [String] {
+        Array(Set(recursiveSubviewTooltipValues(in: rootView))).sorted()
+    }
+
+    private func recursiveSubviewTooltipValues(in view: NSView) -> [String] {
+        var values: [String] = []
+        if let tooltip = view.toolTip?.trimmingCharacters(in: .whitespacesAndNewlines),
+           tooltip.isEmpty == false {
+            values.append(tooltip)
+        }
+
+        for subview in view.subviews {
+            values.append(contentsOf: recursiveSubviewTooltipValues(in: subview))
+        }
+
+        return values
+    }
+
+    private func tooltipView(in rootView: NSView, containing text: String) -> NSView? {
+        if let tooltip = rootView.toolTip,
+           tooltip.contains(text) {
+            return rootView
+        }
+
+        for subview in rootView.subviews {
+            if let matchingView = tooltipView(in: subview, containing: text) {
+                return matchingView
+            }
+        }
+
+        return nil
     }
 
     private func recursiveAccessibilityTextValues(

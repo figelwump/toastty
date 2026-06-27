@@ -21,6 +21,21 @@ private struct SidebarSemanticTextBridge: NSViewRepresentable {
     }
 }
 
+private struct SidebarTooltipBridge: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.toolTip = text.isEmpty ? nil : text
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.toolTip = text.isEmpty ? nil : text
+    }
+}
+
 private struct SidebarSessionRowDiagnosticState: Equatable {
     var windowID: UUID
     var workspaceID: UUID
@@ -1356,7 +1371,9 @@ struct SidebarView: View {
                 ToastyTheme.sidebarSessionPathText.opacity(0.12),
                 in: RoundedRectangle(cornerRadius: 4)
             )
-            .help(resolvedHelpText)
+            .background {
+                SidebarTooltipBridge(text: resolvedHelpText)
+            }
             .accessibilityLabel("workspace-scoped")
             .accessibilityHint(resolvedHelpText)
     }
