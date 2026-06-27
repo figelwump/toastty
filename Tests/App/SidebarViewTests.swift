@@ -499,6 +499,209 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(indicatorFrame, CGRect(x: 8, y: 160, width: 244, height: 2))
     }
 
+    func testHiddenSessionPillStateReturnsEmptyWhenListFitsViewport() {
+        let rows = makeSidebarSessionRowIDs(count: 3)
+        let state = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: [
+                rows[0]: CGRect(x: 0, y: 40, width: 240, height: 32),
+                rows[1]: CGRect(x: 0, y: 76, width: 240, height: 32),
+                rows[2]: CGRect(x: 0, y: 112, width: 240, height: 32),
+            ],
+            unreadSessionRowIDs: [],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+
+        XCTAssertNil(state.above)
+        XCTAssertNil(state.below)
+    }
+
+    func testHiddenSessionPillStateCountsOnlyBelowAtTopOfList() {
+        let rows = makeSidebarSessionRowIDs(count: 4)
+        let state = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: [
+                rows[0]: CGRect(x: 0, y: 40, width: 240, height: 36),
+                rows[1]: CGRect(x: 0, y: 82, width: 240, height: 36),
+                rows[2]: CGRect(x: 0, y: 205, width: 240, height: 36),
+                rows[3]: CGRect(x: 0, y: 247, width: 240, height: 36),
+            ],
+            unreadSessionRowIDs: [rows[3]],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+
+        XCTAssertNil(state.above)
+        XCTAssertEqual(state.below?.direction, .below)
+        XCTAssertEqual(state.below?.count, 2)
+        XCTAssertEqual(state.below?.targetID, rows[2])
+        XCTAssertEqual(state.below?.hasUnread, true)
+    }
+
+    func testHiddenSessionPillStateCountsBothDirectionsInMiddle() {
+        let rows = makeSidebarSessionRowIDs(count: 6)
+        let state = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: [
+                rows[0]: CGRect(x: 0, y: -90, width: 240, height: 40),
+                rows[1]: CGRect(x: 0, y: -20, width: 240, height: 40),
+                rows[2]: CGRect(x: 0, y: 24, width: 240, height: 40),
+                rows[3]: CGRect(x: 0, y: 90, width: 240, height: 40),
+                rows[4]: CGRect(x: 0, y: 180, width: 240, height: 35),
+                rows[5]: CGRect(x: 0, y: 210, width: 240, height: 40),
+            ],
+            unreadSessionRowIDs: [rows[0]],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+
+        XCTAssertEqual(state.above?.count, 2)
+        XCTAssertEqual(state.above?.targetID, rows[1])
+        XCTAssertEqual(state.above?.hasUnread, true)
+        XCTAssertEqual(state.below?.count, 1)
+        XCTAssertEqual(state.below?.targetID, rows[5])
+        XCTAssertEqual(state.below?.hasUnread, false)
+    }
+
+    func testHiddenSessionPillStateCountsOnlyAboveAtBottomOfList() {
+        let rows = makeSidebarSessionRowIDs(count: 3)
+        let state = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: [
+                rows[0]: CGRect(x: 0, y: -90, width: 240, height: 40),
+                rows[1]: CGRect(x: 0, y: -45, width: 240, height: 40),
+                rows[2]: CGRect(x: 0, y: 52, width: 240, height: 40),
+            ],
+            unreadSessionRowIDs: [],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+
+        XCTAssertEqual(state.above?.direction, .above)
+        XCTAssertEqual(state.above?.count, 2)
+        XCTAssertEqual(state.above?.targetID, rows[1])
+        XCTAssertNil(state.below)
+    }
+
+    func testHiddenSessionPillStateTreatsPartiallyVisibleRowsAsVisible() {
+        let rows = makeSidebarSessionRowIDs(count: 2)
+        let state = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: [
+                rows[0]: CGRect(x: 0, y: 20, width: 240, height: 40),
+                rows[1]: CGRect(x: 0, y: 190, width: 240, height: 40),
+            ],
+            unreadSessionRowIDs: [rows[0], rows[1]],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+
+        XCTAssertNil(state.above)
+        XCTAssertNil(state.below)
+    }
+
+    func testHiddenSessionPillStateUsesBoundaryEpsilon() {
+        let rows = makeSidebarSessionRowIDs(count: 4)
+        let state = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: [
+                rows[0]: CGRect(x: 0, y: 0, width: 240, height: 33.5),
+                rows[1]: CGRect(x: 0, y: 0, width: 240, height: 33.6),
+                rows[2]: CGRect(x: 0, y: 198.5, width: 240, height: 40),
+                rows[3]: CGRect(x: 0, y: 198.4, width: 240, height: 40),
+            ],
+            unreadSessionRowIDs: [],
+            viewportHeight: 200,
+            visibleTop: 32,
+            epsilon: 1.5
+        )
+
+        XCTAssertEqual(state.above?.count, 1)
+        XCTAssertEqual(state.above?.targetID, rows[0])
+        XCTAssertEqual(state.below?.count, 1)
+        XCTAssertEqual(state.below?.targetID, rows[2])
+    }
+
+    func testHiddenSessionPillStateAggregatesUnreadOnlyFromHiddenRows() {
+        let rows = makeSidebarSessionRowIDs(count: 4)
+        let framesByID: [SidebarView.SidebarSessionRowID: CGRect] = [
+            rows[0]: CGRect(x: 0, y: -70, width: 240, height: 40),
+            rows[1]: CGRect(x: 0, y: 60, width: 240, height: 40),
+            rows[2]: CGRect(x: 0, y: 110, width: 240, height: 40),
+            rows[3]: CGRect(x: 0, y: 220, width: 240, height: 40),
+        ]
+        let visibleUnreadState = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: framesByID,
+            unreadSessionRowIDs: [rows[1]],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+        let hiddenUnreadState = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: framesByID,
+            unreadSessionRowIDs: [rows[0], rows[3]],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+
+        XCTAssertEqual(visibleUnreadState.above?.hasUnread, false)
+        XCTAssertEqual(visibleUnreadState.below?.hasUnread, false)
+        XCTAssertEqual(hiddenUnreadState.above?.hasUnread, true)
+        XCTAssertEqual(hiddenUnreadState.below?.hasUnread, true)
+    }
+
+    func testHiddenSessionPillAccessibilityLabelIncludesDirectionCountAndUnreadState() {
+        let rows = makeSidebarSessionRowIDs(count: 2)
+
+        XCTAssertEqual(
+            SidebarView.hiddenSessionPillAccessibilityLabel(
+                SidebarView.HiddenSessionPill(
+                    direction: .above,
+                    count: 1,
+                    hasUnread: false,
+                    targetID: rows[0]
+                )
+            ),
+            "1 session hidden above"
+        )
+        XCTAssertEqual(
+            SidebarView.hiddenSessionPillAccessibilityLabel(
+                SidebarView.HiddenSessionPill(
+                    direction: .below,
+                    count: 2,
+                    hasUnread: true,
+                    targetID: rows[1]
+                )
+            ),
+            "2 sessions hidden below, unread"
+        )
+    }
+
+    func testHiddenSessionScrollAnchorUsesClearanceWithinUsableRange() {
+        let above = SidebarView.hiddenSessionScrollAnchor(for: .above, viewportHeight: 200)
+        let below = SidebarView.hiddenSessionScrollAnchor(for: .below, viewportHeight: 200)
+
+        XCTAssertEqual(above.x, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(above.y, 40.0 / 156.0, accuracy: 0.0001)
+        XCTAssertEqual(below.x, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(below.y, 116.0 / 156.0, accuracy: 0.0001)
+    }
+
+    func testHiddenSessionScrollAnchorClampsForSmallViewports() {
+        let above = SidebarView.hiddenSessionScrollAnchor(for: .above, viewportHeight: 60)
+        let below = SidebarView.hiddenSessionScrollAnchor(for: .below, viewportHeight: 60)
+
+        XCTAssertEqual(above.y, 0.35, accuracy: 0.0001)
+        XCTAssertEqual(below.y, 0.65, accuracy: 0.0001)
+    }
+
+    func testHiddenSessionScrollAnchorFallsBackForInvalidViewports() {
+        XCTAssertEqual(SidebarView.hiddenSessionScrollAnchor(for: .above, viewportHeight: 0), .top)
+        XCTAssertEqual(SidebarView.hiddenSessionScrollAnchor(for: .below, viewportHeight: .infinity), .bottom)
+    }
+
     func testWorkspaceDragActivationUsesVerticalThreshold() {
         XCTAssertFalse(
             SidebarView.workspaceDragActivationExceeded(translation: CGSize(width: 30, height: 3.9))
@@ -982,6 +1185,19 @@ final class SidebarViewTests: XCTestCase {
 
         guard duration > 0 else { return }
         RunLoop.main.run(until: Date().addingTimeInterval(duration))
+    }
+
+    private func makeSidebarSessionRowIDs(
+        count: Int,
+        workspaceID: UUID = UUID()
+    ) -> [SidebarView.SidebarSessionRowID] {
+        (0..<count).map { index in
+            SidebarView.SidebarSessionRowID(
+                workspaceID: workspaceID,
+                sessionID: "session-\(index)",
+                panelID: UUID()
+            )
+        }
     }
 
     private func makeSidebarHostingView(
