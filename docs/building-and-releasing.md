@@ -86,6 +86,9 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 # Workspace tabs screenshot smoke
 ./scripts/automation/workspace-tabs-smoke.sh
 
+# Workspace-scope CLI/socket smoke
+./scripts/automation/workspace-scope-smoke.sh
+
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
 
@@ -112,6 +115,12 @@ TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
   --smoke-test workspace-tabs \
   --scope head \
   --require-remote
+
+# Remote workspace-scope CLI/socket smoke
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/validate.sh \
+  --smoke-test workspace-scope \
+  --scope working-tree
 
 # Remote shortcut-hints screenshot smoke
 TOASTTY_REMOTE_GUI_HOST=mac-mini.local \

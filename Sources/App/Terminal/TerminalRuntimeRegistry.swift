@@ -1636,13 +1636,15 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         }
 
         do {
+            let restoredScopedWorkspaceIDs = restoredScopedWorkspaceIDs(from: record)
             let plan = try restoredManagedLaunchPlanner.prepareManagedLaunch(
                 ManagedAgentLaunchRequest(
                     agent: record.agent,
                     panelID: panelID,
                     argv: argv,
                     cwd: record.cwd
-                )
+                ),
+                inheritedScopedWorkspaceIDs: restoredScopedWorkspaceIDs
             )
 
             var commandEnvironment = plan.environment
@@ -1691,6 +1693,12 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
             return nil
         }
+    }
+
+    private func restoredScopedWorkspaceIDs(from record: ManagedAgentResumeRecord) -> Set<UUID>? {
+        guard let scopedWorkspaceIDs = record.scopedWorkspaceIDs else { return nil }
+        guard let store else { return scopedWorkspaceIDs }
+        return scopedWorkspaceIDs.intersection(Set(store.state.workspacesByID.keys))
     }
 
     private func restoredManagedLaunchMetadata(

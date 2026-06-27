@@ -237,6 +237,45 @@ final class WorkspaceLayoutResumeRecordLoggingTests: XCTestCase {
         XCTAssertEqual(resumeLog.metadata["panel_id"], panelID.uuidString)
     }
 
+    func testApplicationWillTerminateFlushPreservesScopedResumeRecord() throws {
+        let fileURL = temporaryLayoutFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let selection = try XCTUnwrap(store.state.selectedWorkspaceSelection())
+        let panelID = try XCTUnwrap(selection.workspace.focusedPanelID)
+        let record = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/toastty/session.jsonl",
+            cwd: "/tmp/toastty",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scopedWorkspaceIDs: [selection.workspaceID]
+        )
+        XCTAssertTrue(store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: record)))
+
+        let coordinator = WorkspaceLayoutPersistenceCoordinator(
+            context: WorkspaceLayoutPersistenceContext(
+                profileID: "test-profile",
+                fileURL: fileURL,
+                shouldMigrateLegacyStore: false
+            )
+        )
+
+        coordinator.flushCurrentState(store.state, reason: "application_will_terminate")
+
+        let persistedLayout = try XCTUnwrap(
+            WorkspaceLayoutPersistenceStore(fileURL: fileURL).loadLayout(for: "test-profile")?.layout
+        )
+        let restoredState = persistedLayout.makeAppState()
+        let restoredWorkspace = try XCTUnwrap(restoredState.workspacesByID[selection.workspaceID])
+        guard case .terminal(let restoredTerminalState)? = restoredWorkspace.panelState(for: panelID) else {
+            XCTFail("Expected persisted panel to restore as terminal")
+            return
+        }
+
+        XCTAssertEqual(restoredTerminalState.resumeRecord?.scopedWorkspaceIDs, Set([selection.workspaceID]))
+    }
+
     private func temporaryLayoutFileURL() -> URL {
         FileManager.default.temporaryDirectory
             .appending(path: "toastty-layout-resume-record-logging-\(UUID().uuidString)", directoryHint: .isDirectory)

@@ -2214,7 +2214,8 @@ final class TerminalMetadataServiceTests: XCTestCase {
             nativeSessionID: "pi-session-id",
             sessionFilePath: "/tmp/toastty/pi-session.jsonl",
             cwd: "/tmp/toastty",
-            capturedAt: Date(timeIntervalSince1970: 1_234)
+            capturedAt: Date(timeIntervalSince1970: 1_234),
+            scopedWorkspaceIDs: [workspaceID]
         )
         XCTAssertTrue(
             store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord))

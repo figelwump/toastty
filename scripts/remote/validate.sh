@@ -34,7 +34,7 @@ disposable remote worktree, syncs the requested change scope into it, runs the
 selected validation flow, and copies the artifacts back locally.
 
 Options:
-  --smoke-test smoke-ui|workspace-tabs|shortcut-hints|shortcut-trace
+  --smoke-test smoke-ui|workspace-tabs|workspace-scope|shortcut-hints|shortcut-trace
                                       Remote smoke test to run
   --scope working-tree|head|ref         Local change scope to validate (default: working-tree)
   --ref <git-ref>                       Git ref to export when --scope ref is used
@@ -116,6 +116,9 @@ smoke_script_path() {
     workspace-tabs)
       printf 'scripts/automation/workspace-tabs-smoke.sh\n'
       ;;
+    workspace-scope)
+      printf 'scripts/automation/workspace-scope-smoke.sh\n'
+      ;;
     shortcut-hints)
       printf 'scripts/automation/shortcut-hints-smoke.sh\n'
       ;;
@@ -137,6 +140,9 @@ smoke_run_id() {
       ;;
     workspace-tabs)
       printf 'workspace-tabs-smoke-%s\n' "$run_label"
+      ;;
+    workspace-scope)
+      printf 'workspace-scope-smoke-%s\n' "$run_label"
       ;;
     shortcut-hints)
       printf 'shortcut-hints-smoke-%s\n' "$run_label"
@@ -165,6 +171,13 @@ EOF
 FIXTURE
 UNREAD_FIXTURE
 TOASTTY_WORKSPACE_TABS_RESTORE_FRONT_APP
+TUIST_DISABLE_GHOSTTY
+TOASTTY_DISABLE_GHOSTTY
+EOF
+      ;;
+    workspace-scope)
+      cat <<'EOF'
+TOASTTY_WORKSPACE_SCOPE_RESTORE_FRONT_APP
 TUIST_DISABLE_GHOSTTY
 TOASTTY_DISABLE_GHOSTTY
 EOF

@@ -240,6 +240,158 @@ final class TerminalAppControlTests: XCTestCase {
         }
         XCTAssertEqual(firstTab.string("title"), "Live Right Panel")
     }
+
+    func testScopedCallerCannotReadTerminalStateOutsideWorkspaceScope() throws {
+        let fixture = try TerminalAppControlFixture()
+        let existingWorkspaceIDs = Set(fixture.store.state.window(id: fixture.windowID)?.workspaceIDs ?? [])
+        XCTAssertTrue(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: nil, activate: true)))
+        let otherWorkspaceID = try XCTUnwrap(
+            fixture.store.state.window(id: fixture.windowID)?.workspaceIDs.first {
+                existingWorkspaceIDs.contains($0) == false
+            }
+        )
+        let otherPanelID = try XCTUnwrap(fixture.store.state.workspacesByID[otherWorkspaceID]?.focusedPanelID)
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "caller-scoped",
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [],
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        XCTAssertThrowsError(
+            try fixture.executor.runQuery(
+                id: AppControlQueryID.terminalState.rawValue,
+                args: ["panelID": .string(otherPanelID.uuidString)],
+                context: AutomationRequestContext(
+                    callerSessionID: "caller-scoped",
+                    commandName: "app_control.run_query"
+                )
+            )
+        ) { error in
+            guard case AutomationSocketError.scopeDenied(let workspaceID) = error else {
+                XCTFail("expected scopeDenied, got \(error)")
+                return
+            }
+            XCTAssertEqual(workspaceID, otherWorkspaceID)
+        }
+    }
+
+    func testScopedCallerCannotMoveWorkspaceAcrossOutOfScopeDestinationIndex() throws {
+        let fixture = try TerminalAppControlFixture()
+        XCTAssertTrue(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Other", activate: false)))
+        let window = try XCTUnwrap(fixture.store.state.window(id: fixture.windowID))
+        let originalIndex = try XCTUnwrap(window.workspaceIDs.firstIndex(of: fixture.workspaceID))
+        let otherWorkspaceID = try XCTUnwrap(window.workspaceIDs.first { $0 != fixture.workspaceID })
+        let otherIndex = try XCTUnwrap(window.workspaceIDs.firstIndex(of: otherWorkspaceID))
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "caller-move",
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [],
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        XCTAssertThrowsError(
+            try fixture.executor.runAction(
+                id: AppControlActionID.workspaceMove.rawValue,
+                args: [
+                    "windowID": .string(fixture.windowID.uuidString),
+                    "index": .int(originalIndex + 1),
+                    "toIndex": .int(otherIndex + 1),
+                ],
+                context: AutomationRequestContext(
+                    callerSessionID: "caller-move",
+                    commandName: "app_control.run_action"
+                )
+            )
+        ) { error in
+            guard case AutomationSocketError.scopeDenied(let workspaceID) = error else {
+                XCTFail("expected scopeDenied, got \(error)")
+                return
+            }
+            XCTAssertEqual(workspaceID, otherWorkspaceID)
+        }
+    }
+
+    func testWorkspaceCreateAutoBindsNewWorkspaceToScopedCaller() throws {
+        let fixture = try TerminalAppControlFixture()
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "caller-create",
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [],
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let outcome = try fixture.executor.runAction(
+            id: AppControlActionID.workspaceCreate.rawValue,
+            args: ["windowID": .string(fixture.windowID.uuidString)],
+            context: AutomationRequestContext(
+                callerSessionID: "caller-create",
+                commandName: "app_control.run_action"
+            )
+        )
+
+        let rawCreatedWorkspaceID = try XCTUnwrap(outcome.result?.string("workspaceID"))
+        let createdWorkspaceID = try XCTUnwrap(UUID(uuidString: rawCreatedWorkspaceID))
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.scope(ofSessionID: "caller-create"),
+            [createdWorkspaceID]
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.allowsWorkspaceAutomation(
+                callerSessionID: "caller-create",
+                of: createdWorkspaceID
+            )
+        )
+    }
+
+    func testAgentLaunchChildInheritsScopedParentEffectiveWorkspaceScope() throws {
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let fixture = try TerminalAppControlFixture(agentTerminalCommandRouter: terminalRouter)
+        let explicitWorkspaceID = UUID()
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "parent-scoped",
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [explicitWorkspaceID],
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let outcome = try fixture.executor.runAction(
+            id: AppControlActionID.agentLaunch.rawValue,
+            args: [
+                "profileID": .string("codex"),
+                "workspaceID": .string(fixture.workspaceID.uuidString),
+            ],
+            context: AutomationRequestContext(
+                callerSessionID: "parent-scoped",
+                commandName: "app_control.run_action"
+            )
+        )
+
+        let childSessionID = try XCTUnwrap(outcome.result?.string("sessionID"))
+        let childRecord = try XCTUnwrap(fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: childSessionID))
+        XCTAssertEqual(childRecord.scopedWorkspaceIDs, [explicitWorkspaceID, fixture.workspaceID])
+    }
 }
 
 @MainActor
@@ -247,6 +399,7 @@ private struct TerminalAppControlFixture {
     let store: AppStore
     let executor: AppControlExecutor
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let sessionRuntimeStore: SessionRuntimeStore
     let windowID: UUID
     let workspaceID: UUID
     let panelID: UUID
@@ -266,7 +419,7 @@ private struct TerminalAppControlFixture {
         terminalRuntimeRegistry = TerminalRuntimeRegistry()
         terminalRuntimeRegistry.bind(store: store)
         let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
-        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
 

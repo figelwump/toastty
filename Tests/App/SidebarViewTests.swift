@@ -683,6 +683,89 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("Process Watch"))
     }
 
+    func testWorkspaceScopedSessionRendersScopeCountTag() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "scoped-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            scopedWorkspaceIDs: []
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(
+            textValues.contains("1 scope"),
+            "Sidebar text values should include single-scope tag text: \(textValues)"
+        )
+        XCTAssertTrue(
+            textValues.contains(where: { $0.localizedCaseInsensitiveContains("Scoped to: Workspace 1") }),
+            "Sidebar accessibility text should describe workspace scope: \(textValues)"
+        )
+    }
+
+    func testWorkspaceScopedSessionTooltipListsEffectiveWorkspaceNames() throws {
+        let additionalWorkspaceID = UUID()
+        let additionalWorkspace = makeSinglePanelWorkspace(
+            id: additionalWorkspaceID,
+            title: "workspace-scope-diagnostic"
+        )
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "multi-scope-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            scopedWorkspaceIDs: [additionalWorkspaceID],
+            additionalWorkspaces: [additionalWorkspace],
+            prependAdditionalWorkspaces: true
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(
+            textValues.contains("2 scopes"),
+            "Sidebar text values should include multi-scope tag text: \(textValues)"
+        )
+        XCTAssertTrue(
+            textValues.contains(where: {
+                $0.contains("Scoped to: Workspace 1 and workspace-scope-diagnostic")
+            }),
+            "Sidebar accessibility text should list effective workspace scope names: \(textValues)"
+        )
+
+        let tooltipValues = renderedTooltipValues(in: hostingView)
+        XCTAssertTrue(
+            tooltipValues.contains(where: {
+                $0.contains("Scoped to: Workspace 1 and workspace-scope-diagnostic")
+            }),
+            "Sidebar scoped tag should expose a native tooltip with effective workspace names: \(tooltipValues)"
+        )
+    }
+
+    func testWorkspaceScopedSessionTooltipBridgeDoesNotSwallowRowClick() throws {
+        let harness = try makeSidebarHarness(
+            sessionID: "scoped-click-row",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready"),
+            scopedWorkspaceIDs: [],
+            sessionPanelPlacement: .backgroundUnread
+        )
+        XCTAssertNotEqual(harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID, harness.panelID)
+
+        let tooltipView = try XCTUnwrap(
+            tooltipView(
+                in: harness.hostingView,
+                containing: "Scoped to: Workspace 1"
+            )
+        )
+        let clickLocation = tooltipView.convert(
+            NSPoint(x: tooltipView.bounds.midX, y: tooltipView.bounds.midY),
+            to: nil
+        )
+        try click(window: harness.window, at: clickLocation)
+        pumpMainRunLoop()
+
+        XCTAssertEqual(
+            harness.store.selectedWorkspace(in: harness.windowID)?.focusedPanelID,
+            harness.panelID
+        )
+
+        harness.window.orderOut(nil)
+    }
+
     func testSidebarUnreadBackgroundUsesReadyGreenTint() throws {
         let unreadColor = try XCTUnwrap(
             NSColor(ToastyTheme.sidebarSessionUnreadBackground).usingColorSpace(.deviceRGB)
@@ -989,6 +1072,9 @@ final class SidebarViewTests: XCTestCase {
         agent: AgentKind = .codex,
         sessionStatus: SessionStatus,
         displayTitleOverride: String? = nil,
+        scopedWorkspaceIDs: Set<UUID>? = nil,
+        additionalWorkspaces: [WorkspaceState] = [],
+        prependAdditionalWorkspaces: Bool = false,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> NSView {
         try makeSidebarHarness(
@@ -996,6 +1082,9 @@ final class SidebarViewTests: XCTestCase {
             agent: agent,
             sessionStatus: sessionStatus,
             displayTitleOverride: displayTitleOverride,
+            scopedWorkspaceIDs: scopedWorkspaceIDs,
+            additionalWorkspaces: additionalWorkspaces,
+            prependAdditionalWorkspaces: prependAdditionalWorkspaces,
             sessionPanelPlacement: sessionPanelPlacement
         ).hostingView
     }
@@ -1012,13 +1101,28 @@ final class SidebarViewTests: XCTestCase {
         agent: AgentKind = .codex,
         sessionStatus: SessionStatus,
         displayTitleOverride: String? = nil,
+        scopedWorkspaceIDs: Set<UUID>? = nil,
+        additionalWorkspaces: [WorkspaceState] = [],
+        prependAdditionalWorkspaces: Bool = false,
         sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> SidebarHarness {
         let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
-        let state = harnessState.state
+        var state = harnessState.state
         let windowID = harnessState.windowID
         let workspaceID = harnessState.workspaceID
         let panelID = harnessState.sessionPanelID
+        if additionalWorkspaces.isEmpty == false,
+           let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) {
+            let additionalWorkspaceIDs = additionalWorkspaces.map(\.id)
+            if prependAdditionalWorkspaces {
+                state.windows[windowIndex].workspaceIDs.insert(contentsOf: additionalWorkspaceIDs, at: 0)
+            } else {
+                state.windows[windowIndex].workspaceIDs.append(contentsOf: additionalWorkspaceIDs)
+            }
+            for workspace in additionalWorkspaces {
+                state.workspacesByID[workspace.id] = workspace
+            }
+        }
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -1035,6 +1139,7 @@ final class SidebarViewTests: XCTestCase {
             displayTitleOverride: displayTitleOverride,
             cwd: "/repo/sidebar",
             repoRoot: "/repo",
+            scopedWorkspaceIDs: scopedWorkspaceIDs,
             at: Date(timeIntervalSince1970: 1_700_000_000)
         )
         sessionRuntimeStore.updateStatus(
@@ -1222,6 +1327,19 @@ final class SidebarViewTests: XCTestCase {
         return (state, windowID)
     }
 
+    private func makeSinglePanelWorkspace(id: UUID, title: String) -> WorkspaceState {
+        let panelID = UUID()
+        return WorkspaceState(
+            id: id,
+            title: title,
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .terminal(TerminalPanelState(title: title, shell: "zsh", cwd: "/repo"))
+            ],
+            focusedPanelID: panelID
+        )
+    }
+
     private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {
         view.layoutSubtreeIfNeeded()
         let bounds = view.bounds
@@ -1320,6 +1438,42 @@ final class SidebarViewTests: XCTestCase {
         view.mouseUp(with: mouseUp)
     }
 
+    private func click(
+        window: NSWindow,
+        at location: NSPoint,
+        clickCount: Int = 1
+    ) throws {
+        guard let mouseDown = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: clickCount,
+            pressure: 1
+        ) else {
+            throw NSError(domain: "SidebarViewTests", code: 3, userInfo: nil)
+        }
+        guard let mouseUp = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0.05,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: clickCount,
+            pressure: 0
+        ) else {
+            throw NSError(domain: "SidebarViewTests", code: 4, userInfo: nil)
+        }
+
+        window.sendEvent(mouseDown)
+        window.sendEvent(mouseUp)
+    }
+
     private func pointerInteractionView(in rootView: NSView, workspaceID: UUID) -> PointerInteractionView? {
         if let pointerView = rootView as? PointerInteractionView,
            pointerView.logMetadata["workspaceID"] == workspaceID.uuidString {
@@ -1359,6 +1513,39 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return values
+    }
+
+    private func renderedTooltipValues(in rootView: NSView) -> [String] {
+        Array(Set(recursiveSubviewTooltipValues(in: rootView))).sorted()
+    }
+
+    private func recursiveSubviewTooltipValues(in view: NSView) -> [String] {
+        var values: [String] = []
+        if let tooltip = view.toolTip?.trimmingCharacters(in: .whitespacesAndNewlines),
+           tooltip.isEmpty == false {
+            values.append(tooltip)
+        }
+
+        for subview in view.subviews {
+            values.append(contentsOf: recursiveSubviewTooltipValues(in: subview))
+        }
+
+        return values
+    }
+
+    private func tooltipView(in rootView: NSView, containing text: String) -> NSView? {
+        if let tooltip = rootView.toolTip,
+           tooltip.contains(text) {
+            return rootView
+        }
+
+        for subview in rootView.subviews {
+            if let matchingView = tooltipView(in: subview, containing: text) {
+                return matchingView
+            }
+        }
+
+        return nil
     }
 
     private func recursiveAccessibilityTextValues(

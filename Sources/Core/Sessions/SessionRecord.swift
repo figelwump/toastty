@@ -30,6 +30,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var cwd: String?
     public var touchedFiles: [String]
     public var touchedHunks: [HunkRef]
+    public var scopedWorkspaceIDs: Set<UUID>?
     public var startedAt: Date
     public var updatedAt: Date
     public var stoppedAt: Date?
@@ -48,6 +49,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         cwd: String? = nil,
         touchedFiles: [String] = [],
         touchedHunks: [HunkRef] = [],
+        scopedWorkspaceIDs: Set<UUID>? = nil,
         startedAt: Date,
         updatedAt: Date,
         stoppedAt: Date? = nil
@@ -65,6 +67,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.cwd = cwd
         self.touchedFiles = touchedFiles
         self.touchedHunks = touchedHunks
+        self.scopedWorkspaceIDs = scopedWorkspaceIDs
         self.startedAt = startedAt
         self.updatedAt = updatedAt
         self.stoppedAt = stoppedAt
@@ -94,6 +97,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         touchedFiles = try container.decodeIfPresent([String].self, forKey: .touchedFiles) ?? []
         touchedHunks = try container.decodeIfPresent([HunkRef].self, forKey: .touchedHunks) ?? []
+        scopedWorkspaceIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .scopedWorkspaceIDs)
         startedAt = try container.decode(Date.self, forKey: .startedAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         stoppedAt = try container.decodeIfPresent(Date.self, forKey: .stoppedAt)
@@ -114,6 +118,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         try container.encodeIfPresent(cwd, forKey: .cwd)
         try container.encode(touchedFiles, forKey: .touchedFiles)
         try container.encode(touchedHunks, forKey: .touchedHunks)
+        try container.encodeIfPresent(scopedWorkspaceIDs, forKey: .scopedWorkspaceIDs)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(stoppedAt, forKey: .stoppedAt)
@@ -135,6 +140,7 @@ private extension SessionRecord {
         case cwd
         case touchedFiles
         case touchedHunks
+        case scopedWorkspaceIDs
         case startedAt
         case updatedAt
         case stoppedAt

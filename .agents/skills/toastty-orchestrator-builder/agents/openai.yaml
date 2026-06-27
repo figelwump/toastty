@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Orchestrator Builder"
+  short_description: "Generate scoped Toastty orchestration skills"
+  default_prompt: "Use $toastty-orchestrator-builder to design a custom scoped Toastty orchestrator skill for my workflow."

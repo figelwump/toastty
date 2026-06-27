@@ -4,8 +4,17 @@ import Foundation
 
 @MainActor
 protocol ManagedAgentLaunchPlanning: AnyObject {
-    func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan
+    func prepareManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>?
+    ) throws -> ManagedAgentLaunchPlan
     func discardManagedLaunch(sessionID: String)
+}
+
+extension ManagedAgentLaunchPlanning {
+    func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan {
+        try prepareManagedLaunch(request, inheritedScopedWorkspaceIDs: nil)
+    }
 }
 
 @MainActor
@@ -52,6 +61,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.nativeSessionObserverRegistry = nativeSessionObserverRegistry
             ?? ManagedAgentNativeSessionObserverRegistry(
                 store: store,
+                sessionRuntimeStore: sessionRuntimeStore,
                 fileManager: fileManager,
                 nowProvider: nowProvider
             )
@@ -63,7 +73,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         }
     }
 
-    func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan {
+    func prepareManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
         guard let sessionRuntimeStore else {
             throw AgentLaunchError.serviceUnavailable
         }
@@ -102,6 +115,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             codexStatusTrackingSource: request.agent == .codex ? codexStatusTrackingSource : nil,
             cwd: resolvedCWD,
             repoRoot: repoRoot,
+            scopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             at: launchStart
         )
         sessionRuntimeStore.updateStatus(
@@ -416,8 +430,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         }
 
         nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
+        var scopedRecord = record
+        scopedRecord.scopedWorkspaceIDs = currentActiveSession.scopedWorkspaceIDs
         let didUpdate = store.send(
-            .updateTerminalPanelResumeRecord(panelID: currentActiveSession.panelID, resumeRecord: record)
+            .updateTerminalPanelResumeRecord(panelID: currentActiveSession.panelID, resumeRecord: scopedRecord)
         )
         guard didUpdate else { return }
         ToasttyLog.info(
@@ -426,7 +442,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             metadata: [
                 "session_id": sessionID,
                 "panel_id": currentActiveSession.panelID.uuidString,
-                "native_session_id": record.nativeSessionID,
+                "native_session_id": scopedRecord.nativeSessionID,
             ]
         )
     }

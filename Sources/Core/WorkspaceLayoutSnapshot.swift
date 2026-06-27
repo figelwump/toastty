@@ -34,6 +34,7 @@ public struct WorkspaceLayoutSnapshot: Codable, Equatable, Sendable {
             selectedWindowID: selectedWindowID,
             configuredTerminalFontPoints: nil
         )
+        state.pruneManagedAgentResumeRecordScopes(validWorkspaceIDs: Set(restoredWorkspaces.keys))
         state.pruneDuplicateManagedAgentResumeRecords()
         return state
     }

@@ -71,6 +71,7 @@ Supported smoke tests:
 
 - `smoke-ui`: general UI/socket smoke.
 - `workspace-tabs`: workspace tab behavior.
+- `workspace-scope`: cooperative workspace-scoped automation through the live app, CLI, and socket path.
 - `shortcut-hints`: visible shortcut hints or screenshot/state artifacts.
 - `shortcut-trace`: real AppKit keyboard shortcut tracing.
 
@@ -113,6 +114,7 @@ Common helpers:
 
 - `scripts/automation/smoke-ui.sh`
 - `scripts/automation/workspace-tabs-smoke.sh`
+- `scripts/automation/workspace-scope-smoke.sh`
 - `scripts/automation/shortcut-hints-smoke.sh`
 - `scripts/automation/shortcut-trace.sh`
 - `scripts/automation/smoke-cli-live-control.sh`

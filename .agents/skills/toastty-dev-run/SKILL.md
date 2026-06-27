@@ -117,7 +117,7 @@ Notes:
 - `--scope working-tree` validates the current uncommitted local worktree by syncing it into a disposable remote worktree.
 - `--scope head` validates the current checked-out commit without uncommitted changes.
 - `--scope ref --ref <rev>` validates an explicit ref.
-- `--smoke-test smoke-ui|workspace-tabs|shortcut-hints|shortcut-trace` is the primary supported remote path for automated validation.
+- `--smoke-test smoke-ui|workspace-tabs|workspace-scope|shortcut-hints|shortcut-trace` is the primary supported remote path for automated validation.
 - The remote artifacts come back under `artifacts/remote-gui/<run-label>/remote/`.
 - Smoke runs fall back to a local smoke run if remote preflight fails; pass `--require-remote` when the remote path itself matters.
 - For `--scope head` or `--scope ref`, that local fallback uses a temporary local worktree at the requested ref so the validated snapshot stays aligned with the requested scope.

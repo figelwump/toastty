@@ -88,6 +88,67 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertEqual(pendingConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"], record.nativeSessionID)
     }
 
+    func testSurfaceLaunchConfigurationRestoresWorkspaceScopeForRestoredPanel() async throws {
+        let fixture = try makeRuntimeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let scopedWorkspaceID = UUID()
+        let staleWorkspaceID = UUID()
+        let windowID = UUID()
+        let record = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scopedWorkspaceIDs: [scopedWorkspaceID, staleWorkspaceID]
+        )
+        let store = AppStore(
+            state: makeRuntimeResumeState(
+                windowID: windowID,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                resumeRecord: record,
+                profileBinding: TerminalProfileBinding(profileID: "zmx"),
+                additionalWorkspaceID: scopedWorkspaceID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        let profileProvider = makeRuntimeResumeProfileProvider()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let agentCatalogProvider = TestAgentCatalogProvider(
+            profiles: [
+                AgentProfile(
+                    id: "codex",
+                    displayName: "Codex",
+                    argv: ["agent-safehouse", "--workdir=/tmp/repo", "codex"]
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
+        registry.setAgentCatalogProvider(agentCatalogProvider)
+        registry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+        let restoredManagedLaunchPlanner = makeRestoredManagedLaunchPlanner(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+        registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
+        registry.bind(store: store)
+
+        _ = registry.surfaceLaunchConfiguration(for: panelID)
+
+        let activeSession = try XCTUnwrap(sessionRuntimeStore.sessionRegistry.activeSession(for: panelID))
+        XCTAssertEqual(activeSession.scopedWorkspaceIDs, Set([scopedWorkspaceID]))
+        XCTAssertEqual(
+            sessionRuntimeStore.effectiveWorkspaceScope(sessionID: activeSession.sessionID),
+            Set([workspaceID, scopedWorkspaceID])
+        )
+        XCTAssertTrue(sessionRuntimeStore.isWorkspaceScoped(sessionID: activeSession.sessionID))
+    }
+
     func testSurfaceLaunchConfigurationUsesValidClaudeResumeRecordForRestoredPanel() async throws {
         let fixture = try makeRuntimeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -433,38 +494,60 @@ private func makeRuntimeResumeState(
     workspaceID: UUID,
     panelID: UUID,
     resumeRecord: ManagedAgentResumeRecord,
-    profileBinding: TerminalProfileBinding?
+    profileBinding: TerminalProfileBinding?,
+    additionalWorkspaceID: UUID? = nil
 ) -> AppState {
     let slotID = UUID()
+    let workspace = WorkspaceState(
+        id: workspaceID,
+        title: "Workspace 1",
+        layoutTree: .slot(slotID: slotID, panelID: panelID),
+        panels: [
+            panelID: .terminal(
+                TerminalPanelState(
+                    title: "Terminal 1",
+                    shell: "zsh",
+                    cwd: "",
+                    launchWorkingDirectory: "/tmp/stale",
+                    profileBinding: profileBinding,
+                    resumeRecord: resumeRecord
+                )
+            ),
+        ],
+        focusedPanelID: panelID
+    )
+    var workspaceIDs = [workspaceID]
+    var workspacesByID = [workspaceID: workspace]
+    if let additionalWorkspaceID {
+        let additionalPanelID = UUID()
+        workspaceIDs.append(additionalWorkspaceID)
+        workspacesByID[additionalWorkspaceID] = WorkspaceState(
+            id: additionalWorkspaceID,
+            title: "Workspace 2",
+            layoutTree: .slot(slotID: UUID(), panelID: additionalPanelID),
+            panels: [
+                additionalPanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 2",
+                        shell: "zsh",
+                        cwd: "/tmp/scoped"
+                    )
+                ),
+            ],
+            focusedPanelID: additionalPanelID
+        )
+    }
+
     return AppState(
         windows: [
             WindowState(
                 id: windowID,
                 frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
-                workspaceIDs: [workspaceID],
+                workspaceIDs: workspaceIDs,
                 selectedWorkspaceID: workspaceID
             ),
         ],
-        workspacesByID: [
-            workspaceID: WorkspaceState(
-                id: workspaceID,
-                title: "Workspace 1",
-                layoutTree: .slot(slotID: slotID, panelID: panelID),
-                panels: [
-                    panelID: .terminal(
-                        TerminalPanelState(
-                            title: "Terminal 1",
-                            shell: "zsh",
-                            cwd: "",
-                            launchWorkingDirectory: "/tmp/stale",
-                            profileBinding: profileBinding,
-                            resumeRecord: resumeRecord
-                        )
-                    ),
-                ],
-                focusedPanelID: panelID
-            ),
-        ],
+        workspacesByID: workspacesByID,
         selectedWindowID: windowID
     )
 }

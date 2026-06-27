@@ -28,31 +28,89 @@ enum CLICommand: Equatable {
     case sessionUpdateResumeRecord(sessionID: String, panelID: UUID?, agent: AgentKind, nativeSessionID: String, sessionFilePath: String, cwd: String?)
     case sessionIngestAgentEvent(sessionID: String, panelID: UUID?, source: AgentEventSource)
     case sessionStop(sessionID: String, panelID: UUID?, reason: String?)
+    case sessionScopeShow(sessionID: String)
+    case sessionScopeSetCurrent(sessionID: String, panelID: UUID)
+    case sessionScopeSet(sessionID: String, workspaceIDs: [UUID])
+    case sessionScopeAdd(sessionID: String, workspaceIDs: [UUID])
+    case sessionScopeClear(sessionID: String)
 
-    func makeRequestEnvelope(requestID: String = UUID().uuidString) -> AutomationRequestEnvelope? {
+    func makeRequestEnvelope(
+        callerSessionID: String? = nil,
+        requestID: String = UUID().uuidString
+    ) -> AutomationRequestEnvelope? {
         switch self {
         case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .diagnosticsCollect, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
-            return AutomationRequestEnvelope(requestID: requestID, command: command)
+            return AutomationRequestEnvelope(
+                requestID: requestID,
+                command: command,
+                callerSessionID: callerSessionID
+            )
         case .appControlRun(let kind, let id, let args):
             let command = kind == .action ? "app_control.run_action" : "app_control.run_query"
             return AutomationRequestEnvelope(
                 requestID: requestID,
                 command: command,
+                callerSessionID: callerSessionID,
                 payload: [
                     "id": .string(id),
                     "args": .object(args),
                 ]
             )
+        case .sessionScopeShow(let sessionID):
+            return AutomationRequestEnvelope(
+                requestID: requestID,
+                command: "session.scope.show",
+                callerSessionID: callerSessionID,
+                payload: ["sessionID": .string(sessionID)]
+            )
+        case .sessionScopeSetCurrent(let sessionID, let panelID):
+            return AutomationRequestEnvelope(
+                requestID: requestID,
+                command: "session.scope.set_current",
+                callerSessionID: callerSessionID,
+                payload: [
+                    "sessionID": .string(sessionID),
+                    "panelID": .string(panelID.uuidString),
+                ]
+            )
+        case .sessionScopeSet(let sessionID, let workspaceIDs):
+            return AutomationRequestEnvelope(
+                requestID: requestID,
+                command: "session.scope.set",
+                callerSessionID: callerSessionID,
+                payload: scopePayload(sessionID: sessionID, workspaceIDs: workspaceIDs)
+            )
+        case .sessionScopeAdd(let sessionID, let workspaceIDs):
+            return AutomationRequestEnvelope(
+                requestID: requestID,
+                command: "session.scope.add",
+                callerSessionID: callerSessionID,
+                payload: scopePayload(sessionID: sessionID, workspaceIDs: workspaceIDs)
+            )
+        case .sessionScopeClear(let sessionID):
+            return AutomationRequestEnvelope(
+                requestID: requestID,
+                command: "session.scope.clear",
+                callerSessionID: callerSessionID,
+                payload: ["sessionID": .string(sessionID)]
+            )
         }
+    }
+
+    private func scopePayload(sessionID: String, workspaceIDs: [UUID]) -> [String: AutomationJSONValue] {
+        [
+            "sessionID": .string(sessionID),
+            "workspaceIDs": .array(workspaceIDs.map { .string($0.uuidString) }),
+        ]
     }
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .diagnosticsCollect:
-            preconditionFailure("managed launch preparation is handled as a request")
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .diagnosticsCollect, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
+            preconditionFailure("request-backed commands are handled as requests")
 
         case .notify(let title, let body, let workspaceID, let panelID):
             var payload: [String: AutomationJSONValue] = [
@@ -260,6 +318,25 @@ enum CLICommand: Equatable {
             return "processed \(source.rawValue) event"
         case .sessionStop(let sessionID, _, _):
             return "stopped \(sessionID)"
+        case .sessionScopeShow:
+            return "showed session scope"
+        case .sessionScopeSetCurrent(let sessionID, _):
+            return "set current workspace scope for \(sessionID)"
+        case .sessionScopeSet(let sessionID, _):
+            return "set scope for \(sessionID)"
+        case .sessionScopeAdd(let sessionID, _):
+            return "added scope for \(sessionID)"
+        case .sessionScopeClear(let sessionID):
+            return "cleared scope for \(sessionID)"
+        }
+    }
+
+    var isSessionScopeCommand: Bool {
+        switch self {
+        case .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
+            return true
+        default:
+            return false
         }
     }
 }
@@ -280,17 +357,20 @@ public enum ToasttyCLI {
     public static func run(arguments: [String], environment: [String: String]) -> Int32 {
         do {
             let invocation = try parse(arguments: arguments, environment: environment)
+            let callerSessionID = callerSessionID(from: environment)
             switch invocation.command {
             case .agentPrepareManagedLaunch(let request):
                 return try runManagedAgentPrepareCommand(
                     options: invocation.options,
-                    request: request
+                    request: request,
+                    callerSessionID: callerSessionID
                 )
 
             case .agentManagedLaunchPreflightDecision(let token):
                 return try runManagedAgentPreflightDecisionCommand(
                     options: invocation.options,
-                    token: token
+                    token: token,
+                    callerSessionID: callerSessionID
                 )
 
             case .sessionIngestAgentEvent(let sessionID, let panelID, let source):
@@ -313,7 +393,7 @@ public enum ToasttyCLI {
             default:
                 let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
                 let response: AutomationResponseEnvelope
-                if let request = invocation.command.makeRequestEnvelope() {
+                if let request = invocation.command.makeRequestEnvelope(callerSessionID: callerSessionID) {
                     response = try client.send(request)
                 } else {
                     response = try client.send(invocation.command.makeEventEnvelope())
@@ -323,6 +403,8 @@ public enum ToasttyCLI {
                     try writeStdout(jsonString(for: response))
                 } else if case .appControlList = invocation.command {
                     try writeStdout(renderCatalogListing(response: response))
+                } else if invocation.command.isSessionScopeCommand {
+                    try writeStdout(renderSessionScopeResult(response: response))
                 } else if response.ok {
                     switch invocation.command {
                     case .appControlRun(let kind, _, _):
@@ -424,6 +506,11 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
+      toastty [--json] [--socket-path <path>] session scope show [--session <id>]
+      toastty [--json] [--socket-path <path>] session scope set-current [--session <id>]
+      toastty [--json] [--socket-path <path>] session scope set [--session <id>] --workspace <id> [--workspace <id> ...]
+      toastty [--json] [--socket-path <path>] session scope add [--session <id>] --workspace <id> [--workspace <id> ...]
+      toastty [--json] [--socket-path <path>] session scope clear [--session <id>]
       toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|opencode-plugin|mimocode-plugin|pi-extension [--session <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
@@ -791,6 +878,9 @@ public enum ToasttyCLI {
                 )?.nonEmptyValue
             )
 
+        case "scope":
+            return try parseSessionScopeCommand(remainingArguments, environment: environment)
+
         case "ingest-agent-event":
             let parsed = try parseCommandArguments(
                 remainingArguments,
@@ -851,6 +941,133 @@ public enum ToasttyCLI {
         default:
             throw ToasttyCLIError.usage("unknown session subcommand: \(subcommand)\n\n\(usage)")
         }
+    }
+
+    private static func parseSessionScopeCommand(
+        _ arguments: [String],
+        environment: [String: String]
+    ) throws -> CLICommand {
+        guard let subcommand = arguments.first else {
+            throw ToasttyCLIError.usage("session scope requires a subcommand\n\n\(usage)")
+        }
+
+        let remainingArguments = Array(arguments.dropFirst())
+        switch subcommand {
+        case "show":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--session"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("session scope show does not accept positional arguments\n\n\(usage)")
+            }
+            return .sessionScopeShow(
+                sessionID: try scopeCommandSessionID(in: parsed, environment: environment)
+            )
+
+        case "set":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--session", "--workspace"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("session scope set does not accept positional arguments\n\n\(usage)")
+            }
+            return .sessionScopeSet(
+                sessionID: try scopeCommandSessionID(in: parsed, environment: environment),
+                workspaceIDs: try scopeCommandWorkspaceIDs(in: parsed)
+            )
+
+        case "set-current":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--session"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("session scope set-current does not accept positional arguments\n\n\(usage)")
+            }
+            let sessionID = try scopeCommandSessionID(in: parsed, environment: environment)
+            if let callerSessionID = callerSessionID(from: environment),
+               let explicitSessionID = parsed.singleValue("--session"),
+               explicitSessionID != callerSessionID {
+                throw ToasttyCLIError.usage("session scope set-current can only target the current session; use set --workspace for another session\n\n\(usage)")
+            }
+            return .sessionScopeSetCurrent(
+                sessionID: sessionID,
+                panelID: try scopeCommandCurrentPanelID(environment: environment)
+            )
+
+        case "add":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--session", "--workspace"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("session scope add does not accept positional arguments\n\n\(usage)")
+            }
+            return .sessionScopeAdd(
+                sessionID: try scopeCommandSessionID(in: parsed, environment: environment),
+                workspaceIDs: try scopeCommandWorkspaceIDs(in: parsed)
+            )
+
+        case "clear":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--session"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("session scope clear does not accept positional arguments\n\n\(usage)")
+            }
+            return .sessionScopeClear(
+                sessionID: try scopeCommandSessionID(in: parsed, environment: environment)
+            )
+
+        default:
+            throw ToasttyCLIError.usage("unknown session scope subcommand: \(subcommand)\n\n\(usage)")
+        }
+    }
+
+    private static func scopeCommandSessionID(
+        in parsed: ParsedCommandArguments,
+        environment: [String: String]
+    ) throws -> String {
+        do {
+            return try requireValue(
+                "--session",
+                environmentKey: ToasttyLaunchContextEnvironment.sessionIDKey,
+                in: parsed,
+                environment: environment
+            )
+        } catch let error as ToasttyCLIError {
+            guard case .usage = error else { throw error }
+            throw ToasttyCLIError.usage("--session is required when TOASTTY_SESSION_ID is unavailable\n\n\(usage)")
+        }
+    }
+
+    private static func scopeCommandWorkspaceIDs(
+        in parsed: ParsedCommandArguments
+    ) throws -> [UUID] {
+        let values = parsed.values("--workspace")
+        guard values.isEmpty == false else {
+            throw ToasttyCLIError.usage("session scope requires at least one --workspace\n\n\(usage)")
+        }
+        return try values.map { value in
+            guard let workspaceID = UUID(uuidString: value) else {
+                throw ToasttyCLIError.usage("--workspace must be a UUID")
+            }
+            return workspaceID
+        }
+    }
+
+    private static func scopeCommandCurrentPanelID(environment: [String: String]) throws -> UUID {
+        guard let rawPanelID = environment[ToasttyLaunchContextEnvironment.panelIDKey],
+              rawPanelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw ToasttyCLIError.usage("TOASTTY_PANEL_ID is required for session scope set-current\n\n\(usage)")
+        }
+        guard let panelID = UUID(uuidString: rawPanelID) else {
+            throw ToasttyCLIError.usage("TOASTTY_PANEL_ID must be a UUID")
+        }
+        return panelID
     }
 
     private static func parseCommandArguments(
@@ -1053,6 +1270,14 @@ public enum ToasttyCLI {
             .path
     }
 
+    private static func callerSessionID(from environment: [String: String]) -> String? {
+        guard let value = environment[ToasttyLaunchContextEnvironment.sessionIDKey] else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private static func jsonString(for response: AutomationResponseEnvelope) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1108,6 +1333,40 @@ public enum ToasttyCLI {
             return string
         }
         return fallback
+    }
+
+    private static func renderSessionScopeResult(response: AutomationResponseEnvelope) throws -> String {
+        guard response.ok else {
+            if let error = response.error {
+                throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+            }
+            throw ToasttyCLIError.runtime("request failed")
+        }
+        guard let result = response.result,
+              let sessionID = result.string("sessionID"),
+              let isScoped = result.bool("isScoped") else {
+            throw ToasttyCLIError.runtime("missing session scope result")
+        }
+        guard isScoped else {
+            return "\(sessionID): unrestricted"
+        }
+        let workspaceIDs = result.stringArray("workspaceIDs")
+        let explicitScope = workspaceIDs.isEmpty
+            ? "own workspace only"
+            : workspaceIDs.joined(separator: ",")
+        let effectiveWorkspaceIDs: [String]
+        if case .array(let values)? = result["effectiveWorkspaceIDs"] {
+            effectiveWorkspaceIDs = values.compactMap { value in
+                guard case .string(let string) = value else { return nil }
+                return string
+            }
+        } else {
+            effectiveWorkspaceIDs = []
+        }
+        if effectiveWorkspaceIDs.isEmpty {
+            return "\(sessionID): workspace-scoped \(explicitScope)"
+        }
+        return "\(sessionID): workspace-scoped \(explicitScope) (effective: \(effectiveWorkspaceIDs.joined(separator: ",")))"
     }
 
     private static func decodeAutomationResult<T: Decodable>(_ response: AutomationResponseEnvelope) throws -> T {
@@ -1172,11 +1431,13 @@ public enum ToasttyCLI {
 
     private static func runManagedAgentPrepareCommand(
         options: CLIOptions,
-        request: ManagedAgentLaunchRequest
+        request: ManagedAgentLaunchRequest,
+        callerSessionID: String?
     ) throws -> Int32 {
         let preparation = try ManagedAgentLaunchSocketClient.prepareManagedLaunch(
             request,
-            socketPath: options.socketPath
+            socketPath: options.socketPath,
+            callerSessionID: callerSessionID
         )
 
         let encoder = JSONEncoder()
@@ -1200,11 +1461,13 @@ public enum ToasttyCLI {
 
     private static func runManagedAgentPreflightDecisionCommand(
         options: CLIOptions,
-        token: String
+        token: String,
+        callerSessionID: String?
     ) throws -> Int32 {
         let decision = try ManagedAgentLaunchSocketClient.managedLaunchPreflightDecision(
             token: token,
-            socketPath: options.socketPath
+            socketPath: options.socketPath,
+            callerSessionID: callerSessionID
         )
 
         let encoder = JSONEncoder()

@@ -6,19 +6,22 @@ public struct ManagedAgentResumeRecord: Codable, Equatable, Sendable {
     public var sessionFilePath: String
     public var cwd: String
     public var capturedAt: Date
+    public var scopedWorkspaceIDs: Set<UUID>?
 
     public init(
         agent: AgentKind,
         nativeSessionID: String,
         sessionFilePath: String,
         cwd: String,
-        capturedAt: Date
+        capturedAt: Date,
+        scopedWorkspaceIDs: Set<UUID>? = nil
     ) {
         self.agent = agent
         self.nativeSessionID = nativeSessionID
         self.sessionFilePath = sessionFilePath
         self.cwd = cwd
         self.capturedAt = capturedAt
+        self.scopedWorkspaceIDs = scopedWorkspaceIDs
     }
 
     var resumeClaimKey: String? {

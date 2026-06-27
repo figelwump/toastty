@@ -77,4 +77,58 @@ struct PanelStateCodableTests {
         #expect(decoded.profileBinding == TerminalProfileBinding(profileID: "zmx"))
         #expect(decoded.resumeRecord == nil)
     }
+
+    @Test
+    func managedAgentResumeRecordPreservesScopedWorkspaceIDs() throws {
+        let workspaceID = UUID()
+        let record = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/project",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scopedWorkspaceIDs: [workspaceID]
+        )
+
+        let encoded = try JSONEncoder().encode(record)
+        let decoded = try JSONDecoder().decode(ManagedAgentResumeRecord.self, from: encoded)
+
+        #expect(decoded == record)
+        #expect(decoded.scopedWorkspaceIDs == Set([workspaceID]))
+    }
+
+    @Test
+    func managedAgentResumeRecordPreservesExplicitEmptyScope() throws {
+        let record = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/project",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scopedWorkspaceIDs: []
+        )
+
+        let encoded = try JSONEncoder().encode(record)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let scopedWorkspaceIDs = try #require(object["scopedWorkspaceIDs"] as? [Any])
+        let decoded = try JSONDecoder().decode(ManagedAgentResumeRecord.self, from: encoded)
+
+        #expect(scopedWorkspaceIDs.isEmpty)
+        #expect(decoded.scopedWorkspaceIDs == Set<UUID>())
+    }
+
+    @Test
+    func managedAgentResumeRecordDecodesLegacyRecordAsUnscoped() throws {
+        let legacyRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/project",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let encoded = try JSONEncoder().encode(legacyRecord)
+        let decoded = try JSONDecoder().decode(ManagedAgentResumeRecord.self, from: encoded)
+
+        #expect(decoded.scopedWorkspaceIDs == nil)
+    }
 }

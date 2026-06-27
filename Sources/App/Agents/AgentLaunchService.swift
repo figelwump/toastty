@@ -156,6 +156,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         environment: [String: String] = [:],
         initialPrompt: String? = nil,
         initialCommands: [String] = [],
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
         focusPolicy: TerminalInputFocusPolicy = .focusTarget
     ) throws -> AgentLaunchResult {
         guard let terminalCommandRouter else {
@@ -189,7 +190,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 argv: launchArgv,
                 cwd: explicitCWD ?? target.cwd,
                 environment: launchEnvironment
-            )
+            ),
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
         )
         var commandEnvironment = plan.environment
         commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
@@ -224,8 +226,14 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         )
     }
 
-    func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan {
-        try managedLaunchPlanner.prepareManagedLaunch(request)
+    func prepareManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
+        try managedLaunchPlanner.prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
     }
 
     func discardManagedLaunch(sessionID: String) {

@@ -1298,6 +1298,17 @@ final class AppStore: ObservableObject {
         ) != nil
     }
 
+    func nextUnreadOrActivePanelTargetFromCommand(
+        preferredWindowID: UUID?,
+        sessionRuntimeStore: SessionRuntimeStore?
+    ) -> PanelNavigationTarget? {
+        nextUnreadOrActivePanelTarget(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore,
+            updatingCycleState: false
+        )
+    }
+
     @discardableResult
     func focusNextUnreadOrActivePanelFromCommand(
         preferredWindowID: UUID?,

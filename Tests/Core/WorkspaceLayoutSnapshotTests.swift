@@ -485,12 +485,24 @@ struct WorkspaceLayoutSnapshotTests {
         let panelID = UUID()
         let slotID = UUID()
         let binding = TerminalProfileBinding(profileID: "zmx")
+        let scopedWorkspaceID = UUID()
+        let scopedPanelID = UUID()
         let resumeRecord = ManagedAgentResumeRecord(
             agent: .claude,
             nativeSessionID: "db4f311b-12d0-4f61-ba81-0ae44ed10492",
             sessionFilePath: "/tmp/claude-session.jsonl",
             cwd: "/tmp/profiled",
-            capturedAt: Date(timeIntervalSince1970: 1_700_000_001)
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_001),
+            scopedWorkspaceIDs: [scopedWorkspaceID]
+        )
+        let scopedWorkspace = WorkspaceState(
+            id: scopedWorkspaceID,
+            title: "Scoped",
+            layoutTree: .slot(slotID: UUID(), panelID: scopedPanelID),
+            panels: [
+                scopedPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp/scoped")),
+            ],
+            focusedPanelID: scopedPanelID
         )
         let workspace = WorkspaceState(
             id: workspaceID,
@@ -515,11 +527,14 @@ struct WorkspaceLayoutSnapshotTests {
                 WindowState(
                     id: windowID,
                     frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
-                    workspaceIDs: [workspaceID],
+                    workspaceIDs: [workspaceID, scopedWorkspaceID],
                     selectedWorkspaceID: workspaceID
                 ),
             ],
-            workspacesByID: [workspaceID: workspace],
+            workspacesByID: [
+                workspaceID: workspace,
+                scopedWorkspaceID: scopedWorkspace,
+            ],
             selectedWindowID: windowID,
             configuredTerminalFontPoints: nil
         )
@@ -535,6 +550,132 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(restoredTerminalState.profileBinding == binding)
         #expect(restoredTerminalState.resumeRecord == resumeRecord)
         #expect(restoredWorkspace.focusedPanelID == panelID)
+    }
+
+    @Test
+    func makeAppStatePrunesStaleScopedWorkspaceIDsFromResumeRecords() throws {
+        let workspaceID = UUID()
+        let scopedWorkspaceID = UUID()
+        let staleWorkspaceID = UUID()
+        let panelID = UUID()
+        let scopedPanelID = UUID()
+        let slotID = UUID()
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/profiled",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_001),
+            scopedWorkspaceIDs: [scopedWorkspaceID, staleWorkspaceID]
+        )
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Profiled",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: "/tmp/profiled",
+                        resumeRecord: resumeRecord
+                    )
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+        let scopedWorkspace = WorkspaceState(
+            id: scopedWorkspaceID,
+            title: "Scoped",
+            layoutTree: .slot(slotID: UUID(), panelID: scopedPanelID),
+            panels: [
+                scopedPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp/scoped")),
+            ],
+            focusedPanelID: scopedPanelID
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID, scopedWorkspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: workspace,
+                scopedWorkspaceID: scopedWorkspace,
+            ],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+
+        guard case .terminal(let restoredTerminalState)? = restoredWorkspace.panels[panelID] else {
+            Issue.record("Expected terminal panel to survive restore")
+            return
+        }
+
+        #expect(restoredTerminalState.resumeRecord?.scopedWorkspaceIDs == Set([scopedWorkspaceID]))
+    }
+
+    @Test
+    func makeAppStatePreservesPrunedEmptyScopedWorkspaceIDsFromResumeRecords() throws {
+        let workspaceID = UUID()
+        let staleWorkspaceID = UUID()
+        let panelID = UUID()
+        let slotID = UUID()
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/profiled",
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_001),
+            scopedWorkspaceIDs: [staleWorkspaceID]
+        )
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Profiled",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: "/tmp/profiled",
+                        resumeRecord: resumeRecord
+                    )
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+
+        guard case .terminal(let restoredTerminalState)? = restoredWorkspace.panels[panelID] else {
+            Issue.record("Expected terminal panel to survive restore")
+            return
+        }
+
+        #expect(restoredTerminalState.resumeRecord?.scopedWorkspaceIDs == Set<UUID>())
     }
 
     @Test
@@ -557,7 +698,8 @@ struct WorkspaceLayoutSnapshotTests {
             nativeSessionID: nativeSessionID,
             sessionFilePath: "/tmp/codex-session.jsonl",
             cwd: "/tmp/second",
-            capturedAt: Date(timeIntervalSince1970: 1_700_000_010)
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_010),
+            scopedWorkspaceIDs: []
         )
         let workspace = WorkspaceState(
             id: workspaceID,

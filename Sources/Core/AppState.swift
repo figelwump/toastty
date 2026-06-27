@@ -153,6 +153,49 @@ public struct AppState: Codable, Equatable, Sendable {
         return didMutate
     }
 
+    @discardableResult
+    mutating func pruneManagedAgentResumeRecordScopes(validWorkspaceIDs: Set<UUID>) -> Bool {
+        var didMutate = false
+
+        for workspaceID in orderedWorkspaceIDsForManagedAgentResumeRecords() {
+            guard var workspace = workspacesByID[workspaceID] else { continue }
+            var workspaceDidMutate = false
+
+            for tabID in Self.orderedTabIDs(in: workspace) {
+                guard var tab = workspace.tabsByID[tabID] else { continue }
+                var tabDidMutate = false
+
+                for panelID in Self.orderedPanelIDs(in: tab) {
+                    guard case .terminal(var terminalState) = tab.panels[panelID],
+                          var record = terminalState.resumeRecord,
+                          let scopedWorkspaceIDs = record.scopedWorkspaceIDs else {
+                        continue
+                    }
+
+                    let prunedScope = scopedWorkspaceIDs.intersection(validWorkspaceIDs)
+                    guard prunedScope != scopedWorkspaceIDs else { continue }
+
+                    record.scopedWorkspaceIDs = prunedScope
+                    terminalState.resumeRecord = record
+                    tab.panels[panelID] = .terminal(terminalState)
+                    tabDidMutate = true
+                }
+
+                if tabDidMutate {
+                    workspace.tabsByID[tabID] = tab
+                    workspaceDidMutate = true
+                }
+            }
+
+            if workspaceDidMutate {
+                workspacesByID[workspaceID] = workspace
+                didMutate = true
+            }
+        }
+
+        return didMutate
+    }
+
     private func orderedWorkspaceIDsForManagedAgentResumeRecords() -> [UUID] {
         var orderedWorkspaceIDs: [UUID] = []
         var seenWorkspaceIDs = Set<UUID>()

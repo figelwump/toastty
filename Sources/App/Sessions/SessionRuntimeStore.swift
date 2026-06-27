@@ -33,6 +33,7 @@ final class SessionRuntimeStore: ObservableObject {
         let agent: AgentKind
         let statusKind: SessionStatusKind
         let isActive: Bool
+        let isWorkspaceScoped: Bool
 
         var summary: String {
             [
@@ -41,6 +42,7 @@ final class SessionRuntimeStore: ObservableObject {
                 agent.rawValue,
                 statusKind.rawValue,
                 isActive ? "active" : "stopped",
+                isWorkspaceScoped ? "scoped" : "unscoped",
             ].joined(separator: ":")
         }
     }
@@ -89,6 +91,7 @@ final class SessionRuntimeStore: ObservableObject {
         displayTitleOverride: String? = nil,
         cwd: String?,
         repoRoot: String?,
+        scopedWorkspaceIDs: Set<UUID>? = nil,
         at now: Date
     ) {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
@@ -110,6 +113,7 @@ final class SessionRuntimeStore: ObservableObject {
             displayTitleOverride: displayTitleOverride,
             cwd: cwd,
             repoRoot: repoRoot,
+            scopedWorkspaceIDs: scopedWorkspaceIDs,
             at: now
         )
         ToasttyLog.info(
@@ -122,10 +126,12 @@ final class SessionRuntimeStore: ObservableObject {
                 windowID: windowID,
                 workspaceID: workspaceID,
                 usesSessionStatusNotifications: usesSessionStatusNotifications,
-                displayTitleOverride: displayTitleOverride
+                displayTitleOverride: displayTitleOverride,
+                scopedWorkspaceIDs: scopedWorkspaceIDs
             )
         )
         publish(nextRegistry, reason: "start_session")
+        synchronizePersistedResumeRecordScope(sessionID: sessionID, in: nextRegistry)
     }
 
     func startProcessWatch(
@@ -1030,7 +1036,8 @@ final class SessionRuntimeStore: ObservableObject {
         reason: ManagedSessionStopReason = .explicit,
         at now: Date
     ) {
-        if let record = sessionRegistry.sessionsByID[sessionID], record.isActive {
+        let activeRecord = sessionRegistry.sessionsByID[sessionID].flatMap { $0.isActive ? $0 : nil }
+        if let record = activeRecord {
             logSessionStop(record, reason: reason, at: now)
         }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
@@ -1044,6 +1051,9 @@ final class SessionRuntimeStore: ObservableObject {
             nextRegistry.stopSession(sessionID: sessionID, at: now)
         }
         publish(nextRegistry, reason: "stop_session")
+        if let activeRecord {
+            clearPersistedResumeRecord(panelID: activeRecord.panelID)
+        }
     }
 
     func stopSessionForPanel(
@@ -1051,7 +1061,8 @@ final class SessionRuntimeStore: ObservableObject {
         reason: ManagedSessionStopReason = .explicit,
         at now: Date
     ) {
-        if let record = sessionRegistry.activeSession(for: panelID) {
+        let activeRecord = sessionRegistry.activeSession(for: panelID)
+        if let record = activeRecord {
             logSessionStop(record, reason: reason, at: now)
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
             codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
@@ -1066,6 +1077,9 @@ final class SessionRuntimeStore: ObservableObject {
             nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
         }
         publish(nextRegistry, reason: "stop_session_for_panel")
+        if activeRecord != nil {
+            clearPersistedResumeRecord(panelID: panelID)
+        }
     }
 
     func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
@@ -1078,6 +1092,43 @@ final class SessionRuntimeStore: ObservableObject {
 
     func isLaterFlagged(sessionID: String) -> Bool {
         sessionRegistry.isLaterFlagged(sessionID: sessionID)
+    }
+
+    func scope(ofSessionID sessionID: String) -> Set<UUID>? {
+        sessionRegistry.scope(ofSessionID: sessionID)
+    }
+
+    func effectiveWorkspaceScope(sessionID: String) -> Set<UUID>? {
+        sessionRegistry.effectiveWorkspaceScope(sessionID: sessionID)
+    }
+
+    func isWorkspaceScoped(sessionID: String) -> Bool {
+        sessionRegistry.isWorkspaceScoped(sessionID: sessionID)
+    }
+
+    func allowsWorkspaceAutomation(callerSessionID: String?, of workspaceID: UUID) -> Bool {
+        sessionRegistry.allowsWorkspaceAutomation(callerSessionID: callerSessionID, of: workspaceID)
+    }
+
+    @discardableResult
+    func setScope(sessionID: String, workspaceIDs: Set<UUID>) -> Bool {
+        mutateScope(sessionID: sessionID, reason: "set_scope") { registry in
+            registry.setScope(sessionID: sessionID, workspaceIDs: workspaceIDs)
+        }
+    }
+
+    @discardableResult
+    func addScope(sessionID: String, workspaceIDs: Set<UUID>) -> Bool {
+        mutateScope(sessionID: sessionID, reason: "add_scope") { registry in
+            registry.addScope(sessionID: sessionID, workspaceIDs: workspaceIDs)
+        }
+    }
+
+    @discardableResult
+    func clearScope(sessionID: String) -> Bool {
+        mutateScope(sessionID: sessionID, reason: "clear_scope") { registry in
+            registry.clearScope(sessionID: sessionID)
+        }
     }
 
     func setLaterFlag(sessionID: String, isFlagged: Bool) {
@@ -1232,7 +1283,8 @@ final class SessionRuntimeStore: ObservableObject {
                 panelID: status.panelID,
                 agent: status.agent,
                 statusKind: status.status.kind,
-                isActive: status.isActive
+                isActive: status.isActive,
+                isWorkspaceScoped: status.isWorkspaceScoped
             )
         }
     }
@@ -1246,6 +1298,77 @@ final class SessionRuntimeStore: ObservableObject {
         let visibleRows = rows.prefix(limit).map(\.summary)
         let suffix = rows.count > limit ? ["+\(rows.count - limit)"] : []
         return (visibleRows + suffix).joined(separator: ",")
+    }
+
+    @discardableResult
+    private func mutateScope(
+        sessionID: String,
+        reason: String,
+        _ mutation: (inout SessionRegistry) -> Bool
+    ) -> Bool {
+        let previousScope = sessionRegistry.scope(ofSessionID: sessionID)
+        var nextRegistry = sessionRegistry
+        guard mutation(&nextRegistry) else {
+            return false
+        }
+        let nextScope = nextRegistry.scope(ofSessionID: sessionID)
+        ToasttyLog.info(
+            "Updated managed session workspace scope",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "reason": reason,
+                "previous_scope": scopeMetadata(previousScope),
+                "next_scope": scopeMetadata(nextScope),
+            ]
+        )
+        publish(nextRegistry, reason: reason)
+        synchronizePersistedResumeRecordScope(sessionID: sessionID, in: nextRegistry)
+        return true
+    }
+
+    private func synchronizePersistedResumeRecordScope(sessionID: String, in registry: SessionRegistry) {
+        guard let record = registry.activeSession(sessionID: sessionID) else { return }
+        updatePersistedResumeRecordScope(
+            panelID: record.panelID,
+            scopedWorkspaceIDs: record.scopedWorkspaceIDs
+        )
+    }
+
+    private func updatePersistedResumeRecordScope(
+        panelID: UUID,
+        scopedWorkspaceIDs: Set<UUID>?
+    ) {
+        guard let store,
+              let selection = store.state.workspaceSelection(containingPanelID: panelID),
+              case .terminal(let terminalState)? = selection.workspace.panelState(for: panelID),
+              var resumeRecord = terminalState.resumeRecord,
+              resumeRecord.scopedWorkspaceIDs != scopedWorkspaceIDs else {
+            return
+        }
+
+        resumeRecord.scopedWorkspaceIDs = scopedWorkspaceIDs
+        _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: resumeRecord))
+    }
+
+    private func clearPersistedResumeRecord(panelID: UUID) {
+        guard let store,
+              let selection = store.state.workspaceSelection(containingPanelID: panelID),
+              case .terminal(let terminalState)? = selection.workspace.panelState(for: panelID),
+              terminalState.resumeRecord != nil else {
+            return
+        }
+
+        _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
+    }
+
+    private func scopeMetadata(_ scope: Set<UUID>?) -> String {
+        guard let scope else { return "unrestricted" }
+        if scope.isEmpty { return "own_workspace_only" }
+        return scope
+            .map(\.uuidString)
+            .sorted()
+            .joined(separator: ",")
     }
 
     private func updateSuppressedCodexVisibleErrorDetailIfNeeded(
@@ -2128,7 +2251,8 @@ final class SessionRuntimeStore: ObservableObject {
         windowID: UUID,
         workspaceID: UUID,
         usesSessionStatusNotifications: Bool,
-        displayTitleOverride: String?
+        displayTitleOverride: String?,
+        scopedWorkspaceIDs: Set<UUID>?
     ) -> [String: String] {
         var metadata = [
             "session_id": sessionID,
@@ -2137,6 +2261,7 @@ final class SessionRuntimeStore: ObservableObject {
             "window_id": windowID.uuidString,
             "workspace_id": workspaceID.uuidString,
             "uses_status_notifications": usesSessionStatusNotifications ? "true" : "false",
+            "workspace_scope": scopeMetadata(scopedWorkspaceIDs),
         ]
         if let displayTitleOverride = truncatedLogMetadataValue(displayTitleOverride, limit: 80) {
             metadata["display_title_override"] = displayTitleOverride

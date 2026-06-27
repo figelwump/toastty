@@ -28,6 +28,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         displayTitleOverride: String? = nil,
         cwd: String?,
         repoRoot: String?,
+        scopedWorkspaceIDs: Set<UUID>? = nil,
         at now: Date
     ) {
         if let existingRecord = sessionsByID[sessionID],
@@ -53,6 +54,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             displayTitleOverride: displayTitleOverride,
             repoRoot: repoRoot,
             cwd: cwd,
+            scopedWorkspaceIDs: scopedWorkspaceIDs,
             startedAt: now,
             updatedAt: now
         )
@@ -117,6 +119,62 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
 
     public func isLaterFlagged(sessionID: String) -> Bool {
         activeSession(sessionID: sessionID)?.isFlaggedForLater == true
+    }
+
+    public func scope(ofSessionID sessionID: String) -> Set<UUID>? {
+        activeSession(sessionID: sessionID)?.scopedWorkspaceIDs
+    }
+
+    public func effectiveWorkspaceScope(sessionID: String) -> Set<UUID>? {
+        guard let record = activeSession(sessionID: sessionID),
+              let explicitScope = record.scopedWorkspaceIDs else {
+            return nil
+        }
+        // Invariant: nil scope is unrestricted; an empty non-nil scope is still
+        // workspace-scoped and allows only the session's live own workspace.
+        return explicitScope.union([record.workspaceID])
+    }
+
+    public func isWorkspaceScoped(sessionID: String) -> Bool {
+        activeSession(sessionID: sessionID)?.scopedWorkspaceIDs != nil
+    }
+
+    @discardableResult
+    public mutating func setScope(sessionID: String, workspaceIDs: Set<UUID>) -> Bool {
+        guard var record = activeSession(sessionID: sessionID) else { return false }
+        guard record.scopedWorkspaceIDs != workspaceIDs else { return false }
+        record.scopedWorkspaceIDs = workspaceIDs
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    @discardableResult
+    public mutating func addScope(sessionID: String, workspaceIDs: Set<UUID>) -> Bool {
+        guard var record = activeSession(sessionID: sessionID) else { return false }
+        let nextScope = (record.scopedWorkspaceIDs ?? []).union(workspaceIDs)
+        guard record.scopedWorkspaceIDs != nextScope else { return false }
+        record.scopedWorkspaceIDs = nextScope
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    @discardableResult
+    public mutating func clearScope(sessionID: String) -> Bool {
+        guard var record = activeSession(sessionID: sessionID),
+              record.scopedWorkspaceIDs != nil else {
+            return false
+        }
+        record.scopedWorkspaceIDs = nil
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    public func allowsWorkspaceAutomation(callerSessionID: String?, of workspaceID: UUID) -> Bool {
+        guard let callerSessionID,
+              callerSessionID.isEmpty == false else {
+            return true
+        }
+        return effectiveWorkspaceScope(sessionID: callerSessionID)?.contains(workspaceID) ?? true
     }
 
     public mutating func updatePanelLocation(
@@ -241,7 +299,9 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             displayTitleOverride: record.displayTitleOverride,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
-            isActive: record.isActive
+            isActive: record.isActive,
+            scopedWorkspaceIDs: record.scopedWorkspaceIDs,
+            effectiveScopedWorkspaceIDs: record.scopedWorkspaceIDs.map { $0.union([record.workspaceID]) }
         )
     }
 

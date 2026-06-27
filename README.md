@@ -225,14 +225,14 @@ For the full command reference including all flags, environment variables, JSON 
 
 ### Workflow automation with the CLI
 
-The CLI can also drive higher-level workflows against a normal running Toastty instance. This repo's `worktree-create` skill is one example: it resolves the current Toastty window, creates a background workspace, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and launches the new agent with structured `agent.launch` arguments for `cwd`, environment, `initialPrompt`, and optional setup commands. Fully custom startup commands remain available through the helper's explicit `--startup-command` path.
+The CLI can also drive higher-level workflows against a normal running Toastty instance. This repo's `worktree-create` skill is one example: it resolves the current Toastty window, scopes the current parent session when needed, creates a background workspace, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and launches the new agent with structured `agent.launch` arguments for `cwd`, environment, `initialPrompt`, and optional setup commands. Fully custom startup commands remain available through the helper's explicit `--startup-command` path.
 
 Repo-local skills can be linked into supported global agent skill directories with `scripts/agents/link-global-skills.sh`. Run it with `--help` to list supported targets, selected skills, and cleanup options.
 
 If you want to point an agent at that pattern and have it adapt the workflow for another repo, use this prompt:
 
 ```text
-Read `.agents/skills/worktree-create/SKILL.md` and `.agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh`, then adapt that workflow for this repo. Reuse the same Toastty CLI pattern: resolve the current window/panel, create a workspace, open a handoff document as a local-document panel, and launch the agent with `action run agent.launch` using structured `cwd`, environment, `initialPrompt`, and any approved `initialCommands`. Use the helper's `--startup-command` path only for fully custom terminal setup.
+Read `.agents/skills/worktree-create/SKILL.md` and `.agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh`, then adapt that workflow for this repo. Reuse the same Toastty CLI pattern: resolve the current window/panel, scope the current parent session when needed, create a workspace, open a handoff document as a local-document panel, and launch the agent with `action run agent.launch` using structured `cwd`, environment, `initialPrompt`, and any approved `initialCommands`. Use the helper's `--startup-command` path only for fully custom terminal setup.
 ```
 
 ## Configuration
