@@ -160,7 +160,7 @@ Rules for generated orchestrators:
 
 - Start scoped unless the user explicitly wants unrestricted automation.
 - Use an empty explicit scope for current-workspace-only operation.
-- Add only user-assigned workspaces.
+- Add only user-assigned workspaces or workflow-created child workspaces that the generated orchestrator is explicitly authorized to manage.
 - Treat `scope_denied` as a boundary signal, not a failure to bypass.
 - Explain that scoping is cooperative and not a security boundary.
 
