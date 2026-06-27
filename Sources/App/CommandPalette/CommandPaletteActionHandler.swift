@@ -65,6 +65,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func manageAgents(originWindowID: UUID) -> Bool
     func canSetUpAgentStatusHooks(originWindowID: UUID) -> Bool
     func setUpAgentStatusHooks(originWindowID: UUID) -> Bool
+    func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool
+    func copyDiagnosticsSnippet(originWindowID: UUID) -> Bool
     func canReloadConfiguration() -> Bool
     func reloadConfiguration() -> Bool
     func openFileResult(
@@ -94,6 +96,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
     private let openManageConfigAction: @MainActor (UUID) -> Bool
     private let openTerminalProfilesConfigurationAction: @MainActor (UUID) -> Bool
     private let openAgentProfilesConfigurationAction: @MainActor (UUID) -> Bool
+    private let presentDiagnosticsSnippetAction: @MainActor () -> Void
 
     init(
         store: AppStore,
@@ -112,6 +115,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         openManageConfigAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
         openTerminalProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
         openAgentProfilesConfigurationAction: @escaping @MainActor (UUID) -> Bool = { _ in false },
+        presentDiagnosticsSnippetAction: @escaping @MainActor () -> Void = { DiagnosticsSnippetPresenter.present() },
         processWatchCommandController: ProcessWatchCommandController? = nil
     ) {
         self.store = store
@@ -135,6 +139,7 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         self.openManageConfigAction = openManageConfigAction
         self.openTerminalProfilesConfigurationAction = openTerminalProfilesConfigurationAction
         self.openAgentProfilesConfigurationAction = openAgentProfilesConfigurationAction
+        self.presentDiagnosticsSnippetAction = presentDiagnosticsSnippetAction
     }
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -541,6 +546,18 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return true
     }
 
+    func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
+        store?.window(id: originWindowID) != nil
+    }
+
+    func copyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
+        guard canCopyDiagnosticsSnippet(originWindowID: originWindowID) else {
+            return false
+        }
+        presentDiagnosticsSnippetAction()
+        return true
+    }
+
     func canReloadConfiguration() -> Bool {
         supportsConfigurationReload()
     }
@@ -688,6 +705,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return manageAgents(originWindowID: originWindowID)
         case .setUpAgentStatusHooks:
             return setUpAgentStatusHooks(originWindowID: originWindowID)
+        case .copyDiagnosticsSnippet:
+            return copyDiagnosticsSnippet(originWindowID: originWindowID)
         case .reloadConfiguration:
             return reloadConfiguration()
         }

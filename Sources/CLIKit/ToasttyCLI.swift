@@ -5,6 +5,7 @@ import Foundation
 struct CLIOptions: Equatable {
     var jsonOutput: Bool
     var socketPath: String
+    var socketPathSourceOverride: DiagnosticsSocketPathSource?
 }
 
 struct CLIInvocation: Equatable {
@@ -17,6 +18,7 @@ enum CLICommand: Equatable {
     case agentManagedLaunchPreflightDecision(token: String)
     case appControlList(kind: AppControlCommandKind)
     case appControlRun(kind: AppControlCommandKind, id: String, args: [String: AutomationJSONValue])
+    case diagnosticsCollect(DiagnosticsCollectOptions)
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
@@ -29,7 +31,7 @@ enum CLICommand: Equatable {
 
     func makeRequestEnvelope(requestID: String = UUID().uuidString) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .diagnosticsCollect, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -49,7 +51,7 @@ enum CLICommand: Equatable {
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .diagnosticsCollect:
             preconditionFailure("managed launch preparation is handled as a request")
 
         case .notify(let title, let body, let workspaceID, let panelID):
@@ -229,6 +231,8 @@ enum CLICommand: Equatable {
             return resolvedSessionID
         case .agentManagedLaunchPreflightDecision:
             return "resolved managed launch preflight decision"
+        case .diagnosticsCollect(let options):
+            return "wrote diagnostics to \(options.outputPath)"
         case .appControlList:
             return "listed app control commands"
         case .appControlRun(let kind, let id, _):
@@ -296,6 +300,15 @@ public enum ToasttyCLI {
                     sessionID: sessionID,
                     panelID: panelID
                 )
+
+            case .diagnosticsCollect(let collectOptions):
+                try DiagnosticsCollectCommand.run(
+                    options: collectOptions,
+                    socketPath: invocation.options.socketPath,
+                    socketPathSourceOverride: invocation.options.socketPathSourceOverride,
+                    environment: environment
+                )
+                return 0
 
             default:
                 let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
@@ -372,6 +385,15 @@ public enum ToasttyCLI {
                 command: try parseAgentCommand(Array(remainingArguments.dropFirst()), environment: environment)
             )
 
+        case "diagnostics":
+            return CLIInvocation(
+                options: options,
+                command: try parseDiagnosticsCommand(
+                    Array(remainingArguments.dropFirst()),
+                    environment: environment
+                )
+            )
+
         case "notify":
             return CLIInvocation(
                 options: options,
@@ -395,6 +417,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
       toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive]
       toastty [--json] [--socket-path <path>] agent managed-launch-preflight-decision --token <id>
+      toastty [--socket-path <path>] diagnostics collect [--shell-probe <file>] [--note <text>] [--out <file>]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
@@ -411,6 +434,7 @@ public enum ToasttyCLI {
     ) throws -> (CLIOptions, [String]) {
         var jsonOutput = false
         var socketPath = AutomationConfig.resolveSocketPath(environment: environment)
+        var socketPathSourceOverride: DiagnosticsSocketPathSource?
         var remaining: [String] = []
 
         var index = 0
@@ -425,6 +449,7 @@ public enum ToasttyCLI {
                     throw ToasttyCLIError.usage("missing value for --socket-path\n\n\(usage)")
                 }
                 socketPath = arguments[index + 1]
+                socketPathSourceOverride = .cliOption
                 index += 2
 
             default:
@@ -433,7 +458,14 @@ public enum ToasttyCLI {
             }
         }
 
-        return (CLIOptions(jsonOutput: jsonOutput, socketPath: socketPath), remaining)
+        return (
+            CLIOptions(
+                jsonOutput: jsonOutput,
+                socketPath: socketPath,
+                socketPathSourceOverride: socketPathSourceOverride
+            ),
+            remaining
+        )
     }
 
     private static func parseNotifyCommand(_ arguments: [String]) throws -> CLICommand {
@@ -454,6 +486,38 @@ public enum ToasttyCLI {
             workspaceID: workspaceID,
             panelID: panelID
         )
+    }
+
+    private static func parseDiagnosticsCommand(
+        _ arguments: [String],
+        environment: [String: String]
+    ) throws -> CLICommand {
+        guard let subcommand = arguments.first else {
+            throw ToasttyCLIError.usage("diagnostics requires a subcommand\n\n\(usage)")
+        }
+
+        let remainingArguments = Array(arguments.dropFirst())
+        switch subcommand {
+        case "collect":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--shell-probe", "--note", "--out"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("diagnostics collect does not accept positional arguments\n\n\(usage)")
+            }
+
+            return .diagnosticsCollect(
+                DiagnosticsCollectOptions(
+                    shellProbePath: parsed.singleValue("--shell-probe"),
+                    note: parsed.singleValue("--note"),
+                    outputPath: parsed.singleValue("--out") ?? defaultDiagnosticsOutputPath(environment: environment)
+                )
+            )
+
+        default:
+            throw ToasttyCLIError.usage("unknown diagnostics subcommand: \(subcommand)\n\n\(usage)")
+        }
     }
 
     private static func parseAppControlCommand(
@@ -981,6 +1045,12 @@ public enum ToasttyCLI {
             return [:]
         }
         return [key: value]
+    }
+
+    private static func defaultDiagnosticsOutputPath(environment: [String: String]) -> String {
+        URL(fileURLWithPath: environment["TMPDIR"] ?? NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("toastty-diag-\(getpid()).json", isDirectory: false)
+            .path
     }
 
     private static func jsonString(for response: AutomationResponseEnvelope) throws -> String {

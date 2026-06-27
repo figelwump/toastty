@@ -37,6 +37,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canManageTerminalProfilesValue = true
     var canManageAgentsValue = true
     var canSetUpAgentStatusHooksValue = true
+    var canCopyDiagnosticsSnippetValue = true
     var canReloadValue = true
 
     var createWindowResult = true
@@ -67,6 +68,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var manageTerminalProfilesResult = true
     var manageAgentsResult = true
     var setUpAgentStatusHooksResult = true
+    var copyDiagnosticsSnippetResult = true
     var reloadConfigurationResult = true
 
     var sidebarTitleValue = ToasttyBuiltInCommand.toggleSidebar.title
@@ -103,6 +105,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var managedTerminalProfilesWindowIDs: [UUID] = []
     var managedAgentsWindowIDs: [UUID] = []
     var setUpAgentStatusHooksWindowIDs: [UUID] = []
+    var copiedDiagnosticsSnippetWindowIDs: [UUID] = []
     var reloadConfigurationCount = 0
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
@@ -459,6 +462,16 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return setUpAgentStatusHooksResult
     }
 
+    func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canCopyDiagnosticsSnippetValue
+    }
+
+    func copyDiagnosticsSnippet(originWindowID: UUID) -> Bool {
+        copiedDiagnosticsSnippetWindowIDs.append(originWindowID)
+        return copyDiagnosticsSnippetResult
+    }
+
     func canReloadConfiguration() -> Bool {
         canReloadValue
     }
@@ -573,6 +586,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return manageAgents(originWindowID: originWindowID)
             case .setUpAgentStatusHooks:
                 return setUpAgentStatusHooks(originWindowID: originWindowID)
+            case .copyDiagnosticsSnippet:
+                return copyDiagnosticsSnippet(originWindowID: originWindowID)
             case .reloadConfiguration:
                 return reloadConfiguration()
             }

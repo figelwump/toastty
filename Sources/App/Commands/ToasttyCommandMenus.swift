@@ -374,6 +374,10 @@ struct ToasttyCommandMenus: Commands {
             }
             .disabled(agentGetStartedTargetWindowID == nil)
 
+            Button("Copy Diagnostics Collection Snippet…") {
+                DiagnosticsSnippetPresenter.present()
+            }
+
             Button("Get Started with Toastty…") {
                 showAgentGetStartedFlow()
             }

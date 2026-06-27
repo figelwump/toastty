@@ -33,7 +33,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
     }
 
     var managedSnippetRelativePath: String {
-        ".toastty/shell/\(managedSnippetFileName)"
+        ToasttyShellIntegrationMarkers.managedSnippetRelativePath(fileName: managedSnippetFileName)
     }
 
     var defaultInitFileName: String {
@@ -59,7 +59,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
     }
 
     var sourceLine: String {
-        "source \"$HOME/\(managedSnippetRelativePath)\""
+        ToasttyShellIntegrationMarkers.sourceLine(managedSnippetFileName: managedSnippetFileName)
     }
 
     var managedSnippetContents: String {
@@ -813,11 +813,7 @@ private struct ProfileShellIntegrationResolvedShellPath: Equatable, Sendable {
 }
 
 final class ProfileShellIntegrationInstaller {
-    private static let managedSourceCommentLines = [
-        "# Added by Toastty terminal profile shell integration",
-        "# Keep this near the end of this file, after other PATH, history, and prompt-hook changes,",
-        "# so Toastty can restore its shim directory and prompt-time title/journal hooks.",
-    ]
+    private static let managedSourceCommentLines = ToasttyShellIntegrationMarkers.managedSourceCommentLines
     #if DEBUG
     static let debugAllowRealInstallEnvironmentKey = "TOASTTY_DEBUG_ALLOW_REAL_SHELL_INTEGRATION_INSTALL"
     #endif
@@ -1294,12 +1290,11 @@ final class ProfileShellIntegrationInstaller {
         referencesManagedSnippetFor plan: ProfileShellIntegrationInstallPlan
     ) -> Bool {
         let fileName = plan.managedSnippetURL.lastPathComponent
-        let markers = [
-            plan.sourceLine,
-            plan.managedSnippetURL.path,
-            "$HOME/.toastty/shell/\(fileName)",
-            "~/.toastty/shell/\(fileName)",
-        ]
+        let markers = ToasttyShellIntegrationMarkers.referenceMarkers(
+            managedSnippetPath: plan.managedSnippetURL.path,
+            managedSnippetFileName: fileName,
+            sourceLine: plan.sourceLine
+        )
 
         return contents
             .components(separatedBy: .newlines)

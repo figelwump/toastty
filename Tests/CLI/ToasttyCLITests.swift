@@ -251,6 +251,84 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func diagnosticsCollectParsesOptions() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "diagnostics", "collect",
+                "--shell-probe", "/tmp/probe.txt",
+                "--note", "socket failed",
+                "--out", "/tmp/toastty-diag.json",
+            ],
+            environment: ["TMPDIR": "/tmp/toastty-cli-tests/"]
+        )
+
+        guard case .diagnosticsCollect(let options) = invocation.command else {
+            Issue.record("expected diagnostics collect command")
+            return
+        }
+
+        #expect(options.shellProbePath == "/tmp/probe.txt")
+        #expect(options.note == "socket failed")
+        #expect(options.outputPath == "/tmp/toastty-diag.json")
+    }
+
+    @Test
+    func diagnosticsCollectDefaultsOutputPathUnderTMPDIR() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["diagnostics", "collect"],
+            environment: ["TMPDIR": "/tmp/toastty-cli-tests/"]
+        )
+
+        guard case .diagnosticsCollect(let options) = invocation.command else {
+            Issue.record("expected diagnostics collect command")
+            return
+        }
+
+        #expect(options.outputPath.hasPrefix("/tmp/toastty-cli-tests/toastty-diag-"))
+        #expect(options.outputPath.hasSuffix(".json"))
+    }
+
+    @Test
+    func diagnosticsCollectWritesRedactedBundleWithoutLiveSocket() throws {
+        let root = try makeCLITemporaryDirectory(prefix: "toastty-cli-diag")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtimeHome = root.appendingPathComponent("runtime-home", isDirectory: true)
+        let temp = root.appendingPathComponent("tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        let probeURL = root.appendingPathComponent("probe.txt", isDirectory: false)
+        let outputURL = root.appendingPathComponent("diag.json", isDirectory: false)
+        try """
+        PATH=/Users/vishal/.toastty/bin:/usr/bin
+        TOASTTY_SOCKET_PATH=/tmp/toastty/events-v1.sock
+        OPENAI_API_KEY=sk-test_abcdefghijklmnopqrstuvwxyz
+        """.write(to: probeURL, atomically: true, encoding: .utf8)
+
+        let exitCode = ToasttyCLI.run(
+            arguments: [
+                "diagnostics", "collect",
+                "--shell-probe", probeURL.path,
+                "--note", "note contains sk-test_abcdefghijklmnopqrstuvwxyz",
+                "--out", outputURL.path,
+            ],
+            environment: [
+                "HOME": root.path,
+                ToasttyRuntimePaths.environmentKey: runtimeHome.path,
+                "TMPDIR": temp.path + "/",
+            ]
+        )
+
+        #expect(exitCode == 0)
+        let data = try Data(contentsOf: outputURL)
+        let bundle = try JSONDecoder().decode(DiagnosticsBundle.self, from: data)
+        let encoded = String(decoding: data, as: UTF8.self)
+        #expect(bundle.socket.state == .noSocket)
+        #expect(bundle.probe.rawShellProbe?.contains("/tmp/toastty/events-v1.sock") == true)
+        #expect(bundle.probe.rawShellProbe?.contains("sk-test_abcdefghijklmnopqrstuvwxyz") == false)
+        #expect(bundle.note?.contains("sk-test_abcdefghijklmnopqrstuvwxyz") == false)
+        #expect(encoded.contains("\"redaction\""))
+    }
+
+    @Test
     func sessionStartGeneratesSessionIDWhenOmitted() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(
@@ -637,4 +715,11 @@ private func makeListeningSocket(at socketPath: String) throws -> Int32 {
 
 private enum CLITestSocketError: Error {
     case socket(String)
+}
+
+private func makeCLITemporaryDirectory(prefix: String) throws -> URL {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
 }
