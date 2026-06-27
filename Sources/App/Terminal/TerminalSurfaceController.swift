@@ -110,18 +110,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let pixelSizingEnabled: Bool
     }
 
-    private struct WidthFirstSurfaceResizeStage {
-        let requestedWidth: Int
-        let requestedHeight: Int
-        let estimatedColumns: Int
-        let estimatedRows: Int
-        let estimatedCellWidthPx: Int
-        let estimatedCellHeightPx: Int
-        let previousWidthInCurrentUnits: Int
-        let previousHeightInCurrentUnits: Int
-        let previousMetrics: GhosttyRenderMetrics
-    }
-
     private struct PendingViewportUpdate {
         let hostState: TerminalPanelHostState
         let focused: Bool
@@ -162,12 +150,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 return true
             }
         }
-    }
-
-    private enum SurfaceSizeDispatchStage: String {
-        case direct
-        case widthFirstIntermediate = "width_first_intermediate"
-        case widthFirstFinal = "width_first_final"
     }
 
     private struct SurfaceDiagnostics {
@@ -1832,134 +1814,40 @@ extension TerminalSurfaceController {
             reason: reason,
             presentationChangedEstimate: presentationChangedEstimate
         )
-
-        let widthFirstStage = widthFirstResizeStageForSimultaneousShrink(
-            requestedWidth: requestedWidth,
-            requestedHeight: requestedHeight,
-            scale: scale,
-            reason: reason
-        )
-        if let widthFirstStage {
-            logStagingSimultaneousShrinkResize(
-                stage: widthFirstStage,
-                finalRequestedWidth: requestedWidth,
-                finalRequestedHeight: requestedHeight,
-                logicalWidth: logicalWidth,
-                logicalHeight: logicalHeight,
-                pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight,
-                scale: scale,
-                focused: focused,
-                sourceContainer: sourceContainer,
-                attachment: attachment,
-                resumedFromViewportDeferral: resumedFromViewportDeferral,
-                reason: reason,
-                presentationChangedEstimate: presentationChangedEstimate
-            )
-            _ = performGhosttySurfaceSizeDispatch(
-                surface,
-                requestedWidth: widthFirstStage.requestedWidth,
-                requestedHeight: widthFirstStage.requestedHeight,
-                targetRequestedWidth: requestedWidth,
-                targetRequestedHeight: requestedHeight,
-                logicalWidth: logicalWidth,
-                logicalHeight: logicalHeight,
-                pixelWidth: pixelWidth,
-                pixelHeight: pixelHeight,
-                scale: scale,
-                sourceContainer: sourceContainer,
-                attachment: attachment,
-                resumedFromViewportDeferral: resumedFromViewportDeferral,
-                reason: reason,
-                stage: .widthFirstIntermediate,
-                presentationChangedEstimate: presentationChangedEstimate
-            )
-        }
-
-        return performGhosttySurfaceSizeDispatch(
-            surface,
-            requestedWidth: requestedWidth,
-            requestedHeight: requestedHeight,
-            targetRequestedWidth: requestedWidth,
-            targetRequestedHeight: requestedHeight,
-            logicalWidth: logicalWidth,
-            logicalHeight: logicalHeight,
-            pixelWidth: pixelWidth,
-            pixelHeight: pixelHeight,
-            scale: scale,
-            sourceContainer: sourceContainer,
-            attachment: attachment,
-            resumedFromViewportDeferral: resumedFromViewportDeferral,
-            reason: reason,
-            stage: widthFirstStage == nil ? .direct : .widthFirstFinal,
-            presentationChangedEstimate: presentationChangedEstimate
-        )
-    }
-
-    private func performGhosttySurfaceSizeDispatch(
-        _ surface: ghostty_surface_t,
-        requestedWidth: Int,
-        requestedHeight: Int,
-        targetRequestedWidth: Int,
-        targetRequestedHeight: Int,
-        logicalWidth: Int,
-        logicalHeight: Int,
-        pixelWidth: Int,
-        pixelHeight: Int,
-        scale: Double,
-        sourceContainer: NSView,
-        attachment: PanelHostAttachmentToken,
-        resumedFromViewportDeferral: Bool,
-        reason: SurfaceSizeDispatchReason,
-        stage: SurfaceSizeDispatchStage,
-        presentationChangedEstimate: Bool
-    ) -> ghostty_surface_size_s {
         ghostty_surface_set_size(surface, UInt32(requestedWidth), UInt32(requestedHeight))
         let measuredSize = ghostty_surface_size(surface)
-
-        var metadata: [String: String] = [
-            "panel_id": panelID.uuidString,
-            "reason": reason.rawValue,
-            "dispatch_stage": stage.rawValue,
-            "requested_units": reason.usesPixelUnits ? "pixels" : "logical",
-            "requested_width": String(requestedWidth),
-            "requested_height": String(requestedHeight),
-            "target_requested_width": String(targetRequestedWidth),
-            "target_requested_height": String(targetRequestedHeight),
-            "logical_width": String(logicalWidth),
-            "logical_height": String(logicalHeight),
-            "pixel_width": String(pixelWidth),
-            "pixel_height": String(pixelHeight),
-            "scale": String(format: "%.3f", scale),
-            "reported_width_px": String(measuredSize.width_px),
-            "reported_height_px": String(measuredSize.height_px),
-            "reported_columns": String(measuredSize.columns),
-            "reported_rows": String(measuredSize.rows),
-            "reported_cell_width_px": String(measuredSize.cell_width_px),
-            "reported_cell_height_px": String(measuredSize.cell_height_px),
-            "attachment_id": attachment.rawValue.uuidString,
-            "source_container_id": describeObjectIdentity(sourceContainer),
-            "resumed_from_viewport_deferral": resumedFromViewportDeferral ? "true" : "false",
-            "presentation_changed_estimate": presentationChangedEstimate ? "true" : "false",
-        ]
-        if stage != .direct {
-            metadata["target_resize_staged"] = "true"
-        }
-
         ToasttyLog.debug(
             "Dispatched Ghostty surface size update",
             category: .ghostty,
-            metadata: metadata
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "reason": reason.rawValue,
+                "requested_units": reason.usesPixelUnits ? "pixels" : "logical",
+                "requested_width": String(requestedWidth),
+                "requested_height": String(requestedHeight),
+                "logical_width": String(logicalWidth),
+                "logical_height": String(logicalHeight),
+                "pixel_width": String(pixelWidth),
+                "pixel_height": String(pixelHeight),
+                "scale": String(format: "%.3f", scale),
+                "reported_width_px": String(measuredSize.width_px),
+                "reported_height_px": String(measuredSize.height_px),
+                "reported_columns": String(measuredSize.columns),
+                "reported_rows": String(measuredSize.rows),
+                "reported_cell_width_px": String(measuredSize.cell_width_px),
+                "reported_cell_height_px": String(measuredSize.cell_height_px),
+                "attachment_id": attachment.rawValue.uuidString,
+                "source_container_id": describeObjectIdentity(sourceContainer),
+                "resumed_from_viewport_deferral": resumedFromViewportDeferral ? "true" : "false",
+                "presentation_changed_estimate": presentationChangedEstimate ? "true" : "false",
+            ]
         )
         logFocusModeResizeTrace(
             event: "surface_size_dispatched",
             extra: [
                 "requested_units": reason.usesPixelUnits ? "pixels" : "logical",
-                "dispatch_stage": stage.rawValue,
                 "requested_width": String(requestedWidth),
                 "requested_height": String(requestedHeight),
-                "target_requested_width": String(targetRequestedWidth),
-                "target_requested_height": String(targetRequestedHeight),
                 "logical_width": String(logicalWidth),
                 "logical_height": String(logicalHeight),
                 "pixel_width": String(pixelWidth),
@@ -1973,130 +1861,6 @@ extension TerminalSurfaceController {
             ]
         )
         return measuredSize
-    }
-
-    private func widthFirstResizeStageForSimultaneousShrink(
-        requestedWidth: Int,
-        requestedHeight: Int,
-        scale: Double,
-        reason: SurfaceSizeDispatchReason
-    ) -> WidthFirstSurfaceResizeStage? {
-        let currentScaleThousandths = max(Int((scale * 1000).rounded()), 1)
-        guard requestedWidth > 0, requestedHeight > 0,
-              let previousMetrics = lastRenderMetrics,
-              previousMetrics.pixelSizingEnabled == reason.usesPixelUnits,
-              previousMetrics.scaleThousandths > 0,
-              previousMetrics.cellWidthPx > 0,
-              previousMetrics.cellHeightPx > 0,
-              previousMetrics.columns > 0,
-              previousMetrics.rows > 0,
-              let previousWidthInCurrentUnits = scaledPixelDimension(
-                  previousMetrics.widthPx,
-                  fromScaleThousandths: previousMetrics.scaleThousandths,
-                  toScaleThousandths: currentScaleThousandths
-              ),
-              let previousHeightInCurrentUnits = scaledPixelDimension(
-                  previousMetrics.heightPx,
-                  fromScaleThousandths: previousMetrics.scaleThousandths,
-                  toScaleThousandths: currentScaleThousandths
-              ),
-              let estimatedCellWidthPx = scaledPixelDimension(
-                  previousMetrics.cellWidthPx,
-                  fromScaleThousandths: previousMetrics.scaleThousandths,
-                  toScaleThousandths: currentScaleThousandths
-              ),
-              let estimatedCellHeightPx = scaledPixelDimension(
-                  previousMetrics.cellHeightPx,
-                  fromScaleThousandths: previousMetrics.scaleThousandths,
-                  toScaleThousandths: currentScaleThousandths
-              ),
-              requestedWidth < previousWidthInCurrentUnits,
-              requestedHeight < previousHeightInCurrentUnits,
-              let estimatedColumns = estimatedGridDimension(
-                  pixelCount: requestedWidth,
-                  cellPixelCount: estimatedCellWidthPx
-              ),
-              let estimatedRows = estimatedGridDimension(
-                  pixelCount: requestedHeight,
-                  cellPixelCount: estimatedCellHeightPx
-              ) else {
-            return nil
-        }
-        let estimatedColumnsShrank = estimatedColumns < previousMetrics.columns
-        let estimatedRowsShrank = estimatedRows < previousMetrics.rows
-        let widthShrankByAtLeastOneCell = requestedWidth <= previousWidthInCurrentUnits - estimatedCellWidthPx
-        let heightShrankByAtLeastOneCell = requestedHeight <= previousHeightInCurrentUnits - estimatedCellHeightPx
-        guard (estimatedColumnsShrank && estimatedRowsShrank) ||
-              (widthShrankByAtLeastOneCell && heightShrankByAtLeastOneCell) else {
-            return nil
-        }
-
-        return WidthFirstSurfaceResizeStage(
-            requestedWidth: requestedWidth,
-            requestedHeight: previousHeightInCurrentUnits,
-            estimatedColumns: estimatedColumns,
-            estimatedRows: estimatedRows,
-            estimatedCellWidthPx: estimatedCellWidthPx,
-            estimatedCellHeightPx: estimatedCellHeightPx,
-            previousWidthInCurrentUnits: previousWidthInCurrentUnits,
-            previousHeightInCurrentUnits: previousHeightInCurrentUnits,
-            previousMetrics: previousMetrics
-        )
-    }
-
-    private func logStagingSimultaneousShrinkResize(
-        stage: WidthFirstSurfaceResizeStage,
-        finalRequestedWidth: Int,
-        finalRequestedHeight: Int,
-        logicalWidth: Int,
-        logicalHeight: Int,
-        pixelWidth: Int,
-        pixelHeight: Int,
-        scale: Double,
-        focused: Bool,
-        sourceContainer: NSView,
-        attachment: PanelHostAttachmentToken,
-        resumedFromViewportDeferral: Bool,
-        reason: SurfaceSizeDispatchReason,
-        presentationChangedEstimate: Bool
-    ) {
-        ToasttyLog.debug(
-            "Staging Ghostty simultaneous shrink surface size update",
-            category: .ghostty,
-            metadata: [
-                "panel_id": panelID.uuidString,
-                "reason": reason.rawValue,
-                "requested_units": reason.usesPixelUnits ? "pixels" : "logical",
-                "final_requested_width": String(finalRequestedWidth),
-                "final_requested_height": String(finalRequestedHeight),
-                "intermediate_requested_width": String(stage.requestedWidth),
-                "intermediate_requested_height": String(stage.requestedHeight),
-                "logical_width": String(logicalWidth),
-                "logical_height": String(logicalHeight),
-                "pixel_width": String(pixelWidth),
-                "pixel_height": String(pixelHeight),
-                "scale": String(format: "%.3f", scale),
-                "focused": focused ? "true" : "false",
-                "attachment_id": attachment.rawValue.uuidString,
-                "source_container_id": describeObjectIdentity(sourceContainer),
-                "display_id": resolvedDisplayID(sourceContainer: sourceContainer).map(String.init) ?? "nil",
-                "resumed_from_viewport_deferral": resumedFromViewportDeferral ? "true" : "false",
-                "presentation_changed_estimate": presentationChangedEstimate ? "true" : "false",
-                "previous_reported_columns": String(stage.previousMetrics.columns),
-                "previous_reported_rows": String(stage.previousMetrics.rows),
-                "previous_reported_width_px": String(stage.previousMetrics.widthPx),
-                "previous_reported_height_px": String(stage.previousMetrics.heightPx),
-                "previous_reported_cell_width_px": String(stage.previousMetrics.cellWidthPx),
-                "previous_reported_cell_height_px": String(stage.previousMetrics.cellHeightPx),
-                "previous_reported_scale_thousandths": String(stage.previousMetrics.scaleThousandths),
-                "previous_width_current_units": String(stage.previousWidthInCurrentUnits),
-                "previous_height_current_units": String(stage.previousHeightInCurrentUnits),
-                "estimated_cell_width_px": String(stage.estimatedCellWidthPx),
-                "estimated_cell_height_px": String(stage.estimatedCellHeightPx),
-                "estimated_final_columns": String(stage.estimatedColumns),
-                "estimated_final_rows": String(stage.estimatedRows),
-            ]
-        )
     }
 
     private func logPotentialSimultaneousShrinkResizeBeforeDispatch(
@@ -2205,19 +1969,6 @@ extension TerminalSurfaceController {
             return nil
         }
         return max(pixelCount / cellPixelCount, 1)
-    }
-
-    private func scaledPixelDimension(
-        _ value: Int,
-        fromScaleThousandths: Int,
-        toScaleThousandths: Int
-    ) -> Int? {
-        guard value > 0, fromScaleThousandths > 0, toScaleThousandths > 0 else {
-            return nil
-        }
-        let scaled = Double(value) * Double(toScaleThousandths) / Double(fromScaleThousandths)
-        guard scaled.isFinite else { return nil }
-        return max(Int(scaled.rounded()), 1)
     }
 
     private func describeObjectIdentity(_ object: AnyObject) -> String {

@@ -31,6 +31,11 @@ Why `-Dsentry=false`:
 
 If you distribute signed Toastty binaries, publish the Ghostty commit and build flags you used for the embedded artifact in your release notes.
 
+Resize safety: use a Ghostty checkout that contains upstream commits
+`7fa6fffbc` and `7837563ed`, or a later equivalent fix. Older artifacts can hit
+Debug overflow assertions when a display move simultaneously shrinks terminal
+columns and rows with the cursor past the new active bottom.
+
 The local xcframeworks under `Dependencies/` are intentionally ignored by Git, so the checked-out repo may contain older or differently built local artifacts until they are rebuilt and reinstalled.
 
 The generated artifact is typically:
