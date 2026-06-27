@@ -12,6 +12,9 @@ final class DiagnosticsSnippetGeneratorTests: XCTestCase {
         )
         XCTAssertTrue(snippet.contains("diagnostics collect"))
         XCTAssertTrue(snippet.contains("--out /tmp/toastty-diag.json"))
+        XCTAssertTrue(snippet.contains("command -v toastty claude codex pi opencode mimo mimocode"))
+        XCTAssertTrue(snippet.contains("type -a claude codex pi opencode mimo mimocode"))
+        XCTAssertFalse(snippet.contains(" cdx"))
     }
 
     func testSnippetEscapesSingleQuotesInBakedCLIPath() {
