@@ -26,6 +26,24 @@ This smoke builds the app, launches a runtime-isolated non-automation instance, 
 
 ## Commands
 
+### `doctor`
+
+Run local checks for common Toastty troubleshooting issues.
+
+```
+toastty [--json] [--socket-path <path>] doctor
+```
+
+`doctor` checks the resolved automation socket, runtime metadata, shell
+integration markers, managed agent shims, and log readability. It reads local
+state and actively connects to the local Toastty automation socket for a ping
+when one is present. Human output is a pass/warn/fail checklist with remediation
+hints. With `--json`, the CLI returns the same structured check report for
+agents and scripts.
+
+The command does not write a diagnostics bundle, upload anything, or attempt
+automatic fixes. It exits non-zero only when at least one check fails.
+
 ### `diagnostics collect`
 
 Collect a local redacted diagnostics JSON bundle. This command reads local disk
@@ -37,7 +55,8 @@ toastty diagnostics collect [--shell-probe <file>] [--note <text>] [--out <file>
 
 The JSON includes embedded redacted log contents, app/runtime metadata, shell
 integration status, system metadata, and socket probe details. If `--out` is
-omitted, the CLI writes to a temporary path.
+omitted, the CLI writes to a temporary path. The printed summary includes the
+same shared check counts used by `toastty doctor`.
 
 ### `diagnostics submit`
 

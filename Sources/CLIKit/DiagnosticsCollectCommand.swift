@@ -65,12 +65,14 @@ enum DiagnosticsCollectCommand {
         let shellExistingCount = bundle.shell.detectedShells.filter(\.exists).count
         let currentLogLine = logSummary("Current log", bundle.logs.current)
         let previousLogLine = logSummary("Previous log", bundle.logs.previous)
+        let checkReport = DiagnosticsCheckEvaluator.evaluate(bundle)
 
         return [
             "Toastty diagnostics collected",
             "Output: \(outputPath)",
             appLine,
             runtimeLine,
+            "Checks: \(checkReport.summary.pass) passed, \(checkReport.summary.warn) warnings, \(checkReport.summary.fail) failed",
             "Socket: \(bundle.socket.state.rawValue) (\(bundle.socket.socketPath))",
             "Shell integration: \(shellInstalledCount)/\(shellExistingCount) existing init files reference Toastty",
             "Shim directory: \(bundle.shell.shimDirectory.path) (\(bundle.shell.shimDirectory.entries.count) entries)",

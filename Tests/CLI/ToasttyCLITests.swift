@@ -78,6 +78,108 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func doctorParsesAsLocalCommandWithGlobalOptions() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "--json",
+                "--socket-path", "/tmp/toastty-doctor.sock",
+                "doctor",
+            ],
+            environment: [:]
+        )
+
+        guard case .doctor = invocation.command else {
+            Issue.record("expected doctor command")
+            return
+        }
+
+        #expect(invocation.options.jsonOutput)
+        #expect(invocation.options.socketPath == "/tmp/toastty-doctor.sock")
+        #expect(invocation.options.socketPathSourceOverride == .cliOption)
+    }
+
+    @Test
+    func doctorRejectsPositionalArguments() {
+        do {
+            _ = try ToasttyCLI.parse(arguments: ["doctor", "socket"], environment: [:])
+            Issue.record("expected parse failure")
+        } catch let error as ToasttyCLIError {
+            guard case .usage(let message) = error else {
+                Issue.record("expected usage error")
+                return
+            }
+            #expect(message.contains("doctor does not accept positional arguments"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func doctorHumanRendererShowsStatusEvidenceAndFix() {
+        let output = DiagnosticsDoctorCommand.renderHuman(
+            DiagnosticsCheckReport(
+                generatedAtMs: 1,
+                overallStatus: .fail,
+                summary: DiagnosticsCheckSummary(pass: 1, warn: 0, fail: 1),
+                checks: [
+                    DiagnosticsCheckResult(
+                        id: "automation-socket",
+                        title: "Automation socket",
+                        status: .fail,
+                        summary: "No socket found.",
+                        evidence: ["path: /tmp/toastty.sock"],
+                        remediation: "Open Toastty."
+                    ),
+                ]
+            )
+        )
+
+        #expect(output.contains("Overall: fail"))
+        #expect(output.contains("[fail] Automation socket"))
+        #expect(output.contains("- path: /tmp/toastty.sock"))
+        #expect(output.contains("Fix: Open Toastty."))
+    }
+
+    @Test
+    func doctorExitCodeReflectsOnlyFailures() {
+        let warnOnly = DiagnosticsCheckReport(
+            generatedAtMs: 1,
+            overallStatus: .warn,
+            summary: DiagnosticsCheckSummary(pass: 1, warn: 1, fail: 0),
+            checks: []
+        )
+        let failing = DiagnosticsCheckReport(
+            generatedAtMs: 1,
+            overallStatus: .fail,
+            summary: DiagnosticsCheckSummary(pass: 1, warn: 1, fail: 1),
+            checks: []
+        )
+
+        #expect(DiagnosticsDoctorCommand.exitCode(for: warnOnly) == 0)
+        #expect(DiagnosticsDoctorCommand.exitCode(for: failing) == 1)
+    }
+
+    @Test
+    func doctorRunReturnsFailureWhenSocketIsMissing() throws {
+        let root = try makeCLITemporaryDirectory(prefix: "toastty-cli-doctor")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtimeHome = root.appendingPathComponent("runtime-home", isDirectory: true)
+        let temp = root.appendingPathComponent("tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+
+        let exitCode = ToasttyCLI.run(
+            arguments: ["doctor"],
+            environment: [
+                "HOME": root.path,
+                ToasttyRuntimePaths.environmentKey: runtimeHome.path,
+                "TMPDIR": temp.path + "/",
+            ]
+        )
+
+        #expect(exitCode == 1)
+    }
+
+    @Test
     func actionRunParsesRepeatableInitialCommands() throws {
         let workspaceID = UUID()
         let invocation = try ToasttyCLI.parse(

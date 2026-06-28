@@ -18,6 +18,7 @@ enum CLICommand: Equatable {
     case agentManagedLaunchPreflightDecision(token: String)
     case appControlList(kind: AppControlCommandKind)
     case appControlRun(kind: AppControlCommandKind, id: String, args: [String: AutomationJSONValue])
+    case doctor(DiagnosticsDoctorOptions)
     case diagnosticsCollect(DiagnosticsCollectOptions)
     case diagnosticsSubmit(DiagnosticsSubmitOptions)
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
@@ -40,7 +41,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .diagnosticsCollect, .diagnosticsSubmit, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -110,7 +111,7 @@ enum CLICommand: Equatable {
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .diagnosticsCollect, .diagnosticsSubmit, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
             preconditionFailure("request-backed commands are handled as requests")
 
         case .notify(let title, let body, let workspaceID, let panelID):
@@ -290,6 +291,8 @@ enum CLICommand: Equatable {
             return resolvedSessionID
         case .agentManagedLaunchPreflightDecision:
             return "resolved managed launch preflight decision"
+        case .doctor:
+            return "ran Toastty doctor"
         case .diagnosticsCollect(let options):
             return "wrote diagnostics to \(options.outputPath)"
         case .diagnosticsSubmit(let options):
@@ -382,6 +385,15 @@ public enum ToasttyCLI {
                     source: source,
                     sessionID: sessionID,
                     panelID: panelID
+                )
+
+            case .doctor(let doctorOptions):
+                return try DiagnosticsDoctorCommand.run(
+                    options: doctorOptions,
+                    socketPath: invocation.options.socketPath,
+                    socketPathSourceOverride: invocation.options.socketPathSourceOverride,
+                    jsonOutput: invocation.options.jsonOutput,
+                    environment: environment
                 )
 
             case .diagnosticsCollect(let collectOptions):
@@ -486,6 +498,12 @@ public enum ToasttyCLI {
                 )
             )
 
+        case "doctor":
+            return CLIInvocation(
+                options: options,
+                command: try parseDoctorCommand(Array(remainingArguments.dropFirst()))
+            )
+
         case "notify":
             return CLIInvocation(
                 options: options,
@@ -509,6 +527,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
       toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive]
       toastty [--json] [--socket-path <path>] agent managed-launch-preflight-decision --token <id>
+      toastty [--json] [--socket-path <path>] doctor
       toastty [--socket-path <path>] diagnostics collect [--shell-probe <file>] [--note <text>] [--out <file>]
       toastty diagnostics submit --file <file> [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
@@ -584,6 +603,14 @@ public enum ToasttyCLI {
             workspaceID: workspaceID,
             panelID: panelID
         )
+    }
+
+    private static func parseDoctorCommand(_ arguments: [String]) throws -> CLICommand {
+        let parsed = try parseCommandArguments(arguments, valueOptions: [])
+        guard parsed.positionals.isEmpty else {
+            throw ToasttyCLIError.usage("doctor does not accept positional arguments\n\n\(usage)")
+        }
+        return .doctor(DiagnosticsDoctorOptions())
     }
 
     private static func parseDiagnosticsCommand(

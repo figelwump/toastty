@@ -57,7 +57,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 
 - Automation mode creates a Unix domain socket at a short temp path derived from the active runtime home when runtime isolation is enabled, otherwise under `$TMPDIR/toastty-$UID/events-v1.sock`, unless `TOASTTY_SOCKET_PATH` overrides it.
 - Automation runs can also write screenshots and state dumps under `artifacts/` or the directory provided via `--artifacts-dir`.
-- `Toastty > Send Diagnostics to Developer…` copies an agent snippet that writes a redacted diagnostics JSON bundle to a per-run temporary path with restrictive permissions. The bundle includes app/runtime metadata, socket probe results, shell-integration checks, shell probe output when provided, and embedded redacted Toastty log contents.
+- `Toastty > Send Diagnostics to Developer…` copies an agent snippet that first runs `toastty doctor --json` into a temporary local file, then writes a redacted diagnostics JSON bundle to a per-run temporary path with restrictive permissions. The bundle includes app/runtime metadata, socket probe results, shell-integration checks, shell probe output when provided, and embedded redacted Toastty log contents.
 - Browser panel screenshot actions can write user-selected PNG files, place PNG data on the macOS pasteboard, or write temporary agent-share screenshots under the system temp directory in `toastty-browser-screenshots/`.
 - Browser annotation sends can write temporary annotated PNG files under the system temp directory in `toastty-browser-annotations/`, then send the selected managed agent a prompt containing those file paths plus the page title, URL, viewport, and numbered comments when available.
 
@@ -74,9 +74,10 @@ Toastty is designed to run locally on your machine. The app itself does not send
 
 Toastty does not upload diagnostics automatically. The diagnostics flow is:
 
-1. `toastty diagnostics collect` writes a local redacted JSON bundle and prints a human summary.
-2. You review the JSON bundle.
-3. Only after explicit approval, `toastty diagnostics submit --file <path> --yes` uploads that exact reviewed file to the Toastty diagnostics Worker.
+1. `toastty doctor` can run local checks and print remediation hints without writing a bundle or uploading anything. It reads local state and pings the local Toastty automation socket when one is present.
+2. `toastty diagnostics collect` writes a local redacted JSON bundle and prints a human summary.
+3. You review the JSON bundle.
+4. Only after explicit approval, `toastty diagnostics submit --file <path> --yes` uploads that exact reviewed file to the Toastty diagnostics Worker.
 
 The uploaded report is stored in Cloudflare R2 under a temporary `reports/`
 prefix. R2 lifecycle rules must delete that prefix after the configured
