@@ -288,30 +288,46 @@ struct SidebarView: View {
         unreadSessionRowIDs: Set<SidebarSessionRowID>,
         viewportHeight: CGFloat,
         visibleTop: CGFloat = ToastyTheme.sidebarTopPadding,
+        minimumVisibleFraction: CGFloat = 0.5,
         epsilon: CGFloat = 1.5
     ) -> HiddenSessionPillState {
         guard viewportHeight.isFinite,
               viewportHeight > 0,
               visibleTop.isFinite,
+              minimumVisibleFraction.isFinite,
+              minimumVisibleFraction >= 0,
+              minimumVisibleFraction <= 1,
               epsilon.isFinite else {
             return .empty
         }
 
         let topThreshold = visibleTop + epsilon
         let bottomThreshold = viewportHeight - epsilon
+        guard bottomThreshold > topThreshold else { return .empty }
+
         var hiddenAbove: [SidebarSessionRowID] = []
         var hiddenBelow: [SidebarSessionRowID] = []
 
         for rowID in orderedSessionRowIDs {
             guard let frame = measuredSessionRowFramesByID[rowID],
                   frame.minY.isFinite,
-                  frame.maxY.isFinite else {
+                  frame.maxY.isFinite,
+                  frame.height.isFinite,
+                  frame.height > 0 else {
                 continue
             }
 
-            if frame.maxY <= topThreshold {
+            let visibleHeight = max(0, min(frame.maxY, bottomThreshold) - max(frame.minY, topThreshold))
+            let viewportVisibleHeight = bottomThreshold - topThreshold
+            let minimumVisibleHeight = min(frame.height * minimumVisibleFraction, viewportVisibleHeight)
+
+            // A one-pixel intersection is not useful as a scroll affordance; keep
+            // a row counted hidden until enough of that row is visible to identify it.
+            if frame.maxY <= topThreshold
+                || (frame.minY < topThreshold && visibleHeight < minimumVisibleHeight) {
                 hiddenAbove.append(rowID)
-            } else if frame.minY >= bottomThreshold {
+            } else if frame.minY >= bottomThreshold
+                || (frame.maxY > bottomThreshold && visibleHeight < minimumVisibleHeight) {
                 hiddenBelow.append(rowID)
             }
         }
