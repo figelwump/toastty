@@ -595,14 +595,16 @@ struct SidebarView: View {
                     Capsule()
                         .fill(
                             pill.hasUnread
-                                ? ToastyTheme.badgeBlue.opacity(0.16)
-                                : ToastyTheme.elevatedBackground.opacity(0.96)
+                                ? ToastyTheme.badgeBlue.opacity(0.22)
+                                : ToastyTheme.primaryText.opacity(0.10)
                         )
                 )
                 .overlay {
                     Capsule()
                         .stroke(
-                            pill.hasUnread ? ToastyTheme.badgeBlue.opacity(0.64) : ToastyTheme.hairline,
+                            pill.hasUnread
+                                ? ToastyTheme.badgeBlue.opacity(0.70)
+                                : ToastyTheme.primaryText.opacity(0.18),
                             lineWidth: 1
                         )
                 }
