@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -18,6 +19,77 @@ private struct SidebarSemanticTextBridge: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
         nsView.stringValue = text
+    }
+}
+
+private struct SidebarScrollViewportHeightReporter: NSViewRepresentable {
+    let onHeightChange: @MainActor (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> SidebarScrollViewportHeightReporterView {
+        let view = SidebarScrollViewportHeightReporterView()
+        view.onHeightChange = onHeightChange
+        return view
+    }
+
+    func updateNSView(_ nsView: SidebarScrollViewportHeightReporterView, context: Context) {
+        nsView.onHeightChange = onHeightChange
+        nsView.scheduleRefresh()
+    }
+}
+
+@MainActor
+private final class SidebarScrollViewportHeightReporterView: NSView {
+    var onHeightChange: (@MainActor (CGFloat) -> Void)?
+    private weak var observedClipView: NSClipView?
+    private var boundsObservation: NSKeyValueObservation?
+    private var lastReportedHeight: CGFloat?
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        scheduleRefresh()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scheduleRefresh()
+    }
+
+    override func layout() {
+        super.layout()
+        scheduleRefresh()
+    }
+
+    func scheduleRefresh() {
+        Task { @MainActor [weak self] in
+            self?.refreshHeight()
+        }
+    }
+
+    private func refreshHeight() {
+        guard let clipView = enclosingScrollView?.contentView else { return }
+
+        if observedClipView !== clipView {
+            observedClipView = clipView
+            lastReportedHeight = nil
+            boundsObservation = clipView.observe(\.bounds, options: [.new]) { [weak self] _, change in
+                guard let height = change.newValue?.height else { return }
+                Task { @MainActor [weak self] in
+                    self?.reportHeight(height)
+                }
+            }
+        }
+
+        reportHeight(clipView.bounds.height)
+    }
+
+    private func reportHeight(_ height: CGFloat) {
+        guard height.isFinite,
+              lastReportedHeight.map({ abs(height - $0) >= 0.5 }) ?? true else {
+            return
+        }
+
+        lastReportedHeight = height
+        onHeightChange?(height)
     }
 }
 
@@ -123,6 +195,8 @@ struct SidebarView: View {
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
     /// Test seam for asserting row geometry used by drag reordering.
     let workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)?
+    /// Test seam for asserting the rendered scroll viewport used by hidden-session pills.
+    let workspaceViewportHeightObserver: ((CGFloat) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
@@ -296,7 +370,8 @@ struct SidebarView: View {
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
-        workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil
+        workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
+        workspaceViewportHeightObserver: ((CGFloat) -> Void)? = nil
     ) {
         self.windowID = windowID
         self.store = store
@@ -305,6 +380,7 @@ struct SidebarView: View {
         self.terminalRuntimeContext = terminalRuntimeContext
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
+        self.workspaceViewportHeightObserver = workspaceViewportHeightObserver
     }
 
     private var selectedWorkspaceID: UUID? {
@@ -338,6 +414,15 @@ struct SidebarView: View {
                     }
                     .padding(.horizontal, 8)
                     .coordinateSpace(name: SidebarWorkspaceListCoordinateSpace.name)
+                    .background {
+                        // SwiftUI geometry attached to the ScrollView can report
+                        // a zero height on macOS; read the enclosing NSScrollView
+                        // clip view from inside this scroll content instead.
+                        SidebarScrollViewportHeightReporter { height in
+                            sidebarWorkspaceListViewportHeight = height
+                            workspaceViewportHeightObserver?(height)
+                        }
+                    }
                     .onPreferenceChange(WorkspaceRowFramePreferenceKey.self) { framesByID in
                         measuredWorkspaceRowFramesByID = framesByID
                         workspaceRowFrameObserver?(framesByID)
@@ -366,7 +451,6 @@ struct SidebarView: View {
                     }
                 }
                 .coordinateSpace(name: SidebarWorkspaceViewportCoordinateSpace.name)
-                .background(sidebarWorkspaceViewportHeightMeasurement())
                 // Keep the titlebar region opaque while letting rows scroll
                 // underneath it instead of showing through the traffic-light area.
                 .safeAreaInset(edge: .top, spacing: 0) {
@@ -377,9 +461,6 @@ struct SidebarView: View {
                 }
                 .overlay(alignment: .bottom) {
                     hiddenSessionPill(sidebarHiddenSessionPillState.below, using: proxy)
-                }
-                .onPreferenceChange(SidebarWorkspaceViewportHeightPreferenceKey.self) { height in
-                    sidebarWorkspaceListViewportHeight = height
                 }
                 .onAppear {
                     scrollToSelectedWorkspace(using: proxy, animated: false)
@@ -1105,15 +1186,6 @@ struct SidebarView: View {
                 value: [
                     rowID: geometry.frame(in: .named(SidebarWorkspaceViewportCoordinateSpace.name))
                 ]
-            )
-        }
-    }
-
-    private func sidebarWorkspaceViewportHeightMeasurement() -> some View {
-        GeometryReader { geometry in
-            Color.clear.preference(
-                key: SidebarWorkspaceViewportHeightPreferenceKey.self,
-                value: geometry.size.height
             )
         }
     }
@@ -2041,13 +2113,5 @@ private struct SidebarSessionRowFramePreferenceKey: PreferenceKey {
         nextValue: () -> [SidebarView.SidebarSessionRowID: CGRect]
     ) {
         value.merge(nextValue(), uniquingKeysWith: { _, next in next })
-    }
-}
-
-private struct SidebarWorkspaceViewportHeightPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }

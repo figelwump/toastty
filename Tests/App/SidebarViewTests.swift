@@ -1003,6 +1003,63 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(scrollRequests.last?.animated, true)
     }
 
+    func testSidebarViewportHeightObserverReportsRenderedScrollHeight() throws {
+        let workspaces = (1...3).map { WorkspaceState.bootstrap(title: "Workspace \($0)") }
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 220),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: workspaces.first?.id
+                )
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        var observedViewportHeights: [CGFloat] = []
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeContext: runtimeContext,
+            workspaceViewportHeightObserver: { height in
+                observedViewportHeights.append(height)
+            }
+        )
+        let hostingView = NSHostingView(
+            rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth, height: 220)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 220),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+        let deadline = Date().addingTimeInterval(1)
+        while (observedViewportHeights.max() ?? 0) <= 100, Date() < deadline {
+            pumpMainRunLoop(duration: 0.05)
+            hostingView.layoutSubtreeIfNeeded()
+        }
+
+        XCTAssertGreaterThan(
+            observedViewportHeights.max() ?? 0,
+            100,
+            "Hidden-session pills need the rendered scroll viewport height; a zero height suppresses both pills"
+        )
+    }
+
     func testWorkspaceHeaderPaddingClickSelectsWorkspace() throws {
         let workspaces = (1...2).map { WorkspaceState.bootstrap(title: "Workspace \($0)") }
         let windowID = UUID()
