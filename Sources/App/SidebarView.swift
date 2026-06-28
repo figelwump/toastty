@@ -591,11 +591,6 @@ struct SidebarView: View {
                     Image(systemName: pill.direction.iconName)
                         .font(.system(size: 10, weight: .bold))
 
-                    Text("\(pill.count)")
-                        .font(ToastyTheme.fontWorkspaceAgentCount)
-                        .fontWeight(.semibold)
-                        .monospacedDigit()
-
                     if pill.hasUnread {
                         Circle()
                             .fill(ToastyTheme.badgeBlue)
