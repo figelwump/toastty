@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -33,6 +34,77 @@ private struct SidebarTooltipBridge: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         nsView.toolTip = text.isEmpty ? nil : text
+    }
+}
+
+private struct SidebarScrollViewportHeightReporter: NSViewRepresentable {
+    let onHeightChange: @MainActor (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> SidebarScrollViewportHeightReporterView {
+        let view = SidebarScrollViewportHeightReporterView()
+        view.onHeightChange = onHeightChange
+        return view
+    }
+
+    func updateNSView(_ nsView: SidebarScrollViewportHeightReporterView, context: Context) {
+        nsView.onHeightChange = onHeightChange
+        nsView.scheduleRefresh()
+    }
+}
+
+@MainActor
+private final class SidebarScrollViewportHeightReporterView: NSView {
+    var onHeightChange: (@MainActor (CGFloat) -> Void)?
+    private weak var observedClipView: NSClipView?
+    private var boundsObservation: NSKeyValueObservation?
+    private var lastReportedHeight: CGFloat?
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        scheduleRefresh()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scheduleRefresh()
+    }
+
+    override func layout() {
+        super.layout()
+        scheduleRefresh()
+    }
+
+    func scheduleRefresh() {
+        Task { @MainActor [weak self] in
+            self?.refreshHeight()
+        }
+    }
+
+    private func refreshHeight() {
+        guard let clipView = enclosingScrollView?.contentView else { return }
+
+        if observedClipView !== clipView {
+            observedClipView = clipView
+            lastReportedHeight = nil
+            boundsObservation = clipView.observe(\.bounds, options: [.new]) { [weak self] _, change in
+                guard let height = change.newValue?.height else { return }
+                Task { @MainActor [weak self] in
+                    self?.reportHeight(height)
+                }
+            }
+        }
+
+        reportHeight(clipView.bounds.height)
+    }
+
+    private func reportHeight(_ height: CGFloat) {
+        guard height.isFinite,
+              lastReportedHeight.map({ abs(height - $0) >= 0.5 }) ?? true else {
+            return
+        }
+
+        lastReportedHeight = height
+        onHeightChange?(height)
     }
 }
 
@@ -85,6 +157,49 @@ struct SidebarView: View {
         var targetIndex: Int
     }
 
+    struct SidebarSessionRowID: Hashable, Equatable {
+        let workspaceID: UUID
+        let sessionID: String
+        let panelID: UUID
+    }
+
+    enum HiddenSessionDirection: Equatable {
+        case above
+        case below
+
+        var iconName: String {
+            switch self {
+            case .above:
+                return "chevron.up"
+            case .below:
+                return "chevron.down"
+            }
+        }
+
+        var accessibilityDirection: String {
+            switch self {
+            case .above:
+                return "above"
+            case .below:
+                return "below"
+            }
+        }
+    }
+
+    struct HiddenSessionPill: Equatable {
+        let direction: HiddenSessionDirection
+        let count: Int
+        let hasUnread: Bool
+        let targetID: SidebarSessionRowID
+    }
+
+    struct HiddenSessionPillState: Equatable {
+        let above: HiddenSessionPill?
+        let below: HiddenSessionPill?
+
+        static let empty = HiddenSessionPillState(above: nil, below: nil)
+    }
+
     let windowID: UUID
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -95,6 +210,9 @@ struct SidebarView: View {
     let scrollRequestObserver: ((UUID, Bool) -> Void)?
     /// Test seam for asserting row geometry used by drag reordering.
     let workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)?
+    /// Test seam for asserting the rendered scroll viewport used by hidden-session pills.
+    let workspaceViewportHeightObserver: ((CGFloat) -> Void)?
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
@@ -108,6 +226,8 @@ struct SidebarView: View {
     @State private var sidebarFlashResetWorkItem: DispatchWorkItem?
     @State private var activeWorkspaceDrag: WorkspaceDragState?
     @State private var measuredWorkspaceRowFramesByID: [UUID: CGRect] = [:]
+    @State private var measuredSessionRowFramesByID: [SidebarSessionRowID: CGRect] = [:]
+    @State private var sidebarWorkspaceListViewportHeight: CGFloat = 0
     @State private var sidebarSessionRowDiagnosticsByPanelID: [UUID: SidebarSessionRowDiagnosticState] = [:]
     @State private var optionKeyPressed = false
 
@@ -179,6 +299,103 @@ struct SidebarView: View {
         return CGRect(x: referenceFrame.minX, y: y, width: referenceFrame.width, height: 2)
     }
 
+    nonisolated static func hiddenSessionPillState(
+        orderedSessionRowIDs: [SidebarSessionRowID],
+        measuredSessionRowFramesByID: [SidebarSessionRowID: CGRect],
+        unreadSessionRowIDs: Set<SidebarSessionRowID>,
+        viewportHeight: CGFloat,
+        visibleTop: CGFloat = ToastyTheme.sidebarTopPadding,
+        minimumVisibleFraction: CGFloat = 0.5,
+        epsilon: CGFloat = 1.5
+    ) -> HiddenSessionPillState {
+        guard viewportHeight.isFinite,
+              viewportHeight > 0,
+              visibleTop.isFinite,
+              minimumVisibleFraction.isFinite,
+              minimumVisibleFraction >= 0,
+              minimumVisibleFraction <= 1,
+              epsilon.isFinite else {
+            return .empty
+        }
+
+        let topThreshold = visibleTop + epsilon
+        let bottomThreshold = viewportHeight - epsilon
+        guard bottomThreshold > topThreshold else { return .empty }
+
+        var hiddenAbove: [SidebarSessionRowID] = []
+        var hiddenBelow: [SidebarSessionRowID] = []
+
+        for rowID in orderedSessionRowIDs {
+            guard let frame = measuredSessionRowFramesByID[rowID],
+                  frame.minY.isFinite,
+                  frame.maxY.isFinite,
+                  frame.height.isFinite,
+                  frame.height > 0 else {
+                continue
+            }
+
+            let visibleHeight = max(0, min(frame.maxY, bottomThreshold) - max(frame.minY, topThreshold))
+            let viewportVisibleHeight = bottomThreshold - topThreshold
+            let minimumVisibleHeight = min(frame.height * minimumVisibleFraction, viewportVisibleHeight)
+
+            // A one-pixel intersection is not useful as a scroll affordance; keep
+            // a row counted hidden until enough of that row is visible to identify it.
+            if frame.maxY <= topThreshold
+                || (frame.minY < topThreshold && visibleHeight < minimumVisibleHeight) {
+                hiddenAbove.append(rowID)
+            } else if frame.minY >= bottomThreshold
+                || (frame.maxY > bottomThreshold && visibleHeight < minimumVisibleHeight) {
+                hiddenBelow.append(rowID)
+            }
+        }
+
+        let abovePill = hiddenAbove.last.map { targetID in
+            HiddenSessionPill(
+                direction: .above,
+                count: hiddenAbove.count,
+                hasUnread: hiddenAbove.contains { unreadSessionRowIDs.contains($0) },
+                targetID: targetID
+            )
+        }
+        let belowPill = hiddenBelow.first.map { targetID in
+            HiddenSessionPill(
+                direction: .below,
+                count: hiddenBelow.count,
+                hasUnread: hiddenBelow.contains { unreadSessionRowIDs.contains($0) },
+                targetID: targetID
+            )
+        }
+
+        return HiddenSessionPillState(above: abovePill, below: belowPill)
+    }
+
+    nonisolated static func hiddenSessionScrollAnchor(
+        for direction: HiddenSessionDirection,
+        viewportHeight: CGFloat
+    ) -> UnitPoint {
+        guard viewportHeight.isFinite,
+              viewportHeight > 1 else {
+            return direction == .above ? .top : .bottom
+        }
+
+        let estimatedSessionRowHeight: CGFloat = 44
+        let availableScrollableHeight = max(viewportHeight - estimatedSessionRowHeight, 1)
+        switch direction {
+        case .above:
+            let topClearance = ToastyTheme.sidebarTopPadding + 8
+            let y = min(0.35, max(0.12, topClearance / availableScrollableHeight))
+            return UnitPoint(x: 0.5, y: y)
+
+        case .below:
+            let bottomClearance: CGFloat = 40
+            let y = min(
+                0.88,
+                max(0.65, (viewportHeight - bottomClearance - estimatedSessionRowHeight) / availableScrollableHeight)
+            )
+            return UnitPoint(x: 0.5, y: y)
+        }
+    }
+
     init(
         windowID: UUID,
         store: AppStore,
@@ -186,7 +403,8 @@ struct SidebarView: View {
         sessionRuntimeStore: SessionRuntimeStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
-        workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil
+        workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
+        workspaceViewportHeightObserver: ((CGFloat) -> Void)? = nil
     ) {
         self.windowID = windowID
         self.store = store
@@ -195,6 +413,7 @@ struct SidebarView: View {
         self.terminalRuntimeContext = terminalRuntimeContext
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
+        self.workspaceViewportHeightObserver = workspaceViewportHeightObserver
     }
 
     private var selectedWorkspaceID: UUID? {
@@ -228,9 +447,21 @@ struct SidebarView: View {
                     }
                     .padding(.horizontal, 8)
                     .coordinateSpace(name: SidebarWorkspaceListCoordinateSpace.name)
+                    .background {
+                        // SwiftUI geometry attached to the ScrollView can report
+                        // a zero height on macOS; read the enclosing NSScrollView
+                        // clip view from inside this scroll content instead.
+                        SidebarScrollViewportHeightReporter { height in
+                            sidebarWorkspaceListViewportHeight = height
+                            workspaceViewportHeightObserver?(height)
+                        }
+                    }
                     .onPreferenceChange(WorkspaceRowFramePreferenceKey.self) { framesByID in
                         measuredWorkspaceRowFramesByID = framesByID
                         workspaceRowFrameObserver?(framesByID)
+                    }
+                    .onPreferenceChange(SidebarSessionRowFramePreferenceKey.self) { framesByID in
+                        measuredSessionRowFramesByID = framesByID
                     }
                     .overlay(alignment: .topLeading) {
                         if let activeWorkspaceDrag,
@@ -252,10 +483,17 @@ struct SidebarView: View {
                         }
                     }
                 }
+                .coordinateSpace(name: SidebarWorkspaceViewportCoordinateSpace.name)
                 // Keep the titlebar region opaque while letting rows scroll
                 // underneath it instead of showing through the traffic-light area.
                 .safeAreaInset(edge: .top, spacing: 0) {
                     sidebarTitlebarCover
+                }
+                .overlay(alignment: .top) {
+                    hiddenSessionPill(sidebarHiddenSessionPillState.above, using: proxy)
+                }
+                .overlay(alignment: .bottom) {
+                    hiddenSessionPill(sidebarHiddenSessionPillState.below, using: proxy)
                 }
                 .onAppear {
                     scrollToSelectedWorkspace(using: proxy, animated: false)
@@ -343,6 +581,66 @@ struct SidebarView: View {
             .frame(maxWidth: .infinity)
             .frame(height: ToastyTheme.sidebarTopPadding)
             .allowsHitTesting(false)
+    }
+
+    private var sidebarHiddenSessionPillState: HiddenSessionPillState {
+        guard activeWorkspaceDrag == nil else { return .empty }
+
+        return Self.hiddenSessionPillState(
+            orderedSessionRowIDs: currentSidebarSessionRowIDs(),
+            measuredSessionRowFramesByID: measuredSessionRowFramesByID,
+            unreadSessionRowIDs: currentUnreadSidebarSessionRowIDs(),
+            viewportHeight: sidebarWorkspaceListViewportHeight,
+            visibleTop: ToastyTheme.sidebarTopPadding
+        )
+    }
+
+    @ViewBuilder
+    private func hiddenSessionPill(
+        _ pill: HiddenSessionPill?,
+        using proxy: ScrollViewProxy
+    ) -> some View {
+        if let pill {
+            Button {
+                scrollToHiddenSession(pill, using: proxy)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: pill.direction.iconName)
+                        .font(.system(size: 10, weight: .bold))
+
+                    if pill.hasUnread {
+                        Circle()
+                            .fill(ToastyTheme.badgeBlue)
+                            .frame(width: 6, height: 6)
+                            .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .foregroundStyle(pill.hasUnread ? ToastyTheme.badgeBlue : ToastyTheme.inactiveText)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule()
+                        .fill(ToastyTheme.surfaceBackground.opacity(0.88))
+                )
+                .overlay {
+                    Capsule()
+                        .stroke(
+                            pill.hasUnread
+                                ? ToastyTheme.badgeBlue.opacity(0.70)
+                                : ToastyTheme.primaryText.opacity(0.18),
+                            lineWidth: 1
+                        )
+                }
+                .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Self.hiddenSessionPillAccessibilityLabel(pill))
+            .accessibilityIdentifier("sidebar.hiddenSessions.\(pill.direction.accessibilityDirection)")
+            .offset(y: pill.direction == .above ? ToastyTheme.sidebarTopPadding + 8 : -12)
+            .transition(.opacity)
+            .animation(.easeOut(duration: 0.12), value: pill)
+        }
     }
 
     @ViewBuilder
@@ -668,6 +966,11 @@ struct SidebarView: View {
         workspace: WorkspaceState,
         isHovered: Bool
     ) -> some View {
+        let sessionRowID = SidebarSessionRowID(
+            workspaceID: workspace.id,
+            sessionID: workspaceSessionStatus.sessionID,
+            panelID: workspaceSessionStatus.panelID
+        )
         let status = workspaceSessionStatus.status
         let isLaterFlagged = sessionRuntimeStore.isLaterFlagged(sessionID: workspaceSessionStatus.sessionID)
         let showsUnreadSessionAccent = showsUnreadSessionAccent(
@@ -765,6 +1068,7 @@ struct SidebarView: View {
                 .accessibilityLabel(accessibilityLabel)
             }
         }
+        .id(sessionRowID)
         .contextMenu {
             if workspaceSessionStatus.agent != .processWatch {
                 Button(
@@ -788,6 +1092,7 @@ struct SidebarView: View {
             SidebarSemanticTextBridge(text: accessibilityLabel)
                 .frame(width: 0, height: 0)
         }
+        .background(sessionRowFrameMeasurement(rowID: sessionRowID))
         .onAppear {
             logSidebarSessionRowDiagnosticIfChanged(rowDiagnosticState, reason: "appear")
         }
@@ -913,6 +1218,17 @@ struct SidebarView: View {
                 key: WorkspaceRowFramePreferenceKey.self,
                 value: [
                     workspaceID: geometry.frame(in: .named(SidebarWorkspaceListCoordinateSpace.name))
+                ]
+            )
+        }
+    }
+
+    private func sessionRowFrameMeasurement(rowID: SidebarSessionRowID) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: SidebarSessionRowFramePreferenceKey.self,
+                value: [
+                    rowID: geometry.frame(in: .named(SidebarWorkspaceViewportCoordinateSpace.name))
                 ]
             )
         }
@@ -1528,6 +1844,69 @@ struct SidebarView: View {
         }
     }
 
+    private func scrollToHiddenSession(
+        _ pill: HiddenSessionPill,
+        using proxy: ScrollViewProxy
+    ) {
+        let anchor = hiddenSessionScrollAnchor(for: pill.direction)
+
+        Task { @MainActor in
+            if accessibilityReduceMotion {
+                proxy.scrollTo(pill.targetID, anchor: anchor)
+            } else {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    proxy.scrollTo(pill.targetID, anchor: anchor)
+                }
+            }
+        }
+    }
+
+    private func hiddenSessionScrollAnchor(for direction: HiddenSessionDirection) -> UnitPoint {
+        Self.hiddenSessionScrollAnchor(for: direction, viewportHeight: sidebarWorkspaceListViewportHeight)
+    }
+
+    private func currentSidebarSessionRowIDs() -> [SidebarSessionRowID] {
+        guard let window = store.window(id: windowID) else { return [] }
+
+        return window.workspaceIDs.flatMap { workspaceID -> [SidebarSessionRowID] in
+            guard store.state.workspacesByID[workspaceID] != nil else { return [] }
+
+            return sessionRuntimeStore
+                .workspaceStatuses(for: workspaceID)
+                .map { status in
+                    SidebarSessionRowID(
+                        workspaceID: workspaceID,
+                        sessionID: status.sessionID,
+                        panelID: status.panelID
+                    )
+                }
+        }
+    }
+
+    private func currentUnreadSidebarSessionRowIDs() -> Set<SidebarSessionRowID> {
+        guard let window = store.window(id: windowID) else { return [] }
+
+        return Set(
+            window.workspaceIDs.flatMap { workspaceID -> [SidebarSessionRowID] in
+                guard let workspace = store.state.workspacesByID[workspaceID] else { return [] }
+
+                return sessionRuntimeStore
+                    .workspaceStatuses(for: workspaceID)
+                    .compactMap { status in
+                        guard showsUnreadSessionAccent(for: status.panelID, in: workspace) else {
+                            return nil
+                        }
+
+                        return SidebarSessionRowID(
+                            workspaceID: workspaceID,
+                            sessionID: status.sessionID,
+                            panelID: status.panelID
+                        )
+                    }
+            }
+        )
+    }
+
     private func pruneTransientSidebarState() {
         if let renamingWorkspaceID,
            store.state.workspacesByID[renamingWorkspaceID] == nil {
@@ -1556,12 +1935,15 @@ struct SidebarView: View {
     private func pruneTransientWorkspaceDragState() {
         guard let window = store.window(id: windowID) else {
             measuredWorkspaceRowFramesByID = [:]
+            measuredSessionRowFramesByID = [:]
             cancelWorkspaceDrag()
             return
         }
 
         let workspaceIDs = Set(window.workspaceIDs)
         measuredWorkspaceRowFramesByID = measuredWorkspaceRowFramesByID.filter { workspaceIDs.contains($0.key) }
+        let currentSessionRowIDs = Set(currentSidebarSessionRowIDs())
+        measuredSessionRowFramesByID = measuredSessionRowFramesByID.filter { currentSessionRowIDs.contains($0.key) }
         if let activeWorkspaceDrag,
            workspaceIDs.contains(activeWorkspaceDrag.workspaceID) == false {
             cancelWorkspaceDrag()
@@ -1660,6 +2042,12 @@ struct SidebarView: View {
             components.append("flagged for later")
         }
         return components.joined(separator: ", ")
+    }
+
+    static func hiddenSessionPillAccessibilityLabel(_ pill: HiddenSessionPill) -> String {
+        let sessionLabel = pill.count == 1 ? "session" : "sessions"
+        let unreadSuffix = pill.hasUnread ? ", unread" : ""
+        return "\(pill.count) \(sessionLabel) hidden \(pill.direction.accessibilityDirection)\(unreadSuffix)"
     }
 
     static func canFocusSessionPanel(_ panelID: UUID, in workspace: WorkspaceState) -> Bool {
@@ -1863,10 +2251,25 @@ private enum SidebarWorkspaceListCoordinateSpace {
     static let name = "sidebar-workspaces.list"
 }
 
+private enum SidebarWorkspaceViewportCoordinateSpace {
+    static let name = "sidebar-workspaces.viewport"
+}
+
 private struct WorkspaceRowFramePreferenceKey: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
 
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+private struct SidebarSessionRowFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [SidebarView.SidebarSessionRowID: CGRect] = [:]
+
+    static func reduce(
+        value: inout [SidebarView.SidebarSessionRowID: CGRect],
+        nextValue: () -> [SidebarView.SidebarSessionRowID: CGRect]
+    ) {
         value.merge(nextValue(), uniquingKeysWith: { _, next in next })
     }
 }
