@@ -609,11 +609,7 @@ struct SidebarView: View {
                 .padding(.vertical, 5)
                 .background(
                     Capsule()
-                        .fill(
-                            pill.hasUnread
-                                ? ToastyTheme.badgeBlue.opacity(0.22)
-                                : ToastyTheme.primaryText.opacity(0.10)
-                        )
+                        .fill(ToastyTheme.surfaceBackground.opacity(0.88))
                 )
                 .overlay {
                     Capsule()
