@@ -1300,9 +1300,10 @@ final class SidebarViewTests: XCTestCase {
         harness.hostingView.layoutSubtreeIfNeeded()
         let peakBitmap = try renderedBitmap(for: harness.hostingView)
 
-        pumpMainRunLoop(duration: 0.5)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let settledBitmap = try renderedBitmap(for: harness.hostingView)
+        let settledBitmap = try waitForRenderedBitmap(
+            of: harness.hostingView,
+            matching: baselineBitmap
+        )
 
         XCTAssertNil(harness.store.pendingSidebarSessionFlashRequest)
         XCTAssertGreaterThan(
@@ -1333,9 +1334,10 @@ final class SidebarViewTests: XCTestCase {
         harness.hostingView.layoutSubtreeIfNeeded()
         let peakBitmap = try renderedBitmap(for: harness.hostingView)
 
-        pumpMainRunLoop(duration: 0.5)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let settledBitmap = try renderedBitmap(for: harness.hostingView)
+        let settledBitmap = try waitForRenderedBitmap(
+            of: harness.hostingView,
+            matching: baselineBitmap
+        )
 
         XCTAssertNil(harness.store.pendingSidebarSessionFlashRequest)
         XCTAssertGreaterThan(
@@ -1366,9 +1368,10 @@ final class SidebarViewTests: XCTestCase {
         harness.hostingView.layoutSubtreeIfNeeded()
         let peakBitmap = try renderedBitmap(for: harness.hostingView)
 
-        pumpMainRunLoop(duration: 0.5)
-        harness.hostingView.layoutSubtreeIfNeeded()
-        let settledBitmap = try renderedBitmap(for: harness.hostingView)
+        let settledBitmap = try waitForRenderedBitmap(
+            of: harness.hostingView,
+            matching: baselineBitmap
+        )
 
         XCTAssertNil(harness.store.pendingSidebarSessionFlashRequest)
         XCTAssertGreaterThan(
@@ -1688,6 +1691,25 @@ final class SidebarViewTests: XCTestCase {
         let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: bounds))
         view.cacheDisplay(in: bounds, to: bitmap)
         return bitmap
+    }
+
+    private func waitForRenderedBitmap(
+        of view: NSView,
+        matching baseline: NSBitmapImageRep,
+        timeout: TimeInterval = 1.5,
+        pollInterval: TimeInterval = 0.05
+    ) throws -> NSBitmapImageRep {
+        let deadline = Date().addingTimeInterval(timeout)
+        var latestBitmap = try renderedBitmap(for: view)
+        var latestDifference = try differingPixelCount(between: baseline, and: latestBitmap)
+
+        while latestDifference != 0, Date() < deadline {
+            pumpMainRunLoop(duration: pollInterval)
+            latestBitmap = try renderedBitmap(for: view)
+            latestDifference = try differingPixelCount(between: baseline, and: latestBitmap)
+        }
+
+        return latestBitmap
     }
 
     private func renderedBitmap(
