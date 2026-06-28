@@ -55,7 +55,7 @@ sv exec -- tuist generate
 
 After the first deploy, set `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` in `sv` to the
 Worker URL printed by Wrangler, for example
-`https://toastty-diagnostics.vishal-kapur.workers.dev`.
+`https://toastty-diagnostics.giantthings.workers.dev`.
 
 The upload key is spam friction, not a strong secret once embedded in a shipped
 CLI binary.
