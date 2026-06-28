@@ -52,6 +52,32 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func diagnosticsSubmitParsesFlags() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "diagnostics", "submit",
+                "--file", "/tmp/toastty-diag.json",
+                "--endpoint", "https://diagnostics.example.com",
+                "--yes",
+                "--dry-run",
+                "--allow-secret-scan-warning",
+            ],
+            environment: [:]
+        )
+
+        guard case .diagnosticsSubmit(let options) = invocation.command else {
+            Issue.record("expected diagnostics submit command")
+            return
+        }
+
+        #expect(options.filePath == "/tmp/toastty-diag.json")
+        #expect(options.endpoint == "https://diagnostics.example.com")
+        #expect(options.yes)
+        #expect(options.dryRun)
+        #expect(options.allowSecretScanWarning)
+    }
+
+    @Test
     func actionRunParsesRepeatableInitialCommands() throws {
         let workspaceID = UUID()
         let invocation = try ToasttyCLI.parse(

@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "toastty-diagnostics",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "MAX_BODY_BYTES": "15000000",
+    "RETENTION_DAYS": "30",
+    "MIN_REDACTION_RULES_VERSION": "1"
+  },
+  "r2_buckets": [
+    {
+      "binding": "DIAGNOSTICS_BUCKET",
+      "bucket_name": "toastty-diagnostics-prod"
+    }
+  ],
+  "env": {
+    "test": {
+      "name": "toastty-diagnostics-test",
+      "vars": {
+        "MAX_BODY_BYTES": "15000000",
+        "RETENTION_DAYS": "30",
+        "MIN_REDACTION_RULES_VERSION": "1",
+        "TOASTTY_DIAGNOSTICS_UPLOAD_KEY": "test-upload-key",
+        "TOASTTY_DIAGNOSTICS_ADMIN_KEY": "test-admin-key"
+      },
+      "r2_buckets": [
+        {
+          "binding": "DIAGNOSTICS_BUCKET",
+          "bucket_name": "toastty-diagnostics-test"
+        }
+      ]
+    }
+  }
+}

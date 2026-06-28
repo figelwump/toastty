@@ -10,6 +10,11 @@ enum DiagnosticsSnippetGenerator {
         I'm hitting an issue in Toastty and want to gather a diagnostic report.
 
         TC="$(command -v toastty || printf '%s\\n' \(bakedPath))"
+        TMPBASE="${TMPDIR:-/tmp}"
+        TMPBASE="${TMPBASE%/}"
+        umask 077
+        PROBE="$(mktemp "$TMPBASE/toastty-probe.XXXXXX")"
+        DIAG="$(mktemp "$TMPBASE/toastty-diag.XXXXXX")"
 
         {
           echo "TOASTTY_CLI_PATH=${TOASTTY_CLI_PATH:-<unset>}"
@@ -17,14 +22,19 @@ enum DiagnosticsSnippetGenerator {
           type -a claude codex pi opencode mimo mimocode
           ls -la ~/.toastty/bin 2>&1
           echo "PATH=$PATH"
-        } > /tmp/toastty-probe.txt 2>&1
+        } > "$PROBE" 2>&1
 
         "$TC" diagnostics collect \\
-          --shell-probe /tmp/toastty-probe.txt \\
+          --shell-probe "$PROBE" \\
           --note "<one line: what's been going wrong this session>" \\
-          --out /tmp/toastty-diag.json
+          --out "$DIAG"
 
-        Then show me the summary it printed and the contents of /tmp/toastty-diag.json so I can review what was collected.
+        printf '\\nTOASTTY_CLI_RESOLVED=%s\\n' "$TC"
+        printf 'TOASTTY_DIAGNOSTICS_JSON=%s\\n' "$DIAG"
+
+        Then show me the summary it printed and the contents of the JSON file so I can review what was collected.
+        If I say yes after reviewing it, submit that exact file with:
+          "$TC" diagnostics submit --file "$DIAG" --yes
         """
     }
 

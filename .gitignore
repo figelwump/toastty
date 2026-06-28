@@ -15,3 +15,8 @@ DerivedData
 *.xcodeproj
 *.xcworkspace
 node_modules/
+.dev.vars
+.dev.vars.*
+workers/diagnostics/.wrangler/
+workers/diagnostics/.dev.vars
+workers/diagnostics/.dev.vars.*

@@ -26,6 +26,42 @@ This smoke builds the app, launches a runtime-isolated non-automation instance, 
 
 ## Commands
 
+### `diagnostics collect`
+
+Collect a local redacted diagnostics JSON bundle. This command reads local disk
+state and probes the Toastty socket; collection itself does not upload anything.
+
+```
+toastty diagnostics collect [--shell-probe <file>] [--note <text>] [--out <file>]
+```
+
+The JSON includes embedded redacted log contents, app/runtime metadata, shell
+integration status, system metadata, and socket probe details. If `--out` is
+omitted, the CLI writes to a temporary path.
+
+### `diagnostics submit`
+
+Submit an already-collected diagnostics JSON bundle to the configured Toastty
+diagnostics Worker.
+
+```
+toastty diagnostics submit --file <file> [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
+```
+
+Without `--yes`, the command validates the file and prints the upload summary
+without sending anything. With `--yes`, it uploads the exact JSON bytes from
+`--file`; it does not rebuild or re-redact the bundle.
+
+Endpoint resolution order is `--endpoint`, `TOASTTY_DIAGNOSTICS_ENDPOINT`, then
+the endpoint embedded at build time. The upload key is read from
+`TOASTTY_DIAGNOSTICS_UPLOAD_KEY`, `TOASTTY_DIAGNOSTICS_UPLOAD_KEY_FILE`, or a
+build-injected value.
+
+The submit command refuses bundles that are missing redaction metadata, use an
+old schema/redaction version, exceed the upload size limit, or still appear to
+contain high-confidence secret patterns. Use `--allow-secret-scan-warning` only
+after manually reviewing a false positive.
+
 ### `action list`
 
 List the always-on app-control actions exposed by the running app.

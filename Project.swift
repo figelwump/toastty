@@ -31,6 +31,30 @@ func resolvedManifestEnvironmentValue(
     return manifestValue ?? compatibilityValue ?? defaultValue
 }
 
+func resolvedOptionalManifestEnvironmentValue(
+    manifestKey: String,
+    compatibilityKey: String
+) -> String {
+    let manifestValue = environment[manifestKey]
+    let compatibilityValue = environment[compatibilityKey]
+
+    if let manifestValue, manifestValue.isEmpty {
+        fatalError("\(manifestKey) must not be empty when set at `tuist generate` time.")
+    }
+    if let compatibilityValue, compatibilityValue.isEmpty {
+        fatalError("\(compatibilityKey) must not be empty when set at `tuist generate` time.")
+    }
+    if
+        let manifestValue,
+        let compatibilityValue,
+        manifestValue != compatibilityValue
+    {
+        fatalError("\(manifestKey) and \(compatibilityKey) must match when both are set at `tuist generate` time.")
+    }
+
+    return manifestValue ?? compatibilityValue ?? ""
+}
+
 // Tuist manifest evaluation reliably exposes TUIST_* variables. Keep the plain
 // TOASTTY_* names as a compatibility fallback for contexts where they still pass through.
 let marketingVersion = resolvedManifestEnvironmentValue(
@@ -42,6 +66,14 @@ let buildNumber = resolvedManifestEnvironmentValue(
     manifestKey: "TUIST_TOASTTY_BUILD_NUMBER",
     compatibilityKey: "TOASTTY_BUILD_NUMBER",
     defaultValue: "1"
+)
+let diagnosticsUploadEndpoint = resolvedOptionalManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT",
+    compatibilityKey: "TOASTTY_DIAGNOSTICS_ENDPOINT"
+)
+let diagnosticsUploadKey = resolvedOptionalManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY",
+    compatibilityKey: "TOASTTY_DIAGNOSTICS_UPLOAD_KEY"
 )
 let sparkleFeedURL = "https://updates.toastty.dev/appcast.xml"
 let sparklePublicEDKey = "TmgFEcjPjqplsktNMX2rJSj+2YjJyVX5UvGMvSBHjlM="
@@ -329,6 +361,12 @@ if hasGhosttyXCFramework {
 
 let appTargetSettings: Settings = .settings(base: appTargetSettingsBase)
 let appTestTargetSettings: Settings = .settings(base: appTestTargetSettingsBase)
+let cliTargetSettings: Settings = .settings(
+    base: [
+        "TOASTTY_DIAGNOSTICS_UPLOAD_ENDPOINT": SettingValue(stringLiteral: diagnosticsUploadEndpoint),
+        "TOASTTY_DIAGNOSTICS_UPLOAD_KEY": SettingValue(stringLiteral: diagnosticsUploadKey),
+    ]
+)
 
 let project = Project(
     name: "toastty",
@@ -403,11 +441,15 @@ let project = Project(
             product: .commandLineTool,
             bundleId: "com.GiantThings.toastty.cli",
             deploymentTargets: .macOS("14.0"),
-            infoPlist: .default,
+            infoPlist: .extendingDefault(with: [
+                "ToasttyDiagnosticsEndpoint": .string("$(TOASTTY_DIAGNOSTICS_UPLOAD_ENDPOINT)"),
+                "ToasttyDiagnosticsUploadKey": .string("$(TOASTTY_DIAGNOSTICS_UPLOAD_KEY)"),
+            ]),
             sources: ["Sources/CLI/**"],
             dependencies: [
                 .target(name: "ToasttyCLIKit"),
-            ]
+            ],
+            settings: cliTargetSettings
         ),
         .target(
             name: "toastty-agent-shim",

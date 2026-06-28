@@ -19,6 +19,7 @@ enum CLICommand: Equatable {
     case appControlList(kind: AppControlCommandKind)
     case appControlRun(kind: AppControlCommandKind, id: String, args: [String: AutomationJSONValue])
     case diagnosticsCollect(DiagnosticsCollectOptions)
+    case diagnosticsSubmit(DiagnosticsSubmitOptions)
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
@@ -39,7 +40,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .diagnosticsCollect, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .diagnosticsCollect, .diagnosticsSubmit, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -109,7 +110,7 @@ enum CLICommand: Equatable {
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .diagnosticsCollect, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .diagnosticsCollect, .diagnosticsSubmit, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
             preconditionFailure("request-backed commands are handled as requests")
 
         case .notify(let title, let body, let workspaceID, let panelID):
@@ -291,6 +292,8 @@ enum CLICommand: Equatable {
             return "resolved managed launch preflight decision"
         case .diagnosticsCollect(let options):
             return "wrote diagnostics to \(options.outputPath)"
+        case .diagnosticsSubmit(let options):
+            return "processed diagnostics file \(options.filePath)"
         case .appControlList:
             return "listed app control commands"
         case .appControlRun(let kind, let id, _):
@@ -386,6 +389,13 @@ public enum ToasttyCLI {
                     options: collectOptions,
                     socketPath: invocation.options.socketPath,
                     socketPathSourceOverride: invocation.options.socketPathSourceOverride,
+                    environment: environment
+                )
+                return 0
+
+            case .diagnosticsSubmit(let submitOptions):
+                try DiagnosticsSubmitCommand.run(
+                    options: submitOptions,
                     environment: environment
                 )
                 return 0
@@ -500,6 +510,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive]
       toastty [--json] [--socket-path <path>] agent managed-launch-preflight-decision --token <id>
       toastty [--socket-path <path>] diagnostics collect [--shell-probe <file>] [--note <text>] [--out <file>]
+      toastty diagnostics submit --file <file> [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
@@ -599,6 +610,26 @@ public enum ToasttyCLI {
                     shellProbePath: parsed.singleValue("--shell-probe"),
                     note: parsed.singleValue("--note"),
                     outputPath: parsed.singleValue("--out") ?? defaultDiagnosticsOutputPath(environment: environment)
+                )
+            )
+
+        case "submit":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--file", "--endpoint"],
+                flagOptions: ["--yes", "--dry-run", "--allow-secret-scan-warning"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("diagnostics submit does not accept positional arguments\n\n\(usage)")
+            }
+
+            return .diagnosticsSubmit(
+                DiagnosticsSubmitOptions(
+                    filePath: try requireValue("--file", in: parsed),
+                    endpoint: parsed.singleValue("--endpoint"),
+                    yes: parsed.hasFlag("--yes"),
+                    dryRun: parsed.hasFlag("--dry-run"),
+                    allowSecretScanWarning: parsed.hasFlag("--allow-secret-scan-warning")
                 )
             )
 
@@ -1072,12 +1103,19 @@ public enum ToasttyCLI {
 
     private static func parseCommandArguments(
         _ arguments: [String],
-        valueOptions: Set<String>
+        valueOptions: Set<String>,
+        flagOptions: Set<String> = []
     ) throws -> ParsedCommandArguments {
         var parsed = ParsedCommandArguments()
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
+            if flagOptions.contains(argument) {
+                parsed.recordFlag(argument)
+                index += 1
+                continue
+            }
+
             if valueOptions.contains(argument) {
                 guard index + 1 < arguments.count else {
                     throw ToasttyCLIError.usage("missing value for \(argument)\n\n\(usage)")
@@ -1542,9 +1580,14 @@ private struct SessionIngestResult: Codable, Equatable {
 private struct ParsedCommandArguments {
     var positionals: [String] = []
     private var optionValues: [String: [String]] = [:]
+    private var flags: Set<String> = []
 
     mutating func recordValue(_ value: String, for flag: String) {
         optionValues[flag, default: []].append(value)
+    }
+
+    mutating func recordFlag(_ flag: String) {
+        flags.insert(flag)
     }
 
     func singleValue(_ flag: String) -> String? {
@@ -1553,6 +1596,10 @@ private struct ParsedCommandArguments {
 
     func values(_ flag: String) -> [String] {
         optionValues[flag] ?? []
+    }
+
+    func hasFlag(_ flag: String) -> Bool {
+        flags.contains(flag)
     }
 }
 
