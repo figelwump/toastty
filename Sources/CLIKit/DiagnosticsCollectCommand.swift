@@ -23,10 +23,12 @@ enum DiagnosticsCollectCommand {
             socketPathOverride: socketPath,
             pathSourceOverride: socketPathSourceOverride
         )
+        let automation = DiagnosticsAutomationCollector.collect(socket: probe)
         let rawBundle = DiagnosticsCollector.collect(
             note: options.note,
             shellProbeFilePath: options.shellProbePath,
             socket: probe,
+            automation: automation,
             environment: environment,
             homeDirectoryPath: resolvedHomeDirectoryPath,
             fileManager: fileManager
@@ -65,6 +67,7 @@ enum DiagnosticsCollectCommand {
         let shellExistingCount = bundle.shell.detectedShells.filter(\.exists).count
         let currentLogLine = logSummary("Current log", bundle.logs.current)
         let previousLogLine = logSummary("Previous log", bundle.logs.previous)
+        let automationLine = automationSummary(bundle.automation)
         let checkReport = DiagnosticsCheckEvaluator.evaluate(bundle)
 
         return [
@@ -78,6 +81,7 @@ enum DiagnosticsCollectCommand {
             "Shim directory: \(bundle.shell.shimDirectory.path) (\(bundle.shell.shimDirectory.entries.count) entries)",
             currentLogLine,
             previousLogLine,
+            automationLine,
             "Redactions: \(bundle.redaction?.redactedKeyCount ?? 0) using rules v\(bundle.redaction?.rulesVersion ?? 0)",
         ]
         .joined(separator: "\n")
@@ -94,8 +98,47 @@ enum DiagnosticsCollectCommand {
         return "\(label): included \(size) from \(log.path)"
     }
 
+    private static func automationSummary(_ automation: DiagnosticsAutomationSection?) -> String {
+        guard let automation else {
+            return "Automation audit: unavailable"
+        }
+        guard automation.status.status == "available" else {
+            return "Automation audit: unavailable (\(automation.status.detail ?? "unknown"))"
+        }
+        return "Automation audit: included \(automation.recentRequests.count) recent calls"
+    }
+
     private static func writeStdout(_ string: String) throws {
         let output = string.hasSuffix("\n") ? string : string + "\n"
         FileHandle.standardOutput.write(output.data(using: .utf8) ?? Data())
+    }
+}
+
+private enum DiagnosticsAutomationCollector {
+    static func collect(socket: DiagnosticsSocketProbeResult) -> DiagnosticsAutomationSection {
+        guard socket.state == .healthy else {
+            return .unavailable("automation socket is not healthy")
+        }
+
+        do {
+            let response = try ToasttySocketClient(socketPath: socket.socketPath, timeoutInterval: 2).send(
+                AutomationRequestEnvelope(
+                    requestID: UUID().uuidString,
+                    command: AutomationSocketProtocol.diagnosticsRecentRequestsCommand
+                )
+            )
+            guard response.ok else {
+                return .unavailable(
+                    response.error.map { "\($0.code): \($0.message)" } ?? "automation diagnostics request failed"
+                )
+            }
+            guard let result = response.result else {
+                return .unavailable("automation diagnostics response did not include a result")
+            }
+            let data = try JSONEncoder().encode(result)
+            return try JSONDecoder().decode(DiagnosticsAutomationSection.self, from: data)
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
     }
 }

@@ -11,6 +11,7 @@ public struct DiagnosticsBundle: Codable, Equatable, Sendable {
     public var shell: DiagnosticsShellSection
     public var system: DiagnosticsSystemSection
     public var socket: DiagnosticsSocketProbeResult
+    public var automation: DiagnosticsAutomationSection?
     public var probe: DiagnosticsProbeSection
     public var redaction: DiagnosticsRedactionSection?
 
@@ -23,6 +24,7 @@ public struct DiagnosticsBundle: Codable, Equatable, Sendable {
         shell: DiagnosticsShellSection,
         system: DiagnosticsSystemSection,
         socket: DiagnosticsSocketProbeResult,
+        automation: DiagnosticsAutomationSection? = nil,
         probe: DiagnosticsProbeSection,
         redaction: DiagnosticsRedactionSection? = nil
     ) {
@@ -34,6 +36,7 @@ public struct DiagnosticsBundle: Codable, Equatable, Sendable {
         self.shell = shell
         self.system = system
         self.socket = socket
+        self.automation = automation
         self.probe = probe
         self.redaction = redaction
     }
@@ -249,6 +252,84 @@ public struct DiagnosticsProbeSection: Codable, Equatable, Sendable {
         self.shellProbePath = shellProbePath
         self.rawShellProbe = rawShellProbe
         self.readError = readError
+    }
+}
+
+public struct DiagnosticsAutomationSection: Codable, Equatable, Sendable {
+    public var status: DiagnosticsAvailability
+    public var recentRequests: [DiagnosticsAutomationRequestEntry]
+
+    public init(
+        status: DiagnosticsAvailability,
+        recentRequests: [DiagnosticsAutomationRequestEntry]
+    ) {
+        self.status = status
+        self.recentRequests = recentRequests
+    }
+
+    public static func unavailable(_ detail: String) -> DiagnosticsAutomationSection {
+        DiagnosticsAutomationSection(
+            status: .unavailable(detail),
+            recentRequests: []
+        )
+    }
+}
+
+public struct DiagnosticsAutomationRequestEntry: Codable, Equatable, Sendable {
+    public var timestampMs: Int64
+    public var kind: String
+    public var requestID: String?
+    public var command: String?
+    public var eventType: String?
+    public var callerSessionID: String?
+    public var callerAgent: String?
+    public var sessionID: String?
+    public var panelID: String?
+    public var actionID: String?
+    public var queryID: String?
+    public var argumentKeys: [String]
+    public var selectors: [String: AutomationJSONValue]
+    public var flags: [String: AutomationJSONValue]
+    public var ok: Bool
+    public var durationMs: Int
+    public var errorCode: String?
+
+    public init(
+        timestampMs: Int64,
+        kind: String,
+        requestID: String?,
+        command: String?,
+        eventType: String?,
+        callerSessionID: String?,
+        callerAgent: String?,
+        sessionID: String?,
+        panelID: String?,
+        actionID: String?,
+        queryID: String?,
+        argumentKeys: [String],
+        selectors: [String: AutomationJSONValue],
+        flags: [String: AutomationJSONValue],
+        ok: Bool,
+        durationMs: Int,
+        errorCode: String?
+    ) {
+        self.timestampMs = timestampMs
+        self.kind = kind
+        self.requestID = requestID
+        self.command = command
+        self.eventType = eventType
+        self.callerSessionID = callerSessionID
+        self.callerAgent = callerAgent
+        self.sessionID = sessionID
+        self.panelID = panelID
+        self.actionID = actionID
+        self.queryID = queryID
+        self.argumentKeys = argumentKeys
+        self.selectors = selectors
+        self.flags = flags
+        self.ok = ok
+        self.durationMs = durationMs
+        self.errorCode = errorCode
     }
 }
 

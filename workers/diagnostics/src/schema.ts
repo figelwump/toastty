@@ -8,6 +8,7 @@ export type DiagnosticsBundle = {
   logs?: Record<string, unknown>;
   shell?: Record<string, unknown>;
   socket?: Record<string, unknown>;
+  automation?: Record<string, unknown>;
   system?: Record<string, unknown>;
   redaction?: {
     rulesVersion: number;
@@ -82,6 +83,7 @@ export function validateDiagnosticsBundle(value: unknown, minimumRedactionRulesV
       logs: asRecord(object.logs) ?? undefined,
       shell: asRecord(object.shell) ?? undefined,
       socket: asRecord(object.socket) ?? undefined,
+      automation: asRecord(object.automation) ?? undefined,
       system: asRecord(object.system) ?? undefined,
       redaction: {
         rulesVersion,

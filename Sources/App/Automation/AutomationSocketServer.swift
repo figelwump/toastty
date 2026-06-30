@@ -834,6 +834,57 @@ private final class AutomationSocketClient: @unchecked Sendable {
 }
 
 private final class AutomationCommandExecutor: @unchecked Sendable {
+    private static let recentAutomationRequestLimit = 250
+    private static let auditArgumentKeyAllowlist: Set<String> = [
+        "action",
+        "activate",
+        "agent",
+        "allowUnavailable",
+        "amount",
+        "argv",
+        "background",
+        "contains",
+        "content",
+        "createPolicy",
+        "cwd",
+        "detail",
+        "expectedRevision",
+        "filePath",
+        "files",
+        "fixture",
+        "focusUnreadSessionPanel",
+        "hookEventName",
+        "id",
+        "includeRuntime",
+        "index",
+        "initialCommands",
+        "initialPrompt",
+        "kind",
+        "name",
+        "nativeSessionID",
+        "panelID",
+        "patch",
+        "placement",
+        "preflightPolicy",
+        "profileID",
+        "query",
+        "sessionID",
+        "source",
+        "status",
+        "step",
+        "submit",
+        "summary",
+        "tabID",
+        "text",
+        "threadID",
+        "title",
+        "toIndex",
+        "url",
+        "windowID",
+        "workspaceID",
+        "workspaceIDs",
+    ]
+
     private let store: AppStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
@@ -854,6 +905,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private var sessionUpdateCoalescer = SessionUpdateCoalescer()
     private var pendingManagedLaunchPreflights: [String: PendingManagedLaunchPreflight] = [:]
     private var loggedUnrestrictedScopeCallerSessionIDs = Set<String>()
+    private var recentAutomationRequests: [DiagnosticsAutomationRequestEntry] = []
     @MainActor
     private lazy var appControlExecutor = AppControlExecutor(
         store: store,
@@ -892,7 +944,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
     @MainActor
     func execute(envelope: AutomationIncomingEnvelope) -> AutomationResponseEnvelope {
+        let startedAt = Date()
         let responseRequestID = envelope.requestID ?? UUID().uuidString
+        let response: AutomationResponseEnvelope
 
         do {
             let result: [String: AutomationJSONValue]?
@@ -912,21 +966,21 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 result = try executeEvent(event)
             }
 
-            return AutomationResponseEnvelope(
+            response = AutomationResponseEnvelope(
                 requestID: responseRequestID,
                 ok: true,
                 result: result,
                 error: nil
             )
         } catch let socketError as AutomationSocketError {
-            return AutomationResponseEnvelope(
+            response = AutomationResponseEnvelope(
                 requestID: responseRequestID,
                 ok: false,
                 result: nil,
                 error: socketError.errorBody
             )
         } catch let launchError as AgentLaunchError {
-            return AutomationResponseEnvelope(
+            response = AutomationResponseEnvelope(
                 requestID: responseRequestID,
                 ok: false,
                 result: nil,
@@ -936,7 +990,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 )
             )
         } catch {
-            return AutomationResponseEnvelope(
+            response = AutomationResponseEnvelope(
                 requestID: responseRequestID,
                 ok: false,
                 result: nil,
@@ -946,6 +1000,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 )
             )
         }
+
+        recordAutomationRequest(
+            envelope: envelope,
+            response: response,
+            startedAt: startedAt
+        )
+        return response
     }
 
     @MainActor
@@ -1006,6 +1067,14 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("token is required")
             }
             return try automationObject(managedLaunchPreflightDecision(token: token))
+
+        case AutomationSocketProtocol.diagnosticsRecentRequestsCommand:
+            return try automationObject(
+                DiagnosticsAutomationSection(
+                    status: .available,
+                    recentRequests: recentAutomationRequests
+                )
+            )
 
         case "app_control.list_actions":
             return try automationObject(
@@ -1288,6 +1357,225 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         default:
             throw AutomationSocketError.unknownCommand
         }
+    }
+
+    @MainActor
+    private func recordAutomationRequest(
+        envelope: AutomationIncomingEnvelope,
+        response: AutomationResponseEnvelope,
+        startedAt: Date
+    ) {
+        guard shouldAudit(envelope) else { return }
+
+        let entry = automationAuditEntry(
+            envelope: envelope,
+            response: response,
+            startedAt: startedAt
+        )
+        recentAutomationRequests.append(entry)
+        if recentAutomationRequests.count > Self.recentAutomationRequestLimit {
+            recentAutomationRequests.removeFirst(
+                recentAutomationRequests.count - Self.recentAutomationRequestLimit
+            )
+        }
+    }
+
+    private func shouldAudit(_ envelope: AutomationIncomingEnvelope) -> Bool {
+        guard case .request(let request) = envelope else {
+            return true
+        }
+        switch request.command {
+        case "automation.ping", AutomationSocketProtocol.diagnosticsRecentRequestsCommand:
+            return false
+        default:
+            return true
+        }
+    }
+
+    @MainActor
+    private func automationAuditEntry(
+        envelope: AutomationIncomingEnvelope,
+        response: AutomationResponseEnvelope,
+        startedAt: Date
+    ) -> DiagnosticsAutomationRequestEntry {
+        let durationMs = max(0, Int(Date().timeIntervalSince(startedAt) * 1000))
+        switch envelope {
+        case .request(let request):
+            let args = auditArguments(for: request)
+            let sessionID = auditSessionID(for: request, args: args)
+            return DiagnosticsAutomationRequestEntry(
+                timestampMs: Self.millisecondsSinceEpoch(startedAt),
+                kind: "request",
+                requestID: request.requestID,
+                command: request.command,
+                eventType: nil,
+                callerSessionID: normalizedOptionalText(request.callerSessionID),
+                callerAgent: auditAgent(
+                    callerSessionID: normalizedOptionalText(request.callerSessionID),
+                    sessionID: sessionID
+                ),
+                sessionID: sessionID,
+                panelID: auditPanelID(for: request, args: args),
+                actionID: auditActionID(for: request),
+                queryID: auditQueryID(for: request),
+                argumentKeys: auditArgumentKeys(from: args),
+                selectors: auditSelectors(from: args),
+                flags: auditFlags(from: args),
+                ok: response.ok,
+                durationMs: durationMs,
+                errorCode: response.error?.code
+            )
+
+        case .event(let event):
+            return DiagnosticsAutomationRequestEntry(
+                timestampMs: Self.millisecondsSinceEpoch(startedAt),
+                kind: "event",
+                requestID: event.requestID,
+                command: nil,
+                eventType: event.eventType,
+                callerSessionID: nil,
+                callerAgent: auditAgent(callerSessionID: nil, sessionID: normalizedOptionalText(event.sessionID)),
+                sessionID: normalizedOptionalText(event.sessionID),
+                panelID: normalizedOptionalText(event.panelID),
+                actionID: nil,
+                queryID: nil,
+                argumentKeys: auditArgumentKeys(from: event.payload),
+                selectors: auditSelectors(from: event.payload),
+                flags: auditFlags(from: event.payload),
+                ok: response.ok,
+                durationMs: durationMs,
+                errorCode: response.error?.code
+            )
+        }
+    }
+
+    private func auditArguments(for request: AutomationRequestEnvelope) -> [String: AutomationJSONValue] {
+        switch request.command {
+        case "app_control.run_action", "app_control.run_query":
+            return request.payload.object("args") ?? [:]
+        case "automation.perform_action":
+            return request.payload.object("args") ?? request.payload
+        default:
+            return request.payload
+        }
+    }
+
+    private func auditActionID(for request: AutomationRequestEnvelope) -> String? {
+        switch request.command {
+        case "app_control.run_action":
+            return normalizedOptionalText(request.payload.string("id"))
+        case "automation.perform_action":
+            return normalizedOptionalText(request.payload.string("action"))
+        default:
+            return nil
+        }
+    }
+
+    private func auditQueryID(for request: AutomationRequestEnvelope) -> String? {
+        switch request.command {
+        case "app_control.run_query":
+            return normalizedOptionalText(request.payload.string("id"))
+        default:
+            return nil
+        }
+    }
+
+    private func auditSessionID(
+        for request: AutomationRequestEnvelope,
+        args: [String: AutomationJSONValue]
+    ) -> String? {
+        normalizedOptionalText(request.payload.string("sessionID"))
+            ?? normalizedOptionalText(args.string("sessionID"))
+    }
+
+    private func auditPanelID(
+        for request: AutomationRequestEnvelope,
+        args: [String: AutomationJSONValue]
+    ) -> String? {
+        normalizedOptionalText(request.payload.string("panelID"))
+            ?? normalizedOptionalText(args.string("panelID"))
+    }
+
+    @MainActor
+    private func auditAgent(callerSessionID: String?, sessionID: String?) -> String? {
+        for candidate in [callerSessionID, sessionID].compactMap({ $0 }) {
+            if let agent = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: candidate)?.agent {
+                return agent.rawValue
+            }
+        }
+        return nil
+    }
+
+    private func auditArgumentKeys(from args: [String: AutomationJSONValue]) -> [String] {
+        let keys = Set(
+            args.keys.map { key in
+                normalizedAuditArgumentKey(key)
+            }
+        )
+        return keys.sorted()
+    }
+
+    private func normalizedAuditArgumentKey(_ key: String) -> String {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return "other"
+        }
+        if Self.auditArgumentKeyAllowlist.contains(trimmed) {
+            return trimmed
+        }
+        if trimmed.hasPrefix("env.") {
+            return "env.*"
+        }
+        return "other"
+    }
+
+    private func auditSelectors(from args: [String: AutomationJSONValue]) -> [String: AutomationJSONValue] {
+        let allowedKeys: Set<String> = [
+            "windowID",
+            "workspaceID",
+            "panelID",
+            "tabID",
+            "index",
+            "toIndex",
+        ]
+        return auditValues(from: args, allowedKeys: allowedKeys)
+    }
+
+    private func auditFlags(from args: [String: AutomationJSONValue]) -> [String: AutomationJSONValue] {
+        let allowedKeys: Set<String> = [
+            "activate",
+            "allowUnavailable",
+            "background",
+            "focusUnreadSessionPanel",
+            "includeRuntime",
+        ]
+        return auditValues(from: args, allowedKeys: allowedKeys)
+    }
+
+    private func auditValues(
+        from args: [String: AutomationJSONValue],
+        allowedKeys: Set<String>
+    ) -> [String: AutomationJSONValue] {
+        args.reduce(into: [:]) { result, element in
+            guard allowedKeys.contains(element.key),
+                  let value = auditSafeValue(element.value) else {
+                return
+            }
+            result[element.key] = value
+        }
+    }
+
+    private func auditSafeValue(_ value: AutomationJSONValue) -> AutomationJSONValue? {
+        switch value {
+        case .string, .int, .double, .bool:
+            return value
+        case .object, .array, .null:
+            return nil
+        }
+    }
+
+    private static func millisecondsSinceEpoch(_ date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1000).rounded())
     }
 
     private func requireAutomationMode(for command: String) throws {

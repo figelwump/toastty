@@ -7,6 +7,7 @@ public enum DiagnosticsCollector {
         note: String?,
         shellProbeFilePath: String?,
         socket: DiagnosticsSocketProbeResult,
+        automation: DiagnosticsAutomationSection? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectoryPath: String = NSHomeDirectory(),
         fileManager: FileManager = .default
@@ -41,6 +42,7 @@ public enum DiagnosticsCollector {
             ),
             system: DiagnosticsSystemCollector.collect(),
             socket: socket,
+            automation: automation,
             probe: DiagnosticsProbeCollector.collect(
                 shellProbeFilePath: shellProbeFilePath,
                 fileManager: fileManager

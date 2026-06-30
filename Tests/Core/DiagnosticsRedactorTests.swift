@@ -16,6 +16,7 @@ struct DiagnosticsRedactorTests {
         OPENAI_API_KEY=sk-test_abcdefghijklmnopqrstuvwxyz
         git=https://user:password@example.com/repo.git
         """
+        bundle.automation = .unavailable("failed with token sk-test_abcdefghijklmnopqrstuvwxyz")
         bundle.shell.environment = [
             DiagnosticsEnvironmentEntry(name: "PATH", value: "/Users/vishal/.toastty/bin:/usr/bin"),
             DiagnosticsEnvironmentEntry(name: "TOASTTY_SOCKET_PATH", value: "/tmp/toastty-501/events-v1.sock"),
@@ -29,6 +30,7 @@ struct DiagnosticsRedactorTests {
         #expect(encoded.contains("Bearer abcdefghijklmnopqrstuvwxyz") == false)
         #expect(encoded.contains("secret-value") == false)
         #expect(encoded.contains("password@example.com") == false)
+        #expect(redacted.automation?.status.detail?.contains("sk-test_abcdefghijklmnopqrstuvwxyz") == false)
         #expect(redacted.note?.contains("/Users/vishal/repo") == true)
         #expect(redacted.logs.current.content?.contains("/Users/vishal/repo") == true)
         #expect(redacted.socket.socketPath == "/tmp/toastty-501/events-v1.sock")

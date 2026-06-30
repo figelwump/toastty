@@ -36,12 +36,13 @@ describe("diagnostics worker", () => {
     const envelope = await retrieved.json() as {
       reportID: string;
       summary: { socketState?: string; redactionRulesVersion: number };
-      bundle: { schemaVersion: number };
+      bundle: { schemaVersion: number; automation?: { recentRequests?: unknown[] } };
     };
     expect(envelope.reportID).toBe(submitted.reportID);
     expect(envelope.summary.socketState).toBe("healthy");
     expect(envelope.summary.redactionRulesVersion).toBe(1);
     expect(envelope.bundle.schemaVersion).toBe(1);
+    expect(envelope.bundle.automation?.recentRequests).toHaveLength(1);
   });
 
   it("requires upload and admin keys", async () => {
@@ -56,6 +57,27 @@ describe("diagnostics worker", () => {
       method: "GET"
     });
     expect(admin.status).toBe(401);
+  });
+
+  it("accepts older bundles without automation diagnostics", async () => {
+    const bundle = makeBundle();
+    delete (bundle as { automation?: unknown }).automation;
+
+    const response = await SELF.fetch("https://diagnostics.test/v1/diagnostics", {
+      method: "POST",
+      headers: uploadHeaders,
+      body: JSON.stringify(bundle)
+    });
+
+    expect(response.status).toBe(201);
+    const submitted = await response.json() as { reportID: string };
+    const retrieved = await SELF.fetch(`https://diagnostics.test/v1/diagnostics/${submitted.reportID}`, {
+      method: "GET",
+      headers: adminHeaders
+    });
+    expect(retrieved.status).toBe(200);
+    const envelope = await retrieved.json() as { bundle: { automation?: unknown } };
+    expect(envelope.bundle.automation).toBeUndefined();
   });
 
   it("rejects oversized streamed bodies before JSON parsing", async () => {
@@ -195,6 +217,31 @@ function makeBundle() {
     socket: {
       state: "healthy",
       socketPath: "/tmp/toastty-501/events-v1.sock"
+    },
+    automation: {
+      status: {
+        status: "available"
+      },
+      recentRequests: [
+        {
+          timestampMs: 1_800_000_000_000,
+          kind: "request",
+          requestID: "req-1",
+          command: "app_control.run_action",
+          callerSessionID: "sess-1",
+          callerAgent: "codex",
+          actionID: "workspace.select",
+          argumentKeys: ["focusUnreadSessionPanel", "workspaceID"],
+          selectors: {
+            workspaceID: "workspace-1"
+          },
+          flags: {
+            focusUnreadSessionPanel: false
+          },
+          ok: true,
+          durationMs: 3
+        }
+      ]
     },
     system: {
       arch: "arm64",

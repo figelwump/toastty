@@ -14,6 +14,7 @@ public struct DiagnosticsRedactor: Sendable {
         redacted.logs = state.redactLogs(redacted.logs)
         redacted.shell = state.redactShell(redacted.shell)
         redacted.socket = state.redactSocket(redacted.socket)
+        redacted.automation = redacted.automation.map { state.redactAutomation($0) }
         redacted.probe = state.redactProbe(redacted.probe)
         redacted.redaction = DiagnosticsRedactionSection(
             rulesVersion: Self.rulesVersion,
@@ -86,6 +87,12 @@ private struct RedactionState {
             socket.currentSocketRecord = currentSocketRecord
         }
         return socket
+    }
+
+    mutating func redactAutomation(_ automation: DiagnosticsAutomationSection) -> DiagnosticsAutomationSection {
+        var automation = automation
+        automation.status = redactAvailability(automation.status)
+        return automation
     }
 
     mutating func redactProbe(_ probe: DiagnosticsProbeSection) -> DiagnosticsProbeSection {
