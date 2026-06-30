@@ -578,6 +578,7 @@ private extension AgentLaunchInstrumentation {
           let suppressWorkingUntil = 0;
           let blankWorkingSuppressUntil = 0;
           let questionApprovalResolvedUntil = 0;
+          let mimoTurnClosed = false;
           const terminalWorkingSuppressMs = 2000;
           const blankWorkingSuppressMs = 750;
           const questionApprovalResolvedSuppressMs = 2000;
@@ -645,6 +646,7 @@ private extension AgentLaunchInstrumentation {
             lastCompletedTextCandidate = "";
             blankWorkingSuppressUntil = 0;
             questionApprovalResolvedUntil = 0;
+            mimoTurnClosed = false;
             clearPendingOpenCodeFinal();
           }
 
@@ -707,6 +709,13 @@ private extension AgentLaunchInstrumentation {
             return true;
           }
 
+          function shouldSuppressGenericMiMoWorkingAfterTurnClosed(event) {
+            return isMiMoCode
+              && mimoTurnClosed
+              && isWorkingStatus(event)
+              && isGenericOpenCodeWorkingStatus(event);
+          }
+
           function shouldSuppressBlankWorkingAfterVisibleDetail(event) {
             if (!isWorkingStatus(event) || workingStatusDetail(event)) return false;
             if (!blankWorkingSuppressUntil) return false;
@@ -737,6 +746,9 @@ private extension AgentLaunchInstrumentation {
             }
             if (event.type === "toastty.final") {
               lastForwardedStatusKey = "";
+            }
+            if (isMiMoCode && options.suppressFollowingWorking && isTerminalStatus(event)) {
+              mimoTurnClosed = true;
             }
             if (options.suppressFollowingWorking && isTerminalStatus(event)) {
               suppressWorkingUntil = nowMilliseconds() + terminalWorkingSuppressMs;
@@ -1069,6 +1081,7 @@ private extension AgentLaunchInstrumentation {
             if (!event) return queue;
             if (shouldSuppressWorkingAfterTerminal(event)) return queue;
             if (shouldSuppressGenericOpenCodeWorkingAfterTextComplete(event)) return queue;
+            if (shouldSuppressGenericMiMoWorkingAfterTurnClosed(event)) return queue;
             if (shouldSuppressBlankWorkingAfterVisibleDetail(event)) return queue;
             if (!isMiMoCode && isWorkingStatus(event) && !isGenericOpenCodeWorkingStatus(event)) {
               clearPendingOpenCodeFinal();

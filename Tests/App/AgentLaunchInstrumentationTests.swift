@@ -292,6 +292,97 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertFalse(String(describing: events).contains("Writing response"))
     }
 
+    func testMiMoCodePluginSuppressesDelayedGenericWorkingAfterSessionPost() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .mimocode,
+            commandName: "mimo",
+            configContentEnvironmentKey: "MIMOCODE_CONFIG_CONTENT",
+            runnerBody: """
+            await hooks["session.pre"]?.({}, {});
+            await hooks["session.userQuery.post"]?.({ finalText: "per-step text" }, {});
+            await hooks["session.post"]?.({}, {});
+            const realNow = Date.now;
+            const afterFinal = realNow() + 3000;
+            Date.now = () => afterFinal;
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "text", text: "delayed late text" } },
+            });
+            hooks.event?.({
+              type: "session.status",
+              properties: { status: { type: "busy" } },
+            });
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "reasoning" } },
+            });
+            Date.now = realNow;
+            """
+        )
+
+        XCTAssertEqual(events.count, 3)
+        XCTAssertEqual(events[0]["type"] as? String, "toastty.status")
+        let firstProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(firstProperties["kind"] as? String, "working")
+        XCTAssertEqual(firstProperties["detail"] as? String, "Starting")
+
+        XCTAssertEqual(events[1]["type"] as? String, "toastty.final")
+        let finalProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+        XCTAssertEqual(finalProperties["text"] as? String, "per-step text")
+
+        XCTAssertEqual(events[2]["type"] as? String, "toastty.status")
+        let resumedProperties = try XCTUnwrap(events[2]["properties"] as? [String: Any])
+        XCTAssertEqual(resumedProperties["kind"] as? String, "working")
+        XCTAssertEqual(resumedProperties["detail"] as? String, "Reasoning")
+        XCTAssertFalse(String(describing: events).contains("Writing response"))
+    }
+
+    func testMiMoCodePluginAllowsGenericWorkingAfterNextTurnReset() throws {
+        let events = try runOpenCodeFamilyPluginScenario(
+            agent: .mimocode,
+            commandName: "mimo",
+            configContentEnvironmentKey: "MIMOCODE_CONFIG_CONTENT",
+            runnerBody: """
+            await hooks["session.pre"]?.({}, {});
+            await hooks["session.userQuery.post"]?.({ finalText: "per-step text" }, {});
+            await hooks["session.post"]?.({}, {});
+            const realNow = Date.now;
+            const afterFinal = realNow() + 3000;
+            Date.now = () => afterFinal;
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "text", text: "delayed late text" } },
+            });
+            hooks["session.userQuery.pre"]?.({}, {});
+            hooks.event?.({
+              type: "message.part.updated",
+              properties: { part: { type: "text", text: "new turn text" } },
+            });
+            Date.now = realNow;
+            """
+        )
+
+        XCTAssertEqual(events.count, 4)
+        XCTAssertEqual(events[0]["type"] as? String, "toastty.status")
+        let firstProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
+        XCTAssertEqual(firstProperties["kind"] as? String, "working")
+        XCTAssertEqual(firstProperties["detail"] as? String, "Starting")
+
+        XCTAssertEqual(events[1]["type"] as? String, "toastty.final")
+        let finalProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
+        XCTAssertEqual(finalProperties["text"] as? String, "per-step text")
+
+        XCTAssertEqual(events[2]["type"] as? String, "toastty.status")
+        let nextTurnProperties = try XCTUnwrap(events[2]["properties"] as? [String: Any])
+        XCTAssertEqual(nextTurnProperties["kind"] as? String, "working")
+        XCTAssertEqual(nextTurnProperties["detail"] as? String, "Running query")
+
+        XCTAssertEqual(events[3]["type"] as? String, "toastty.status")
+        let writingProperties = try XCTUnwrap(events[3]["properties"] as? [String: Any])
+        XCTAssertEqual(writingProperties["kind"] as? String, "working")
+        XCTAssertEqual(writingProperties["detail"] as? String, "Writing response")
+    }
+
     func testOpenCodeFamilyPluginMapsQuestionToolHooksToApprovalStatus() throws {
         for scenario in [
             (agent: AgentKind.opencode, commandName: "opencode", environmentKey: "OPENCODE_CONFIG_CONTENT"),
