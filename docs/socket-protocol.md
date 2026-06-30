@@ -236,6 +236,13 @@ Notable action-specific behavior:
     the visible workspace selection.
   - Background-created workspaces remain marked as new until selected once.
   - The action result includes `workspaceID` and `windowID`.
+- `workspace.select`
+  - requires `args.workspaceID` or `args.index` (1-based).
+  - By default, only changes the selected workspace and preserves that
+    workspace's selected tab and focused panel.
+  - `args.focusUnreadSessionPanel=true` opts into foreground navigation that
+    focuses the newest unread managed-session panel visible in the selected
+    workspace tab.
 - `workspace.move`
   - requires `args.index` and `args.toIndex`, both 1-based workspace positions
     in the target window.
@@ -459,6 +466,9 @@ Supported action IDs:
   - accepts `args.index` (1-based) or `args.tabID`
 - `workspace.select`
   - requires `args.workspaceID` or `args.index` (1-based)
+  - accepts `args.focusUnreadSessionPanel`; default `false` preserves the
+    selected tab/panel, `true` may focus an unread managed-session panel in
+    the selected tab
 - `workspace.create`
   - `args.title` is optional
   - `args.activate` is optional and defaults to `true`
@@ -488,6 +498,8 @@ Supported action IDs:
 - `workspace.focus-slot.up`
 - `workspace.focus-slot.down`
 - `workspace.focus-next-unread-or-active`
+  - foreground navigation action: can change selected workspace, tab, focused
+    panel, and active window
   - `args.windowID` is required when multiple windows exist
   - first targets unread panels using the normal unread traversal order
   - unread traversal still wraps within the current workspace before moving on
@@ -501,6 +513,8 @@ Supported action IDs:
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
   - requires `args.panelID`
+  - foreground navigation action: focuses the panel within the target workspace
+    and selects the workspace tab containing it
 - `workspace.resize-split.left`
 - `workspace.resize-split.right`
 - `workspace.resize-split.up`

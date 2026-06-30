@@ -120,8 +120,22 @@ final class AppControlExecutor {
             }
             try enforceWorkspaceAutomationAccess(targetWorkspaceID)
 
+            let focusUnreadSessionPanel = args.boolValue("focusUnreadSessionPanel") ?? false
+            let store = try requiredStore()
+            guard focusUnreadSessionPanel else {
+                return .init(
+                    didMutateState: store.send(
+                        .selectWorkspace(
+                            windowID: selection.windowID,
+                            workspaceID: targetWorkspaceID
+                        )
+                    ),
+                    result: nil
+                )
+            }
+
             return .init(
-                didMutateState: try requiredStore().selectWorkspace(
+                didMutateState: store.selectWorkspace(
                     windowID: selection.windowID,
                     workspaceID: targetWorkspaceID,
                     preferringUnreadSessionPanelIn: sessionRuntimeStore

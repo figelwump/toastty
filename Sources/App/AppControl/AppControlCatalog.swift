@@ -142,7 +142,10 @@ enum AppControlActionID: String, CaseIterable, Sendable {
                 kind: .action,
                 summary: "Select a workspace by ID or 1-based index.",
                 selectors: [.windowID, .workspaceID],
-                parameters: [.index(summary: "1-based workspace index in the target window.", required: false)]
+                parameters: [
+                    .index(summary: "1-based workspace index in the target window.", required: false),
+                    .focusUnreadSessionPanel(required: false),
+                ]
             )
         case .workspaceMove:
             return .init(
@@ -209,7 +212,13 @@ enum AppControlActionID: String, CaseIterable, Sendable {
         case .workspaceReopenLastClosedPanel:
             return .init(id: rawValue, kind: .action, summary: "Reopen the most recently closed panel.", selectors: [.windowID, .workspaceID])
         case .panelFocusNextUnreadOrActive:
-            return .init(id: rawValue, kind: .action, summary: "Focus the next unread or active session panel.", selectors: [.windowID], aliases: aliases)
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Foreground navigation: focus the next unread or active session panel, possibly switching workspace, tab, or window.",
+                selectors: [.windowID],
+                aliases: aliases
+            )
         case .workspaceSplitHorizontal:
             return .init(id: rawValue, kind: .action, summary: "Split the focused slot horizontally.", selectors: [.windowID, .workspaceID])
         case .workspaceSplitVertical:
@@ -241,7 +250,13 @@ enum AppControlActionID: String, CaseIterable, Sendable {
         case .workspaceFocusSlotDown:
             return .init(id: rawValue, kind: .action, summary: "Focus the slot below.", selectors: [.windowID, .workspaceID])
         case .workspaceFocusPanel:
-            return .init(id: rawValue, kind: .action, summary: "Focus a panel by panel ID.", selectors: [.windowID, .workspaceID], parameters: [.panelID(required: true)])
+            return .init(
+                id: rawValue,
+                kind: .action,
+                summary: "Foreground navigation: focus a panel by panel ID within the target workspace and select the tab containing it.",
+                selectors: [.windowID, .workspaceID],
+                parameters: [.panelID(required: true)]
+            )
         case .workspaceResizeSplitLeft:
             return .init(id: rawValue, kind: .action, summary: "Resize the focused split to the left.", selectors: [.windowID, .workspaceID], parameters: [.amount(required: false)])
         case .workspaceResizeSplitRight:
@@ -442,6 +457,15 @@ private extension AppControlParameterDescriptor {
 
     static func filePath(summary: String, required: Bool) -> Self {
         .init(name: "filePath", summary: summary, valueType: .string, required: required)
+    }
+
+    static func focusUnreadSessionPanel(required: Bool) -> Self {
+        .init(
+            name: "focusUnreadSessionPanel",
+            summary: "Also focus the newest unread managed-session panel visible in the selected workspace tab. Defaults to false.",
+            valueType: .boolean,
+            required: required
+        )
     }
 
     static func content(required: Bool) -> Self {

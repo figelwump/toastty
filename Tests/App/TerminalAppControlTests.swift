@@ -172,6 +172,93 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertTrue(terminalRouter.sentTextByPanelID.isEmpty)
     }
 
+    func testWorkspaceSelectActionPreservesSelectedTabByDefault() throws {
+        let scenario = try makeWorkspaceSelectUnreadScenario()
+
+        let outcome = try scenario.fixture.executor.runAction(
+            id: AppControlActionID.workspaceSelect.rawValue,
+            args: [
+                "workspaceID": .string(scenario.targetWorkspaceID.uuidString),
+            ]
+        )
+
+        XCTAssertTrue(outcome.didMutateState)
+        XCTAssertEqual(
+            scenario.fixture.store.state.selectedWorkspaceID(in: scenario.fixture.windowID),
+            scenario.targetWorkspaceID
+        )
+        let workspace = try XCTUnwrap(scenario.fixture.store.state.workspacesByID[scenario.targetWorkspaceID])
+        XCTAssertEqual(workspace.selectedTabID, scenario.targetTabID)
+        XCTAssertEqual(workspace.focusedPanelID, scenario.initialFocusedPanelID)
+        XCTAssertEqual(workspace.unreadPanelIDs, [scenario.unreadPanelID])
+    }
+
+    func testWorkspaceSelectActionPreservesSelectedTabWithExplicitFalse() throws {
+        let scenario = try makeWorkspaceSelectUnreadScenario()
+
+        let outcome = try scenario.fixture.executor.runAction(
+            id: AppControlActionID.workspaceSelect.rawValue,
+            args: [
+                "workspaceID": .string(scenario.targetWorkspaceID.uuidString),
+                "focusUnreadSessionPanel": .bool(false),
+            ]
+        )
+
+        XCTAssertTrue(outcome.didMutateState)
+        XCTAssertEqual(
+            scenario.fixture.store.state.selectedWorkspaceID(in: scenario.fixture.windowID),
+            scenario.targetWorkspaceID
+        )
+        let workspace = try XCTUnwrap(scenario.fixture.store.state.workspacesByID[scenario.targetWorkspaceID])
+        XCTAssertEqual(workspace.selectedTabID, scenario.targetTabID)
+        XCTAssertEqual(workspace.focusedPanelID, scenario.initialFocusedPanelID)
+        XCTAssertEqual(workspace.unreadPanelIDs, [scenario.unreadPanelID])
+    }
+
+    func testWorkspaceSelectActionCanOptInToUnreadSessionPanelFocus() throws {
+        let scenario = try makeWorkspaceSelectUnreadScenario()
+
+        let outcome = try scenario.fixture.executor.runAction(
+            id: AppControlActionID.workspaceSelect.rawValue,
+            args: [
+                "workspaceID": .string(scenario.targetWorkspaceID.uuidString),
+                "focusUnreadSessionPanel": .bool(true),
+            ]
+        )
+
+        XCTAssertTrue(outcome.didMutateState)
+        XCTAssertEqual(
+            scenario.fixture.store.state.selectedWorkspaceID(in: scenario.fixture.windowID),
+            scenario.targetWorkspaceID
+        )
+        let workspace = try XCTUnwrap(scenario.fixture.store.state.workspacesByID[scenario.targetWorkspaceID])
+        XCTAssertEqual(workspace.selectedTabID, scenario.targetTabID)
+        XCTAssertEqual(workspace.focusedPanelID, scenario.unreadPanelID)
+        XCTAssertEqual(workspace.unreadPanelIDs, [])
+    }
+
+    func testWorkspaceSelectActionOptInPreservesFocusWhenNoUnreadSessionPanelExists() throws {
+        let scenario = try makeWorkspaceSelectUnreadScenario(markUnread: false)
+
+        let outcome = try scenario.fixture.executor.runAction(
+            id: AppControlActionID.workspaceSelect.rawValue,
+            args: [
+                "workspaceID": .string(scenario.targetWorkspaceID.uuidString),
+                "focusUnreadSessionPanel": .bool(true),
+            ]
+        )
+
+        XCTAssertTrue(outcome.didMutateState)
+        XCTAssertEqual(
+            scenario.fixture.store.state.selectedWorkspaceID(in: scenario.fixture.windowID),
+            scenario.targetWorkspaceID
+        )
+        let workspace = try XCTUnwrap(scenario.fixture.store.state.workspacesByID[scenario.targetWorkspaceID])
+        XCTAssertEqual(workspace.selectedTabID, scenario.targetTabID)
+        XCTAssertEqual(workspace.focusedPanelID, scenario.initialFocusedPanelID)
+        XCTAssertEqual(workspace.unreadPanelIDs, [])
+    }
+
     func testTerminalStateQueryUsesLiveTitleWithoutMutatingPersistedTitle() throws {
         let fixture = try TerminalAppControlFixture()
         fixture.terminalRuntimeRegistry.terminalLiveTitleStore.setTitle(
@@ -392,6 +479,76 @@ final class TerminalAppControlTests: XCTestCase {
         let childRecord = try XCTUnwrap(fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: childSessionID))
         XCTAssertEqual(childRecord.scopedWorkspaceIDs, [explicitWorkspaceID, fixture.workspaceID])
     }
+
+    private func makeWorkspaceSelectUnreadScenario(
+        markUnread: Bool = true
+    ) throws -> WorkspaceSelectUnreadScenario {
+        let fixture = try TerminalAppControlFixture()
+        let existingWorkspaceIDs = Set(fixture.store.state.window(id: fixture.windowID)?.workspaceIDs ?? [])
+        XCTAssertTrue(
+            fixture.store.send(
+                .createWorkspace(
+                    windowID: fixture.windowID,
+                    title: "Unread Target",
+                    activate: false
+                )
+            )
+        )
+        let targetWorkspaceID = try XCTUnwrap(
+            fixture.store.state.window(id: fixture.windowID)?.workspaceIDs.first {
+                existingWorkspaceIDs.contains($0) == false
+            }
+        )
+        XCTAssertTrue(fixture.store.send(.splitFocusedSlot(workspaceID: targetWorkspaceID, orientation: .horizontal)))
+
+        var targetWorkspace = try XCTUnwrap(fixture.store.state.workspacesByID[targetWorkspaceID])
+        let targetTabID = try XCTUnwrap(targetWorkspace.selectedTabID)
+        let initialFocusedPanelID = try XCTUnwrap(targetWorkspace.focusedPanelID)
+        let unreadPanelID = try XCTUnwrap(
+            targetWorkspace.layoutTree.allSlotInfos.map(\.panelID).first { $0 != initialFocusedPanelID }
+        )
+
+        if markUnread {
+            fixture.sessionRuntimeStore.startSession(
+                sessionID: "workspace-select-unread",
+                agent: .codex,
+                panelID: unreadPanelID,
+                windowID: fixture.windowID,
+                workspaceID: targetWorkspaceID,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+            fixture.sessionRuntimeStore.updateStatus(
+                sessionID: "workspace-select-unread",
+                status: SessionStatus(kind: .ready, summary: "Ready", detail: "Unread target"),
+                at: Date(timeIntervalSince1970: 1_700_000_001)
+            )
+        }
+
+        targetWorkspace = try XCTUnwrap(fixture.store.state.workspacesByID[targetWorkspaceID])
+        XCTAssertEqual(targetWorkspace.selectedTabID, targetTabID)
+        XCTAssertEqual(targetWorkspace.focusedPanelID, initialFocusedPanelID)
+        XCTAssertEqual(targetWorkspace.unreadPanelIDs, markUnread ? [unreadPanelID] : [])
+        XCTAssertEqual(fixture.store.state.selectedWorkspaceID(in: fixture.windowID), fixture.workspaceID)
+
+        return WorkspaceSelectUnreadScenario(
+            fixture: fixture,
+            targetWorkspaceID: targetWorkspaceID,
+            targetTabID: targetTabID,
+            initialFocusedPanelID: initialFocusedPanelID,
+            unreadPanelID: unreadPanelID
+        )
+    }
+}
+
+@MainActor
+private struct WorkspaceSelectUnreadScenario {
+    let fixture: TerminalAppControlFixture
+    let targetWorkspaceID: UUID
+    let targetTabID: UUID
+    let initialFocusedPanelID: UUID
+    let unreadPanelID: UUID
 }
 
 @MainActor
