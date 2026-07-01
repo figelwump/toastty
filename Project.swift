@@ -363,6 +363,7 @@ let appTargetSettings: Settings = .settings(base: appTargetSettingsBase)
 let appTestTargetSettings: Settings = .settings(base: appTestTargetSettingsBase)
 let cliTargetSettings: Settings = .settings(
     base: [
+        "CREATE_INFOPLIST_SECTION_IN_BINARY": "YES",
         "TOASTTY_DIAGNOSTICS_UPLOAD_ENDPOINT": SettingValue(stringLiteral: diagnosticsUploadEndpoint),
         "TOASTTY_DIAGNOSTICS_UPLOAD_KEY": SettingValue(stringLiteral: diagnosticsUploadKey),
     ]
