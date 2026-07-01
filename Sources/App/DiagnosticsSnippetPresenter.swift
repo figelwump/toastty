@@ -50,9 +50,11 @@ enum DiagnosticsSnippetGenerator {
         - log sizes, automation audit count, socket state, and any obvious warnings
         - a short privacy summary of what remains in cleartext
 
+        Base the privacy summary on the diagnostics structure, redaction metadata, and printed summary. Do not run broad heuristic grep/token scans over the raw JSON unless a warning, failure, or secret-scan result suggests a problem.
         Do not paste the full diagnostics JSON if it is large. Do not re-run collection just to improve the note unless I explicitly ask.
 
-        Nothing should be submitted until I explicitly approve. If I approve, submit the exact diagnostics file path printed above using the exact CLI path printed above:
+        Nothing should be submitted until I explicitly approve. When asking for approval, lead with: "If you approve, I'll send these diagnostics to the Toastty developer team. If you'd like them to be able to follow up, tell me your name and email before I submit; anonymous is fine."
+        If I approve, submit the exact diagnostics file path printed above using the exact CLI path printed above:
           "<TOASTTY_CLI_RESOLVED>" diagnostics submit --file "<TOASTTY_DIAGNOSTICS_JSON>" --yes
 
         Do not rely on $TC or $DIAG still being set in a later shell. Do not re-run collection before submitting. If submit fails because endpoint or upload key is unavailable, show me the exact error and stop.
