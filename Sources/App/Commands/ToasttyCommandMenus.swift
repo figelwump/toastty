@@ -113,6 +113,8 @@ struct TerminalProfileMenuModel: Equatable {
 
 @MainActor
 struct ToasttyCommandMenus: Commands {
+    nonisolated static let toasttyDoctorCommand = #""${TOASTTY_CLI_PATH:-toastty}" doctor"#
+
     enum FindCommandTarget: Equatable {
         case localDocument(UUID)
         case terminal(UUID)
@@ -247,6 +249,16 @@ struct ToasttyCommandMenus: Commands {
         return sessionRuntimeStore.sessionRegistry.activeSession(for: commandFocusedTerminalPanelID) != nil
     }
 
+    private var canPasteToasttyDoctorCommand: Bool {
+        guard let panelID = commandFocusedTerminalPanelID else {
+            return false
+        }
+        return Self.canPasteToasttyDoctorCommand(
+            focusedTerminalPanelID: panelID,
+            promptState: terminalRuntimeRegistry.promptState(panelID: panelID)
+        )
+    }
+
     private var commandFocusedTerminalSearchState: TerminalSearchState? {
         guard let panelID = commandFocusedTerminalPanelID else {
             return nil
@@ -373,6 +385,11 @@ struct ToasttyCommandMenus: Commands {
                 showAgentStatusHooksSetup()
             }
             .disabled(agentGetStartedTargetWindowID == nil)
+
+            Button("Paste Toastty Doctor Command") {
+                pasteToasttyDoctorCommandIntoFocusedTerminal()
+            }
+            .disabled(canPasteToasttyDoctorCommand == false)
 
             Button("Copy Diagnostics Collection Snippet…") {
                 DiagnosticsSnippetPresenter.present()
@@ -772,6 +789,21 @@ struct ToasttyCommandMenus: Commands {
         )
     }
 
+    private func pasteToasttyDoctorCommandIntoFocusedTerminal() {
+        guard let panelID = commandFocusedTerminalPanelID,
+              Self.canPasteToasttyDoctorCommand(
+                  focusedTerminalPanelID: panelID,
+                  promptState: terminalRuntimeRegistry.promptState(panelID: panelID)
+              ) else {
+            return
+        }
+        _ = terminalRuntimeRegistry.sendText(
+            Self.toasttyDoctorCommand,
+            submit: false,
+            panelID: panelID
+        )
+    }
+
     private func createBlankScratchpad(_ preferredWindowID: UUID?) {
         guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return
@@ -1065,6 +1097,13 @@ struct ToasttyCommandMenus: Commands {
 
     nonisolated static func resolvedCommandWindowID(focusedWindowID: UUID?, keyWindowID: UUID?) -> UUID? {
         keyWindowID ?? focusedWindowID
+    }
+
+    nonisolated static func canPasteToasttyDoctorCommand(
+        focusedTerminalPanelID: UUID?,
+        promptState: TerminalPromptState
+    ) -> Bool {
+        focusedTerminalPanelID != nil && promptState.isIdleAtPrompt
     }
 
     static func agentGetStartedTargetWindowID(store: AppStore, preferredWindowID: UUID?) -> UUID? {

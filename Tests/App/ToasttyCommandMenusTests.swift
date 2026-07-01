@@ -313,6 +313,42 @@ final class ToasttyCommandMenusTests: XCTestCase {
         )
     }
 
+    func testToasttyDoctorPasteCommandUsesInjectedCLIPathWithFallback() {
+        XCTAssertEqual(
+            ToasttyCommandMenus.toasttyDoctorCommand,
+            #""${TOASTTY_CLI_PATH:-toastty}" doctor"#
+        )
+    }
+
+    func testCanPasteToasttyDoctorCommandRequiresFocusedIdleTerminal() {
+        let terminalPanelID = UUID()
+
+        XCTAssertTrue(
+            ToasttyCommandMenus.canPasteToasttyDoctorCommand(
+                focusedTerminalPanelID: terminalPanelID,
+                promptState: .idleAtPrompt
+            )
+        )
+        XCTAssertFalse(
+            ToasttyCommandMenus.canPasteToasttyDoctorCommand(
+                focusedTerminalPanelID: nil,
+                promptState: .idleAtPrompt
+            )
+        )
+        XCTAssertFalse(
+            ToasttyCommandMenus.canPasteToasttyDoctorCommand(
+                focusedTerminalPanelID: terminalPanelID,
+                promptState: .busy
+            )
+        )
+        XCTAssertFalse(
+            ToasttyCommandMenus.canPasteToasttyDoctorCommand(
+                focusedTerminalPanelID: terminalPanelID,
+                promptState: .unavailable
+            )
+        )
+    }
+
     func testFindCommandsYieldToUnrelatedTextInput() {
         XCTAssertTrue(
             ToasttyCommandMenus.textInputOwnsFindCommands(
