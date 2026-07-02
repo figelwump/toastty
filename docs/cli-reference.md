@@ -86,6 +86,14 @@ old schema/redaction version, exceed the upload size limit, or still appear to
 contain high-confidence secret patterns. Use `--allow-secret-scan-warning` only
 after manually reviewing a false positive.
 
+On success, the Worker returns a `reportID`. Operators can fetch the stored
+report through the diagnostics Worker admin endpoint, or from an agent session
+with:
+
+```bash
+sv exec -- .agents/skills/toastty-diagnostics/scripts/fetch-diagnostics-report.py <reportID>
+```
+
 ### `action list`
 
 List the always-on app-control actions exposed by the running app.

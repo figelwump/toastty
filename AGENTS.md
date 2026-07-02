@@ -8,6 +8,7 @@
   - `.agents/skills/toastty-verify/SKILL.md` for choosing, running, and reporting Toastty verification.
   - `.agents/skills/toastty-debug/SKILL.md` for debugging, log discovery, runtime target selection, and focused repro planning.
   - `.agents/skills/toastty-dev-run/SKILL.md` for isolated live dev/debug app instances.
+  - `.agents/skills/toastty-diagnostics/SKILL.md` for fetching and analyzing submitted diagnostics reports.
   - `docs/agents/automation.md` for smoke, remote, and xcodebuild test details.
   - `docs/agents/workspace-scope.md` for cooperative workspace-scoped automation semantics and CLI commands.
   - `docs/agents/menu-performance.md` for menu-related regressions and shortcuts.

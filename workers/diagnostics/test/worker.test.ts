@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import fixtures from "../../../Shared/Diagnostics/secret-scan-fixtures.json";
-import { notificationSummary } from "../src/index";
+import { adminURLForBaseURL, diagnosticsNotificationPayload, notificationSummary } from "../src/index";
 import { scanForSecrets } from "../src/secretScan";
 
 const uploadHeaders = {
@@ -176,6 +176,68 @@ describe("diagnostics worker", () => {
     expect("notePreview" in summary).toBe(false);
     expect("secretScanFindings" in summary).toBe(false);
     expect(summary.secretScanFindingCount).toBe(1);
+  });
+
+  it("builds actionable notification payloads without freeform bundle content", () => {
+    const reportID = "TT-20260628-ABCDEFGHJKLMNPQR";
+    const payload = diagnosticsNotificationPayload(
+      reportID,
+      "https://diagnostics.example.com/v1/diagnostics/TT-20260628-ABCDEFGHJKLMNPQR",
+      {
+        appVersion: "1.0",
+        build: "100",
+        runtimeLabel: "toastty-test",
+        socketState: "healthy",
+        redactionRulesVersion: 1,
+        redactedKeyCount: 2,
+        notePreview: "freeform user note",
+        systemArch: "arm64",
+        hardwareModel: "Mac16,1",
+        secretScanOverride: false,
+        secretScanFindings: []
+      }
+    );
+
+    expect(payload.type).toBe("toastty.diagnostics.submitted");
+    expect(payload.reportID).toBe(reportID);
+    expect(payload.adminURL).toBe("https://diagnostics.example.com/v1/diagnostics/TT-20260628-ABCDEFGHJKLMNPQR");
+    expect(payload.skillPrompt).toBe(
+      "Use $toastty-diagnostics to fetch and summarize TT-20260628-ABCDEFGHJKLMNPQR."
+    );
+    expect("notePreview" in payload.summary).toBe(false);
+    expect("secretScanFindings" in payload.summary).toBe(false);
+  });
+
+  it("omits adminURL from notification payloads when no trusted base URL is configured", () => {
+    const payload = diagnosticsNotificationPayload(
+      "TT-20260628-ABCDEFGHJKLMNPQR",
+      undefined,
+      {
+        redactionRulesVersion: 1,
+        redactedKeyCount: 0,
+        secretScanOverride: false,
+        secretScanFindings: []
+      }
+    );
+
+    expect("adminURL" in payload).toBe(false);
+    expect(payload.reportID).toBe("TT-20260628-ABCDEFGHJKLMNPQR");
+    expect(payload.summary.secretScanFindingCount).toBe(0);
+  });
+
+  it("builds admin URLs from a trusted base URL instead of request host data", () => {
+    const reportID = "TT-20260628-ABCDEFGHJKLMNPQR";
+
+    expect(adminURLForBaseURL("https://diagnostics.example.com", reportID)).toBe(
+      "https://diagnostics.example.com/v1/diagnostics/TT-20260628-ABCDEFGHJKLMNPQR"
+    );
+    expect(adminURLForBaseURL("https://diagnostics.example.com/support?ignored=1#frag", reportID)).toBe(
+      "https://diagnostics.example.com/support/v1/diagnostics/TT-20260628-ABCDEFGHJKLMNPQR"
+    );
+    expect(adminURLForBaseURL("https://diagnostics.example.com/v1/diagnostics/", reportID)).toBe(
+      "https://diagnostics.example.com/v1/diagnostics/TT-20260628-ABCDEFGHJKLMNPQR"
+    );
+    expect(adminURLForBaseURL("not a url", reportID)).toBeUndefined();
   });
 });
 

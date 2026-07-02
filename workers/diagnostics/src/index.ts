@@ -4,6 +4,7 @@ import { scanForSecrets } from "./secretScan";
 type DiagnosticsEnv = Env & {
   TOASTTY_DIAGNOSTICS_UPLOAD_KEY?: string;
   TOASTTY_DIAGNOSTICS_ADMIN_KEY?: string;
+  TOASTTY_DIAGNOSTICS_ADMIN_BASE_URL?: string;
   TOASTTY_DIAGNOSTICS_NOTIFY_WEBHOOK_URL?: string;
 };
 
@@ -18,6 +19,18 @@ type ReportEnvelope = {
   };
   summary: DiagnosticsSummary;
   bundle: unknown;
+};
+
+type DiagnosticsNotificationSummary = Omit<DiagnosticsSummary, "notePreview" | "secretScanFindings"> & {
+  secretScanFindingCount: number;
+};
+
+type DiagnosticsNotificationPayload = {
+  type: "toastty.diagnostics.submitted";
+  reportID: string;
+  adminURL?: string;
+  skillPrompt: string;
+  summary: DiagnosticsNotificationSummary;
 };
 
 export default {
@@ -106,7 +119,14 @@ async function handleSubmit(request: Request, env: DiagnosticsEnv, ctx: Executio
   });
 
   if (env.TOASTTY_DIAGNOSTICS_NOTIFY_WEBHOOK_URL) {
-    ctx.waitUntil(sendNotification(env.TOASTTY_DIAGNOSTICS_NOTIFY_WEBHOOK_URL, reportID, summary));
+    ctx.waitUntil(sendNotification(
+      env.TOASTTY_DIAGNOSTICS_NOTIFY_WEBHOOK_URL,
+      diagnosticsNotificationPayload(
+        reportID,
+        adminURLForBaseURL(env.TOASTTY_DIAGNOSTICS_ADMIN_BASE_URL, reportID),
+        summary
+      )
+    ));
   }
 
   return jsonResponse({ reportID, receivedAtMs, expiresAtMs }, 201);
@@ -238,37 +258,73 @@ function objectKeyForReportID(reportID: string): string {
   return `reports/${date.slice(0, 4)}/${date.slice(4, 6)}/${date.slice(6, 8)}/${reportID}.json`;
 }
 
-async function sendNotification(webhookURL: string, reportID: string, summary: DiagnosticsSummary): Promise<void> {
+async function sendNotification(webhookURL: string, payload: DiagnosticsNotificationPayload): Promise<void> {
   try {
     const response = await fetch(webhookURL, {
       method: "POST",
       headers: { "content-type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ reportID, summary: notificationSummary(summary) })
+      body: JSON.stringify(payload)
     });
     if (!response.ok) {
       console.warn(JSON.stringify({
         event: "diagnostics.notification_failed",
-        reportID,
+        reportID: payload.reportID,
         status: response.status
       }));
     }
   } catch (error) {
     console.warn(JSON.stringify({
       event: "diagnostics.notification_failed",
-      reportID,
+      reportID: payload.reportID,
       message: safeErrorMessage(error)
     }));
   }
 }
 
-export function notificationSummary(summary: DiagnosticsSummary): Omit<DiagnosticsSummary, "notePreview" | "secretScanFindings"> & {
-  secretScanFindingCount: number;
-} {
+export function diagnosticsNotificationPayload(
+  reportID: string,
+  adminURL: string | undefined,
+  summary: DiagnosticsSummary
+): DiagnosticsNotificationPayload {
+  const payload: DiagnosticsNotificationPayload = {
+    type: "toastty.diagnostics.submitted",
+    reportID,
+    skillPrompt: `Use $toastty-diagnostics to fetch and summarize ${reportID}.`,
+    summary: notificationSummary(summary)
+  };
+  if (adminURL) {
+    payload.adminURL = adminURL;
+  }
+  return payload;
+}
+
+export function notificationSummary(summary: DiagnosticsSummary): DiagnosticsNotificationSummary {
   const { notePreview: _, secretScanFindings, ...safeSummary } = summary;
   return {
     ...safeSummary,
     secretScanFindingCount: secretScanFindings.length
   };
+}
+
+export function adminURLForBaseURL(baseURL: string | undefined, reportID: string): string | undefined {
+  if (!baseURL) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(baseURL);
+  } catch {
+    return undefined;
+  }
+  const basePath = url.pathname.replace(/\/+$/, "");
+  if (basePath.endsWith("/v1/diagnostics")) {
+    url.pathname = `${basePath}/${encodeURIComponent(reportID)}`;
+  } else {
+    url.pathname = `${basePath}/v1/diagnostics/${encodeURIComponent(reportID)}`;
+  }
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 function numberSetting(value: string | undefined, fallback: number): number {

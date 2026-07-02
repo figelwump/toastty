@@ -90,6 +90,15 @@ outcome, and duration. Toastty does not include freeform automation payload text
 such as terminal input, pasted content, argv, environment values, file lists, or
 file contents in that automation audit.
 
+Toastty diagnostics reports are retrieved through the diagnostics Worker admin
+endpoint with `x-toastty-admin-key`; agents should use the repo-local
+`toastty-diagnostics` skill rather than direct R2 credentials. If the optional
+notification webhook is configured, Toastty sends a summary-only notification
+containing the report ID, admin fetch URL, a suggested `$toastty-diagnostics`
+prompt, and bounded summary fields. The notification does not include the full
+diagnostics bundle, freeform note text, raw logs, environment values, or
+secret-scan finding details.
+
 ## Logging behavior
 
 Default logs are persistent so GUI builds have a supportable place to write diagnostics.

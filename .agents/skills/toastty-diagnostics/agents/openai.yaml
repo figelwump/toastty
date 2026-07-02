@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Diagnostics"
+  short_description: "Fetch and analyze submitted reports."
+  default_prompt: "Use $toastty-diagnostics to fetch and summarize a Toastty diagnostics report by ID."

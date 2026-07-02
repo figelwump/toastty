@@ -26,7 +26,7 @@ Run `tuist install` after cloning the repo and whenever `Tuist/Package.swift` or
 | `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY` | `Project.swift` during `tuist generate` | unset | Optional diagnostics upload key embedded into the bundled `toastty` CLI. This is spam friction, not a strong secret once shipped in a binary. Prefer `sv exec -- tuist generate` for release builds. |
 | `TOASTTY_VERSION` | `Project.swift` compatibility fallback, `scripts/release/release.sh` | `0.1.0` | Compatibility alias for the marketing version. `scripts/release/release.sh` forwards this to `TUIST_TOASTTY_VERSION` before calling `tuist generate`. |
 | `TOASTTY_BUILD_NUMBER` | `Project.swift` compatibility fallback, `scripts/release/release.sh` | `1` | Compatibility alias for the build number. `scripts/release/release.sh` forwards this to `TUIST_TOASTTY_BUILD_NUMBER` before calling `tuist generate`. |
-| `TOASTTY_DIAGNOSTICS_ENDPOINT` | `Project.swift` compatibility fallback; `toastty diagnostics submit` runtime fallback | unset | Diagnostics upload endpoint. At runtime this can override or provide the endpoint for local submit tests. |
+| `TOASTTY_DIAGNOSTICS_ENDPOINT` | `Project.swift` compatibility fallback; `toastty diagnostics submit` runtime fallback; `toastty-diagnostics` skill runtime fallback | unset | Diagnostics Worker endpoint. At runtime this can override or provide the endpoint for local submit tests and operator report fetches. |
 | `TOASTTY_DIAGNOSTICS_UPLOAD_KEY` | `Project.swift` compatibility fallback; `toastty diagnostics submit` runtime fallback | unset | Diagnostics upload key. At runtime this can be injected with `sv exec -- toastty diagnostics submit ...` for local testing. |
 | `TOASTTY_DIAGNOSTICS_UPLOAD_KEY_FILE` | `toastty diagnostics submit` runtime fallback | unset | Path to a UTF-8 file containing the diagnostics upload key. Useful when a local script should avoid placing the key directly in a command line. |
 | `GHOSTTY_XCFRAMEWORK_SOURCE` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Source path for a built `GhosttyKit.xcframework` to install into Toastty's local `Dependencies/` directory. |
@@ -35,6 +35,18 @@ Run `tuist install` after cloning the repo and whenever `Tuist/Package.swift` or
 | `GHOSTTY_SOURCE_REPO` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Optional override for the Ghostty repo root used when inferring commit and cleanliness metadata. |
 | `GHOSTTY_SOURCE_DIRTY` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Optional override for the Ghostty source cleanliness marker written to the installed metadata sidecar. Release DMG builds require `0`. |
 | `GHOSTTY_BUILD_FLAGS` | `scripts/ghostty/install-local-xcframework.sh`, `scripts/release/release.sh` | unset | Build flags recorded for the installed Ghostty artifact. Release DMG builds require this metadata so notes can include the shipped Ghostty build configuration. |
+
+## Diagnostics Worker Operator Environment
+
+These flags are used by the diagnostics Worker deploy path and operator-side
+report retrieval. Keep secret values in `sv`; do not paste them into chat or
+commit them.
+
+| Flag | Scope | Default | Effect |
+|---|---|---|---|
+| `TOASTTY_DIAGNOSTICS_ADMIN_KEY` | `scripts/deploy/diagnostics-worker.sh`; diagnostics Worker admin endpoint; `.agents/skills/toastty-diagnostics` helper | unset | Secret admin key for fetching stored diagnostics envelopes through `GET /v1/diagnostics/<reportID>`. |
+| `TOASTTY_DIAGNOSTICS_ADMIN_BASE_URL` | diagnostics Worker notification payloads | `https://toastty-diagnostics.giantthings.workers.dev` in Worker config | Trusted public Worker origin used to build `adminURL` values in summary-only notifications. |
+| `TOASTTY_DIAGNOSTICS_NOTIFY_WEBHOOK_URL` | `scripts/deploy/diagnostics-worker.sh`; diagnostics Worker notification delivery | unset | Optional webhook URL that receives summary-only `toastty.diagnostics.submitted` notifications after report storage. |
 
 ## Runtime Environment
 

@@ -11,7 +11,8 @@
   "vars": {
     "MAX_BODY_BYTES": "15000000",
     "RETENTION_DAYS": "30",
-    "MIN_REDACTION_RULES_VERSION": "1"
+    "MIN_REDACTION_RULES_VERSION": "1",
+    "TOASTTY_DIAGNOSTICS_ADMIN_BASE_URL": "https://toastty-diagnostics.giantthings.workers.dev"
   },
   "r2_buckets": [
     {
@@ -26,6 +27,7 @@
         "MAX_BODY_BYTES": "15000000",
         "RETENTION_DAYS": "30",
         "MIN_REDACTION_RULES_VERSION": "1",
+        "TOASTTY_DIAGNOSTICS_ADMIN_BASE_URL": "https://diagnostics.test",
         "TOASTTY_DIAGNOSTICS_UPLOAD_KEY": "test-upload-key",
         "TOASTTY_DIAGNOSTICS_ADMIN_KEY": "test-admin-key"
       },
