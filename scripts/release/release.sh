@@ -56,6 +56,8 @@ Required environment:
   TOASTTY_VERSION
   TOASTTY_BUILD_NUMBER
   TUIST_DEVELOPMENT_TEAM
+  TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT
+  TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY
   TOASTTY_APPLE_ID
   TOASTTY_NOTARY_PASSWORD
   TOASTTY_TEAM_ID
@@ -448,9 +450,28 @@ generate_workspace() {
   log "Generating workspace with distribution signing enabled"
   TUIST_TOASTTY_VERSION="$TOASTTY_VERSION" \
   TUIST_TOASTTY_BUILD_NUMBER="$TOASTTY_BUILD_NUMBER" \
+  TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT="$TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT" \
+  TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY="$TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY" \
   TUIST_DISTRIBUTION_SIGNING=1 \
   TUIST_DEVELOPMENT_TEAM="$TUIST_DEVELOPMENT_TEAM" \
   tuist generate --no-open
+}
+
+verify_generated_diagnostics_injection() {
+  local project_file="$ROOT_DIR/toastty.xcodeproj/project.pbxproj"
+
+  [[ -f "$project_file" ]] || fail "generated project file not found at $project_file"
+  grep -q "TOASTTY_DIAGNOSTICS_UPLOAD_ENDPOINT" "$project_file" \
+    || fail "generated project is missing diagnostics endpoint build setting"
+  grep -q "TOASTTY_DIAGNOSTICS_UPLOAD_KEY" "$project_file" \
+    || fail "generated project is missing diagnostics upload key build setting"
+
+  if grep -q 'TOASTTY_DIAGNOSTICS_UPLOAD_ENDPOINT = "";' "$project_file"; then
+    fail "generated project has an empty diagnostics endpoint build setting"
+  fi
+  if grep -q 'TOASTTY_DIAGNOSTICS_UPLOAD_KEY = "";' "$project_file"; then
+    fail "generated project has an empty diagnostics upload key build setting"
+  fi
 }
 
 archive_app() {
@@ -837,6 +858,8 @@ require_command git
 require_env TOASTTY_VERSION
 require_env TOASTTY_BUILD_NUMBER
 require_env TUIST_DEVELOPMENT_TEAM
+require_env TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT
+require_env TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY
 require_env TOASTTY_APPLE_ID
 require_env TOASTTY_NOTARY_PASSWORD
 require_env TOASTTY_TEAM_ID
@@ -876,6 +899,7 @@ cd "$ROOT_DIR"
 install_tuist_dependencies
 write_export_options_plist
 generate_workspace
+verify_generated_diagnostics_injection
 archive_app
 export_app
 verify_exported_app

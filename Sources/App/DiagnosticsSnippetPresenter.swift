@@ -9,7 +9,14 @@ enum DiagnosticsSnippetGenerator {
         return """
         I'm hitting an issue in Toastty and want to gather a diagnostic report.
 
-        TC="$(command -v toastty || printf '%s\\n' \(bakedPath))"
+        BAKED_TOASTTY_CLI=\(bakedPath)
+        if [ -n "${TOASTTY_CLI_PATH:-}" ] && [ -x "$TOASTTY_CLI_PATH" ]; then
+          TC="$TOASTTY_CLI_PATH"
+        elif [ -x "$BAKED_TOASTTY_CLI" ]; then
+          TC="$BAKED_TOASTTY_CLI"
+        else
+          TC="$(command -v toastty || printf '%s\\n' "$BAKED_TOASTTY_CLI")"
+        fi
         TMPBASE="${TMPDIR:-/tmp}"
         TMPBASE="${TMPBASE%/}"
         umask 077

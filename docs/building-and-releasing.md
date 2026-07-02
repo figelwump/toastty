@@ -187,6 +187,7 @@ sv exec -- env \
 ```
 
 The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
+`sv exec` must provide `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` and `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY`; release builds fail if the generated project would embed empty diagnostics submit endpoint or upload-key settings.
 It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags

@@ -24,6 +24,7 @@ Run `tuist install` after cloning the repo and whenever `Tuist/Package.swift` or
 | `TUIST_TOASTTY_BUILD_NUMBER` | `Project.swift` during `tuist generate` | `1` | Preferred manifest-visible build number input for direct `tuist generate` workflows. Use a monotonically increasing integer for releases. |
 | `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` | `Project.swift` during `tuist generate` | unset | Optional diagnostics upload endpoint embedded into the bundled `toastty` CLI. Prefer setting this through `sv exec -- tuist generate` for release builds. |
 | `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY` | `Project.swift` during `tuist generate` | unset | Optional diagnostics upload key embedded into the bundled `toastty` CLI. This is spam friction, not a strong secret once shipped in a binary. Prefer `sv exec -- tuist generate` for release builds. |
+| `TOASTTY_REQUIRE_DIAGNOSTICS_INJECTION` | `scripts/dev/bootstrap-worktree.sh` | unset | When set to `1`, worktree bootstrap fails if the generated Xcode project has empty diagnostics submit endpoint/key build settings. Without it, bootstrap warns so secretless local and remote test worktrees can still build. |
 | `TOASTTY_VERSION` | `Project.swift` compatibility fallback, `scripts/release/release.sh` | `0.1.0` | Compatibility alias for the marketing version. `scripts/release/release.sh` forwards this to `TUIST_TOASTTY_VERSION` before calling `tuist generate`. |
 | `TOASTTY_BUILD_NUMBER` | `Project.swift` compatibility fallback, `scripts/release/release.sh` | `1` | Compatibility alias for the build number. `scripts/release/release.sh` forwards this to `TUIST_TOASTTY_BUILD_NUMBER` before calling `tuist generate`. |
 | `TOASTTY_DIAGNOSTICS_ENDPOINT` | `Project.swift` compatibility fallback; `toastty diagnostics submit` runtime fallback; `toastty-diagnostics` skill runtime fallback | unset | Diagnostics Worker endpoint. At runtime this can override or provide the endpoint for local submit tests and operator report fetches. |
@@ -297,6 +298,8 @@ sv exec -- ./scripts/release/release.sh
 | `TOASTTY_VERSION` | none | Required release version string used for app metadata and the public DMG filename. |
 | `TOASTTY_BUILD_NUMBER` | none | Required monotonic integer used for `CFBundleVersion` and the internal release staging directory name. |
 | `TUIST_DEVELOPMENT_TEAM` | none | Required team ID used by `Project.swift` and Xcode export signing. |
+| `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` | none | Required diagnostics upload endpoint embedded into the bundled release `toastty` CLI. |
+| `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY` | none | Required diagnostics upload key embedded into the bundled release `toastty` CLI. This is spam friction, not a strong secret once shipped in a binary. |
 | `TOASTTY_APPLE_ID` | none | Required Apple ID email passed to `xcrun notarytool submit`. |
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |

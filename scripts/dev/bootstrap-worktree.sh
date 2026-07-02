@@ -17,6 +17,11 @@ Bootstraps the current Toastty worktree for local development:
 When Ghostty integration is disabled via TUIST_DISABLE_GHOSTTY=1 or
 TOASTTY_DISABLE_GHOSTTY=1, the script still regenerates the workspace and only
 warns if no Ghostty artifact source can be found.
+
+Set TOASTTY_REQUIRE_DIAGNOSTICS_INJECTION=1 to fail if the generated workspace
+does not embed both diagnostics submit endpoint settings. By default this script
+warns so remote and contributor worktrees without private secrets can still
+build local test apps.
 EOF
 }
 
@@ -49,6 +54,40 @@ run_tuist() {
   else
     tuist "$@"
   fi
+}
+
+diagnostics_injection_required() {
+  [[ "${TOASTTY_REQUIRE_DIAGNOSTICS_INJECTION:-}" == "1" ]]
+}
+
+validate_generated_diagnostics_injection() {
+  local project_file="$ROOT_DIR/toastty.xcodeproj/project.pbxproj"
+  local missing=0
+
+  if [[ ! -f "$project_file" ]]; then
+    warn "Generated project file was not found; unable to verify diagnostics endpoint injection."
+    return 0
+  fi
+
+  if ! grep -q "TOASTTY_DIAGNOSTICS_UPLOAD_ENDPOINT" "$project_file" \
+    || grep -q 'TOASTTY_DIAGNOSTICS_UPLOAD_ENDPOINT = "";' "$project_file"; then
+    missing=1
+  fi
+  if ! grep -q "TOASTTY_DIAGNOSTICS_UPLOAD_KEY" "$project_file" \
+    || grep -q 'TOASTTY_DIAGNOSTICS_UPLOAD_KEY = "";' "$project_file"; then
+    missing=1
+  fi
+
+  if [[ "$missing" != "1" ]]; then
+    log "Verified generated diagnostics endpoint settings are populated."
+    return 0
+  fi
+
+  if diagnostics_injection_required; then
+    fail "generated workspace is missing diagnostics endpoint injection; set TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT and TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY through sv or the environment"
+  fi
+
+  warn "Generated workspace has no build-injected diagnostics submit endpoint/key. Set TOASTTY_REQUIRE_DIAGNOSTICS_INJECTION=1 for release-like worktree generation."
 }
 
 debug_xcframework_path() {
@@ -247,4 +286,5 @@ log "Running tuist install"
 run_tuist install >/dev/null
 log "Running tuist generate --no-open"
 run_tuist generate --no-open >/dev/null
+validate_generated_diagnostics_injection
 log "Worktree bootstrap complete."

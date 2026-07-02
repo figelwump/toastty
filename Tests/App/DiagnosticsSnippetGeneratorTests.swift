@@ -7,9 +7,10 @@ final class DiagnosticsSnippetGeneratorTests: XCTestCase {
             cliPath: "/Applications/Toastty Beta.app/Contents/Helpers/toastty"
         )
 
-        XCTAssertTrue(
-            snippet.contains("printf '%s\\n' '/Applications/Toastty Beta.app/Contents/Helpers/toastty'")
-        )
+        XCTAssertTrue(snippet.contains("BAKED_TOASTTY_CLI='/Applications/Toastty Beta.app/Contents/Helpers/toastty'"))
+        XCTAssertTrue(snippet.contains("TC=\"$TOASTTY_CLI_PATH\""))
+        XCTAssertTrue(snippet.contains("TC=\"$BAKED_TOASTTY_CLI\""))
+        XCTAssertTrue(snippet.contains("command -v toastty || printf '%s\\n' \"$BAKED_TOASTTY_CLI\""))
         XCTAssertTrue(snippet.contains("diagnostics collect"))
         XCTAssertTrue(snippet.contains("\"$TC\" --json doctor > \"$DOCTOR\" || DOCTOR_EXIT=$?"))
         XCTAssertTrue(snippet.contains("DOCTOR=\"$(mktemp \"$TMPBASE/toastty-doctor.XXXXXX\")\""))
