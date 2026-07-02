@@ -69,12 +69,17 @@ Submit an already-collected diagnostics JSON bundle to the configured Toastty
 diagnostics Worker.
 
 ```
-toastty diagnostics submit --file <file> [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
+toastty diagnostics submit --file <file> [--contact <text>] [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
 ```
 
 Without `--yes`, the command validates the file and prints the upload summary
-without sending anything. With `--yes`, it uploads the exact JSON bytes from
-`--file`; it does not rebuild or re-redact the bundle.
+without sending anything. With `--yes` and no `--contact`, it uploads the exact
+JSON bytes from `--file`; it does not rebuild or re-redact the bundle.
+
+When `--contact <text>` is provided, the source file is left unchanged. The
+submit command appends `Contact: <text>` to the diagnostics note in the in-memory
+upload payload, then validates and secret-scans that final payload before any
+upload. Contact text remains cleartext in the submitted diagnostics note.
 
 Endpoint resolution order is `--endpoint`, `TOASTTY_DIAGNOSTICS_ENDPOINT`, then
 the endpoint embedded at build time. The upload key is read from

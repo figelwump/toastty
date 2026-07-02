@@ -529,7 +529,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] agent managed-launch-preflight-decision --token <id>
       toastty [--json] [--socket-path <path>] doctor
       toastty [--socket-path <path>] diagnostics collect [--shell-probe <file>] [--note <text>] [--out <file>]
-      toastty diagnostics submit --file <file> [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
+      toastty diagnostics submit --file <file> [--contact <text>] [--endpoint <url>] [--yes] [--dry-run] [--allow-secret-scan-warning]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
@@ -643,7 +643,7 @@ public enum ToasttyCLI {
         case "submit":
             let parsed = try parseCommandArguments(
                 remainingArguments,
-                valueOptions: ["--file", "--endpoint"],
+                valueOptions: ["--file", "--contact", "--endpoint"],
                 flagOptions: ["--yes", "--dry-run", "--allow-secret-scan-warning"]
             )
             guard parsed.positionals.isEmpty else {
@@ -654,6 +654,7 @@ public enum ToasttyCLI {
                 DiagnosticsSubmitOptions(
                     filePath: try requireValue("--file", in: parsed),
                     endpoint: parsed.singleValue("--endpoint"),
+                    contact: parsed.singleValue("--contact"),
                     yes: parsed.hasFlag("--yes"),
                     dryRun: parsed.hasFlag("--dry-run"),
                     allowSecretScanWarning: parsed.hasFlag("--allow-secret-scan-warning")

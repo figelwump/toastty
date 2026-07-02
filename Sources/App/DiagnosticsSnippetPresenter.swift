@@ -61,10 +61,14 @@ enum DiagnosticsSnippetGenerator {
         Do not paste the full diagnostics JSON if it is large. Do not re-run collection just to improve the note unless I explicitly ask.
 
         Nothing should be submitted until I explicitly approve. When asking for approval, lead with: "If you approve, I'll send these diagnostics to the Toastty developer team. If you'd like them to be able to follow up, tell me your name and email before I submit; anonymous is fine."
-        If I approve, submit the exact diagnostics file path printed above using the exact CLI path printed above:
-          "<TOASTTY_CLI_RESOLVED>" diagnostics submit --file "<TOASTTY_DIAGNOSTICS_JSON>" --yes
+        If I provide contact info before submission, include it with --contact. The contact text is uploaded in the submitted diagnostics note in cleartext; do not edit the diagnostics JSON by hand and do not re-run collection just to add contact.
+        Shell-quote contact text as one argument when substituting it into the command.
+        If I approve, submit the diagnostics file path printed above using the exact CLI path printed above. Run exactly one command:
+          With contact: "<TOASTTY_CLI_RESOLVED>" diagnostics submit --file "<TOASTTY_DIAGNOSTICS_JSON>" --yes --contact "<NAME/EMAIL PROVIDED BY USER>"
+          Without contact: "<TOASTTY_CLI_RESOLVED>" diagnostics submit --file "<TOASTTY_DIAGNOSTICS_JSON>" --yes
+        Omit --contact entirely if I did not provide contact info.
 
-        Do not rely on $TC or $DIAG still being set in a later shell. Do not re-run collection before submitting. If submit fails because endpoint or upload key is unavailable, show me the exact error and stop.
+        Do not wrap diagnostics submit in sv exec, sudo, or repo-local helper tooling; this is a user-side submit command and the installed Toastty CLI should carry its upload configuration. Do not rely on $TC or $DIAG still being set in a later shell. Do not re-run collection before submitting. If submit fails because endpoint or upload key is unavailable, show me the exact error and stop.
         """
     }
 

@@ -57,6 +57,7 @@ struct ToasttyCLITests {
             arguments: [
                 "diagnostics", "submit",
                 "--file", "/tmp/toastty-diag.json",
+                "--contact", "cheech <cheech@example.com>",
                 "--endpoint", "https://diagnostics.example.com",
                 "--yes",
                 "--dry-run",
@@ -71,6 +72,7 @@ struct ToasttyCLITests {
         }
 
         #expect(options.filePath == "/tmp/toastty-diag.json")
+        #expect(options.contact == "cheech <cheech@example.com>")
         #expect(options.endpoint == "https://diagnostics.example.com")
         #expect(options.yes)
         #expect(options.dryRun)

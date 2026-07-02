@@ -77,7 +77,7 @@ Toastty does not upload diagnostics automatically. The diagnostics flow is:
 1. `toastty doctor` can run local checks and print remediation hints without writing a bundle or uploading anything. It reads local state and pings the local Toastty automation socket when one is present.
 2. `toastty diagnostics collect` writes a local redacted JSON bundle and prints a human summary.
 3. You review the JSON bundle.
-4. Only after explicit approval, `toastty diagnostics submit --file <path> --yes` uploads that exact reviewed file to the Toastty diagnostics Worker.
+4. Only after explicit approval, `toastty diagnostics submit --file <path> --yes` uploads that exact reviewed file to the Toastty diagnostics Worker. If the user provides follow-up contact details, `--contact <text>` can include them in the submitted diagnostics note without changing the local reviewed file.
 
 The uploaded report is stored in Cloudflare R2 under a temporary `reports/`
 prefix. R2 lifecycle rules must delete that prefix after the configured
@@ -89,6 +89,10 @@ metadata such as command IDs, caller session IDs, selector IDs, boolean flags,
 outcome, and duration. Toastty does not include freeform automation payload text
 such as terminal input, pasted content, argv, environment values, file lists, or
 file contents in that automation audit.
+
+Contact text passed with `--contact` is intentionally included in cleartext in
+the submitted diagnostics note so the developer team can follow up. Do not use
+`--contact` for secrets or other unrelated private data.
 
 Toastty diagnostics reports are retrieved through the diagnostics Worker admin
 endpoint with `x-toastty-admin-key`; agents should use the repo-local

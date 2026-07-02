@@ -4,6 +4,7 @@ import Foundation
 struct DiagnosticsSubmitOptions: Equatable {
     var filePath: String
     var endpoint: String?
+    var contact: String? = nil
     var yes: Bool
     var dryRun: Bool
     var allowSecretScanWarning: Bool
@@ -87,12 +88,11 @@ enum DiagnosticsSubmitCommand {
         httpClient: DiagnosticsSubmitHTTPClient = URLSessionDiagnosticsSubmitHTTPClient()
     ) throws {
         let fileURL = URL(fileURLWithPath: options.filePath, isDirectory: false)
-        let payload = try Data(contentsOf: fileURL)
-        let preflight = try DiagnosticsSubmissionPreflight.validate(
-            jsonData: payload,
-            options: DiagnosticsSubmissionPreflightOptions(
-                allowSecretScanWarning: options.allowSecretScanWarning
-            )
+        let filePayload = try Data(contentsOf: fileURL)
+        let payload = try preparedPayload(
+            filePayload: filePayload,
+            contact: options.contact,
+            allowSecretScanWarning: options.allowSecretScanWarning
         )
         let endpoint = resolvedValue(
             explicit: options.endpoint,
@@ -107,8 +107,9 @@ enum DiagnosticsSubmitCommand {
         if shouldUpload == false {
             try writeStdout(
                 previewSummary(
-                    preflight: preflight,
+                    preflight: payload.preflight,
                     filePath: options.filePath,
+                    includesContact: payload.includesContact,
                     endpoint: uploadURL?.absoluteString,
                     dryRun: options.dryRun,
                     hasApproval: options.yes
@@ -139,7 +140,7 @@ enum DiagnosticsSubmitCommand {
             request.setValue("1", forHTTPHeaderField: "x-toastty-secret-scan-override")
         }
 
-        let response = try httpClient.upload(request, body: payload)
+        let response = try httpClient.upload(request, body: payload.data)
         guard (200..<300).contains(response.statusCode) else {
             throw ToasttyCLIError.runtime(errorMessage(for: response))
         }
@@ -151,6 +152,7 @@ enum DiagnosticsSubmitCommand {
                 "Report ID: \(decoded.reportID)",
                 "Endpoint: \(uploadURL.absoluteString)",
                 "File: \(options.filePath)",
+                payload.includesContact ? "Contact: included in submitted note" : nil,
                 decoded.expiresAtMs.map { "Expires at: \($0) ms since epoch" },
             ]
             .compactMap { $0 }
@@ -188,6 +190,55 @@ enum DiagnosticsSubmitCommand {
             ?? nonEmpty(bundle.object(forInfoDictionaryKey: infoPlistKey) as? String)
     }
 
+    private static func preparedPayload(
+        filePayload: Data,
+        contact: String?,
+        allowSecretScanWarning: Bool
+    ) throws -> (data: Data, preflight: DiagnosticsSubmissionPreflightReport, includesContact: Bool) {
+        let preflightOptions = DiagnosticsSubmissionPreflightOptions(
+            allowSecretScanWarning: allowSecretScanWarning
+        )
+        let initialPreflight = try DiagnosticsSubmissionPreflight.validate(
+            jsonData: filePayload,
+            options: preflightOptions
+        )
+        guard let contact = nonEmpty(contact) else {
+            return (filePayload, initialPreflight, false)
+        }
+
+        let payload = try jsonPayloadByAppendingContact(
+            to: filePayload,
+            existingNote: initialPreflight.bundle.note,
+            contact: contact
+        )
+        let finalPreflight = try DiagnosticsSubmissionPreflight.validate(
+            jsonData: payload,
+            options: preflightOptions
+        )
+        return (payload, finalPreflight, true)
+    }
+
+    private static func noteByAppendingContact(existingNote: String?, contact: String) -> String {
+        let contactLine = "Contact: \(contact)"
+        guard let existingNote = nonEmpty(existingNote) else {
+            return contactLine
+        }
+        return existingNote + "\n" + contactLine
+    }
+
+    private static func jsonPayloadByAppendingContact(
+        to filePayload: Data,
+        existingNote: String?,
+        contact: String
+    ) throws -> Data {
+        let value = try JSONSerialization.jsonObject(with: filePayload)
+        guard var object = value as? [String: Any] else {
+            throw DiagnosticsSubmissionPreflightError.invalidJSON("diagnostics bundle root must be a JSON object")
+        }
+        object["note"] = noteByAppendingContact(existingNote: existingNote, contact: contact)
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
     private static func makeUploadURL(endpoint: String) throws -> URL {
         guard var components = URLComponents(string: endpoint),
               components.scheme?.isEmpty == false,
@@ -213,6 +264,7 @@ enum DiagnosticsSubmitCommand {
     private static func previewSummary(
         preflight: DiagnosticsSubmissionPreflightReport,
         filePath: String,
+        includesContact: Bool,
         endpoint: String?,
         dryRun: Bool,
         hasApproval: Bool
@@ -237,13 +289,17 @@ enum DiagnosticsSubmitCommand {
             "Current log: \(logUploadSummary(bundle.logs.current))",
             "Previous log: \(logUploadSummary(bundle.logs.previous))",
             "Redactions: \(bundle.redaction?.redactedKeyCount ?? 0) using rules v\(bundle.redaction?.rulesVersion ?? 0)",
+            includesContact ? "Contact: included in submitted note" : nil,
             findingLine,
             dryRun
                 ? "Dry run: no upload performed."
                 : hasApproval
                     ? "No upload performed because --dry-run was set."
-                    : "No upload performed. Rerun with --yes to submit this exact file.",
+                    : includesContact
+                        ? "No upload performed. Rerun with --yes to submit this file with contact included."
+                        : "No upload performed. Rerun with --yes to submit this exact file.",
         ]
+        .compactMap { $0 }
         .joined(separator: "\n")
     }
 
