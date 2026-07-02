@@ -19,12 +19,13 @@ DEFAULT_AUTOMATION_DISPLAY_LIMIT = 20
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Fetch and summarize a Toastty diagnostics report."
+        description="List, fetch, and summarize Toastty diagnostics reports."
     )
     parser.add_argument("report_id", nargs="?", help="Toastty report ID, e.g. TT-20260701-ABCDEFGHJKLMNPQR")
     parser.add_argument("--file", dest="input_file", help="Summarize an already-downloaded report envelope JSON file")
     parser.add_argument("--endpoint", help="Diagnostics Worker base URL or /v1/diagnostics endpoint URL")
     parser.add_argument("--output", help="Output path for fetched report JSON; defaults to artifacts/diagnostics/<reportID>.json")
+    parser.add_argument("--limit", type=int, default=25, help="Maximum recent submissions to list when report_id is omitted")
     parser.add_argument("--timeout", type=float, default=30.0, help="Fetch timeout in seconds")
     parser.add_argument("--log-matches", type=int, default=20, help="Maximum warning/error-like log lines to print")
     parser.add_argument(
@@ -46,7 +47,7 @@ def main() -> int:
         return 0
 
     report_id = (args.report_id or "").strip()
-    if not REPORT_ID_RE.match(report_id):
+    if report_id and not REPORT_ID_RE.match(report_id):
         fail("expected a report ID like TT-20260701-ABCDEFGHJKLMNPQR")
 
     admin_key = os.environ.get("TOASTTY_DIAGNOSTICS_ADMIN_KEY", "")
@@ -54,6 +55,13 @@ def main() -> int:
         fail("TOASTTY_DIAGNOSTICS_ADMIN_KEY is missing; run through `sv exec --`")
 
     endpoint = args.endpoint or os.environ.get("TOASTTY_DIAGNOSTICS_ENDPOINT") or DEFAULT_ENDPOINT
+    if not report_id:
+        url = admin_list_url(endpoint, args.limit)
+        raw = fetch_report(url, admin_key, timeout=args.timeout)
+        listing = parse_report_json(raw, source=url)
+        print_report_list(listing)
+        return 0
+
     url = admin_report_url(endpoint, report_id)
     raw = fetch_report(url, admin_key, timeout=args.timeout)
     envelope = parse_report_json(raw, source=url)
@@ -67,7 +75,7 @@ def main() -> int:
     return 0
 
 
-def admin_report_url(endpoint: str, report_id: str) -> str:
+def diagnostics_endpoint_url(endpoint: str) -> str:
     endpoint = endpoint.strip()
     if not endpoint:
         fail("endpoint is empty")
@@ -75,12 +83,21 @@ def admin_report_url(endpoint: str, report_id: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         fail(f"endpoint must be an absolute URL: {endpoint}")
     path = parsed.path.rstrip("/")
-    encoded_report_id = urllib.parse.quote(report_id, safe="")
-    if path.endswith("/v1/diagnostics"):
-        path = f"{path}/{encoded_report_id}"
-    else:
-        path = f"{path}/v1/diagnostics/{encoded_report_id}"
+    if not path.endswith("/v1/diagnostics"):
+        path = f"{path}/v1/diagnostics"
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def admin_list_url(endpoint: str, limit: int) -> str:
+    if limit < 1:
+        fail("limit must be a positive integer")
+    query = urllib.parse.urlencode({"limit": str(limit)})
+    return f"{diagnostics_endpoint_url(endpoint)}?{query}"
+
+
+def admin_report_url(endpoint: str, report_id: str) -> str:
+    encoded_report_id = urllib.parse.quote(report_id, safe="")
+    return f"{diagnostics_endpoint_url(endpoint)}/{encoded_report_id}"
 
 
 def fetch_report(url: str, admin_key: str, timeout: float) -> str:
@@ -181,6 +198,40 @@ def print_summary(envelope: dict[str, Any], source: str, log_match_limit: int, a
         print(f"- {line}")
     if not log_matches:
         print("- None matched in current log content")
+
+
+def print_report_list(listing: dict[str, Any]) -> None:
+    reports = list_value(listing.get("reports"))
+    limit = listing.get("limit")
+    print("")
+    print("Toastty diagnostics submissions")
+    print(f"- Generated: {format_ms(listing.get('generatedAtMs'))}")
+    print(f"- Count: {len(reports)} shown" + (f" (limit {limit})" if isinstance(limit, int) else ""))
+
+    if not reports:
+        print("")
+        print("Recent submissions")
+        print("- None found")
+        return
+
+    print("")
+    print("Recent submissions")
+    for value in reports:
+        report = record(value)
+        summary = record(report.get("summary"))
+        report_id = text(report.get("reportID")) or "?"
+        app_version = text(summary.get("appVersion")) or "?"
+        build = text(summary.get("build")) or "?"
+        runtime = text(summary.get("runtimeLabel")) or "?"
+        socket = text(summary.get("socketState")) or "?"
+        note_preview = text(summary.get("notePreview"))
+        print(
+            f"- {report_id} | submitted {format_ms(report.get('receivedAtMs'))} "
+            f"| expires {format_ms(report.get('expiresAtMs'))} "
+            f"| app {app_version} ({build}) | runtime {runtime} | socket {socket}"
+        )
+        if note_preview:
+            print(f"  note/contact: {collapse(note_preview, 180)}")
 
 
 def describe_automation_call(item: dict[str, Any]) -> str:

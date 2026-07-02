@@ -92,12 +92,15 @@ file contents in that automation audit.
 
 Toastty diagnostics reports are retrieved through the diagnostics Worker admin
 endpoint with `x-toastty-admin-key`; agents should use the repo-local
-`toastty-diagnostics` skill rather than direct R2 credentials. If the optional
-notification webhook is configured, Toastty sends a summary-only notification
-containing the report ID, admin fetch URL, a suggested `$toastty-diagnostics`
-prompt, and bounded summary fields. The notification does not include the full
-diagnostics bundle, freeform note text, raw logs, environment values, or
-secret-scan finding details.
+`toastty-diagnostics` skill rather than direct R2 credentials. The admin list
+endpoint can return recent report IDs, submission times, expiration times,
+optional admin URLs, app/runtime/socket summary fields, and diagnostics note
+previews when present, but not full bundles, raw logs, environment values, or
+secret-scan finding details. If the optional notification webhook is configured,
+Toastty sends a summary-only notification containing the report ID, admin fetch
+URL, a suggested `$toastty-diagnostics` prompt, and bounded summary fields. The
+notification does not include the full diagnostics bundle, freeform note text,
+raw logs, environment values, or secret-scan finding details.
 
 ## Logging behavior
 

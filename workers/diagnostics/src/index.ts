@@ -25,12 +25,32 @@ type DiagnosticsNotificationSummary = Omit<DiagnosticsSummary, "notePreview" | "
   secretScanFindingCount: number;
 };
 
+type DiagnosticsAdminListSummary = Omit<DiagnosticsSummary, "secretScanFindings"> & {
+  secretScanFindingCount: number;
+};
+
 type DiagnosticsNotificationPayload = {
   type: "toastty.diagnostics.submitted";
   reportID: string;
   adminURL?: string;
   skillPrompt: string;
   summary: DiagnosticsNotificationSummary;
+};
+
+type DiagnosticsListReport = {
+  reportID: string;
+  receivedAtMs?: number;
+  expiresAtMs?: number;
+  adminURL?: string;
+  sizeBytes: number;
+  objectKey: string;
+  summary?: DiagnosticsAdminListSummary;
+};
+
+type RecentReportObjectsResult = {
+  objects: R2Object[];
+  scannedObjectCount: number;
+  incomplete: boolean;
 };
 
 export default {
@@ -42,6 +62,9 @@ export default {
       }
       if (request.method === "POST" && url.pathname === "/v1/diagnostics") {
         return await handleSubmit(request, env, ctx);
+      }
+      if (request.method === "GET" && url.pathname === "/v1/diagnostics") {
+        return await handleAdminList(request, env, url);
       }
       if (request.method === "GET" && url.pathname.startsWith("/v1/diagnostics/")) {
         return await handleAdminGet(request, env, url.pathname.slice("/v1/diagnostics/".length));
@@ -91,8 +114,9 @@ async function handleSubmit(request: Request, env: DiagnosticsEnv, ctx: Executio
     return errorResponse(validation.status, validation.code, validation.message);
   }
 
-  const reportID = makeReportID(new Date());
-  const receivedAtMs = Date.now();
+  const receivedAtDate = new Date();
+  const reportID = makeReportID(receivedAtDate);
+  const receivedAtMs = receivedAtDate.getTime();
   const expiresAtMs = receivedAtMs + retentionDays * 24 * 60 * 60 * 1000;
   const summary = buildDiagnosticsSummary(validation.bundle, secretScanFindings, secretScanOverride);
   const envelope: ReportEnvelope = {
@@ -114,7 +138,8 @@ async function handleSubmit(request: Request, env: DiagnosticsEnv, ctx: Executio
     customMetadata: {
       reportID,
       receivedAtMs: String(receivedAtMs),
-      expiresAtMs: String(expiresAtMs)
+      expiresAtMs: String(expiresAtMs),
+      summaryJSON: JSON.stringify(adminListSummary(summary))
     }
   });
 
@@ -130,6 +155,23 @@ async function handleSubmit(request: Request, env: DiagnosticsEnv, ctx: Executio
   }
 
   return jsonResponse({ reportID, receivedAtMs, expiresAtMs }, 201);
+}
+
+async function handleAdminList(request: Request, env: DiagnosticsEnv, url: URL): Promise<Response> {
+  await requireSecretHeader(request, env.TOASTTY_DIAGNOSTICS_ADMIN_KEY, "x-toastty-admin-key", "admin_key_missing");
+  const limit = parseListLimit(url.searchParams.get("limit"));
+  const retentionDays = numberSetting(env.RETENTION_DAYS, 30);
+  const result = await recentReportObjects(env.DIAGNOSTICS_BUCKET, new Date(), retentionDays, limit);
+  const reports = result.objects.slice(0, limit).map((object) => listReportForObject(env, object));
+
+  return jsonResponse({
+    generatedAtMs: Date.now(),
+    limit,
+    count: reports.length,
+    scannedObjectCount: result.scannedObjectCount,
+    incomplete: result.incomplete,
+    reports
+  });
 }
 
 async function handleAdminGet(request: Request, env: DiagnosticsEnv, rawReportID: string): Promise<Response> {
@@ -150,6 +192,75 @@ async function handleAdminGet(request: Request, env: DiagnosticsEnv, rawReportID
       "cache-control": "no-store"
     }
   });
+}
+
+async function recentReportObjects(
+  bucket: R2Bucket,
+  now: Date,
+  retentionDays: number,
+  targetLimit: number
+): Promise<RecentReportObjectsResult> {
+  const objects: R2Object[] = [];
+  let scannedObjectCount = 0;
+  let incomplete = false;
+  const maxScannedObjects = Math.max(1000, targetLimit);
+
+  for (
+    let dayOffset = 0;
+    dayOffset < retentionDays && objects.length < targetLimit && scannedObjectCount < maxScannedObjects;
+    dayOffset += 1
+  ) {
+    const prefix = reportPrefixForUTCDay(now, dayOffset);
+    const page = await listObjectsForPrefix(bucket, prefix, maxScannedObjects - scannedObjectCount);
+    const dayObjects = page.objects;
+    scannedObjectCount += page.scannedObjectCount;
+    incomplete ||= page.incomplete;
+    dayObjects.sort(compareReportObjectsDescending);
+    objects.push(...dayObjects);
+  }
+  objects.sort(compareReportObjectsDescending);
+  if (scannedObjectCount >= maxScannedObjects && objects.length < targetLimit) {
+    incomplete = true;
+  }
+  return { objects, scannedObjectCount, incomplete };
+}
+
+async function listObjectsForPrefix(
+  bucket: R2Bucket,
+  prefix: string,
+  maxObjects: number
+): Promise<RecentReportObjectsResult> {
+  const objects: R2Object[] = [];
+  let cursor: string | undefined;
+  do {
+    const remaining = maxObjects - objects.length;
+    if (remaining <= 0) {
+      return { objects, scannedObjectCount: objects.length, incomplete: true };
+    }
+    const page = await bucket.list({
+      prefix,
+      cursor,
+      limit: Math.min(1000, remaining),
+      include: ["customMetadata"]
+    });
+    objects.push(...page.objects);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return { objects, scannedObjectCount: objects.length, incomplete: false };
+}
+
+function listReportForObject(env: DiagnosticsEnv, object: R2Object): DiagnosticsListReport {
+  const metadata = object.customMetadata ?? {};
+  const reportID = reportIDFromObjectKey(object.key) ?? metadata.reportID ?? object.key;
+  return {
+    reportID,
+    receivedAtMs: numberFromString(metadata.receivedAtMs) ?? object.uploaded.getTime(),
+    expiresAtMs: numberFromString(metadata.expiresAtMs),
+    adminURL: adminURLForBaseURL(env.TOASTTY_DIAGNOSTICS_ADMIN_BASE_URL, reportID),
+    sizeBytes: object.size,
+    objectKey: object.key,
+    summary: adminListSummaryFromMetadata(metadata.summaryJSON)
+  };
 }
 
 function requireJSONContentType(request: Request): void {
@@ -258,6 +369,27 @@ function objectKeyForReportID(reportID: string): string {
   return `reports/${date.slice(0, 4)}/${date.slice(4, 6)}/${date.slice(6, 8)}/${reportID}.json`;
 }
 
+function reportIDFromObjectKey(key: string): string | undefined {
+  const match = key.match(/\/(TT-[0-9]{8}-[A-Z2-9]{16})\.json$/);
+  return match?.[1];
+}
+
+function reportPrefixForUTCDay(now: Date, dayOffset: number): string {
+  const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - dayOffset));
+  const year = String(date.getUTCFullYear()).padStart(4, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `reports/${year}/${month}/${day}/`;
+}
+
+function compareReportObjectsDescending(left: R2Object, right: R2Object): number {
+  return reportObjectReceivedAtMs(right) - reportObjectReceivedAtMs(left);
+}
+
+function reportObjectReceivedAtMs(object: R2Object): number {
+  return numberFromString(object.customMetadata?.receivedAtMs) ?? object.uploaded.getTime();
+}
+
 async function sendNotification(webhookURL: string, payload: DiagnosticsNotificationPayload): Promise<void> {
   try {
     const response = await fetch(webhookURL, {
@@ -306,6 +438,46 @@ export function notificationSummary(summary: DiagnosticsSummary): DiagnosticsNot
   };
 }
 
+export function adminListSummary(summary: DiagnosticsSummary | undefined): DiagnosticsAdminListSummary | undefined {
+  if (!summary) {
+    return undefined;
+  }
+  const { secretScanFindings, ...safeSummary } = summary;
+  return {
+    ...safeSummary,
+    secretScanFindingCount: secretScanFindings.length
+  };
+}
+
+function adminListSummaryFromMetadata(value: string | undefined): DiagnosticsAdminListSummary | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<DiagnosticsAdminListSummary>;
+    const secretScanFindingCount = finiteNumber(parsed.secretScanFindingCount);
+    return {
+      appVersion: stringValue(parsed.appVersion),
+      build: stringValue(parsed.build),
+      runtimeLabel: stringValue(parsed.runtimeLabel),
+      socketState: stringValue(parsed.socketState),
+      currentLogSizeBytes: finiteNumber(parsed.currentLogSizeBytes),
+      currentLogTruncated: booleanValue(parsed.currentLogTruncated),
+      previousLogSizeBytes: finiteNumber(parsed.previousLogSizeBytes),
+      previousLogTruncated: booleanValue(parsed.previousLogTruncated),
+      redactionRulesVersion: finiteNumber(parsed.redactionRulesVersion) ?? 0,
+      redactedKeyCount: finiteNumber(parsed.redactedKeyCount) ?? 0,
+      notePreview: stringValue(parsed.notePreview),
+      systemArch: stringValue(parsed.systemArch),
+      hardwareModel: stringValue(parsed.hardwareModel),
+      secretScanOverride: booleanValue(parsed.secretScanOverride) ?? false,
+      secretScanFindingCount: secretScanFindingCount ?? 0
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function adminURLForBaseURL(baseURL: string | undefined, reportID: string): string | undefined {
   if (!baseURL) {
     return undefined;
@@ -330,6 +502,39 @@ export function adminURLForBaseURL(baseURL: string | undefined, reportID: string
 function numberSetting(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseListLimit(value: string | null): number {
+  if (value === null || value === "") {
+    return 25;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new HTTPError(400, "limit_invalid", "limit must be a positive integer");
+  }
+  if (parsed > 100) {
+    throw new HTTPError(400, "limit_invalid", "limit must be 100 or less");
+  }
+  return parsed;
+}
+
+function numberFromString(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return finiteNumber(Number(value));
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function jsonResponse(value: unknown, status = 200): Response {

@@ -91,8 +91,12 @@ report through the diagnostics Worker admin endpoint, or from an agent session
 with:
 
 ```bash
+sv exec -- .agents/skills/toastty-diagnostics/scripts/fetch-diagnostics-report.py
 sv exec -- .agents/skills/toastty-diagnostics/scripts/fetch-diagnostics-report.py <reportID>
 ```
+
+The no-argument form lists recent submissions. The report-ID form fetches and
+saves the selected report envelope for deeper analysis.
 
 ### `action list`
 

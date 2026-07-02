@@ -45,6 +45,27 @@ Submitted reports are private R2 objects. Fetch them through the Worker admin
 endpoint with `TOASTTY_DIAGNOSTICS_ADMIN_KEY`; do not expose direct R2
 credentials to agent sessions.
 
+List recent submissions:
+
+```bash
+ENDPOINT="https://toastty-diagnostics.giantthings.workers.dev"
+
+sv exec -- sh -c '
+  curl -fsS \
+    -H "x-toastty-admin-key: $TOASTTY_DIAGNOSTICS_ADMIN_KEY" \
+    "$0/v1/diagnostics?limit=25"
+' "$ENDPOINT"
+```
+
+The list response is summary-only. It includes report IDs, submission and
+expiration times, optional admin URLs, app/runtime/socket summary fields, and
+the diagnostics note preview when present. It does not include the full
+diagnostics bundle, raw logs, environment values, or secret-scan finding
+details. If the response has `incomplete: true`, the Worker hit its internal R2
+scan cap and the list may omit older reports.
+
+Fetch a full report by ID:
+
 ```bash
 REPORT_ID="TT-20260701-ABCDEFGHJKLMNPQR"
 ENDPOINT="https://toastty-diagnostics.giantthings.workers.dev"
@@ -60,10 +81,12 @@ sv exec -- sh -c '
 Inside Toastty agent sessions, prefer the repo-local operator skill:
 
 ```bash
+sv exec -- .agents/skills/toastty-diagnostics/scripts/fetch-diagnostics-report.py
 sv exec -- .agents/skills/toastty-diagnostics/scripts/fetch-diagnostics-report.py "$REPORT_ID"
 ```
 
-The admin response is a JSON envelope containing `reportID`, `summary`, and the
+The no-argument form lists recent submissions. The report-ID form fetches and
+saves the admin response JSON envelope containing `reportID`, `summary`, and the
 full submitted `bundle`.
 
 ## Notifications

@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import fixtures from "../../../Shared/Diagnostics/secret-scan-fixtures.json";
-import { adminURLForBaseURL, diagnosticsNotificationPayload, notificationSummary } from "../src/index";
+import { adminListSummary, adminURLForBaseURL, diagnosticsNotificationPayload, notificationSummary } from "../src/index";
 import { scanForSecrets } from "../src/secretScan";
 
 const uploadHeaders = {
@@ -43,6 +43,92 @@ describe("diagnostics worker", () => {
     expect(envelope.summary.redactionRulesVersion).toBe(1);
     expect(envelope.bundle.schemaVersion).toBe(1);
     expect(envelope.bundle.automation?.recentRequests).toHaveLength(1);
+  });
+
+  it("lists recent reports by admin key without returning bundles", async () => {
+    const first = await submitBundle(makeBundle({
+      note: "tab switched unexpectedly; contact: user@example.com",
+      runtimeLabel: "toastty-alpha"
+    }));
+    const second = await submitBundle(makeBundle({
+      note: "socket failed after automation",
+      runtimeLabel: "toastty-beta"
+    }));
+
+    const response = await SELF.fetch("https://diagnostics.test/v1/diagnostics?limit=10", {
+      method: "GET",
+      headers: adminHeaders
+    });
+
+    expect(response.status).toBe(200);
+    const listed = await response.json() as {
+      count: number;
+      limit: number;
+      scannedObjectCount: number;
+      incomplete: boolean;
+      reports: Array<{
+        reportID: string;
+        receivedAtMs: number;
+        expiresAtMs: number;
+        adminURL?: string;
+        summary?: {
+          runtimeLabel?: string;
+          notePreview?: string;
+          secretScanFindingCount?: number;
+          secretScanFindings?: unknown[];
+        };
+        bundle?: unknown;
+        logs?: unknown;
+      }>;
+    };
+    expect(listed.limit).toBe(10);
+    expect(listed.count).toBeGreaterThanOrEqual(2);
+    expect(listed.scannedObjectCount).toBeGreaterThanOrEqual(2);
+    expect(listed.incomplete).toBe(false);
+
+    const reportsByID = new Map(listed.reports.map((report) => [report.reportID, report]));
+    const firstListed = reportsByID.get(first.reportID);
+    const secondListed = reportsByID.get(second.reportID);
+    expect(firstListed).toBeDefined();
+    expect(secondListed).toBeDefined();
+    expect(firstListed?.adminURL).toBe(`https://diagnostics.test/v1/diagnostics/${first.reportID}`);
+    expect(firstListed?.summary?.runtimeLabel).toBe("toastty-alpha");
+    expect(firstListed?.summary?.notePreview).toContain("user@example.com");
+    expect(firstListed?.summary?.secretScanFindingCount).toBe(0);
+    expect(firstListed?.summary?.secretScanFindings).toBeUndefined();
+    expect(firstListed?.bundle).toBeUndefined();
+    expect(firstListed?.logs).toBeUndefined();
+  });
+
+  it("limits and validates report listing requests", async () => {
+    await submitBundle(makeBundle({ runtimeLabel: "limit-one" }));
+    await submitBundle(makeBundle({ runtimeLabel: "limit-two" }));
+
+    const limited = await SELF.fetch("https://diagnostics.test/v1/diagnostics?limit=1", {
+      method: "GET",
+      headers: adminHeaders
+    });
+    expect(limited.status).toBe(200);
+    const listed = await limited.json() as { count: number; reports: unknown[] };
+    expect(listed.count).toBe(1);
+    expect(listed.reports).toHaveLength(1);
+
+    const invalid = await SELF.fetch("https://diagnostics.test/v1/diagnostics?limit=0", {
+      method: "GET",
+      headers: adminHeaders
+    });
+    expect(invalid.status).toBe(400);
+
+    const tooLarge = await SELF.fetch("https://diagnostics.test/v1/diagnostics?limit=101", {
+      method: "GET",
+      headers: adminHeaders
+    });
+    expect(tooLarge.status).toBe(400);
+
+    const unauthorized = await SELF.fetch("https://diagnostics.test/v1/diagnostics?limit=1", {
+      method: "GET"
+    });
+    expect(unauthorized.status).toBe(401);
   });
 
   it("requires upload and admin keys", async () => {
@@ -178,6 +264,26 @@ describe("diagnostics worker", () => {
     expect(summary.secretScanFindingCount).toBe(1);
   });
 
+  it("keeps note preview but omits secret finding details from admin list summaries", () => {
+    const summary = adminListSummary({
+      appVersion: "1.0",
+      build: "100",
+      runtimeLabel: "toastty-test",
+      socketState: "healthy",
+      redactionRulesVersion: 1,
+      redactedKeyCount: 2,
+      notePreview: "contact: user@example.com",
+      systemArch: "arm64",
+      hardwareModel: "Mac16,1",
+      secretScanOverride: true,
+      secretScanFindings: [{ ruleID: "openai-token", label: "OpenAI-style API token", matchCount: 1 }]
+    });
+
+    expect(summary?.notePreview).toBe("contact: user@example.com");
+    expect("secretScanFindings" in (summary ?? {})).toBe(false);
+    expect(summary?.secretScanFindingCount).toBe(1);
+  });
+
   it("builds actionable notification payloads without freeform bundle content", () => {
     const reportID = "TT-20260628-ABCDEFGHJKLMNPQR";
     const payload = diagnosticsNotificationPayload(
@@ -241,15 +347,25 @@ describe("diagnostics worker", () => {
   });
 });
 
-function makeBundle() {
+async function submitBundle(bundle: ReturnType<typeof makeBundle>): Promise<{ reportID: string }> {
+  const response = await SELF.fetch("https://diagnostics.test/v1/diagnostics", {
+    method: "POST",
+    headers: uploadHeaders,
+    body: JSON.stringify(bundle)
+  });
+  expect(response.status).toBe(201);
+  return await response.json() as { reportID: string };
+}
+
+function makeBundle(overrides: { note?: string; runtimeLabel?: string } = {}) {
   return {
     schemaVersion: 1,
     generatedAtMs: 1_800_000_000_000,
-    note: "terminal didn't connect",
+    note: overrides.note ?? "terminal didn't connect",
     app: {
       shortVersion: "1.0",
       build: "100",
-      runtimeLabel: "toastty-test"
+      runtimeLabel: overrides.runtimeLabel ?? "toastty-test"
     },
     logs: {
       current: {
