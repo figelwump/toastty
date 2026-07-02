@@ -89,6 +89,19 @@ class FetchDiagnosticsReportTests(unittest.TestCase):
         self.assertIn("selectors=workspaceID", rendered)
         self.assertIn("flags=focusUnreadSessionPanel=true", rendered)
 
+    def test_describe_automation_call_uses_event_type_when_command_is_absent(self) -> None:
+        rendered = fetch_diagnostics_report.describe_automation_call({
+            "timestampMs": 1_800_000_000_000,
+            "kind": "event",
+            "eventType": "session.status",
+            "callerAgent": "mimocode",
+            "ok": True,
+            "durationMs": 0,
+        })
+
+        self.assertIn("event | session.status", rendered)
+        self.assertNotIn("event | ?", rendered)
+
     def test_print_summary_distinguishes_recorded_and_displayed_automation_calls(self) -> None:
         envelope = {
             "reportID": "TT-20260701-ABCDEFGHJKLMNPQR",

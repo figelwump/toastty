@@ -238,7 +238,7 @@ def describe_automation_call(item: dict[str, Any]) -> str:
     parts = [
         format_ms(item.get("timestampMs")),
         text(item.get("kind")) or "?",
-        text(item.get("command")) or "?",
+        text(item.get("command")) or text(item.get("eventType")) or "?",
     ]
     action_id = text(item.get("actionID"))
     if action_id:
