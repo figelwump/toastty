@@ -250,15 +250,16 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains(#""tool.execute.after""#))
         XCTAssertTrue(plugin.contains(#"resetTurnState();"#))
         XCTAssertTrue(plugin.contains(#"rememberFinalTextCandidate(input, output);"#))
+        XCTAssertTrue(plugin.contains(#"return flush(toasttyFinal(text), { suppressFollowingWorking: true });"#))
         XCTAssertTrue(plugin.contains(#"return flush(toasttyFinal(finalTextFrom(input, output) || lastCompletedTextCandidate), { suppressFollowingWorking: true });"#))
 
         let userQueryPostStart = try XCTUnwrap(plugin.range(of: #"hooks["session.userQuery.post"]"#))
         let sessionPostStart = try XCTUnwrap(plugin.range(of: #"hooks["session.post"]"#))
         let userQueryPostHook = String(plugin[userQueryPostStart.lowerBound..<sessionPostStart.lowerBound])
-        XCTAssertFalse(userQueryPostHook.contains("toasttyFinal"))
+        XCTAssertTrue(userQueryPostHook.contains("toasttyFinal"))
     }
 
-    func testMiMoCodePluginFlushesSessionPostFinalAndSuppressesLateWorking() throws {
+    func testMiMoCodePluginFlushesUserQueryFinalAndSuppressesLateWorking() throws {
         let events = try runOpenCodeFamilyPluginScenario(
             agent: .mimocode,
             commandName: "mimo",
@@ -275,24 +276,21 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             """
         )
 
-        XCTAssertEqual(events.count, 3)
+        XCTAssertEqual(events.count, 2)
         XCTAssertEqual(events[0]["type"] as? String, "toastty.status")
         let firstProperties = try XCTUnwrap(events[0]["properties"] as? [String: Any])
         XCTAssertEqual(firstProperties["kind"] as? String, "working")
         XCTAssertEqual(firstProperties["detail"] as? String, "Starting")
 
-        XCTAssertEqual(events[1]["type"] as? String, "toastty.status")
+        XCTAssertEqual(events[1]["type"] as? String, "toastty.final")
         let secondProperties = try XCTUnwrap(events[1]["properties"] as? [String: Any])
-        XCTAssertEqual(secondProperties["kind"] as? String, "working")
-        XCTAssertEqual(secondProperties["detail"] as? String, "Using Bash")
+        XCTAssertEqual(secondProperties["text"] as? String, "per-step text")
 
-        XCTAssertEqual(events[2]["type"] as? String, "toastty.final")
-        let finalProperties = try XCTUnwrap(events[2]["properties"] as? [String: Any])
-        XCTAssertEqual(finalProperties["text"] as? String, "per-step text")
+        XCTAssertFalse(String(describing: events).contains("Using Bash"))
         XCTAssertFalse(String(describing: events).contains("Writing response"))
     }
 
-    func testMiMoCodePluginSuppressesDelayedGenericWorkingAfterSessionPost() throws {
+    func testMiMoCodePluginSuppressesDelayedGenericWorkingAfterUserQueryFinalWithoutSessionPost() throws {
         let events = try runOpenCodeFamilyPluginScenario(
             agent: .mimocode,
             commandName: "mimo",
@@ -300,7 +298,6 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             runnerBody: """
             await hooks["session.pre"]?.({}, {});
             await hooks["session.userQuery.post"]?.({ finalText: "per-step text" }, {});
-            await hooks["session.post"]?.({}, {});
             const realNow = Date.now;
             const afterFinal = realNow() + 3000;
             Date.now = () => afterFinal;

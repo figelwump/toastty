@@ -1205,7 +1205,10 @@ private extension AgentLaunchInstrumentation {
                 if (detail) {
                   return flush(toasttyStatus("error", "Error", detail), { suppressFollowingWorking: true });
                 }
-                rememberFinalTextCandidate(input, output);
+                const text = rememberFinalTextCandidate(input, output);
+                if (text) {
+                  return flush(toasttyFinal(text), { suppressFollowingWorking: true });
+                }
               } catch (error) {
                 hookFailure("session.userQuery.post", error);
               }
