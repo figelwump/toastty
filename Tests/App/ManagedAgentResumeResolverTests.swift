@@ -106,6 +106,68 @@ struct ManagedAgentResumeResolverTests {
     }
 
     @Test
+    func resolveReturnsOpenCodeSessionLaunchForValidRestoredRecord() throws {
+        let fixture = try makeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let record = ManagedAgentResumeRecord(
+            agent: .opencode,
+            nativeSessionID: "ses_provider",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let resolution = ManagedAgentResumeResolver.resolve(
+            panelID: UUID(),
+            terminalState: TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "",
+                resumeRecord: record
+            ),
+            launchReason: .restore
+        )
+
+        guard case .launch(let configuration) = resolution else {
+            Issue.record("expected resume launch configuration")
+            return
+        }
+        #expect(configuration.initialInput == "opencode --session ses_provider")
+        #expect(configuration.workingDirectoryOverride == fixture.cwdURL.path)
+    }
+
+    @Test
+    func resolveReturnsMiMoSessionLaunchForValidRestoredRecord() throws {
+        let fixture = try makeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let record = ManagedAgentResumeRecord(
+            agent: .mimocode,
+            nativeSessionID: "ses_mimo",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let resolution = ManagedAgentResumeResolver.resolve(
+            panelID: UUID(),
+            terminalState: TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "",
+                resumeRecord: record
+            ),
+            launchReason: .restore
+        )
+
+        guard case .launch(let configuration) = resolution else {
+            Issue.record("expected resume launch configuration")
+            return
+        }
+        #expect(configuration.initialInput == "mimo --session ses_mimo")
+        #expect(configuration.workingDirectoryOverride == fixture.cwdURL.path)
+    }
+
+    @Test
     func resolveUsesConfiguredAgentProfileWrapperForResumeCommand() throws {
         let fixture = try makeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -144,6 +206,49 @@ struct ManagedAgentResumeResolverTests {
         #expect(
             configuration.initialInput ==
                 "agent-safehouse --workdir=/tmp/repo /opt/homebrew/bin/codex resume 019e2823-f520-7690-91b6-cd84eb52dd8a --dangerously-bypass-approvals-and-sandbox"
+        )
+    }
+
+    @Test
+    func resolveUsesConfiguredOpenCodeProfileWrapperForSessionLaunch() throws {
+        let fixture = try makeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let record = ManagedAgentResumeRecord(
+            agent: .opencode,
+            nativeSessionID: "ses_provider",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let resolution = ManagedAgentResumeResolver.resolve(
+            panelID: UUID(),
+            terminalState: TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "", resumeRecord: record),
+            launchReason: .restore,
+            agentCatalog: AgentCatalog(
+                profiles: [
+                    AgentProfile(
+                        id: "opencode",
+                        displayName: "OpenCode",
+                        argv: [
+                            "agent-safehouse",
+                            "--workdir=/tmp/repo",
+                            "opencode",
+                            "--model",
+                            "anthropic/claude-sonnet-4",
+                        ]
+                    ),
+                ]
+            )
+        )
+
+        guard case .launch(let configuration) = resolution else {
+            Issue.record("expected resume launch configuration")
+            return
+        }
+        #expect(
+            configuration.initialInput ==
+                "agent-safehouse --workdir=/tmp/repo opencode --session ses_provider --model anthropic/claude-sonnet-4"
         )
     }
 

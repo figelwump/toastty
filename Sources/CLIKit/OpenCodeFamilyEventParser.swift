@@ -5,6 +5,7 @@ enum OpenCodeFamilyEventParser {
     private static let maxPayloadBytes = 64 * 1024
 
     static func parse(
+        source: AgentEventSource,
         sessionID: String,
         panelID: UUID?,
         payload: Data
@@ -23,6 +24,7 @@ enum OpenCodeFamilyEventParser {
         if let commands = normalizedToasttyCommands(
             eventType: eventType,
             properties: properties,
+            source: source,
             sessionID: sessionID,
             panelID: panelID
         ) {
@@ -102,6 +104,7 @@ private extension OpenCodeFamilyEventParser {
     static func normalizedToasttyCommands(
         eventType: String,
         properties: [String: Any],
+        source: AgentEventSource,
         sessionID: String,
         panelID: UUID?
     ) -> [CLICommand]? {
@@ -125,6 +128,57 @@ private extension OpenCodeFamilyEventParser {
                 ),
             ]
 
+        case "toastty.native_session":
+            return nativeSessionCommands(
+                source: source,
+                sessionID: sessionID,
+                panelID: panelID,
+                properties: properties
+            )
+
+        default:
+            return nil
+        }
+    }
+
+    static func nativeSessionCommands(
+        source: AgentEventSource,
+        sessionID: String,
+        panelID: UUID?,
+        properties: [String: Any]
+    ) -> [CLICommand] {
+        guard let panelID,
+              let agent = agentKind(for: source),
+              let nativeSessionID = normalizedString(properties["nativeSessionID"], limit: 240)
+                ?? normalizedString(properties["native_session_id"], limit: 240)
+                ?? normalizedString(properties["sessionID"], limit: 240)
+                ?? normalizedString(properties["sessionId"], limit: 240),
+              let sessionFilePath = normalizedString(properties["sessionFilePath"], limit: 4096)
+                ?? normalizedString(properties["session_file_path"], limit: 4096)
+                ?? normalizedString(properties["sentinelPath"], limit: 4096)
+                ?? normalizedString(properties["markerPath"], limit: 4096),
+              let cwd = normalizedString(properties["cwd"], limit: 4096) else {
+            return []
+        }
+
+        return [
+            .sessionUpdateResumeRecord(
+                sessionID: sessionID,
+                panelID: panelID,
+                agent: agent,
+                nativeSessionID: nativeSessionID,
+                sessionFilePath: sessionFilePath,
+                cwd: cwd
+            ),
+        ]
+    }
+
+    static func agentKind(for source: AgentEventSource) -> AgentKind? {
+        switch source {
+        case .opencodePlugin:
+            return .opencode
+        case .mimocodePlugin:
+            return .mimocode
         default:
             return nil
         }

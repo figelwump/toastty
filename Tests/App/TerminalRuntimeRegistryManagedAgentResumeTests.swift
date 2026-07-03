@@ -281,6 +281,97 @@ final class TerminalRuntimeRegistryManagedAgentResumeTests: XCTestCase {
         XCTAssertEqual(activeSession.status, SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
     }
 
+    func testSurfaceLaunchConfigurationUsesValidOpenCodeFamilyResumeRecordsForRestoredPanel() async throws {
+        for scenario in [
+            (agent: AgentKind.opencode, commandName: "opencode", nativeSessionID: "ses_provider"),
+            (agent: AgentKind.mimocode, commandName: "mimo", nativeSessionID: "ses_mimo"),
+        ] {
+            let fixture = try makeRuntimeResumeFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+            let panelID = UUID()
+            let workspaceID = UUID()
+            let windowID = UUID()
+            let record = ManagedAgentResumeRecord(
+                agent: scenario.agent,
+                nativeSessionID: scenario.nativeSessionID,
+                sessionFilePath: fixture.sessionFileURL.path,
+                cwd: fixture.cwdURL.path,
+                capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+            let store = AppStore(
+                state: makeRuntimeResumeState(
+                    windowID: windowID,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    resumeRecord: record,
+                    profileBinding: TerminalProfileBinding(profileID: "zmx")
+                ),
+                persistTerminalFontPreference: false
+            )
+            let registry = TerminalRuntimeRegistry()
+            let profileProvider = makeRuntimeResumeProfileProvider()
+            let sessionRuntimeStore = SessionRuntimeStore()
+            sessionRuntimeStore.bind(store: store)
+            let agentCatalogProvider = TestAgentCatalogProvider(
+                profiles: [
+                    AgentProfile(
+                        id: scenario.agent.rawValue,
+                        displayName: scenario.agent.displayName,
+                        argv: ["agent-safehouse", "--workdir=/tmp/repo", scenario.commandName]
+                    ),
+                ]
+            )
+            registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
+            registry.setAgentCatalogProvider(agentCatalogProvider)
+            registry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+            let restoredManagedLaunchPlanner = makeRestoredManagedLaunchPlanner(
+                store: store,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+            registry.setRestoredManagedLaunchPlanner(restoredManagedLaunchPlanner)
+            registry.bind(store: store)
+
+            var submittedCommand: String?
+            registry.setRestoredManagedLaunchSubmitterForTesting { command, submit, submittedPanelID in
+                XCTAssertTrue(submit, scenario.commandName)
+                XCTAssertEqual(submittedPanelID, panelID, scenario.commandName)
+                submittedCommand = command
+                return true
+            }
+
+            let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
+
+            XCTAssertNil(launchConfiguration.initialInput, scenario.commandName)
+            XCTAssertEqual(launchConfiguration.workingDirectoryOverride, fixture.cwdURL.path, scenario.commandName)
+            XCTAssertEqual(
+                launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_RESUME_PROVIDER"],
+                scenario.agent.rawValue,
+                scenario.commandName
+            )
+            XCTAssertEqual(
+                launchConfiguration.environmentVariables["TOASTTY_MANAGED_AGENT_NATIVE_SESSION_ID"],
+                scenario.nativeSessionID,
+                scenario.commandName
+            )
+            let activeSession = try XCTUnwrap(
+                sessionRuntimeStore.sessionRegistry.activeSession(for: panelID),
+                scenario.commandName
+            )
+            XCTAssertEqual(activeSession.agent, scenario.agent, scenario.commandName)
+
+            registry.markInitialSurfaceLaunchCompleted(for: panelID)
+            await Task.yield()
+            await Task.yield()
+            let command = try XCTUnwrap(submittedCommand, scenario.commandName)
+            XCTAssertTrue(command.contains("TOASTTY_SESSION_ID="), scenario.commandName)
+            XCTAssertTrue(command.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"), scenario.commandName)
+            XCTAssertTrue(
+                command.contains("\(scenario.commandName) --session \(scenario.nativeSessionID)"),
+                scenario.commandName
+            )
+        }
+    }
+
     func testSurfaceLaunchConfigurationReusesPendingRestoredManagedLaunchForPanel() throws {
         let fixture = try makeRuntimeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }

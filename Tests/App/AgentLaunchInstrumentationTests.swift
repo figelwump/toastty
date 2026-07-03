@@ -194,6 +194,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(plugin.contains("MacOS"))
         XCTAssertTrue(plugin.contains("toastty"))
         XCTAssertTrue(plugin.contains(#"const source = "opencode-plugin";"#))
+        XCTAssertTrue(plugin.contains(#"const resumeDirectoryPath = "#))
+        XCTAssertTrue(plugin.contains(#"managed-agent-resume"#))
+        XCTAssertTrue(plugin.contains(#""toastty.native_session""#))
         XCTAssertTrue(plugin.contains(#""permission.replied""#))
         XCTAssertTrue(plugin.contains(#""tool.execute.after""#))
         XCTAssertTrue(plugin.contains(#""experimental.text.complete""#))
@@ -245,6 +248,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let pluginURL = try XCTUnwrap(URL(string: pluginSpec))
         let plugin = try String(contentsOf: pluginURL, encoding: .utf8)
         XCTAssertTrue(plugin.contains(#"const source = "mimocode-plugin";"#))
+        XCTAssertTrue(plugin.contains(#"const resumeDirectoryPath = "#))
+        XCTAssertTrue(plugin.contains(#"managed-agent-resume"#))
+        XCTAssertTrue(plugin.contains(#""toastty.native_session""#))
         XCTAssertTrue(plugin.contains(#"hooks["session.userQuery.post"]"#))
         XCTAssertTrue(plugin.contains(#"hooks["session.post"]"#))
         XCTAssertTrue(plugin.contains(#""tool.execute.after""#))
@@ -405,6 +411,56 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             XCTAssertEqual(secondProperties["kind"] as? String, "working", scenario.commandName)
             XCTAssertEqual(secondProperties["detail"] as? String, "Approval resolved", scenario.commandName)
             XCTAssertFalse(String(describing: events).contains("Using Question"), scenario.commandName)
+        }
+    }
+
+    func testOpenCodeFamilyPluginRecordsNativeSessionWithToasttyMarker() throws {
+        let nativeSessionID = "ses_provider/with space-" + String(repeating: "x", count: 170)
+        for scenario in [
+            (agent: AgentKind.opencode, commandName: "opencode", environmentKey: "OPENCODE_CONFIG_CONTENT"),
+            (agent: AgentKind.mimocode, commandName: "mimo", environmentKey: "MIMOCODE_CONFIG_CONTENT"),
+        ] {
+            let result = try runOpenCodeFamilyPluginScenarioResult(
+                agent: scenario.agent,
+                commandName: scenario.commandName,
+                configContentEnvironmentKey: scenario.environmentKey,
+                runnerBody: """
+                hooks.event?.({
+                  type: "session.status",
+                  properties: { sessionID: "\(nativeSessionID)", status: { type: "busy", message: "Indexing" } },
+                });
+                hooks.event?.({
+                  type: "session.status",
+                  properties: { sessionID: "\(nativeSessionID)", status: { type: "busy", message: "Indexing" } },
+                });
+                """
+            )
+
+            XCTAssertEqual(result.events.count, 2, scenario.commandName)
+            XCTAssertEqual(result.events[0]["type"] as? String, "toastty.native_session", scenario.commandName)
+            let nativeProperties = try XCTUnwrap(result.events[0]["properties"] as? [String: Any], scenario.commandName)
+            XCTAssertEqual(nativeProperties["nativeSessionID"] as? String, nativeSessionID, scenario.commandName)
+            XCTAssertTrue((nativeProperties["cwd"] as? String)?.hasSuffix("/repo") == true, scenario.commandName)
+            let sessionFilePath = try XCTUnwrap(nativeProperties["sessionFilePath"] as? String, scenario.commandName)
+            XCTAssertTrue(sessionFilePath.contains("managed-agent-resume"), scenario.commandName)
+            XCTAssertTrue(sessionFilePath.contains(scenario.agent == .opencode ? "opencode-plugin-" : "mimocode-plugin-"), scenario.commandName)
+            XCTAssertFalse(sessionFilePath.contains(nativeSessionID.prefix(12)), scenario.commandName)
+            XCTAssertFalse(sessionFilePath.contains("/with space"), scenario.commandName)
+
+            let markerContents = try XCTUnwrap(result.markerContentsByPath[sessionFilePath], scenario.commandName)
+            let marker = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(markerContents.utf8)) as? [String: Any],
+                scenario.commandName
+            )
+            XCTAssertEqual(marker["source"] as? String, scenario.agent == .opencode ? "opencode-plugin" : "mimocode-plugin", scenario.commandName)
+            XCTAssertEqual(marker["version"] as? Int, 1, scenario.commandName)
+            XCTAssertNil(marker["nativeSessionID"], scenario.commandName)
+            XCTAssertNil(marker["cwd"], scenario.commandName)
+
+            XCTAssertEqual(result.events[1]["type"] as? String, "toastty.status", scenario.commandName)
+            let statusProperties = try XCTUnwrap(result.events[1]["properties"] as? [String: Any], scenario.commandName)
+            XCTAssertEqual(statusProperties["kind"] as? String, "working", scenario.commandName)
+            XCTAssertEqual(statusProperties["detail"] as? String, "Indexing", scenario.commandName)
         }
     }
 
@@ -976,6 +1032,25 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         configContentEnvironmentKey: String,
         runnerBody: String
     ) throws -> [[String: Any]] {
+        try runOpenCodeFamilyPluginScenarioResult(
+            agent: agent,
+            commandName: commandName,
+            configContentEnvironmentKey: configContentEnvironmentKey,
+            runnerBody: runnerBody
+        ).events
+    }
+
+    private struct OpenCodeFamilyPluginScenarioResult {
+        let events: [[String: Any]]
+        let markerContentsByPath: [String: String]
+    }
+
+    private func runOpenCodeFamilyPluginScenarioResult(
+        agent: AgentKind,
+        commandName: String,
+        configContentEnvironmentKey: String,
+        runnerBody: String
+    ) throws -> OpenCodeFamilyPluginScenarioResult {
         let fileManager = FileManager.default
         guard let nodeURL = nodeExecutableURLForTests(fileManager: fileManager) else {
             throw XCTSkip("node is unavailable")
@@ -999,6 +1074,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let captureURL = directoryURL.appendingPathComponent("events.ndjson", isDirectory: false)
         let cliURL = directoryURL.appendingPathComponent("toastty-test-cli", isDirectory: false)
         let runnerURL = directoryURL.appendingPathComponent("runner.mjs", isDirectory: false)
+        let runtimeHomeURL = directoryURL.appendingPathComponent("runtime-home", isDirectory: true)
+        let workingDirectoryURL = directoryURL.appendingPathComponent("repo", isDirectory: true)
+        try fileManager.createDirectory(at: workingDirectoryURL, withIntermediateDirectories: true)
 
         let fakeCLI = """
         #!/bin/sh
@@ -1013,8 +1091,11 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             argv: [commandName],
             cliExecutablePath: cliURL.path,
             sessionID: "test-\(UUID().uuidString)",
-            workingDirectory: nil,
-            fileManager: fileManager
+            workingDirectory: workingDirectoryURL.path,
+            fileManager: fileManager,
+            launchEnvironment: [
+                ToasttyRuntimePaths.environmentKey: runtimeHomeURL.path,
+            ]
         )
         defer {
             if let artifacts = preparedLaunch.artifacts {
@@ -1049,9 +1130,23 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         let lines = try String(contentsOf: captureURL, encoding: .utf8)
             .split(separator: "\n")
             .map(String.init)
-        return try lines.map { line in
+        let events = try lines.map { line in
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
         }
+        let markerContentsByPath: [String: String] = Dictionary(
+            uniqueKeysWithValues: events.compactMap { event in
+                guard let properties = event["properties"] as? [String: Any],
+                      let path = properties["sessionFilePath"] as? String,
+                      let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+                    return nil
+                }
+                return (path, contents)
+            }
+        )
+        return OpenCodeFamilyPluginScenarioResult(
+            events: events,
+            markerContentsByPath: markerContentsByPath
+        )
     }
 
     private func runScript(

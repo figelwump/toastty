@@ -20,11 +20,17 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Saved workspace and window layout snapshots, including window-local sidebar
     widths, window-local terminal font overrides, window-local local-document
     text-size overrides, per-browser page zoom overrides, and managed agent
-    native-resume metadata for restored Codex, Claude, and Pi panels. Native-resume
+    native-resume metadata for restored Codex, Claude, OpenCode, MiMo Code, and Pi panels. Native-resume
     metadata can include the provider, provider-native session ID, provider
-    session file path, working directory, capture timestamp, and any explicit
-    workspace-scope identifiers needed to restore a scoped session after app
-    restart.
+    session file path or Toastty-owned marker path, working directory, capture
+    timestamp, and any explicit workspace-scope identifiers needed to restore a
+    scoped session after app restart.
+- `~/.toastty/managed-agent-resume/`
+  - Toastty-owned marker files for OpenCode and MiMo Code native resume records.
+    Marker filenames are derived from hashed resume metadata. Marker contents
+    include only provider plugin source, marker format version, and capture
+    timestamp; the marker files do not store prompts, tool output, native
+    session IDs, or working directories.
 - `~/.toastty/scratchpad-documents/`
   - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
@@ -47,6 +53,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
+  - `<runtime-home>/managed-agent-resume/`
   - `<runtime-home>/scratchpad-documents/`
   - `<runtime-home>/history/pane-journals/`
   - `<runtime-home>/logs/toastty.log`

@@ -259,7 +259,7 @@ When the profile ID is `opencode` or `mimocode`, Toastty:
 1. **Creates a temporary OpenCode-compatible plugin** inside the per-session launch artifacts directory. Toastty does not write to `.opencode`, `.mimocode`, or global provider config files.
 2. **Injects the plugin through provider config content**. OpenCode launches receive `OPENCODE_CONFIG_CONTENT`; MiMo Code launches receive `MIMOCODE_CONFIG_CONTENT`. If a launch environment already sets the matching config-content variable, Toastty does not overwrite it and launches without status instrumentation.
 3. **Reports status through** `toastty session ingest-agent-event --source opencode-plugin` or `--source mimocode-plugin`. Toastty maps `session.status`, `session.idle`, `permission.asked`, `permission.replied`, and `session.error` into sidebar **Working**, **Ready**, **Needs approval**, and **Error** states.
-4. **Keeps the first slice status-only**. Toastty does not currently record OpenCode or MiMo Code native resume metadata, and it ignores tool-progress plugin events.
+4. **Captures native resume metadata** when plugin hooks expose a provider session ID. The plugin writes a Toastty-owned per-session marker under `~/.toastty/managed-agent-resume/` (or `<runtime-home>/managed-agent-resume/` for isolated runs) and reports only the native session ID, marker path, and working directory back to Toastty.
 5. **Logs helper delivery failures** to `telemetry-failures.log` inside the temporary launch artifacts directory. The plugin logs event type, session context, exit status, and CLI stderr; it does not write full provider event payloads to the failure log.
 
 Typed `opencode`, `mimo`, and `mimocode` launches use the same instrumentation path when Toastty's managed command shims are enabled. The built-in `mimocode` shim falls back to the real `mimo` executable when no `mimocode` executable exists on `PATH`.
@@ -291,18 +291,21 @@ When the agent process exits and the session is stopped, Toastty cleans up Codex
 
 ### Restore and native resume
 
-For managed Codex, Claude, and Pi launches, Toastty also records the provider's
-native session ID, session file path, working directory, and capture time in the
-workspace layout. If the managed session is workspace-scoped, Toastty stores the
-explicit scope with the same native resume record so app restart restores the
-scoped session instead of widening it. Codex records are reported by hooks when
-available and can fall back to provider session-file discovery; Claude records
-are reported by the per-launch `SessionStart` hook and can fall back to provider
-session-file discovery; Pi records come from the bundled Pi extension. When a
-restored terminal panel has a valid record, Toastty runs the provider resume
-command for that native session instead of starting a fresh profile command.
-Claude resumes with `claude --resume <session-id>` and Pi resumes with
-`pi --session <session-file-path>`.
+For managed Codex, Claude, OpenCode, MiMo Code, and Pi launches, Toastty also
+records the provider's native session ID, session file path or Toastty-owned
+marker path, working directory, and capture time in the workspace layout. If the
+managed session is workspace-scoped, Toastty stores the explicit scope with the
+same native resume record so app restart restores the scoped session instead of
+widening it. Codex records are reported by hooks when available and can fall
+back to provider session-file discovery; Claude records are reported by the
+per-launch `SessionStart` hook and can fall back to provider session-file
+discovery; OpenCode and MiMo Code records come from their temporary Toastty
+plugin; Pi records come from the bundled Pi extension. When a restored terminal
+panel has a valid record, Toastty runs the provider resume command for that
+native session instead of starting a fresh profile command. Claude resumes with
+`claude --resume <session-id>`, OpenCode and MiMo Code resume with
+`opencode --session <session-id>` and `mimo --session <session-id>`, and Pi
+resumes with `pi --session <session-file-path>`.
 
 Before resuming, Toastty validates that both the recorded session file and
 working directory still exist. If either is missing, Toastty clears the stale

@@ -1204,8 +1204,8 @@ Behavior:
 - When payload `cwd` is omitted, Toastty uses the active session's recorded
   working directory; if neither is available, the event is rejected
 - Toastty stores the resume record on the active terminal panel so restored
-  managed Codex, Claude, and Pi panels can resume the provider-native session
-  instead of starting a fresh profile command
+  managed Codex, Claude, OpenCode, MiMo Code, and Pi panels can resume the
+  provider-native session instead of starting a fresh profile command
 - Toastty stamps the active session's explicit workspace scope onto the stored
   record; clients do not send scope in this event payload
 - If the record does not change panel state, `stateVersion` may be unchanged

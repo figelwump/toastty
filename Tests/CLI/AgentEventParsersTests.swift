@@ -882,6 +882,68 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func opencodeNativeSessionEventMapsToResumeRecordUpdate() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"type":"toastty.native_session","properties":{"nativeSessionID":"ses_provider","sessionFilePath":"/tmp/toastty/managed-agent-resume/opencode-plugin-ses_provider.json","cwd":"/tmp/repo"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionUpdateResumeRecord(
+                sessionID: "sess-123",
+                panelID: panelID,
+                agent: .opencode,
+                nativeSessionID: "ses_provider",
+                sessionFilePath: "/tmp/toastty/managed-agent-resume/opencode-plugin-ses_provider.json",
+                cwd: "/tmp/repo"
+            ),
+        ])
+    }
+
+    @Test
+    func mimocodeNativeSessionEventMapsToResumeRecordUpdate() throws {
+        let panelID = UUID()
+        let commands = try AgentEventIngestor.commands(
+            for: .mimocodePlugin,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"type":"toastty.native_session","properties":{"nativeSessionID":"ses_mimo","sentinelPath":"/tmp/toastty/managed-agent-resume/mimocode-plugin-ses_mimo.json","cwd":"/tmp/repo"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionUpdateResumeRecord(
+                sessionID: "sess-123",
+                panelID: panelID,
+                agent: .mimocode,
+                nativeSessionID: "ses_mimo",
+                sessionFilePath: "/tmp/toastty/managed-agent-resume/mimocode-plugin-ses_mimo.json",
+                cwd: "/tmp/repo"
+            ),
+        ])
+    }
+
+    @Test
+    func opencodeNativeSessionEventRequiresPanelID() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .opencodePlugin,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"toastty.native_session","properties":{"nativeSessionID":"ses_provider","sessionFilePath":"/tmp/marker.json","cwd":"/tmp/repo"}}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
     func opencodeNormalizedToolStatusMapsToWorkingStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .opencodePlugin,

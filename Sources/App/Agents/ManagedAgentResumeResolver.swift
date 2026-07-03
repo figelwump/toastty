@@ -62,6 +62,8 @@ enum ManagedAgentResumeResolver {
             resumeArguments = ["resume", record.nativeSessionID]
         case .claude:
             resumeArguments = ["--resume", record.nativeSessionID]
+        case .opencode, .mimocode:
+            resumeArguments = ["--session", record.nativeSessionID]
         case .pi:
             resumeArguments = ["--session", record.sessionFilePath]
         default:
@@ -70,12 +72,12 @@ enum ManagedAgentResumeResolver {
 
         guard let profile = agentCatalog.profile(id: record.agent.rawValue),
               profile.argv.isEmpty == false else {
-            return [record.agent.rawValue] + resumeArguments
+            return [defaultResumeExecutableName(for: record.agent)] + resumeArguments
         }
 
         let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: record.agent, argv: profile.argv)
         guard profile.argv.indices.contains(insertionIndex) else {
-            return [record.agent.rawValue] + resumeArguments
+            return [defaultResumeExecutableName(for: record.agent)] + resumeArguments
         }
 
         return Array(profile.argv.prefix(insertionIndex + 1))
@@ -85,6 +87,13 @@ enum ManagedAgentResumeResolver {
 }
 
 private extension ManagedAgentResumeResolver {
+    static func defaultResumeExecutableName(for agent: AgentKind) -> String {
+        if agent == .mimocode {
+            return "mimo"
+        }
+        return agent.rawValue
+    }
+
     static func normalizedExistingDirectory(_ path: String, fileManager: FileManager) -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }

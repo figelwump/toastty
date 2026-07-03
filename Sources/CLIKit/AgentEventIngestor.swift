@@ -28,6 +28,7 @@ enum AgentEventIngestor {
             )
         case .mimocodePlugin, .opencodePlugin:
             try OpenCodeFamilyEventParser.parse(
+                source: source,
                 sessionID: sessionID,
                 panelID: panelID,
                 payload: payload

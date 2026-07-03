@@ -100,6 +100,7 @@ enum AgentLaunchInstrumentation {
                 argv: argv,
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
+                workingDirectory: workingDirectory,
                 fileManager: fileManager,
                 launchEnvironment: launchEnvironment
             )
@@ -111,6 +112,7 @@ enum AgentLaunchInstrumentation {
                 argv: argv,
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
+                workingDirectory: workingDirectory,
                 fileManager: fileManager,
                 launchEnvironment: launchEnvironment
             )
@@ -253,6 +255,7 @@ enum AgentLaunchInstrumentation {
         argv: [String],
         cliExecutablePath: String,
         sessionID: String,
+        workingDirectory: String?,
         fileManager: FileManager,
         launchEnvironment: [String: String]
     ) throws -> PreparedAgentLaunchCommand {
@@ -272,10 +275,15 @@ enum AgentLaunchInstrumentation {
         do {
             let pluginURL = artifactsDirectoryURL.appendingPathComponent(runtime.pluginFilename, isDirectory: false)
             let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
+            let runtimeEnvironment = ProcessInfo.processInfo.environment.merging(launchEnvironment) { _, new in new }
+            let resumeDirectoryURL = ToasttyRuntimePaths.resolve(environment: runtimeEnvironment)
+                .managedAgentResumeDirectoryURL
             try Data(
                 makeOpenCodeFamilyStatusPlugin(
                     cliExecutablePath: cliExecutablePath,
                     source: runtime.eventSource,
+                    workingDirectory: workingDirectory,
+                    resumeDirectoryURL: resumeDirectoryURL,
                     telemetryErrorLogURL: telemetryErrorLogURL
                 ).appending("\n").utf8
             ).write(to: pluginURL, options: .atomic)
@@ -558,16 +566,22 @@ private extension AgentLaunchInstrumentation {
     static func makeOpenCodeFamilyStatusPlugin(
         cliExecutablePath: String,
         source: String,
+        workingDirectory: String?,
+        resumeDirectoryURL: URL,
         telemetryErrorLogURL: URL
     ) -> String {
         let cliLiteral = jsonStringLiteral(cliExecutablePath)
         let sourceLiteral = jsonStringLiteral(source)
+        let workingDirectoryLiteral = jsonStringLiteral(normalizedNonEmptyValue(workingDirectory) ?? "")
+        let resumeDirectoryLiteral = jsonStringLiteral(resumeDirectoryURL.path)
         let logLiteral = jsonStringLiteral(telemetryErrorLogURL.path)
 
         return """
         export async function ToasttyOpenCodeFamilyStatusPlugin() {
           const cliPath = \(cliLiteral);
           const source = \(sourceLiteral);
+          const launchWorkingDirectory = \(workingDirectoryLiteral);
+          const resumeDirectoryPath = \(resumeDirectoryLiteral);
           const logPath = \(logLiteral);
           const isMiMoCode = source === "mimocode-plugin";
           let queue = Promise.resolve();
@@ -584,8 +598,11 @@ private extension AgentLaunchInstrumentation {
           const questionApprovalResolvedSuppressMs = 2000;
           let pendingOpenCodeFinalTimer;
           const openCodeFinalQuietMs = 250;
+          const nativeSessionIDLimit = 240;
           const pendingStatusKeys = new Set();
           const pendingFinalTexts = new Set();
+          const pendingNativeSessionKeys = new Set();
+          const forwardedNativeSessionKeys = new Set();
 
           function envValue(name) {
             const value = process.env[name];
@@ -619,6 +636,70 @@ private extension AgentLaunchInstrumentation {
             const event = { type: candidate.type, properties };
             if (typeof candidate.id === "string" && candidate.id) event.id = candidate.id;
             return event;
+          }
+
+          function sessionIDFrom(value) {
+            const object = objectValue(value);
+            const direct = stringValue(object.sessionID, nativeSessionIDLimit)
+              || stringValue(object.sessionId, nativeSessionIDLimit)
+              || stringValue(object.session_id, nativeSessionIDLimit)
+              || stringValue(objectValue(object.session).id, nativeSessionIDLimit);
+            if (direct) return direct;
+            const event = normalizeProviderEvent(value);
+            const properties = objectValue(event && event.properties);
+            return stringValue(properties.sessionID, nativeSessionIDLimit)
+              || stringValue(properties.sessionId, nativeSessionIDLimit)
+              || stringValue(properties.session_id, nativeSessionIDLimit)
+              || stringValue(objectValue(properties.session).id, nativeSessionIDLimit);
+          }
+
+          function stableHashHex(value, seed) {
+            let hash = seed >>> 0;
+            for (let index = 0; index < value.length; index += 1) {
+              hash ^= value.charCodeAt(index);
+              hash = Math.imul(hash, 16777619);
+            }
+            return (hash >>> 0).toString(16).padStart(8, "0");
+          }
+
+          function nativeSessionFilename(nativeSessionID, cwd) {
+            const key = `${source}\\0${nativeSessionID}\\0${cwd}`;
+            return `${source}-${stableHashHex(key, 2166136261)}${stableHashHex(key, 16777619)}.json`;
+          }
+
+          async function writeNativeSessionMarker(event) {
+            const fs = await import("node:fs/promises");
+            const path = await import("node:path");
+            const properties = objectValue(event.properties);
+            await fs.mkdir(resumeDirectoryPath, { recursive: true });
+            const markerPath = path.join(
+              resumeDirectoryPath,
+              nativeSessionFilename(properties.nativeSessionID, properties.cwd)
+            );
+            const marker = {
+              source,
+              version: 1,
+              capturedAt: new Date().toISOString(),
+            };
+            await fs.writeFile(markerPath, `${JSON.stringify(marker, null, 2)}\\n`, "utf8");
+            event.properties = { ...properties, sessionFilePath: markerPath };
+            return event;
+          }
+
+          function nativeSessionEvent(input) {
+            if (!resumeDirectoryPath) return;
+            const nativeSessionID = sessionIDFrom(input);
+            if (!nativeSessionID) return;
+            const cwd = launchWorkingDirectory || envValue("TOASTTY_CWD") || process.cwd();
+            const normalizedCWD = stringValue(cwd, 4096);
+            if (!normalizedCWD) return;
+            return {
+              type: "toastty.native_session",
+              properties: {
+                nativeSessionID,
+                cwd: normalizedCWD,
+              },
+            };
           }
 
           function toasttyStatus(kind, summary, detail) {
@@ -1077,6 +1158,29 @@ private extension AgentLaunchInstrumentation {
             return true;
           }
 
+          function recordNativeSession(input) {
+            const event = nativeSessionEvent(input);
+            if (!event) return queue;
+            const properties = objectValue(event.properties);
+            const key = [
+              stringValue(properties.nativeSessionID, nativeSessionIDLimit),
+              stringValue(properties.cwd, 4096),
+            ].join("|");
+            if (forwardedNativeSessionKeys.has(key) || pendingNativeSessionKeys.has(key)) return queue;
+            pendingNativeSessionKeys.add(key);
+            queue = queue
+              .then(async () => {
+                const markerEvent = await writeNativeSessionMarker(event);
+                const forwarded = await forward(markerEvent);
+                if (forwarded) forwardedNativeSessionKeys.add(key);
+              })
+              .catch((error) => appendFailure("native_session_exception", event.type, errorText(error)))
+              .finally(() => {
+                pendingNativeSessionKeys.delete(key);
+              });
+            return queue;
+          }
+
           function enqueue(event, options = {}) {
             if (!event) return queue;
             if (shouldSuppressWorkingAfterTerminal(event)) return queue;
@@ -1135,6 +1239,7 @@ private extension AgentLaunchInstrumentation {
           const hooks = {
             event(input) {
               try {
+                recordNativeSession(input);
                 fire(statusFromProviderEvent(normalizeProviderEvent(input)));
               } catch (error) {
                 hookFailure("event", error);
@@ -1143,6 +1248,7 @@ private extension AgentLaunchInstrumentation {
 
             "permission.ask"(input) {
               try {
+                recordNativeSession(input);
                 fire(toasttyStatus("needs_approval", "Needs approval", permissionDetail(objectValue(input))));
               } catch (error) {
                 hookFailure("permission.ask", error);
@@ -1151,6 +1257,7 @@ private extension AgentLaunchInstrumentation {
 
             "tool.execute.before"(input) {
               try {
+                recordNativeSession(input);
                 const toolName = toolNameFromInput(input);
                 fire(isQuestionToolName(toolName)
                   ? questionApprovalStatus()
@@ -1162,6 +1269,7 @@ private extension AgentLaunchInstrumentation {
 
             "tool.execute.after"(input, output) {
               try {
+                recordNativeSession(input);
                 fire(isQuestionToolName(toolNameFromInput(input))
                   ? questionResolvedStatus()
                   : toasttyStatus("working", "Working", toolAfterDetail(input, output)));
@@ -1172,6 +1280,7 @@ private extension AgentLaunchInstrumentation {
 
             "experimental.text.complete"(input, output) {
               try {
+                recordNativeSession(input);
                 const text = rememberFinalTextCandidate(input, output);
                 if (!isMiMoCode) return;
               } catch (error) {
@@ -1183,6 +1292,7 @@ private extension AgentLaunchInstrumentation {
           if (isMiMoCode) {
             hooks["session.pre"] = function () {
               try {
+                recordNativeSession(arguments[0]);
                 resetTurnState();
                 fire(toasttyStatus("working", "Working", "Starting"));
               } catch (error) {
@@ -1192,6 +1302,7 @@ private extension AgentLaunchInstrumentation {
 
             hooks["session.userQuery.pre"] = function () {
               try {
+                recordNativeSession(arguments[0]);
                 resetTurnState();
                 fire(toasttyStatus("working", "Working", "Running query"));
               } catch (error) {
@@ -1201,6 +1312,7 @@ private extension AgentLaunchInstrumentation {
 
             hooks["session.userQuery.post"] = function (input, output) {
               try {
+                recordNativeSession(input);
                 const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
                 if (detail) {
                   return flush(toasttyStatus("error", "Error", detail), { suppressFollowingWorking: true });
@@ -1216,6 +1328,7 @@ private extension AgentLaunchInstrumentation {
 
             hooks["session.post"] = function (input, output) {
               try {
+                recordNativeSession(input);
                 const detail = errorDetail(objectValue(input).error) || errorDetail(objectValue(output).error);
                 if (detail) {
                   return flush(toasttyStatus("error", "Error", detail), { suppressFollowingWorking: true });
