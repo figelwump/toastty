@@ -52,6 +52,29 @@ enum ManagedAgentResumeResolver {
         )
     }
 
+    /// Extracts the native session ID a launch argv resumes, if the argv is a
+    /// resume-shaped command (the inverse of `resumeArgv`). Lets observation
+    /// treat the launch's own session ID as the only acceptable capture.
+    static func expectedNativeSessionID(agent: AgentKind, argv: [String]) -> String? {
+        let resumeToken: String
+        switch agent {
+        case .codex:
+            resumeToken = "resume"
+        case .claude:
+            resumeToken = "--resume"
+        default:
+            return nil
+        }
+
+        guard let tokenIndex = argv.firstIndex(of: resumeToken),
+              argv.indices.contains(tokenIndex + 1) else {
+            return nil
+        }
+        let value = argv[tokenIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard UUID(uuidString: value) != nil else { return nil }
+        return value
+    }
+
     static func resumeArgv(
         for record: ManagedAgentResumeRecord,
         agentCatalog: AgentCatalog

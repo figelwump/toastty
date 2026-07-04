@@ -9,6 +9,7 @@ protocol ManagedAgentLaunchPlanning: AnyObject {
         inheritedScopedWorkspaceIDs: Set<UUID>?
     ) throws -> ManagedAgentLaunchPlan
     func discardManagedLaunch(sessionID: String)
+    func cancelNativeSessionObservation(sessionID: String)
 }
 
 extension ManagedAgentLaunchPlanning {
@@ -143,7 +144,11 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     agent: request.agent,
                     panelID: target.panelID,
                     cwd: resolvedCWD,
-                    launchStart: launchStart
+                    launchStart: launchStart,
+                    expectedNativeSessionID: ManagedAgentResumeResolver.expectedNativeSessionID(
+                        agent: request.agent,
+                        argv: request.argv
+                    )
                 )
             )
         } else {
@@ -241,6 +246,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         Task { @MainActor in
             await cleanupManagedArtifacts(for: sessionID)
         }
+    }
+
+    func cancelNativeSessionObservation(sessionID: String) {
+        nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
     }
 
     private func resolveManagedLaunchTarget(panelID: UUID) throws -> ManagedLaunchTarget {

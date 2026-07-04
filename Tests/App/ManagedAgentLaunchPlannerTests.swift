@@ -548,6 +548,30 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
         XCTAssertEqual(observer.observations.first?.cwd, restoredCWD)
         XCTAssertEqual(observer.observations.first?.panelID, fixture.panelID)
+        XCTAssertNil(observer.observations.first?.expectedNativeSessionID)
+    }
+
+    func testPrepareManagedLaunchPassesExpectedNativeSessionIDForResumeArgv() throws {
+        let observer = StubManagedAgentNativeSessionObserver()
+        let fixture = try makePlannerFixture(nativeSessionObserverRegistry: observer)
+        let nativeSessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex", "resume", nativeSessionID],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertEqual(observer.observations.first?.expectedNativeSessionID, nativeSessionID)
+        XCTAssertEqual(observer.observations.first?.panelID, fixture.panelID)
     }
 
     func testLaunchPlanContinuesWhenRepositoryRootResolutionTimesOut() throws {

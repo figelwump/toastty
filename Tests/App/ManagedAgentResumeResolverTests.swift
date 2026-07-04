@@ -378,6 +378,67 @@ struct ManagedAgentResumeResolverTests {
 
         #expect(resolution == .none)
     }
+
+    @Test
+    func expectedNativeSessionIDParsesCodexResumeArgv() {
+        let sessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .codex,
+                argv: ["codex", "resume", sessionID]
+            ) == sessionID
+        )
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .codex,
+                argv: ["codex", "--yolo", "resume", sessionID, "--search"]
+            ) == sessionID
+        )
+    }
+
+    @Test
+    func expectedNativeSessionIDParsesClaudeResumeArgv() {
+        let sessionID = "db4f311b-12d0-4f61-ba81-0ae44ed10492"
+
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .claude,
+                argv: ["claude", "--resume", sessionID]
+            ) == sessionID
+        )
+    }
+
+    @Test
+    func expectedNativeSessionIDRejectsNonResumeOrMalformedArgv() {
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(agent: .codex, argv: ["codex"]) == nil
+        )
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .codex,
+                argv: ["codex", "resume", "--last"]
+            ) == nil
+        )
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .claude,
+                argv: ["claude", "--resume"]
+            ) == nil
+        )
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .claude,
+                argv: ["claude", "--resume", "not-a-uuid"]
+            ) == nil
+        )
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .opencode,
+                argv: ["opencode", "--session", "db4f311b-12d0-4f61-ba81-0ae44ed10492"]
+            ) == nil
+        )
+    }
 }
 
 private func makeResumeFixture(

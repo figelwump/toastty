@@ -344,6 +344,107 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func codexHookSessionStartCancelsNativeSessionObservation() async throws {
+        let socketPath = temporarySocketPath()
+        let observer = await MainActor.run { SpyNativeSessionObserverRegistry() }
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath, nativeSessionObserverRegistry: observer)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-codex-hook-cancel"
+        try await MainActor.run {
+            server.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: server.panelID,
+                windowID: try #require(server.store.state.windows.first?.id),
+                workspaceID: server.workspaceID,
+                usesSessionStatusNotifications: true,
+                cwd: "/tmp/repo",
+                repoRoot: "/tmp/repo",
+                at: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.codex_hook_event",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "hookEventName": .string("SessionStart"),
+                    "source": .string("startup"),
+                    "threadID": .string("thread-root"),
+                    "nativeSessionID": .string("thread-root"),
+                    "sessionFilePath": .string("/tmp/codex/root.jsonl"),
+                    "cwd": .string("/tmp/repo"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.string("status") == "accepted")
+        let cancelledSessionIDs = await MainActor.run { observer.cancelledSessionIDs }
+        #expect(cancelledSessionIDs.contains(sessionID))
+    }
+
+    @Test
+    func sessionUpdateResumeRecordCancelsNativeSessionObservation() async throws {
+        let socketPath = temporarySocketPath()
+        let observer = await MainActor.run { SpyNativeSessionObserverRegistry() }
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath, nativeSessionObserverRegistry: observer)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-claude-resume-cancel"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.claude.rawValue),
+                    "cwd": .string("/tmp/repo"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.update_resume_record",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.claude.rawValue),
+                    "nativeSessionID": .string("db4f311b-12d0-4f61-ba81-0ae44ed10492"),
+                    "sessionFilePath": .string("/tmp/claude/session.jsonl"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        let cancelledSessionIDs = await MainActor.run { observer.cancelledSessionIDs }
+        #expect(cancelledSessionIDs.contains(sessionID))
+    }
+
+    @Test
     func sessionStatusCanResolveActiveSessionForBackgroundTabPanel() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
@@ -1767,7 +1868,8 @@ struct AutomationSocketServerTests {
         codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider = { _ in .ready },
         codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter = { _, _, completion in
             completion(.cancel)
-        }
+        },
+        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil
     ) throws -> (
         server: AutomationSocketServer,
         store: AppStore,
@@ -1798,7 +1900,8 @@ struct AutomationSocketServerTests {
             agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { socketPath },
-            codexStatusTrackingSourceProvider: codexStatusTrackingSourceProvider
+            codexStatusTrackingSourceProvider: codexStatusTrackingSourceProvider,
+            nativeSessionObserverRegistry: nativeSessionObserverRegistry
         )
         let server = try AutomationSocketServer(
             socketPath: socketPath,
@@ -2117,5 +2220,19 @@ private final class CapturedWindowID: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return value
+    }
+}
+
+@MainActor
+private final class SpyNativeSessionObserverRegistry: ManagedAgentNativeSessionObserving {
+    private(set) var observations: [ManagedAgentNativeSessionObservationContext] = []
+    private(set) var cancelledSessionIDs: [String] = []
+
+    func startObservation(_ observation: ManagedAgentNativeSessionObservationContext) {
+        observations.append(observation)
+    }
+
+    func cancelObservation(sessionID: String) {
+        cancelledSessionIDs.append(sessionID)
     }
 }

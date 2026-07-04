@@ -153,6 +153,40 @@ public struct AppState: Codable, Equatable, Sendable {
         return didMutate
     }
 
+    /// Returns the panel whose resume record currently claims the given
+    /// native session, if any. Session observers use this to avoid capturing
+    /// a session that already belongs to another panel, which would strip
+    /// that panel's record through duplicate pruning.
+    public func panelIDOwningManagedAgentResumeRecord(
+        agent: AgentKind,
+        nativeSessionID: String
+    ) -> UUID? {
+        let probeRecord = ManagedAgentResumeRecord(
+            agent: agent,
+            nativeSessionID: nativeSessionID,
+            sessionFilePath: "",
+            cwd: "",
+            capturedAt: Date(timeIntervalSince1970: 0)
+        )
+        guard let claimKey = probeRecord.resumeClaimKey else { return nil }
+
+        for workspaceID in orderedWorkspaceIDsForManagedAgentResumeRecords() {
+            guard let workspace = workspacesByID[workspaceID] else { continue }
+            for tabID in Self.orderedTabIDs(in: workspace) {
+                guard let tab = workspace.tabsByID[tabID] else { continue }
+                for panelID in Self.orderedPanelIDs(in: tab) {
+                    guard case .terminal(let terminalState) = tab.panels[panelID],
+                          let record = terminalState.resumeRecord,
+                          record.resumeClaimKey == claimKey else {
+                        continue
+                    }
+                    return panelID
+                }
+            }
+        }
+        return nil
+    }
+
     @discardableResult
     mutating func pruneManagedAgentResumeRecordScopes(validWorkspaceIDs: Set<UUID>) -> Bool {
         var didMutate = false

@@ -7,6 +7,10 @@ struct ManagedAgentNativeSessionObservationContext: Equatable, Sendable {
     var panelID: UUID
     var cwd: String
     var launchStart: Date
+    /// Set when the launch command already names the native session it resumes.
+    /// Observation then only confirms that session; scan candidates with any
+    /// other ID are discarded so a same-cwd neighbor can never be claimed.
+    var expectedNativeSessionID: String? = nil
 }
 
 struct ManagedAgentNativeSessionCandidate: Equatable, Sendable {
@@ -34,9 +38,6 @@ struct ManagedAgentNativeSessionScanSummary: Equatable, Sendable {
     var candidateCount: Int
     var codexSnapshotFileCount: Int?
     var codexSnapshotCandidateCount: Int?
-    var codexDirectSessionDeferred: Bool?
-    var codexDirectSessionFileCount: Int?
-    var codexDirectSessionCandidateCount: Int?
     var claudeSessionFileCount: Int?
     var claudeSessionCandidateCount: Int?
 
@@ -49,15 +50,6 @@ struct ManagedAgentNativeSessionScanSummary: Equatable, Sendable {
         }
         if let codexSnapshotCandidateCount {
             metadata["codex_snapshot_candidate_count"] = String(codexSnapshotCandidateCount)
-        }
-        if let codexDirectSessionDeferred {
-            metadata["codex_direct_session_deferred"] = String(codexDirectSessionDeferred)
-        }
-        if let codexDirectSessionFileCount {
-            metadata["codex_direct_session_file_count"] = String(codexDirectSessionFileCount)
-        }
-        if let codexDirectSessionCandidateCount {
-            metadata["codex_direct_session_candidate_count"] = String(codexDirectSessionCandidateCount)
         }
         if let claudeSessionFileCount {
             metadata["claude_session_file_count"] = String(claudeSessionFileCount)
@@ -112,24 +104,30 @@ struct ManagedAgentNativeSessionObserverTiming {
 final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSessionObserving {
     typealias ResumeRecordHandler = @MainActor (String, UUID, ManagedAgentResumeRecord) -> Void
 
+    typealias ResumeRecordOwnerResolver = @MainActor (AgentKind, String) -> UUID?
+
     private var observationsBySessionID: [String: ManagedAgentNativeSessionObservationContext] = [:]
     private var scanCountBySessionID: [String: Int] = [:]
     private var latestScanSummaryBySessionID: [String: ManagedAgentNativeSessionScanSummary] = [:]
+    private var refusedOwnedClaimKeysBySessionID: [String: Set<String>] = [:]
     private var observationLoopTask: Task<Void, Never>?
     private let scanner: any ManagedAgentNativeSessionScanning
     private let timing: ManagedAgentNativeSessionObserverTiming
     private let nowProvider: @Sendable () -> Date
+    private let resumeRecordOwnerResolver: ResumeRecordOwnerResolver?
     private let recordHandler: ResumeRecordHandler
 
     init(
         scanner: any ManagedAgentNativeSessionScanning,
         timing: ManagedAgentNativeSessionObserverTiming = ManagedAgentNativeSessionObserverTiming(),
         nowProvider: @escaping @Sendable () -> Date = Date.init,
+        resumeRecordOwnerResolver: ResumeRecordOwnerResolver? = nil,
         recordHandler: @escaping ResumeRecordHandler
     ) {
         self.scanner = scanner
         self.timing = timing
         self.nowProvider = nowProvider
+        self.resumeRecordOwnerResolver = resumeRecordOwnerResolver
         self.recordHandler = recordHandler
     }
 
@@ -140,8 +138,14 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         nowProvider: @escaping @Sendable () -> Date = Date.init
     ) {
         self.init(
-            scanner: ManagedAgentNativeSessionFileScanner(nowProvider: nowProvider),
+            scanner: ManagedAgentNativeSessionFileScanner(),
             nowProvider: nowProvider,
+            resumeRecordOwnerResolver: { [weak store] agent, nativeSessionID in
+                store?.state.panelIDOwningManagedAgentResumeRecord(
+                    agent: agent,
+                    nativeSessionID: nativeSessionID
+                )
+            },
             recordHandler: { [weak store, weak sessionRuntimeStore] managedSessionID, panelID, record in
                 guard let scopedRecord = Self.resumeRecord(
                     record,
@@ -200,6 +204,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         observationsBySessionID[observation.managedSessionID] = normalizedObservation
         scanCountBySessionID[observation.managedSessionID] = 0
         latestScanSummaryBySessionID.removeValue(forKey: observation.managedSessionID)
+        refusedOwnedClaimKeysBySessionID.removeValue(forKey: observation.managedSessionID)
         ToasttyLog.info(
             "Started managed agent native session observation",
             category: .terminal,
@@ -208,6 +213,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
                 "agent": observation.agent.rawValue,
                 "panel_id": observation.panelID.uuidString,
                 "cwd": cwd,
+                "expected_native_session_id": observation.expectedNativeSessionID ?? "none",
                 "timeout_seconds": Self.formattedSeconds(timing.timeout),
                 "poll_interval_seconds": Self.formattedSeconds(
                     TimeInterval(timing.pollIntervalNanoseconds) / 1_000_000_000
@@ -221,6 +227,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         observationsBySessionID.removeValue(forKey: sessionID)
         scanCountBySessionID.removeValue(forKey: sessionID)
         latestScanSummaryBySessionID.removeValue(forKey: sessionID)
+        refusedOwnedClaimKeysBySessionID.removeValue(forKey: sessionID)
         if observationsBySessionID.isEmpty {
             observationLoopTask?.cancel()
             observationLoopTask = nil
@@ -268,7 +275,12 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             let result = await scanner.scan(for: observation)
             scanCountBySessionID[observation.managedSessionID, default: 0] += 1
             latestScanSummaryBySessionID[observation.managedSessionID] = result.summary
-            let candidates = result.candidates
+            var candidates = result.candidates
+            if let expectedNativeSessionID = observation.expectedNativeSessionID {
+                candidates = candidates.filter { candidate in
+                    candidate.nativeSessionID.caseInsensitiveCompare(expectedNativeSessionID) == .orderedSame
+                }
+            }
             if candidates.count == 1 {
                 candidateBySessionID[observation.managedSessionID] = candidates[0]
             } else if candidates.count > 1 {
@@ -309,11 +321,33 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         }
 
         for (managedSessionID, candidate) in candidateBySessionID {
-            guard let observation = observationsBySessionID.removeValue(forKey: managedSessionID) else {
+            guard let observation = observationsBySessionID[managedSessionID] else {
                 continue
             }
+            if let ownerPanelID = resumeRecordOwnerResolver?(candidate.agent, candidate.nativeSessionID),
+               ownerPanelID != observation.panelID {
+                // Another panel's resume record already claims this native
+                // session; capturing it here would strip that panel's record
+                // through duplicate pruning. Keep observing instead.
+                if refusedOwnedClaimKeysBySessionID[managedSessionID, default: []].insert(candidate.claimKey).inserted {
+                    ToasttyLog.info(
+                        "Leaving managed agent resume record unchanged because the native session is owned by another panel",
+                        category: .terminal,
+                        metadata: [
+                            "session_id": managedSessionID,
+                            "agent": candidate.agent.rawValue,
+                            "panel_id": observation.panelID.uuidString,
+                            "owner_panel_id": ownerPanelID.uuidString,
+                            "native_session_id": candidate.nativeSessionID,
+                        ]
+                    )
+                }
+                continue
+            }
+            observationsBySessionID.removeValue(forKey: managedSessionID)
             scanCountBySessionID.removeValue(forKey: managedSessionID)
             latestScanSummaryBySessionID.removeValue(forKey: managedSessionID)
+            refusedOwnedClaimKeysBySessionID.removeValue(forKey: managedSessionID)
             let record = ManagedAgentResumeRecord(
                 agent: candidate.agent,
                 nativeSessionID: candidate.nativeSessionID,
@@ -364,6 +398,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             }
             scanCountBySessionID.removeValue(forKey: sessionID)
             latestScanSummaryBySessionID.removeValue(forKey: sessionID)
+            refusedOwnedClaimKeysBySessionID.removeValue(forKey: sessionID)
             ToasttyLog.info(
                 "Leaving managed agent resume record unchanged because native session observation timed out",
                 category: .terminal,
@@ -390,12 +425,8 @@ actor ManagedAgentNativeSessionFileScanner: ManagedAgentNativeSessionScanning {
     private let codexSessionsDirectory: URL
     private let codexShellSnapshotsDirectory: URL
     private let claudeProjectsDirectory: URL
-    private let nowProvider: @Sendable () -> Date
 
-    init(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        nowProvider: @escaping @Sendable () -> Date = Date.init
-    ) {
+    init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
         codexSessionsDirectory = homeDirectory
             .appendingPathComponent(".codex", isDirectory: true)
             .appendingPathComponent("sessions", isDirectory: true)
@@ -405,14 +436,12 @@ actor ManagedAgentNativeSessionFileScanner: ManagedAgentNativeSessionScanning {
         claudeProjectsDirectory = homeDirectory
             .appendingPathComponent(".claude", isDirectory: true)
             .appendingPathComponent("projects", isDirectory: true)
-        self.nowProvider = nowProvider
     }
 
     init(
         codexSessionsDirectory: URL,
         claudeProjectsDirectory: URL,
-        codexShellSnapshotsDirectory: URL? = nil,
-        nowProvider: @escaping @Sendable () -> Date = Date.init
+        codexShellSnapshotsDirectory: URL? = nil
     ) {
         self.codexSessionsDirectory = codexSessionsDirectory
         self.codexShellSnapshotsDirectory = codexShellSnapshotsDirectory
@@ -420,7 +449,6 @@ actor ManagedAgentNativeSessionFileScanner: ManagedAgentNativeSessionScanning {
                 .deletingLastPathComponent()
                 .appendingPathComponent("shell_snapshots", isDirectory: true)
         self.claudeProjectsDirectory = claudeProjectsDirectory
-        self.nowProvider = nowProvider
     }
 
     func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate] {
@@ -444,7 +472,6 @@ actor ManagedAgentNativeSessionFileScanner: ManagedAgentNativeSessionScanning {
 
 private extension ManagedAgentNativeSessionFileScanner {
     static let codexSnapshotLaunchTolerance: TimeInterval = 2
-    static let codexDirectSessionFallbackDelay: TimeInterval = 30
     static let codexSnapshotCaptureWindow: TimeInterval = 90
     static let codexNativeSessionIDPattern = try! NSRegularExpression(
         pattern: #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#
@@ -453,76 +480,23 @@ private extension ManagedAgentNativeSessionFileScanner {
     func codexScanResult(
         for observation: ManagedAgentNativeSessionObservationContext
     ) -> ManagedAgentNativeSessionScanResult {
+        // Codex identity comes from hook events first; shell snapshots are the
+        // only scan evidence strong enough to act on (they name this pane's
+        // TOASTTY session). There is deliberately no cwd-only fallback: an
+        // idle resumed session never touches its JSONL while a busy same-cwd
+        // neighbor does, so cwd matching misattributes sessions and the
+        // resulting duplicate pruning destroys the rightful pane's record.
+        // Timing out is safer than claiming another pane's session.
         let snapshotFiles = codexShellSnapshotFiles(for: observation)
         let snapshotCandidates = deduplicatedCandidates(
             codexShellSnapshotCandidates(from: snapshotFiles, for: observation)
         )
-        if snapshotCandidates.isEmpty == false {
-            return ManagedAgentNativeSessionScanResult(
-                candidates: snapshotCandidates,
-                summary: ManagedAgentNativeSessionScanSummary(
-                    candidateCount: snapshotCandidates.count,
-                    codexSnapshotFileCount: snapshotFiles.count,
-                    codexSnapshotCandidateCount: snapshotCandidates.count
-                )
-            )
-        }
-
-        // A matching shell snapshot identifies this launch more strongly than
-        // the cwd-only fallback, even if Codex has not written its JSONL yet.
-        // If the JSONL never lands, the observation timeout is safer than
-        // claiming another same-cwd pane's session.
-        if hasMatchingCodexShellSnapshot(from: snapshotFiles, for: observation) {
-            return ManagedAgentNativeSessionScanResult(
-                candidates: [],
-                summary: ManagedAgentNativeSessionScanSummary(
-                    candidateCount: 0,
-                    codexSnapshotFileCount: snapshotFiles.count,
-                    codexSnapshotCandidateCount: 0,
-                    codexDirectSessionDeferred: true
-                )
-            )
-        }
-
-        guard nowProvider() >= observation.launchStart.addingTimeInterval(Self.codexDirectSessionFallbackDelay) else {
-            return ManagedAgentNativeSessionScanResult(
-                candidates: [],
-                summary: ManagedAgentNativeSessionScanSummary(
-                    candidateCount: 0,
-                    codexSnapshotFileCount: snapshotFiles.count,
-                    codexSnapshotCandidateCount: 0,
-                    codexDirectSessionDeferred: true
-                )
-            )
-        }
-
-        let sessionFiles = jsonlFiles(
-            under: codexSessionsDirectory,
-            modifiedAtOrAfter: observation.launchStart
-        )
-        let sessionCandidates = deduplicatedCandidates(sessionFiles.compactMap { fileURL -> ManagedAgentNativeSessionCandidate? in
-            guard let metadata = codexSessionMetadata(from: fileURL),
-                  metadata.cwd == observation.cwd else {
-                return nil
-            }
-            return ManagedAgentNativeSessionCandidate(
-                agent: .codex,
-                nativeSessionID: metadata.sessionID,
-                sessionFilePath: fileURL.path,
-                cwd: metadata.cwd,
-                updatedAt: metadata.updatedAt
-            )
-        })
-
         return ManagedAgentNativeSessionScanResult(
-            candidates: sessionCandidates,
+            candidates: snapshotCandidates,
             summary: ManagedAgentNativeSessionScanSummary(
-                candidateCount: sessionCandidates.count,
+                candidateCount: snapshotCandidates.count,
                 codexSnapshotFileCount: snapshotFiles.count,
-                codexSnapshotCandidateCount: 0,
-                codexDirectSessionDeferred: false,
-                codexDirectSessionFileCount: sessionFiles.count,
-                codexDirectSessionCandidateCount: sessionCandidates.count
+                codexSnapshotCandidateCount: snapshotCandidates.count
             )
         )
     }
@@ -583,15 +557,6 @@ private extension ManagedAgentNativeSessionFileScanner {
                     updatedAt: updatedAt
                 )
             }
-        }
-    }
-
-    func hasMatchingCodexShellSnapshot(
-        from snapshotURLs: [URL],
-        for observation: ManagedAgentNativeSessionObservationContext
-    ) -> Bool {
-        snapshotURLs.contains { snapshotURL in
-            codexShellSnapshot(snapshotURL, matches: observation)
         }
     }
 

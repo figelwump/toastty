@@ -1808,6 +1808,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                     activeSession: activeSession,
                     capturedAt: now
                 ) {
+                    // The hook event names this pane's native session directly,
+                    // so the file-scanning observation is no longer needed.
+                    agentLaunchService.cancelNativeSessionObservation(sessionID: sessionID)
                     var scopedResumeRecord = resumeRecord
                     scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
                     let didMutate = store.send(.updateTerminalPanelResumeRecord(
@@ -1817,6 +1820,17 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                     if didMutate {
                         stateVersion += 1
                     }
+                    ToasttyLog.info(
+                        "Captured managed agent resume record from hook event",
+                        category: .terminal,
+                        metadata: [
+                            "session_id": sessionID,
+                            "agent": resumeRecord.agent.rawValue,
+                            "panel_id": activeSession.panelID.uuidString,
+                            "native_session_id": resumeRecord.nativeSessionID,
+                            "did_mutate": String(didMutate),
+                        ]
+                    )
                 }
             }
             return [
@@ -1883,6 +1897,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("cwd is required")
             }
 
+            // The hook event names this pane's native session directly, so the
+            // file-scanning observation is no longer needed.
+            agentLaunchService.cancelNativeSessionObservation(sessionID: sessionID)
             let didMutate = store.send(.updateTerminalPanelResumeRecord(
                 panelID: activeSession.panelID,
                 resumeRecord: ManagedAgentResumeRecord(
@@ -1897,6 +1914,17 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             if didMutate {
                 stateVersion += 1
             }
+            ToasttyLog.info(
+                "Captured managed agent resume record from hook event",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "agent": agent.rawValue,
+                    "panel_id": activeSession.panelID.uuidString,
+                    "native_session_id": nativeSessionID,
+                    "did_mutate": String(didMutate),
+                ]
+            )
             return [
                 "eventType": .string(event.eventType),
                 "stateVersion": .int(stateVersion),

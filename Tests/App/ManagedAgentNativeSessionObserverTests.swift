@@ -61,7 +61,7 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
-    func scannerFindsExistingCodexSessionDuringCatchUp() async throws {
+    func observerCapturesCodexSessionFromShellSnapshot() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
@@ -71,16 +71,18 @@ struct ManagedAgentNativeSessionObserverTests {
         let sessionURL = fixture.codexSessionsURL
             .appendingPathComponent("2026/05/15", isDirectory: true)
             .appendingPathComponent("rollout-2026-05-15T10-00-00-\(sessionID).jsonl", isDirectory: false)
-        try FileManager.default.createDirectory(
-            at: sessionURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+        try writeCodexSession(id: sessionID, cwd: fixture.cwdURL.path, to: sessionURL)
+        try writeCodexShellSnapshot(
+            id: sessionID,
+            managedSessionID: "managed-1",
+            panelID: panelID,
+            to: fixture.codexShellSnapshotsURL
         )
-        try Data(
-            #"{"type":"session_meta","payload":{"id":"\#(sessionID)","cwd":"\#(fixture.cwdURL.path)"}}"#.utf8
-        ).write(to: sessionURL)
+        let snapshotURL = fixture.codexShellSnapshotsURL
+            .appendingPathComponent("\(sessionID).1778990848959872000.sh")
         try FileManager.default.setAttributes(
             [.modificationDate: launchStart.addingTimeInterval(1)],
-            ofItemAtPath: sessionURL.path
+            ofItemAtPath: snapshotURL.path
         )
 
         let scanner = ManagedAgentNativeSessionFileScanner(
@@ -190,10 +192,10 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
-    func scannerDefersDirectCodexSessionBeforeFallbackDelay() async throws {
+    func scannerNeverUsesCwdOnlyCodexSessionWithoutShellSnapshot() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
-        let launchStart = Date()
+        let launchStart = Date().addingTimeInterval(-45)
         let sessionID = "019da2ea-82fe-7842-9e86-b15a403e8352"
         let sessionURL = fixture.codexSessionsURL.appendingPathComponent("rollout-\(sessionID).jsonl")
         try writeCodexSession(id: sessionID, cwd: fixture.cwdURL.path, to: sessionURL)
@@ -205,8 +207,7 @@ struct ManagedAgentNativeSessionObserverTests {
         let scanner = ManagedAgentNativeSessionFileScanner(
             codexSessionsDirectory: fixture.codexSessionsURL,
             claudeProjectsDirectory: fixture.claudeProjectsURL,
-            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL,
-            nowProvider: { launchStart.addingTimeInterval(5) }
+            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL
         )
         let candidates = await scanner.candidates(
             for: ManagedAgentNativeSessionObservationContext(
@@ -222,41 +223,7 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
-    func scannerUsesDirectCodexSessionAfterFallbackDelay() async throws {
-        let fixture = try makeNativeSessionScannerFixture()
-        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
-        let launchStart = Date()
-        let sessionID = "019da2ea-82fe-7842-9e86-b15a403e8352"
-        let sessionURL = fixture.codexSessionsURL.appendingPathComponent("rollout-\(sessionID).jsonl")
-        try writeCodexSession(id: sessionID, cwd: fixture.cwdURL.path, to: sessionURL)
-        try FileManager.default.setAttributes(
-            [.modificationDate: launchStart.addingTimeInterval(1)],
-            ofItemAtPath: sessionURL.path
-        )
-
-        let scanner = ManagedAgentNativeSessionFileScanner(
-            codexSessionsDirectory: fixture.codexSessionsURL,
-            claudeProjectsDirectory: fixture.claudeProjectsURL,
-            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL,
-            nowProvider: { launchStart.addingTimeInterval(31) }
-        )
-        let candidates = await scanner.candidates(
-            for: ManagedAgentNativeSessionObservationContext(
-                managedSessionID: "managed-1",
-                agent: .codex,
-                panelID: UUID(),
-                cwd: fixture.cwdURL.path,
-                launchStart: launchStart
-            )
-        )
-
-        #expect(candidates.count == 1)
-        #expect(candidates.first?.nativeSessionID == sessionID)
-        #expect(candidates.first?.sessionFilePath == sessionURL.path)
-    }
-
-    @Test
-    func scannerDefersDirectCodexSessionWhenMatchingSnapshotMetadataIsUnavailable() async throws {
+    func scannerReturnsNoCandidateWhenSnapshotRolloutIsMissing() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let launchStart = Date()
@@ -286,8 +253,7 @@ struct ManagedAgentNativeSessionObserverTests {
         let scanner = ManagedAgentNativeSessionFileScanner(
             codexSessionsDirectory: fixture.codexSessionsURL,
             claudeProjectsDirectory: fixture.claudeProjectsURL,
-            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL,
-            nowProvider: { launchStart.addingTimeInterval(31) }
+            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL
         )
         let scan = await scanner.scan(
             for: ManagedAgentNativeSessionObservationContext(
@@ -300,11 +266,11 @@ struct ManagedAgentNativeSessionObserverTests {
         )
 
         #expect(scan.candidates.isEmpty)
-        #expect(scan.summary.codexDirectSessionDeferred == true)
+        #expect(scan.summary.codexSnapshotCandidateCount == 0)
     }
 
     @Test
-    func scannerFindsCodexShellSnapshotAfterDirectFallbackDelay() async throws {
+    func scannerFindsCodexShellSnapshotWrittenLate() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let launchStart = Date()
@@ -325,8 +291,7 @@ struct ManagedAgentNativeSessionObserverTests {
         let scanner = ManagedAgentNativeSessionFileScanner(
             codexSessionsDirectory: fixture.codexSessionsURL,
             claudeProjectsDirectory: fixture.claudeProjectsURL,
-            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL,
-            nowProvider: { launchStart.addingTimeInterval(45) }
+            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL
         )
         let candidates = await scanner.candidates(
             for: ManagedAgentNativeSessionObservationContext(
@@ -457,7 +422,7 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
-    func scannerPrefersCodexShellSnapshotOverDirectSession() async throws {
+    func scannerPrefersCodexShellSnapshotOverSameCwdSessionActivity() async throws {
         let fixture = try makeNativeSessionScannerFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
         let launchStart = Date().addingTimeInterval(-5)
@@ -485,8 +450,7 @@ struct ManagedAgentNativeSessionObserverTests {
         let scanner = ManagedAgentNativeSessionFileScanner(
             codexSessionsDirectory: fixture.codexSessionsURL,
             claudeProjectsDirectory: fixture.claudeProjectsURL,
-            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL,
-            nowProvider: { launchStart.addingTimeInterval(31) }
+            codexShellSnapshotsDirectory: fixture.codexShellSnapshotsURL
         )
         let candidates = await scanner.candidates(
             for: ManagedAgentNativeSessionObservationContext(
@@ -625,6 +589,165 @@ struct ManagedAgentNativeSessionObserverTests {
 
         #expect(recordCount == 0)
         #expect(registry.activeObservationCountForTesting == 2)
+    }
+
+    @Test
+    func observerIgnoresCandidateThatDoesNotMatchExpectedNativeSessionID() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = StubNativeSessionScanner(candidatesByManagedSessionID: ["managed-1": [candidate]])
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { _, _, _ in
+                recordCount += 1
+            }
+        )
+
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: UUID(),
+                cwd: "/tmp/repo",
+                launchStart: launchStart,
+                expectedNativeSessionID: "0195ffff-0000-7000-8000-000000000000"
+            )
+        )
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 0)
+        #expect(registry.activeObservationCountForTesting == 1)
+    }
+
+    @Test
+    func observerCapturesCandidateMatchingExpectedNativeSessionID() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let expectedSessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+        let expectedCandidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: expectedSessionID,
+            sessionFilePath: "/tmp/codex-expected.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let otherCandidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: "019e3419-94d0-7921-8db3-1118bc90998f",
+            sessionFilePath: "/tmp/codex-other.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(2)
+        )
+        let scanner = StubNativeSessionScanner(
+            candidatesByManagedSessionID: ["managed-1": [expectedCandidate, otherCandidate]]
+        )
+        var recordsByPanelID: [UUID: ManagedAgentResumeRecord] = [:]
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { _, panelID, record in
+                recordsByPanelID[panelID] = record
+            }
+        )
+
+        let panelID = UUID()
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: panelID,
+                cwd: "/tmp/repo",
+                launchStart: launchStart,
+                expectedNativeSessionID: expectedSessionID
+            )
+        )
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordsByPanelID[panelID]?.nativeSessionID == expectedSessionID)
+        #expect(registry.activeObservationCountForTesting == 0)
+    }
+
+    @Test
+    func observerRefusesCandidateOwnedByAnotherPanel() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let ownerPanelID = UUID()
+        let observedPanelID = UUID()
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = StubNativeSessionScanner(candidatesByManagedSessionID: ["managed-1": [candidate]])
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            resumeRecordOwnerResolver: { _, _ in ownerPanelID },
+            recordHandler: { _, _, _ in
+                recordCount += 1
+            }
+        )
+
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: observedPanelID,
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 0)
+        #expect(registry.activeObservationCountForTesting == 1)
+    }
+
+    @Test
+    func observerCapturesCandidateOwnedByObservedPanel() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let panelID = UUID()
+        let sessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: sessionID,
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = StubNativeSessionScanner(candidatesByManagedSessionID: ["managed-1": [candidate]])
+        var recordsByPanelID: [UUID: ManagedAgentResumeRecord] = [:]
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            resumeRecordOwnerResolver: { _, _ in panelID },
+            recordHandler: { _, panelID, record in
+                recordsByPanelID[panelID] = record
+            }
+        )
+
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: panelID,
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordsByPanelID[panelID]?.nativeSessionID == sessionID)
+        #expect(registry.activeObservationCountForTesting == 0)
     }
 }
 

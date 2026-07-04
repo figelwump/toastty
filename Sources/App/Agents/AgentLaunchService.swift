@@ -240,6 +240,10 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         managedLaunchPlanner.discardManagedLaunch(sessionID: sessionID)
     }
 
+    func cancelNativeSessionObservation(sessionID: String) {
+        managedLaunchPlanner.cancelNativeSessionObservation(sessionID: sessionID)
+    }
+
     private func resolvedLaunchProfile(profileID: String) -> AgentProfile? {
         if let profile = agentCatalogProvider.catalog.profile(id: profileID) {
             return profile
