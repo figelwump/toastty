@@ -11,6 +11,9 @@ struct ManagedAgentNativeSessionObservationContext: Equatable, Sendable {
     /// Observation then only confirms that session; scan candidates with any
     /// other ID are discarded so a same-cwd neighbor can never be claimed.
     var expectedNativeSessionID: String? = nil
+    /// Log-dedup marker: set once this observation has reported discarding
+    /// every scanned candidate because none matched `expectedNativeSessionID`.
+    var didLogExpectedNativeSessionIDMismatch: Bool = false
 }
 
 struct ManagedAgentNativeSessionCandidate: Equatable, Sendable {
@@ -111,6 +114,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
     private var latestScanSummaryBySessionID: [String: ManagedAgentNativeSessionScanSummary] = [:]
     private var refusedOwnedClaimKeysBySessionID: [String: Set<String>] = [:]
     private var observationLoopTask: Task<Void, Never>?
+    private var observationLoopGeneration = 0
     private let scanner: any ManagedAgentNativeSessionScanning
     private let timing: ManagedAgentNativeSessionObserverTiming
     private let nowProvider: @Sendable () -> Date
@@ -246,24 +250,44 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         observationsBySessionID.count
     }
 
+    var scanBookkeepingEntryCountForTesting: Int {
+        scanCountBySessionID.count
+            + latestScanSummaryBySessionID.count
+            + refusedOwnedClaimKeysBySessionID.count
+    }
+
+    var hasObservationLoopTaskForTesting: Bool {
+        observationLoopTask != nil
+    }
+
     private func scheduleObservationLoopIfNeeded() {
         guard observationLoopTask == nil else { return }
+        observationLoopGeneration += 1
+        let generation = observationLoopGeneration
         observationLoopTask = Task { @MainActor [weak self] in
-            await self?.runObservationLoop()
+            await self?.runObservationLoop(generation: generation)
         }
     }
 
-    private func runObservationLoop() async {
+    private func runObservationLoop(generation: Int) async {
         await Task.yield()
         while Task.isCancelled == false {
             await evaluatePendingObservations()
             expireTimedOutObservations()
             guard observationsBySessionID.isEmpty == false else {
-                observationLoopTask = nil
+                clearObservationLoopTask(ifGeneration: generation)
                 return
             }
             await timing.sleep(timing.pollIntervalNanoseconds)
         }
+        clearObservationLoopTask(ifGeneration: generation)
+    }
+
+    /// A cancelled loop task can resume from a suspended scan after a newer
+    /// loop has already been scheduled; only the current generation may drop
+    /// the task reference, or it would orphan the live loop.
+    private func clearObservationLoopTask(ifGeneration generation: Int) {
+        guard generation == observationLoopGeneration else { return }
         observationLoopTask = nil
     }
 
@@ -273,12 +297,34 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         var candidateBySessionID: [String: ManagedAgentNativeSessionCandidate] = [:]
         for observation in observationsBySessionID.values {
             let result = await scanner.scan(for: observation)
+            // The observation may have been cancelled (e.g. by a hook-driven
+            // capture) while the scan was suspended; writing bookkeeping for
+            // it here would leak entries no cleanup path removes.
+            guard observationsBySessionID[observation.managedSessionID] != nil else {
+                continue
+            }
             scanCountBySessionID[observation.managedSessionID, default: 0] += 1
             latestScanSummaryBySessionID[observation.managedSessionID] = result.summary
             var candidates = result.candidates
             if let expectedNativeSessionID = observation.expectedNativeSessionID {
                 candidates = candidates.filter { candidate in
                     candidate.nativeSessionID.caseInsensitiveCompare(expectedNativeSessionID) == .orderedSame
+                }
+                if candidates.isEmpty,
+                   result.candidates.isEmpty == false,
+                   observation.didLogExpectedNativeSessionIDMismatch == false {
+                    observationsBySessionID[observation.managedSessionID]?.didLogExpectedNativeSessionIDMismatch = true
+                    ToasttyLog.info(
+                        "Discarded scanned native session candidates that do not match the expected resume session",
+                        category: .terminal,
+                        metadata: [
+                            "session_id": observation.managedSessionID,
+                            "agent": observation.agent.rawValue,
+                            "panel_id": observation.panelID.uuidString,
+                            "expected_native_session_id": expectedNativeSessionID,
+                            "discarded_candidate_count": String(result.candidates.count),
+                        ]
+                    )
                 }
             }
             if candidates.count == 1 {
@@ -324,7 +370,13 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             guard let observation = observationsBySessionID[managedSessionID] else {
                 continue
             }
-            if let ownerPanelID = resumeRecordOwnerResolver?(candidate.agent, candidate.nativeSessionID),
+            // A resume-shaped launch already names this native session in its
+            // argv (the expected-ID filter guarantees the candidate matches),
+            // which entitles this pane to take the claim over from a stale
+            // record elsewhere — the same transfer hook-driven captures
+            // perform through duplicate pruning.
+            if observation.expectedNativeSessionID == nil,
+               let ownerPanelID = resumeRecordOwnerResolver?(candidate.agent, candidate.nativeSessionID),
                ownerPanelID != observation.panelID {
                 // Another panel's resume record already claims this native
                 // session; capturing it here would strip that panel's record
@@ -389,6 +441,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
                 "agent": observation.agent.rawValue,
                 "panel_id": observation.panelID.uuidString,
                 "cwd": observation.cwd,
+                "expected_native_session_id": observation.expectedNativeSessionID ?? "none",
                 "elapsed_seconds": Self.formattedSeconds(elapsedSeconds),
                 "timeout_seconds": Self.formattedSeconds(timing.timeout),
                 "scan_count": String(scanCountBySessionID[sessionID] ?? 0),

@@ -749,6 +749,138 @@ struct ManagedAgentNativeSessionObserverTests {
         #expect(recordsByPanelID[panelID]?.nativeSessionID == sessionID)
         #expect(registry.activeObservationCountForTesting == 0)
     }
+
+    @Test
+    func observerCapturesExpectedNativeSessionEvenWhenOwnedByAnotherPanel() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let panelID = UUID()
+        let ownerPanelID = UUID()
+        let sessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: sessionID,
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = StubNativeSessionScanner(candidatesByManagedSessionID: ["managed-1": [candidate]])
+        var recordsByPanelID: [UUID: ManagedAgentResumeRecord] = [:]
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            resumeRecordOwnerResolver: { _, _ in ownerPanelID },
+            recordHandler: { _, panelID, record in
+                recordsByPanelID[panelID] = record
+            }
+        )
+
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: panelID,
+                cwd: "/tmp/repo",
+                launchStart: launchStart,
+                expectedNativeSessionID: sessionID
+            )
+        )
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordsByPanelID[panelID]?.nativeSessionID == sessionID)
+        #expect(registry.activeObservationCountForTesting == 0)
+    }
+
+    @Test
+    func observerDoesNotResurrectBookkeepingWhenCancelledDuringScan() async throws {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let scanner = GatedNativeSessionScanner()
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { _, _, _ in
+                recordCount += 1
+            }
+        )
+
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: UUID(),
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+        try await waitForAsyncCondition {
+            await scanner.scanStartCount >= 1
+        }
+
+        registry.cancelObservation(sessionID: "managed-1")
+        await scanner.openGate()
+        try await waitForAsyncCondition {
+            await scanner.scanFinishCount >= 1
+        }
+        await Task.yield()
+        await Task.yield()
+
+        #expect(recordCount == 0)
+        #expect(registry.activeObservationCountForTesting == 0)
+        #expect(registry.scanBookkeepingEntryCountForTesting == 0)
+    }
+
+    @Test
+    func observerKeepsNewerLoopTaskWhenCancelledLoopExits() async throws {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let scanner = GatedNativeSessionScanner()
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { _, _, _ in }
+        )
+        defer {
+            registry.cancelObservation(sessionID: "managed-2")
+        }
+
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: UUID(),
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+        try await waitForAsyncCondition {
+            await scanner.scanStartCount >= 1
+        }
+
+        // Cancelling the only observation cancels loop task T1 (still
+        // suspended in the gated scan) and clears the task reference.
+        registry.cancelObservation(sessionID: "managed-1")
+        // A new observation schedules loop task T2.
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-2",
+                agent: .codex,
+                panelID: UUID(),
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+        #expect(registry.hasObservationLoopTaskForTesting)
+
+        // Let T1 resume from the gated scan and exit; it must not clobber
+        // the reference to the still-running T2.
+        await scanner.openGate()
+        try await waitForAsyncCondition {
+            await scanner.scanFinishCount >= 1
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(registry.hasObservationLoopTaskForTesting)
+        #expect(registry.activeObservationCountForTesting == 1)
+    }
 }
 
 private actor StubNativeSessionScanner: ManagedAgentNativeSessionScanning {
@@ -760,6 +892,27 @@ private actor StubNativeSessionScanner: ManagedAgentNativeSessionScanning {
 
     func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate] {
         candidatesByManagedSessionID[observation.managedSessionID] ?? []
+    }
+}
+
+/// Scanner that suspends every scan until the gate opens, so tests can
+/// interleave registry mutations with an in-flight scan deterministically.
+private actor GatedNativeSessionScanner: ManagedAgentNativeSessionScanning {
+    private(set) var scanStartCount = 0
+    private(set) var scanFinishCount = 0
+    private var gateOpen = false
+
+    func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate] {
+        scanStartCount += 1
+        while gateOpen == false {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        scanFinishCount += 1
+        return []
+    }
+
+    func openGate() {
+        gateOpen = true
     }
 }
 
@@ -817,6 +970,21 @@ private func waitForCondition(
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
         if condition() {
+            return
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    Issue.record("condition did not become true before timeout")
+}
+
+@MainActor
+private func waitForAsyncCondition(
+    timeout: TimeInterval = 2,
+    condition: @escaping () async -> Bool
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if await condition() {
             return
         }
         try await Task.sleep(nanoseconds: 10_000_000)
