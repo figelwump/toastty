@@ -1,3 +1,4 @@
+import CoreState
 import SwiftUI
 
 struct AgentGetStartedActionError: LocalizedError, Equatable, Sendable {

@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 enum ProfileShellIntegrationMessaging {

@@ -2402,6 +2402,41 @@ struct ToasttyApp: App {
             .path
     }
 
+    nonisolated static func baseLaunchEnvironment(
+        panelID: UUID,
+        runtimePaths: ToasttyRuntimePaths,
+        socketPath: String,
+        cliExecutablePath: String?,
+        appResourcesPath: String?,
+        shimDirectoryPath: String?,
+        basePath: String?,
+        agentBasePath: String?
+    ) -> [String: String] {
+        let paneJournalFilePath = runtimePaths.paneJournalFileURL(for: panelID).path
+        var environment: [String: String] = [
+            ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
+            ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
+            ToasttyLaunchContextEnvironment.paneJournalFileKey: paneJournalFilePath,
+        ]
+        if let cliExecutablePath {
+            environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
+        }
+        if let appResourcesPath {
+            environment[ToasttyLaunchContextEnvironment.appResourcesPathKey] = appResourcesPath
+        }
+        if let agentBasePath {
+            environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = agentBasePath
+        }
+        if let shimDirectoryPath {
+            environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryPath
+            environment["PATH"] = AgentCommandShimInstaller.pathValue(
+                prepending: shimDirectoryPath,
+                to: basePath
+            )
+        }
+        return environment
+    }
+
     private static func configureBaseLaunchEnvironmentProvider(
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
@@ -2414,6 +2449,7 @@ struct ToasttyApp: App {
         let launchPath = shimDirectoryPath.map {
             AgentCommandShimInstaller.pathValue(prepending: $0, to: basePath)
         } ?? basePath
+        let appResourcesPath = Bundle.main.resourceURL?.path
         ToasttyLog.info(
             "Configured terminal launch context environment",
             category: .bootstrap,
@@ -2421,6 +2457,8 @@ struct ToasttyApp: App {
                 "socket_path": socketPath,
                 "cli_path": cliExecutablePath ?? "none",
                 "cli_path_present": cliExecutablePath == nil ? "false" : "true",
+                "app_resources_path": appResourcesPath ?? "none",
+                "app_resources_path_present": appResourcesPath == nil ? "false" : "true",
                 "agent_shim_directory": shimDirectoryPath ?? "none",
                 "agent_shim_directory_present": shimDirectoryPath == nil ? "false" : "true",
                 "agent_base_path_present": agentBasePath == nil ? "false" : "true",
@@ -2439,26 +2477,16 @@ struct ToasttyApp: App {
             ]
         )
         terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
-            let paneJournalFilePath = runtimePaths.paneJournalFileURL(for: panelID).path
-            var environment: [String: String] = [
-                ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
-                ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
-                ToasttyLaunchContextEnvironment.paneJournalFileKey: paneJournalFilePath,
-            ]
-            if let cliExecutablePath {
-                environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
-            }
-            if let agentBasePath {
-                environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = agentBasePath
-            }
-            if let shimDirectoryPath {
-                environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryPath
-                environment["PATH"] = AgentCommandShimInstaller.pathValue(
-                    prepending: shimDirectoryPath,
-                    to: basePath
-                )
-            }
-            return environment
+            baseLaunchEnvironment(
+                panelID: panelID,
+                runtimePaths: runtimePaths,
+                socketPath: socketPath,
+                cliExecutablePath: cliExecutablePath,
+                appResourcesPath: appResourcesPath,
+                shimDirectoryPath: shimDirectoryPath,
+                basePath: basePath,
+                agentBasePath: agentBasePath
+            )
         }
     }
 
