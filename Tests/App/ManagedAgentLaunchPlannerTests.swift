@@ -693,6 +693,96 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertTrue(observer.cancelledSessionIDs.contains(plan.sessionID))
     }
 
+    func testCodexSessionConfiguredEventDoesNotStealResumeRecordFromLivePanel() async throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-codex-session-configured-live-owner-\(UUID().uuidString)", isDirectory: true)
+        let cwdURL = rootURL.appendingPathComponent("repo", isDirectory: true)
+        let codexSessionsURL = rootURL.appendingPathComponent("codex-sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: cwdURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexSessionsURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let observer = StubManagedAgentNativeSessionObserver()
+        let resolver = CodexManagedSessionResolver(codexSessionsDirectory: codexSessionsURL)
+        let fixture = try makePlannerFixture(
+            nativeSessionObserverRegistry: observer,
+            codexResumeResolver: resolver
+        )
+        let threadID = "019e316e-9f7f-7a33-aad9-33fe27b0f2ce"
+        let rolloutURL = codexSessionsURL.appendingPathComponent("rollout-\(threadID).jsonl", isDirectory: false)
+        try Data(
+            #"{"type":"session_meta","payload":{"id":"\#(threadID)","cwd":"\#(cwdURL.path)"}}"#.utf8
+        ).write(to: rolloutURL)
+
+        let ownerPlan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: cwdURL.path
+            )
+        )
+        let ownerArtifactsURL = try codexArtifactsDirectory(from: ownerPlan)
+        let ownerRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: threadID,
+            sessionFilePath: rolloutURL.path,
+            cwd: cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scopedWorkspaceIDs: [UUID()]
+        )
+        XCTAssertTrue(
+            fixture.store.send(.updateTerminalPanelResumeRecord(panelID: fixture.panelID, resumeRecord: ownerRecord))
+        )
+
+        let workspaceID = try XCTUnwrap(fixture.store.state.selectedWorkspaceSelection()?.workspaceID)
+        XCTAssertTrue(
+            fixture.store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right))
+        )
+        let claimantPanelID = try XCTUnwrap(fixture.store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        let claimantPlan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: claimantPanelID,
+                argv: ["codex"],
+                cwd: cwdURL.path
+            )
+        )
+        let claimantArtifactsURL = try codexArtifactsDirectory(from: claimantPlan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: ownerPlan.sessionID, at: Date())
+            fixture.sessionRuntimeStore.stopSession(sessionID: claimantPlan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: ownerArtifactsURL)
+            try? fixture.fileManager.removeItem(at: claimantArtifactsURL)
+        }
+        let claimantLogURL = try codexSessionLogURL(from: claimantPlan)
+
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"session_configured","session_id":"\(threadID)","thread_id":"\(threadID)","cwd":"\(cwdURL.path)","rollout_path":"\(rolloutURL.path)"}}}
+            """,
+            to: claimantLogURL
+        )
+        try appendCodexSessionLogLine(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"user_message","message":"Check ownership"}}}
+            """,
+            to: claimantLogURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: claimantPlan.sessionID)?.status ==
+                SessionStatus(kind: .working, summary: "Working", detail: "Check ownership")
+        }
+
+        XCTAssertEqual(
+            try terminalState(panelID: fixture.panelID, state: fixture.store.state).resumeRecord,
+            ownerRecord
+        )
+        XCTAssertNil(try terminalState(panelID: claimantPanelID, state: fixture.store.state).resumeRecord)
+        XCTAssertFalse(observer.cancelledSessionIDs.contains(claimantPlan.sessionID))
+    }
+
     func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let plan = try fixture.planner.prepareManagedLaunch(

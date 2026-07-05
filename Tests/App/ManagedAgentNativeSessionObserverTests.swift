@@ -691,7 +691,9 @@ struct ManagedAgentNativeSessionObserverTests {
         let registry = ManagedAgentNativeSessionObserverRegistry(
             scanner: scanner,
             nowProvider: { launchStart.addingTimeInterval(2) },
-            resumeRecordOwnerResolver: { _, _ in ownerPanelID },
+            resumeRecordOwnerResolver: { _, _ in
+                ManagedAgentNativeSessionResumeRecordOwner(panelID: ownerPanelID)
+            },
             recordHandler: { _, _, _ in
                 recordCount += 1
             }
@@ -729,7 +731,9 @@ struct ManagedAgentNativeSessionObserverTests {
         let registry = ManagedAgentNativeSessionObserverRegistry(
             scanner: scanner,
             nowProvider: { launchStart.addingTimeInterval(2) },
-            resumeRecordOwnerResolver: { _, _ in panelID },
+            resumeRecordOwnerResolver: { _, _ in
+                ManagedAgentNativeSessionResumeRecordOwner(panelID: panelID)
+            },
             recordHandler: { _, panelID, record in
                 recordsByPanelID[panelID] = record
             }
@@ -751,7 +755,7 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
-    func observerCapturesExpectedNativeSessionEvenWhenOwnedByAnotherPanel() async {
+    func observerCapturesExpectedNativeSessionWhenOwnedByStalePanel() async {
         let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
         let panelID = UUID()
         let ownerPanelID = UUID()
@@ -768,7 +772,9 @@ struct ManagedAgentNativeSessionObserverTests {
         let registry = ManagedAgentNativeSessionObserverRegistry(
             scanner: scanner,
             nowProvider: { launchStart.addingTimeInterval(2) },
-            resumeRecordOwnerResolver: { _, _ in ownerPanelID },
+            resumeRecordOwnerResolver: { _, _ in
+                ManagedAgentNativeSessionResumeRecordOwner(panelID: ownerPanelID)
+            },
             recordHandler: { _, panelID, record in
                 recordsByPanelID[panelID] = record
             }
@@ -788,6 +794,51 @@ struct ManagedAgentNativeSessionObserverTests {
 
         #expect(recordsByPanelID[panelID]?.nativeSessionID == sessionID)
         #expect(registry.activeObservationCountForTesting == 0)
+    }
+
+    @Test
+    func observerRefusesExpectedNativeSessionOwnedByActivePanel() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let panelID = UUID()
+        let ownerPanelID = UUID()
+        let sessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: sessionID,
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = StubNativeSessionScanner(candidatesByManagedSessionID: ["managed-1": [candidate]])
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            resumeRecordOwnerResolver: { _, _ in
+                ManagedAgentNativeSessionResumeRecordOwner(
+                    panelID: ownerPanelID,
+                    hasActiveSameAgentSession: true
+                )
+            },
+            recordHandler: { _, _, _ in
+                recordCount += 1
+            }
+        )
+
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: panelID,
+                cwd: "/tmp/repo",
+                launchStart: launchStart,
+                expectedNativeSessionID: sessionID
+            )
+        )
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 0)
+        #expect(registry.activeObservationCountForTesting == 1)
     }
 
     @Test

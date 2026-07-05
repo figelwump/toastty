@@ -438,9 +438,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
 
-        nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
         var scopedRecord = record
         scopedRecord.scopedWorkspaceIDs = currentActiveSession.scopedWorkspaceIDs
+        guard shouldAcceptCodexSessionLogResumeRecord(
+            scopedRecord,
+            activeSession: currentActiveSession,
+            sessionID: sessionID
+        ) else {
+            return
+        }
+        nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
         let didUpdate = store.send(
             .updateTerminalPanelResumeRecord(panelID: currentActiveSession.panelID, resumeRecord: scopedRecord)
         )
@@ -452,8 +459,54 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 "session_id": sessionID,
                 "panel_id": currentActiveSession.panelID.uuidString,
                 "native_session_id": scopedRecord.nativeSessionID,
+                "workspace_scope": workspaceScopeMetadata(currentActiveSession.scopedWorkspaceIDs),
             ]
         )
+    }
+
+    private func shouldAcceptCodexSessionLogResumeRecord(
+        _ resumeRecord: ManagedAgentResumeRecord,
+        activeSession: SessionRecord,
+        sessionID: String
+    ) -> Bool {
+        guard let store,
+              let sessionRuntimeStore,
+              let ownerPanelID = store.state.panelIDOwningManagedAgentResumeRecord(
+                agent: resumeRecord.agent,
+                nativeSessionID: resumeRecord.nativeSessionID
+              ),
+              ownerPanelID != activeSession.panelID,
+              let ownerSession = sessionRuntimeStore.sessionRegistry.activeSession(for: ownerPanelID),
+              ownerSession.agent == resumeRecord.agent else {
+            return true
+        }
+
+        ToasttyLog.info(
+            "Refused Codex session log resume record because native session is owned by an active panel",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "agent": resumeRecord.agent.rawValue,
+                "panel_id": activeSession.panelID.uuidString,
+                "owner_panel_id": ownerPanelID.uuidString,
+                "owner_session_id": ownerSession.sessionID,
+                "native_session_id": resumeRecord.nativeSessionID,
+                "session_file_basename": (resumeRecord.sessionFilePath as NSString).lastPathComponent,
+                "cwd": resumeRecord.cwd,
+                "workspace_scope": workspaceScopeMetadata(activeSession.scopedWorkspaceIDs),
+                "owner_workspace_scope": workspaceScopeMetadata(ownerSession.scopedWorkspaceIDs),
+            ]
+        )
+        return false
+    }
+
+    private func workspaceScopeMetadata(_ scope: Set<UUID>?) -> String {
+        guard let scope else { return "unrestricted" }
+        if scope.isEmpty { return "own_workspace_only" }
+        return scope
+            .map(\.uuidString)
+            .sorted()
+            .joined(separator: ",")
     }
 
     private func handleCodexSessionStatusEvent(

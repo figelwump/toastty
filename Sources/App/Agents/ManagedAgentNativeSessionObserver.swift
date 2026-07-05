@@ -64,6 +64,16 @@ struct ManagedAgentNativeSessionScanSummary: Equatable, Sendable {
     }
 }
 
+struct ManagedAgentNativeSessionResumeRecordOwner: Equatable, Sendable {
+    var panelID: UUID
+    var hasActiveSameAgentSession: Bool
+
+    init(panelID: UUID, hasActiveSameAgentSession: Bool = false) {
+        self.panelID = panelID
+        self.hasActiveSameAgentSession = hasActiveSameAgentSession
+    }
+}
+
 protocol ManagedAgentNativeSessionScanning: Sendable {
     func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate]
     func scan(for observation: ManagedAgentNativeSessionObservationContext) async -> ManagedAgentNativeSessionScanResult
@@ -107,7 +117,7 @@ struct ManagedAgentNativeSessionObserverTiming {
 final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSessionObserving {
     typealias ResumeRecordHandler = @MainActor (String, UUID, ManagedAgentResumeRecord) -> Void
 
-    typealias ResumeRecordOwnerResolver = @MainActor (AgentKind, String) -> UUID?
+    typealias ResumeRecordOwnerResolver = @MainActor (AgentKind, String) -> ManagedAgentNativeSessionResumeRecordOwner?
 
     private var observationsBySessionID: [String: ManagedAgentNativeSessionObservationContext] = [:]
     private var scanCountBySessionID: [String: Int] = [:]
@@ -144,10 +154,17 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         self.init(
             scanner: ManagedAgentNativeSessionFileScanner(),
             nowProvider: nowProvider,
-            resumeRecordOwnerResolver: { [weak store] agent, nativeSessionID in
-                store?.state.panelIDOwningManagedAgentResumeRecord(
+            resumeRecordOwnerResolver: { [weak store, weak sessionRuntimeStore] agent, nativeSessionID in
+                guard let panelID = store?.state.panelIDOwningManagedAgentResumeRecord(
                     agent: agent,
                     nativeSessionID: nativeSessionID
+                ) else {
+                    return nil
+                }
+                let activeOwnerSession = sessionRuntimeStore?.sessionRegistry.activeSession(for: panelID)
+                return ManagedAgentNativeSessionResumeRecordOwner(
+                    panelID: panelID,
+                    hasActiveSameAgentSession: activeOwnerSession?.agent == agent
                 )
             },
             recordHandler: { [weak store, weak sessionRuntimeStore] managedSessionID, panelID, record in
@@ -372,15 +389,16 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             }
             // A resume-shaped launch already names this native session in its
             // argv (the expected-ID filter guarantees the candidate matches),
-            // which entitles this pane to take the claim over from a stale
-            // record elsewhere — the same transfer hook-driven captures
-            // perform through duplicate pruning.
-            if observation.expectedNativeSessionID == nil,
-               let ownerPanelID = resumeRecordOwnerResolver?(candidate.agent, candidate.nativeSessionID),
-               ownerPanelID != observation.panelID {
+            // which lets this pane reclaim a stale record elsewhere. It still
+            // must not take a record from another live same-agent owner.
+            if let owner = resumeRecordOwnerResolver?(candidate.agent, candidate.nativeSessionID),
+               owner.panelID != observation.panelID,
+               observation.expectedNativeSessionID == nil || owner.hasActiveSameAgentSession {
                 // Another panel's resume record already claims this native
                 // session; capturing it here would strip that panel's record
-                // through duplicate pruning. Keep observing instead.
+                // through duplicate pruning. Expected-ID launches may reclaim
+                // stale records, but not records owned by a live same-agent
+                // session.
                 if refusedOwnedClaimKeysBySessionID[managedSessionID, default: []].insert(candidate.claimKey).inserted {
                     ToasttyLog.info(
                         "Leaving managed agent resume record unchanged because the native session is owned by another panel",
@@ -389,8 +407,10 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
                             "session_id": managedSessionID,
                             "agent": candidate.agent.rawValue,
                             "panel_id": observation.panelID.uuidString,
-                            "owner_panel_id": ownerPanelID.uuidString,
+                            "owner_panel_id": owner.panelID.uuidString,
                             "native_session_id": candidate.nativeSessionID,
+                            "expected_native_session_id": observation.expectedNativeSessionID ?? "none",
+                            "owner_has_active_same_agent_session": owner.hasActiveSameAgentSession ? "true" : "false",
                         ]
                     )
                 }

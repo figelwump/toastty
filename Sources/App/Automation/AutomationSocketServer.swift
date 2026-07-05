@@ -905,6 +905,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private var sessionUpdateCoalescer = SessionUpdateCoalescer()
     private var pendingManagedLaunchPreflights: [String: PendingManagedLaunchPreflight] = [:]
     private var loggedUnrestrictedScopeCallerSessionIDs = Set<String>()
+    private var loggedRefusedResumeRecordHookClaimKeys = Set<String>()
     private var recentAutomationRequests: [DiagnosticsAutomationRequestEntry] = []
     @MainActor
     private lazy var appControlExecutor = AppControlExecutor(
@@ -1808,29 +1809,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                     activeSession: activeSession,
                     capturedAt: now
                 ) {
-                    // The hook event names this pane's native session directly,
-                    // so the file-scanning observation is no longer needed.
-                    agentLaunchService.cancelNativeSessionObservation(sessionID: sessionID)
-                    var scopedResumeRecord = resumeRecord
-                    scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
-                    let didMutate = store.send(.updateTerminalPanelResumeRecord(
-                        panelID: activeSession.panelID,
-                        resumeRecord: scopedResumeRecord
-                    ))
+                    let didMutate = updateManagedAgentResumeRecordFromHook(
+                        sessionID: sessionID,
+                        activeSession: activeSession,
+                        resumeRecord: resumeRecord,
+                        captureSource: "codex_hook_event"
+                    )
                     if didMutate {
                         stateVersion += 1
                     }
-                    ToasttyLog.info(
-                        "Captured managed agent resume record from hook event",
-                        category: .terminal,
-                        metadata: [
-                            "session_id": sessionID,
-                            "agent": resumeRecord.agent.rawValue,
-                            "panel_id": activeSession.panelID.uuidString,
-                            "native_session_id": resumeRecord.nativeSessionID,
-                            "did_mutate": String(didMutate),
-                        ]
-                    )
                 }
             }
             return [
@@ -1897,34 +1884,21 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("cwd is required")
             }
 
-            // The hook event names this pane's native session directly, so the
-            // file-scanning observation is no longer needed.
-            agentLaunchService.cancelNativeSessionObservation(sessionID: sessionID)
-            let didMutate = store.send(.updateTerminalPanelResumeRecord(
-                panelID: activeSession.panelID,
+            let didMutate = updateManagedAgentResumeRecordFromHook(
+                sessionID: sessionID,
+                activeSession: activeSession,
                 resumeRecord: ManagedAgentResumeRecord(
                     agent: agent,
                     nativeSessionID: nativeSessionID,
                     sessionFilePath: sessionFilePath,
                     cwd: cwd,
-                    capturedAt: now,
-                    scopedWorkspaceIDs: activeSession.scopedWorkspaceIDs
-                )
-            ))
+                    capturedAt: now
+                ),
+                captureSource: "update_resume_record"
+            )
             if didMutate {
                 stateVersion += 1
             }
-            ToasttyLog.info(
-                "Captured managed agent resume record from hook event",
-                category: .terminal,
-                metadata: [
-                    "session_id": sessionID,
-                    "agent": agent.rawValue,
-                    "panel_id": activeSession.panelID.uuidString,
-                    "native_session_id": nativeSessionID,
-                    "did_mutate": String(didMutate),
-                ]
-            )
             return [
                 "eventType": .string(event.eventType),
                 "stateVersion": .int(stateVersion),
@@ -2839,6 +2813,106 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             inputMessageCount: payload.int("inputMessageCount") ?? 0,
             detail: detail
         )
+    }
+
+    @MainActor
+    private func updateManagedAgentResumeRecordFromHook(
+        sessionID: String,
+        activeSession: SessionRecord,
+        resumeRecord: ManagedAgentResumeRecord,
+        captureSource: String
+    ) -> Bool {
+        guard shouldAcceptManagedAgentResumeRecordHookClaim(
+            sessionID: sessionID,
+            activeSession: activeSession,
+            resumeRecord: resumeRecord,
+            captureSource: captureSource
+        ) else {
+            return false
+        }
+
+        // The hook event names this pane's native session directly, so the
+        // file-scanning observation is no longer needed after the claim is
+        // accepted.
+        agentLaunchService.cancelNativeSessionObservation(sessionID: sessionID)
+        var scopedResumeRecord = resumeRecord
+        scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        let didMutate = store.send(.updateTerminalPanelResumeRecord(
+            panelID: activeSession.panelID,
+            resumeRecord: scopedResumeRecord
+        ))
+        ToasttyLog.info(
+            "Captured managed agent resume record from hook event",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "agent": resumeRecord.agent.rawValue,
+                "panel_id": activeSession.panelID.uuidString,
+                "native_session_id": resumeRecord.nativeSessionID,
+                "session_file_basename": (resumeRecord.sessionFilePath as NSString).lastPathComponent,
+                "cwd": resumeRecord.cwd,
+                "capture_source": captureSource,
+                "workspace_scope": workspaceScopeMetadata(activeSession.scopedWorkspaceIDs),
+                "did_mutate": String(didMutate),
+            ]
+        )
+        return didMutate
+    }
+
+    @MainActor
+    private func shouldAcceptManagedAgentResumeRecordHookClaim(
+        sessionID: String,
+        activeSession: SessionRecord,
+        resumeRecord: ManagedAgentResumeRecord,
+        captureSource: String
+    ) -> Bool {
+        guard let ownerPanelID = store.state.panelIDOwningManagedAgentResumeRecord(
+            agent: resumeRecord.agent,
+            nativeSessionID: resumeRecord.nativeSessionID
+        ),
+            ownerPanelID != activeSession.panelID,
+            let ownerSession = sessionRuntimeStore.sessionRegistry.activeSession(for: ownerPanelID),
+            ownerSession.agent == resumeRecord.agent else {
+            return true
+        }
+
+        let claimKey = [
+            sessionID,
+            activeSession.panelID.uuidString,
+            ownerPanelID.uuidString,
+            resumeRecord.agent.rawValue,
+            resumeRecord.nativeSessionID,
+            captureSource,
+        ].joined(separator: "\u{0}")
+        if loggedRefusedResumeRecordHookClaimKeys.insert(claimKey).inserted {
+            ToasttyLog.info(
+                "Refused managed agent resume record hook claim because native session is owned by an active panel",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "agent": resumeRecord.agent.rawValue,
+                    "panel_id": activeSession.panelID.uuidString,
+                    "owner_panel_id": ownerPanelID.uuidString,
+                    "owner_session_id": ownerSession.sessionID,
+                    "native_session_id": resumeRecord.nativeSessionID,
+                    "session_file_basename": (resumeRecord.sessionFilePath as NSString).lastPathComponent,
+                    "cwd": resumeRecord.cwd,
+                    "capture_source": captureSource,
+                    "workspace_scope": workspaceScopeMetadata(activeSession.scopedWorkspaceIDs),
+                    "owner_workspace_scope": workspaceScopeMetadata(ownerSession.scopedWorkspaceIDs),
+                ]
+            )
+        }
+        return false
+    }
+
+    private func workspaceScopeMetadata(_ scope: Set<UUID>?) -> String {
+        guard let scope else { return "unrestricted" }
+        if scope.isEmpty { return "own_workspace_only" }
+        return scope
+            .map(\.uuidString)
+            .sorted()
+            .joined(separator: ",")
     }
 
     private func codexHookEvent(
