@@ -552,6 +552,9 @@ public enum ToasttyCLI {
       toastty [--json] setup guide [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup print-skill <name>
+      toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--apply]
+      toastty [--json] setup install-hooks --agent <id> [--apply]
+      toastty [--json] setup install-skill <name> [--runtime claude|codex|all] [--apply]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
@@ -668,8 +671,69 @@ public enum ToasttyCLI {
             }
             return .setup(.printSkill(name: parsed.positionals[0]))
 
+        case "install-shell-integration":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--shell"],
+                flagOptions: ["--apply"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("setup install-shell-integration does not accept positional arguments\n\n\(usage)")
+            }
+            let shell = try parsed.singleValue("--shell").map(parseSetupShell)
+            return .setup(.installShellIntegration(shell: shell, apply: parsed.hasFlag("--apply")))
+
+        case "install-hooks":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--agent"],
+                flagOptions: ["--apply"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("setup install-hooks does not accept positional arguments\n\n\(usage)")
+            }
+            let agentValue = try requireValue("--agent", in: parsed)
+            guard let agent = AgentKind(rawValue: agentValue) else {
+                throw ToasttyCLIError.usage("--agent must be a lowercase agent ID")
+            }
+            return .setup(.installHooks(agent: agent, apply: parsed.hasFlag("--apply")))
+
+        case "install-skill":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--runtime"],
+                flagOptions: ["--apply"]
+            )
+            guard parsed.positionals.count == 1 else {
+                throw ToasttyCLIError.usage("setup install-skill requires <name>\n\n\(usage)")
+            }
+            let runtimeValue = parsed.singleValue("--runtime") ?? SetupSkillRuntime.claude.rawValue
+            guard let runtime = SetupSkillRuntime(rawValue: runtimeValue) else {
+                throw ToasttyCLIError.usage("--runtime must be one of: claude, codex, all")
+            }
+            return .setup(
+                .installSkill(
+                    name: parsed.positionals[0],
+                    runtime: runtime,
+                    apply: parsed.hasFlag("--apply")
+                )
+            )
+
         default:
             throw ToasttyCLIError.usage("unknown setup subcommand: \(subcommand)\n\n\(usage)")
+        }
+    }
+
+    private static func parseSetupShell(_ value: String) throws -> ProfileShellIntegrationShell {
+        switch value {
+        case "zsh":
+            return .zsh
+        case "bash":
+            return .bash
+        case "fish":
+            return .fish
+        default:
+            throw ToasttyCLIError.usage("--shell must be one of: zsh, bash, fish")
         }
     }
 

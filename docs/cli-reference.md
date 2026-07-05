@@ -90,6 +90,48 @@ scripts are installed later by `setup install-skill`.
 "$TOASTTY_CLI_PATH" setup print-skill toastty-capabilities
 ```
 
+### `setup install-shell-integration`
+
+Dry-run or install Toastty's shell integration for zsh, bash, or fish.
+
+```
+toastty setup install-shell-integration [--shell zsh|bash|fish] [--apply]
+```
+
+Without `--apply`, the command reports planned file writes only. With
+`--apply`, it writes Toastty's managed shell snippet and updates the selected
+shell init file. Run this from a Toastty terminal pane so the CLI can verify the
+Toastty launch context.
+
+### `setup install-hooks`
+
+Dry-run or install agent status hooks. Codex is the only agent that needs a
+global hook file; other supported agents receive status integration through
+Toastty-managed launches.
+
+```
+toastty setup install-hooks --agent codex [--apply]
+```
+
+Without `--apply`, the command reports planned writes to the Codex hooks file
+and Toastty forwarder script. With `--apply`, it writes those files directly.
+Codex may ask the user to trust updated hooks the next time it starts.
+
+### `setup install-skill`
+
+Dry-run or install a bundled starter skill.
+
+```
+toastty setup install-skill <name> [--runtime claude|codex|all] [--apply]
+```
+
+`--runtime claude` installs under `~/.agents/skills`, `--runtime codex`
+installs under `~/.codex/skills`, and `--runtime all` installs both. The command
+copies the full skill directory, preserves executable helper scripts, rewrites
+bundled helper paths for the target runtime, and writes `.toastty-skill.json`
+with a content hash. If an existing install has local edits or no Toastty
+manifest, `--apply` refuses to overwrite it and reports next steps.
+
 ### `diagnostics collect`
 
 Collect a local redacted diagnostics JSON bundle. This command reads local disk

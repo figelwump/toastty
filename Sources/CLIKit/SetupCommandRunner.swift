@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 enum SetupGuideFormat: String, CaseIterable, Codable, Equatable {
@@ -9,12 +10,21 @@ enum SetupCommand: Equatable {
     case guide(format: SetupGuideFormat)
     case skillsList
     case printSkill(name: String)
+    case installShellIntegration(shell: ProfileShellIntegrationShell?, apply: Bool)
+    case installHooks(agent: AgentKind, apply: Bool)
+    case installSkill(name: String, runtime: SetupSkillRuntime, apply: Bool)
 }
 
 enum StarterSkill: String, CaseIterable, Codable, Equatable {
     case toasttyCapabilities = "toastty-capabilities"
     case toasttyScratchpad = "toastty-scratchpad"
     case toasttyOpenMarkdown = "toastty-open-markdown"
+}
+
+enum SetupSkillRuntime: String, CaseIterable, Codable, Equatable {
+    case claude
+    case codex
+    case all
 }
 
 struct SetupResourceStore {
@@ -79,6 +89,17 @@ enum SetupCommandRunner {
         jsonOutput: Bool,
         environment: [String: String]
     ) throws -> Int32 {
+        if command.isInstallerCommand {
+            let execution = try SetupInstallerCommandRunner.execute(
+                command: command,
+                jsonOutput: jsonOutput,
+                environment: environment,
+                store: .live(environment: environment)
+            )
+            writeStdout(execution.output)
+            return execution.exitCode
+        }
+
         let output = try render(
             command: command,
             jsonOutput: jsonOutput,
@@ -114,6 +135,9 @@ enum SetupCommandRunner {
                 return try renderJSON(SkillPayload(name: name, content: content))
             }
             return content
+
+        case .installShellIntegration, .installHooks, .installSkill:
+            throw ToasttyCLIError.runtime("setup installer commands require a launch environment")
         }
     }
 
@@ -130,6 +154,17 @@ enum SetupCommandRunner {
     private static func writeStdout(_ string: String) {
         let output = string.hasSuffix("\n") ? string : string + "\n"
         FileHandle.standardOutput.write(output.data(using: .utf8) ?? Data())
+    }
+}
+
+private extension SetupCommand {
+    var isInstallerCommand: Bool {
+        switch self {
+        case .installShellIntegration, .installHooks, .installSkill:
+            return true
+        case .guide, .skillsList, .printSkill:
+            return false
+        }
     }
 }
 

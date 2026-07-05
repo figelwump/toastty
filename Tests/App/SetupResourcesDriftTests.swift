@@ -115,6 +115,9 @@ final class SetupResourcesDriftTests: XCTestCase {
             "toastty setup guide",
             "toastty setup skills list",
             "toastty setup print-skill",
+            "toastty setup install-shell-integration",
+            "toastty setup install-hooks",
+            "toastty setup install-skill",
         ] {
             XCTAssertTrue(guide.contains(command), "Guide is missing \(command)")
         }

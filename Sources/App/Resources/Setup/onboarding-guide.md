@@ -18,12 +18,15 @@ If `TOASTTY_SESSION_ID` is present, this is a managed Toastty agent session. If 
 - `toastty setup guide --format md` prints this guide as Markdown.
 - `toastty setup skills list` lists starter skills bundled with Toastty.
 - `toastty setup print-skill <name>` previews a bundled skill's `SKILL.md`.
+- `toastty setup install-shell-integration [--shell zsh|bash|fish] [--apply]` installs shell integration.
+- `toastty setup install-hooks --agent codex [--apply]` installs Codex status hooks.
+- `toastty setup install-skill <name> [--runtime claude|codex|all] [--apply]` installs bundled starter skills.
 
-Installer commands are intentionally dry-run first when they are available. The agent should show the plan, ask for confirmation, then rerun the same command with `--apply`.
+Installer commands are intentionally dry-run first. The agent should show the plan, ask for confirmation, then rerun the same command with `--apply`.
 
 ## Starter Skills
 
-Install these first once `toastty setup install-skill` is available:
+Install these first:
 
 - `toastty-capabilities`: teaches future agents how to use Toastty's CLI, app-control catalog, workspace model, scoping, Scratchpad, local documents, browser panels, and notifications.
 - `toastty-scratchpad`: helps agents publish visual HTML artifacts into the current Toastty workspace.
@@ -34,6 +37,7 @@ Preview them now:
 ```bash
 "$TOASTTY_CLI_PATH" setup skills list
 "$TOASTTY_CLI_PATH" setup print-skill toastty-capabilities
+"$TOASTTY_CLI_PATH" setup install-skill toastty-capabilities --runtime all
 ```
 
 ## Operating Rules
@@ -47,9 +51,30 @@ Preview them now:
 ## Suggested Setup Flow
 
 1. Orient the user: "I will dry-run each setup change, show the files, then ask before applying."
-2. Check whether shell integration is already installed. If not, dry-run shell integration first, then apply after confirmation.
-3. If the agent is Codex, dry-run Codex status hooks and mention that Codex may ask for trust once.
-4. Offer starter skills. Install `toastty-capabilities` first, then ask whether the user wants Scratchpad and Markdown helpers.
+2. Dry-run shell integration first:
+
+```bash
+"$TOASTTY_CLI_PATH" setup install-shell-integration
+```
+
+After the user approves, apply the same command with `--apply`.
+
+3. If the agent is Codex, dry-run Codex status hooks and mention that Codex may ask for trust once:
+
+```bash
+"$TOASTTY_CLI_PATH" setup install-hooks --agent codex
+```
+
+After approval, apply with `--apply`.
+
+4. Offer starter skills. Dry-run `toastty-capabilities` first, then ask whether the user wants Scratchpad and Markdown helpers:
+
+```bash
+"$TOASTTY_CLI_PATH" setup install-skill toastty-capabilities --runtime all
+```
+
+After approval, apply with `--apply`.
+
 5. Confirm the setup by launching a fresh agent pane and checking that Toastty tracks it.
 
 ## Optional Tour
