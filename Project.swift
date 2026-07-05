@@ -400,8 +400,12 @@ let project = Project(
             resources: [
                 .glob(
                     pattern: "Sources/App/Resources/**",
-                    excluding: ["Sources/App/Resources/WebPanels/**"]
+                    excluding: [
+                        "Sources/App/Resources/Setup/**",
+                        "Sources/App/Resources/WebPanels/**",
+                    ]
                 ),
+                .folderReference(path: "Sources/App/Resources/Setup"),
                 .folderReference(path: "Sources/App/Resources/WebPanels"),
                 "docs/keyboard-shortcuts.md",
             ],

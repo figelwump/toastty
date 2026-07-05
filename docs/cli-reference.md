@@ -44,6 +44,52 @@ agents and scripts.
 The command does not write a diagnostics bundle, upload anything, or attempt
 automatic fixes. It exits non-zero only when at least one check fails.
 
+### `setup guide`
+
+Print the bundled agent-guided Getting Started guide.
+
+```
+toastty setup guide [--format text|md]
+```
+
+The default `text` format is optimized for terminal reading. Use `--format md`
+when another agent or tool should preserve Markdown headings and code fences.
+
+```bash
+"$TOASTTY_CLI_PATH" setup guide
+"$TOASTTY_CLI_PATH" setup guide --format md
+```
+
+### `setup skills list`
+
+List starter skills bundled with Toastty.
+
+```
+toastty setup skills list
+```
+
+The v1 starter set includes `toastty-capabilities`, `toastty-scratchpad`, and
+`toastty-open-markdown`.
+
+```bash
+"$TOASTTY_CLI_PATH" setup skills list
+```
+
+### `setup print-skill`
+
+Preview a bundled starter skill's `SKILL.md`.
+
+```
+toastty setup print-skill <name>
+```
+
+This command is read-only. It prints the skill instructions only; companion
+scripts are installed later by `setup install-skill`.
+
+```bash
+"$TOASTTY_CLI_PATH" setup print-skill toastty-capabilities
+```
+
 ### `diagnostics collect`
 
 Collect a local redacted diagnostics JSON bundle. This command reads local disk

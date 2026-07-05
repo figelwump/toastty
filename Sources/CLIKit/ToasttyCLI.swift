@@ -22,6 +22,7 @@ enum CLICommand: Equatable {
     case diagnosticsCollect(DiagnosticsCollectOptions)
     case diagnosticsSubmit(DiagnosticsSubmitOptions)
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
+    case setup(SetupCommand)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
     case sessionCodexHookEvent(sessionID: String, panelID: UUID?, event: CodexHookEvent)
@@ -41,7 +42,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -111,7 +112,7 @@ enum CLICommand: Equatable {
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .appControlList, .appControlRun, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .setup, .sessionScopeShow, .sessionScopeSetCurrent, .sessionScopeSet, .sessionScopeAdd, .sessionScopeClear:
             preconditionFailure("request-backed commands are handled as requests")
 
         case .notify(let title, let body, let workspaceID, let panelID):
@@ -306,6 +307,8 @@ enum CLICommand: Equatable {
             return "queried \(id)"
         case .notify:
             return "notification emitted"
+        case .setup:
+            return "ran setup command"
         case .sessionStart(let sessionID, _, _, _, _):
             let resolvedSessionID = response.result?.string("sessionID") ?? sessionID
             return resolvedSessionID
@@ -412,6 +415,13 @@ public enum ToasttyCLI {
                 )
                 return 0
 
+            case .setup(let setupCommand):
+                return try SetupCommandRunner.run(
+                    command: setupCommand,
+                    jsonOutput: invocation.options.jsonOutput,
+                    environment: environment
+                )
+
             default:
                 let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
                 let response: AutomationResponseEnvelope
@@ -510,6 +520,12 @@ public enum ToasttyCLI {
                 command: try parseNotifyCommand(Array(remainingArguments.dropFirst()))
             )
 
+        case "setup":
+            return CLIInvocation(
+                options: options,
+                command: try parseSetupCommand(Array(remainingArguments.dropFirst()))
+            )
+
         case "session":
             return CLIInvocation(
                 options: options,
@@ -533,6 +549,9 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] query list
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+      toastty [--json] setup guide [--format text|md]
+      toastty [--json] setup skills list
+      toastty [--json] setup print-skill <name>
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
@@ -603,6 +622,55 @@ public enum ToasttyCLI {
             workspaceID: workspaceID,
             panelID: panelID
         )
+    }
+
+    private static func parseSetupCommand(_ arguments: [String]) throws -> CLICommand {
+        guard let subcommand = arguments.first else {
+            throw ToasttyCLIError.usage("setup requires a subcommand\n\n\(usage)")
+        }
+
+        let remainingArguments = Array(arguments.dropFirst())
+        switch subcommand {
+        case "guide":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--format"]
+            )
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("setup guide does not accept positional arguments\n\n\(usage)")
+            }
+            let formatValue = parsed.singleValue("--format") ?? SetupGuideFormat.text.rawValue
+            guard let format = SetupGuideFormat(rawValue: formatValue) else {
+                throw ToasttyCLIError.usage("--format must be one of: text, md")
+            }
+            return .setup(.guide(format: format))
+
+        case "skills":
+            guard let skillsSubcommand = remainingArguments.first else {
+                throw ToasttyCLIError.usage("setup skills requires a subcommand\n\n\(usage)")
+            }
+            let skillsRemaining = Array(remainingArguments.dropFirst())
+            switch skillsSubcommand {
+            case "list":
+                let parsed = try parseCommandArguments(skillsRemaining, valueOptions: [])
+                guard parsed.positionals.isEmpty else {
+                    throw ToasttyCLIError.usage("setup skills list does not accept positional arguments\n\n\(usage)")
+                }
+                return .setup(.skillsList)
+            default:
+                throw ToasttyCLIError.usage("unknown setup skills subcommand: \(skillsSubcommand)\n\n\(usage)")
+            }
+
+        case "print-skill":
+            let parsed = try parseCommandArguments(remainingArguments, valueOptions: [])
+            guard parsed.positionals.count == 1 else {
+                throw ToasttyCLIError.usage("setup print-skill requires <name>\n\n\(usage)")
+            }
+            return .setup(.printSkill(name: parsed.positionals[0]))
+
+        default:
+            throw ToasttyCLIError.usage("unknown setup subcommand: \(subcommand)\n\n\(usage)")
+        }
     }
 
     private static func parseDoctorCommand(_ arguments: [String]) throws -> CLICommand {
