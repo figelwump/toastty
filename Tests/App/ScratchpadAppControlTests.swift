@@ -1063,6 +1063,147 @@ struct ScratchpadAppControlTests {
     }
 
     @Test
+    func lookupReturnsSessionLinkedScratchpadMetadataWithoutExporting() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        let response = try fixture.executor.runAction(
+            id: AppControlActionID.panelScratchpadSetContent.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+                "content": .string("<h1>Detect me</h1>"),
+                "title": .string("Detect me"),
+            ]
+        )
+        let result = try #require(response.result)
+        let panelIDString = try #require(result.string("panelID"))
+        let documentIDString = try #require(result.string("documentID"))
+        let documentID = try #require(UUID(uuidString: documentIDString))
+
+        let lookup = try fixture.executor.runQuery(
+            id: AppControlQueryID.panelScratchpadLookup.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+            ]
+        )
+
+        #expect(lookup.bool("linked") == true)
+        #expect(lookup.string("windowID") == fixture.windowID.uuidString)
+        #expect(lookup.string("workspaceID") == fixture.workspaceID.uuidString)
+        #expect(lookup.string("panelID") == panelIDString)
+        #expect(lookup.string("documentID") == documentIDString)
+        #expect(lookup.int("revision") == 1)
+        #expect(lookup.string("title") == "Detect me")
+        #expect(lookup.string("sessionID") == fixture.sessionID)
+        #expect(lookup.string("sourcePanelID") == fixture.sourcePanelID.uuidString)
+        #expect(lookup.string("sourceWorkspaceID") == fixture.workspaceID.uuidString)
+        #expect(lookup.string("displayTitle") == "Codex")
+
+        let exportURL = ScratchpadDocumentExporter.defaultExportURL(
+            documentID: documentID,
+            documentStore: fixture.documentStore
+        )
+        #expect(FileManager.default.fileExists(atPath: exportURL.path) == false)
+    }
+
+    @Test
+    func lookupReturnsUnlinkedMetadataForSessionWithoutScratchpad() throws {
+        let fixture = try ScratchpadAppControlFixture()
+
+        let lookup = try fixture.executor.runQuery(
+            id: AppControlQueryID.panelScratchpadLookup.rawValue,
+            args: [
+                "sessionID": .string(fixture.sessionID),
+            ]
+        )
+
+        #expect(lookup.bool("linked") == false)
+        #expect(lookup.string("sessionID") == fixture.sessionID)
+        #expect(lookup.string("windowID") == fixture.windowID.uuidString)
+        #expect(lookup.string("workspaceID") == fixture.workspaceID.uuidString)
+        #expect(lookup.string("panelID") == nil)
+        #expect(lookup.string("documentID") == nil)
+        #expect(lookup.int("revision") == nil)
+        #expect(lookup.string("title") == nil)
+        #expect(lookup.string("sourcePanelID") == fixture.sourcePanelID.uuidString)
+        #expect(lookup.string("sourceWorkspaceID") == fixture.workspaceID.uuidString)
+    }
+
+    @Test
+    func lookupRejectsUnknownSession() throws {
+        let fixture = try ScratchpadAppControlFixture()
+
+        do {
+            _ = try fixture.executor.runQuery(
+                id: AppControlQueryID.panelScratchpadLookup.rawValue,
+                args: [
+                    "sessionID": .string("missing-session"),
+                ]
+            )
+            Issue.record("lookup should reject unknown sessions")
+        } catch AutomationSocketError.invalidPayload(let message) {
+            #expect(message == "sessionID does not refer to an active session")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func lookupRequiresNonBlankSessionID() throws {
+        let fixture = try ScratchpadAppControlFixture()
+
+        do {
+            _ = try fixture.executor.runQuery(
+                id: AppControlQueryID.panelScratchpadLookup.rawValue,
+                args: [
+                    "sessionID": .string(" "),
+                ]
+            )
+            Issue.record("lookup should reject a blank sessionID")
+        } catch AutomationSocketError.invalidPayload(let message) {
+            #expect(message == "sessionID is required")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func lookupDeniesScopedCallerOutsideScratchpadWorkspace() throws {
+        let fixture = try ScratchpadAppControlFixture()
+        _ = try fixture.createLinkedScratchpad()
+        #expect(fixture.store.send(.createWorkspace(windowID: fixture.windowID, title: "Other", activate: true)))
+        let otherWorkspaceID = try #require(fixture.store.state.window(id: fixture.windowID)?.selectedWorkspaceID)
+        let otherPanelID = try #require(fixture.store.state.workspacesByID[otherWorkspaceID]?.focusedPanelID)
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "caller-scoped",
+            agent: .codex,
+            panelID: otherPanelID,
+            windowID: fixture.windowID,
+            workspaceID: otherWorkspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [],
+            at: Date(timeIntervalSince1970: 200)
+        )
+
+        do {
+            _ = try fixture.executor.runQuery(
+                id: AppControlQueryID.panelScratchpadLookup.rawValue,
+                args: [
+                    "sessionID": .string(fixture.sessionID),
+                ],
+                context: AutomationRequestContext(
+                    callerSessionID: "caller-scoped",
+                    commandName: "app_control.run_query"
+                )
+            )
+            Issue.record("lookup should deny scoped callers outside the Scratchpad workspace")
+        } catch AutomationSocketError.scopeDenied(let workspaceID) {
+            #expect(workspaceID == fixture.workspaceID)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
     func exportWritesSessionLinkedScratchpadToDeterministicFile() throws {
         let fixture = try ScratchpadAppControlFixture()
         let response = try fixture.executor.runAction(
