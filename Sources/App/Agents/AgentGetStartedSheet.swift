@@ -104,7 +104,8 @@ struct AgentGetStartedPresentationRequest: Equatable {
 }
 
 enum AgentGetStartedSheetBehavior {
-    static let supportedAgentHint = "codex, claude, pi, opencode, mimo"
+    static let supportedAgentNames = "codex, claude, pi, opencode, mimo"
+    static let supportedAgentHint = "Need an agent first? Open a pane and start codex, claude, pi, opencode, or mimo."
     static let codexStatusHooksManualRowBody = "Toastty guides the install; Codex may ask you to trust the hook once."
 
     static let onboardingPrompt = """
@@ -253,7 +254,7 @@ struct AgentGetStartedSheet: View {
                 manualFallbackRow(
                     systemImage: "terminal",
                     title: "Shell integration",
-                    body: "Let Toastty track typed agent commands and keep terminal sessions restorable."
+                    body: "Track agents you start by hand."
                 ) {
                     showShellIntegrationStep()
                 }
@@ -271,7 +272,7 @@ struct AgentGetStartedSheet: View {
                 manualFallbackRow(
                     systemImage: "slider.horizontal.3",
                     title: "Terminal profiles",
-                    body: "Open agents.toml to configure quick-launch buttons, menu entries, and shortcuts."
+                    body: "Launchers for tmux, ssh, REPLs, and more."
                 ) {
                     openAgentProfiles()
                 }
@@ -289,7 +290,7 @@ struct AgentGetStartedSheet: View {
                 manualFallbackRow(
                     systemImage: "keyboard",
                     title: "Keyboard shortcuts",
-                    body: "Review workspace, split, focus, and close shortcuts."
+                    body: "Reference."
                 ) {
                     showKeyboardShortcutsStep()
                 }
@@ -311,24 +312,25 @@ struct AgentGetStartedSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            benefitsRow
+
             HStack(alignment: .center, spacing: 8) {
                 Text(AgentGetStartedSheetBehavior.supportedAgentHint)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(ToastyTheme.primaryText)
-                    .textSelection(.enabled)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(ToastyTheme.inactiveText)
                 Image(systemName: "info.circle")
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(ToastyTheme.inactiveText)
-                    .help("Paste the prompt into any supported agent running in a Toastty terminal pane.")
+                    .help("Supported agents: \(AgentGetStartedSheetBehavior.supportedAgentNames). Any agent can run setup; these are the ones Toastty tracks.")
                     .accessibilityHidden(true)
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Supported agents: \(AgentGetStartedSheetBehavior.supportedAgentHint)")
+            .accessibilityLabel("\(AgentGetStartedSheetBehavior.supportedAgentHint) Supported agents: \(AgentGetStartedSheetBehavior.supportedAgentNames).")
 
             Button {
                 copyOnboardingPrompt()
             } label: {
-                Label(onboardingPromptCopied ? "Copied Setup Prompt" : "Copy Setup Prompt", systemImage: "doc.on.doc")
+                Label(onboardingPromptCopied ? "Copied onboarding prompt" : "Copy onboarding prompt", systemImage: "doc.on.doc")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -351,6 +353,59 @@ struct AgentGetStartedSheet: View {
                 .accessibilityIdentifier("sheet.agent.get-started.onboarding-prompt")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var benefitsRow: some View {
+        HStack(spacing: 10) {
+            onboardingBenefit(
+                systemImage: "waveform.path.ecg.rectangle",
+                title: "Live status",
+                body: "Track agent work and completion."
+            )
+            onboardingBenefit(
+                systemImage: "sparkles",
+                title: "Starter skills",
+                body: "Install only what fits your workflow."
+            )
+            onboardingBenefit(
+                systemImage: "slider.horizontal.3",
+                title: "Profiles",
+                body: "Add launchers for terminals you use."
+            )
+        }
+    }
+
+    private func onboardingBenefit(
+        systemImage: String,
+        title: String,
+        body: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ToastyTheme.primaryText)
+                .frame(width: 18, alignment: .center)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .lineLimit(1)
+                Text(body)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 78, alignment: .topLeading)
+        .background(ToastyTheme.elevatedBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder

@@ -23,9 +23,11 @@ final class AgentGetStartedSheetTests: XCTestCase {
 
     func testSupportedAgentHintListsSetupPromptTargets() {
         XCTAssertEqual(
-            AgentGetStartedSheetBehavior.supportedAgentHint,
+            AgentGetStartedSheetBehavior.supportedAgentNames,
             "codex, claude, pi, opencode, mimo"
         )
+        XCTAssertTrue(AgentGetStartedSheetBehavior.supportedAgentHint.contains("Need an agent first?"))
+        XCTAssertTrue(AgentGetStartedSheetBehavior.supportedAgentHint.contains("Open a pane"))
     }
 
     func testCodexStatusHooksManualCopyMentionsTrustPrompt() {
