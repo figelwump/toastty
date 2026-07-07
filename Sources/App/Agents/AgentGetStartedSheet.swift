@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -97,6 +98,17 @@ struct AgentGetStartedPresentationRequest: Equatable {
 }
 
 enum AgentGetStartedSheetBehavior {
+    static let supportedAgentHint = "codex, claude, pi, opencode, mimo"
+    static let codexStatusHooksManualRowBody = "Toastty guides the install; Codex may ask you to trust the hook once."
+
+    static let onboardingPrompt = """
+    You are helping me set up Toastty. Please run:
+
+    "$TOASTTY_CLI_PATH" setup guide
+
+    Read the guide, narrate each step, dry-run every setup command first, show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.
+    """
+
     static func dismissDisabled(
         step: AgentGetStartedStep,
         shellIntegrationState: AgentGetStartedShellIntegrationStepState,
@@ -135,6 +147,7 @@ struct AgentGetStartedSheet: View {
     @State private var agentStatusHooksState: AgentStatusHooksStepState = .loading
     @State private var openAgentProfilesErrorMessage: String?
     @State private var openKeyboardShortcutsReferenceErrorMessage: String?
+    @State private var onboardingPromptCopied = false
     @State private var shellIntegrationTask: Task<Void, Never>?
     @State private var agentStatusHooksTask: Task<Void, Never>?
 
@@ -155,12 +168,15 @@ struct AgentGetStartedSheet: View {
             header
             Divider()
                 .overlay(ToastyTheme.hairline)
-            content
+            ScrollView {
+                content
+            }
+            .frame(maxHeight: 720)
             Divider()
                 .overlay(ToastyTheme.hairline)
             buttonBar
         }
-        .frame(width: 560)
+        .frame(width: 640)
         .background(ToastyTheme.chromeBackground)
         .foregroundStyle(ToastyTheme.primaryText)
         .accessibilityIdentifier("sheet.agent.get-started")
@@ -212,35 +228,115 @@ struct AgentGetStartedSheet: View {
     }
 
     private var chooserContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            sectionCard(
-                title: "Typed Commands",
-                body: """
-                Type codex, claude, pi, or supported wrapper executables directly in Toastty terminals. Shell integration keeps agent sessions visible on the sidebar and preserves terminal history across restarts.
-                """
-            ) {
-                Button("Set Up Typed Commands") {
+        VStack(alignment: .leading, spacing: 18) {
+            onboardingHero
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Manual setup")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ToastyTheme.primaryText)
+
+                manualFallbackRow(
+                    systemImage: "terminal",
+                    title: "Shell integration",
+                    body: "Let Toastty track typed agent commands and keep terminal sessions restorable."
+                ) {
                     showShellIntegrationStep()
                 }
                 .accessibilityIdentifier("sheet.agent.get-started.typed-commands")
-            }
 
-            sectionCard(
-                title: "Agent Status Hooks",
-                body: """
-                Install stable status hooks so Toastty can track agent progress, approval requests, and turn completion without relying on fragile terminal logs.
-                """
-            ) {
-                Button("Set Up Agent Status Hooks") {
+                manualFallbackRow(
+                    systemImage: "checkmark.circle",
+                    title: "Codex status hooks",
+                    body: AgentGetStartedSheetBehavior.codexStatusHooksManualRowBody
+                ) {
                     showAgentStatusHooksStep()
                 }
                 .accessibilityIdentifier("sheet.agent.get-started.status-hooks")
-            }
 
-            quickLaunchButtonsCard
-            keyboardShortcutsCard()
+                manualFallbackRow(
+                    systemImage: "slider.horizontal.3",
+                    title: "Terminal profiles",
+                    body: "Open agents.toml to configure quick-launch buttons, menu entries, and shortcuts."
+                ) {
+                    openAgentProfiles()
+                }
+                .accessibilityIdentifier("sheet.agent.get-started.open-agents")
+
+                if let openAgentProfilesErrorMessage {
+                    inlineMessage(
+                        openAgentProfilesErrorMessage,
+                        textColor: ToastyTheme.sessionErrorText,
+                        backgroundColor: ToastyTheme.sessionErrorBackground,
+                        identifier: "sheet.agent.get-started.error.open"
+                    )
+                }
+
+                manualFallbackRow(
+                    systemImage: "keyboard",
+                    title: "Keyboard shortcuts",
+                    body: "Review workspace, split, focus, and close shortcuts."
+                ) {
+                    showKeyboardShortcutsStep()
+                }
+                .accessibilityIdentifier("sheet.agent.get-started.keyboard-shortcuts")
+            }
         }
         .padding(24)
+    }
+
+    private var onboardingHero: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Set up with your agent")
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                Text("Copy one prompt into an agent running in a Toastty pane. The guide stays in the CLI, so the agent can dry-run each setup step and ask before applying changes.")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(alignment: .center, spacing: 8) {
+                Text(AgentGetStartedSheetBehavior.supportedAgentHint)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .textSelection(.enabled)
+                Image(systemName: "info.circle")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .help("Paste the prompt into any supported agent running in a Toastty terminal pane.")
+                    .accessibilityHidden(true)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Supported agents: \(AgentGetStartedSheetBehavior.supportedAgentHint)")
+
+            Button {
+                copyOnboardingPrompt()
+            } label: {
+                Label(onboardingPromptCopied ? "Copied Setup Prompt" : "Copy Setup Prompt", systemImage: "doc.on.doc")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+            .accessibilityIdentifier("sheet.agent.get-started.copy-onboarding-prompt")
+
+            Text(AgentGetStartedSheetBehavior.onboardingPrompt)
+                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .textSelection(.enabled)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ToastyTheme.elevatedBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityIdentifier("sheet.agent.get-started.onboarding-prompt")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -388,7 +484,7 @@ struct AgentGetStartedSheet: View {
                 Button("Done") {
                     dismiss()
                 }
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("sheet.agent.get-started.done")
 
             case .shellIntegration:
@@ -408,6 +504,7 @@ struct AgentGetStartedSheet: View {
                     dismiss()
                 }
                 .disabled(shellIntegrationState.blocksNavigation)
+                .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("sheet.agent.get-started.done")
 
             case .agentStatusHooks:
@@ -425,6 +522,7 @@ struct AgentGetStartedSheet: View {
                     dismiss()
                 }
                 .disabled(agentStatusHooksState.blocksNavigation)
+                .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("sheet.agent.get-started.done")
 
             case .keyboardShortcuts:
@@ -440,6 +538,7 @@ struct AgentGetStartedSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("sheet.agent.get-started.done")
             }
         }
@@ -645,6 +744,49 @@ struct AgentGetStartedSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
+    private func manualFallbackRow(
+        systemImage: String,
+        title: String,
+        body: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .frame(width: 22, alignment: .center)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(ToastyTheme.primaryText)
+                    Text(body)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .accessibilityHidden(true)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ToastyTheme.elevatedBackground)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+
     private func shellIntegrationStatusContent(
         status: ProfileShellIntegrationInstallStatus
     ) -> some View {
@@ -757,6 +899,7 @@ struct AgentGetStartedSheet: View {
     }
 
     private func showShellIntegrationStep() {
+        onboardingPromptCopied = false
         openAgentProfilesErrorMessage = nil
         openKeyboardShortcutsReferenceErrorMessage = nil
         step = .shellIntegration
@@ -764,6 +907,7 @@ struct AgentGetStartedSheet: View {
     }
 
     private func showAgentStatusHooksStep() {
+        onboardingPromptCopied = false
         openAgentProfilesErrorMessage = nil
         openKeyboardShortcutsReferenceErrorMessage = nil
         step = .agentStatusHooks
@@ -771,6 +915,7 @@ struct AgentGetStartedSheet: View {
     }
 
     private func showKeyboardShortcutsStep() {
+        onboardingPromptCopied = false
         openAgentProfilesErrorMessage = nil
         openKeyboardShortcutsReferenceErrorMessage = nil
         step = .keyboardShortcuts
@@ -786,6 +931,13 @@ struct AgentGetStartedSheet: View {
         openKeyboardShortcutsReferenceErrorMessage = AgentGetStartedSheetBehavior.actionErrorMessage(
             for: result
         )
+    }
+
+    private func copyOnboardingPrompt() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(AgentGetStartedSheetBehavior.onboardingPrompt, forType: .string)
+        onboardingPromptCopied = true
     }
 
     private func loadShellIntegrationStatus() {

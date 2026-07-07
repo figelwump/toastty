@@ -3,6 +3,35 @@ import CoreState
 import XCTest
 
 final class AgentGetStartedSheetTests: XCTestCase {
+    func testOnboardingPromptPointsAgentAtSetupGuide() {
+        let prompt = AgentGetStartedSheetBehavior.onboardingPrompt
+
+        XCTAssertTrue(prompt.contains(#""$TOASTTY_CLI_PATH" setup guide"#))
+    }
+
+    func testOnboardingPromptPreservesDryRunApplyContract() {
+        let prompt = AgentGetStartedSheetBehavior.onboardingPrompt
+
+        XCTAssertTrue(prompt.contains("dry-run every setup command first"))
+        XCTAssertTrue(prompt.contains("wait for my explicit OK"))
+        XCTAssertTrue(prompt.contains("--apply"))
+    }
+
+    func testOnboardingPromptStaysShortEnoughForCopyFirstSetup() {
+        XCTAssertLessThanOrEqual(AgentGetStartedSheetBehavior.onboardingPrompt.count, 280)
+    }
+
+    func testSupportedAgentHintListsSetupPromptTargets() {
+        XCTAssertEqual(
+            AgentGetStartedSheetBehavior.supportedAgentHint,
+            "codex, claude, pi, opencode, mimo"
+        )
+    }
+
+    func testCodexStatusHooksManualCopyMentionsTrustPrompt() {
+        XCTAssertTrue(AgentGetStartedSheetBehavior.codexStatusHooksManualRowBody.contains("trust the hook once"))
+    }
+
     func testLoadedStateUsesInstallableCaseWhenFilesStillNeedUpdates() {
         let status = makeStatus(
             needsManagedSnippetWrite: true,
