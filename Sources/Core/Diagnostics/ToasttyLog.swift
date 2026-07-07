@@ -71,13 +71,15 @@ public struct ToasttyLogConfiguration: Sendable, Equatable {
         let mirrorToStderr = truthy(environment["TOASTTY_LOG_STDERR"])
 
         let filePath: String?
-        if let rawPath = environment["TOASTTY_LOG_FILE"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        let rawLogFilePath = environment["TOASTTY_LOG_FILE"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let rawPath = rawLogFilePath,
            rawPath.isEmpty == false,
            rawPath.lowercased() != "none" {
             filePath = rawPath
         } else if truthy(environment["TOASTTY_LOG_TO_FILE"]) {
             filePath = runtimePaths.defaultLogFileURL.path
-        } else if environment["TOASTTY_LOG_FILE"] == nil {
+        } else if environment["TOASTTY_LOG_FILE"] == nil,
+                  isRunningUnderXCTest(environment) == false {
             filePath = runtimePaths.defaultLogFileURL.path
         } else {
             filePath = nil
@@ -103,6 +105,12 @@ public struct ToasttyLogConfiguration: Sendable, Equatable {
             return false
         }
         return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+    }
+
+    private static func isRunningUnderXCTest(_ environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil ||
+            environment["XCTestBundlePath"] != nil ||
+            environment["XCTestSessionIdentifier"] != nil
     }
 }
 

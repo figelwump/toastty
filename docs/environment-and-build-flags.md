@@ -82,6 +82,8 @@ These flags are read by the app itself when Toastty launches normally.
 | `TOASTTY_LOG_DISABLE` | unset | Disables Toastty logging entirely. |
 | `TOASTTY_LOG_TO_FILE` | unset | Legacy compatibility toggle that forces the default file sink when `TOASTTY_LOG_FILE` is otherwise unset. Prefer `TOASTTY_LOG_FILE`. |
 
+XCTest-hosted processes default to no file sink unless `TOASTTY_LOG_FILE` or `TOASTTY_LOG_TO_FILE=1` is set explicitly. This keeps fixture diagnostics out of app runtime logs while preserving opt-in test log capture.
+
 ### Standard environment variables Toastty also consults
 
 | Variable | Effect |
@@ -283,6 +285,7 @@ CLI notes:
 - The wrapper does not fall back to a local run. If remote preflight fails, it writes a `setup_error` result locally and exits non-zero.
 - Remote test runs call `./scripts/dev/bootstrap-worktree.sh` inside the disposable remote worktree before invoking `xcodebuild test`.
 - The wrapper sets `TOASTTY_RUNTIME_HOME=<remote-run>/runtime-home` and `TOASTTY_DEV_WORKTREE_ROOT=<remote-worktree>` for the remote `xcodebuild` environment so AppKit-presenting or host-app tests stay runtime-isolated from the remote user's shared state.
+- XCTest-hosted Toastty logging does not write a file by default. Set `TOASTTY_LOG_FILE=<path>` or `TOASTTY_LOG_TO_FILE=1` when a remote test run needs app-level file logs.
 - Pass `--keep-remote` to keep the remote worktree and run directory for follow-up debugging.
 
 ### `scripts/release/release.sh`

@@ -37,6 +37,61 @@ struct ToasttyLogConfigurationTests {
     }
 
     @Test
+    func xctestProcessesDisableDefaultFileSink() {
+        let config = ToasttyLogConfiguration.fromEnvironment(
+            [
+                "TOASTTY_DEV_WORKTREE_ROOT": "/tmp/toastty-runtime-log-tests/worktrees/main",
+                "XCTestConfigurationFilePath": "/tmp/toastty-tests.xctestconfiguration",
+            ],
+            homeDirectoryPath: "/tmp/ignored-home"
+        )
+
+        #expect(config.filePath == nil)
+    }
+
+    @Test
+    func xctestProcessesHonorExplicitLogFilePath() {
+        let config = ToasttyLogConfiguration.fromEnvironment(
+            [
+                "TOASTTY_LOG_FILE": "/tmp/toastty-test-debug.log",
+                "TOASTTY_DEV_WORKTREE_ROOT": "/tmp/toastty-runtime-log-tests/worktrees/main",
+                "XCTestConfigurationFilePath": "/tmp/toastty-tests.xctestconfiguration",
+            ],
+            homeDirectoryPath: "/tmp/ignored-home"
+        )
+
+        #expect(config.filePath == "/tmp/toastty-test-debug.log")
+    }
+
+    @Test
+    func xctestProcessesKeepExplicitLogFileDisablement() {
+        let config = ToasttyLogConfiguration.fromEnvironment(
+            [
+                "TOASTTY_LOG_FILE": "none",
+                "TOASTTY_DEV_WORKTREE_ROOT": "/tmp/toastty-runtime-log-tests/worktrees/main",
+                "XCTestConfigurationFilePath": "/tmp/toastty-tests.xctestconfiguration",
+            ],
+            homeDirectoryPath: "/tmp/ignored-home"
+        )
+
+        #expect(config.filePath == nil)
+    }
+
+    @Test
+    func xctestProcessesHonorLogToFileOptIn() {
+        let config = ToasttyLogConfiguration.fromEnvironment(
+            [
+                "TOASTTY_LOG_TO_FILE": "1",
+                "TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-log-tests/runtime-home",
+                "XCTestConfigurationFilePath": "/tmp/toastty-tests.xctestconfiguration",
+            ],
+            homeDirectoryPath: "/tmp/ignored-home"
+        )
+
+        #expect(config.filePath == "/tmp/toastty-runtime-log-tests/runtime-home/logs/toastty.log")
+    }
+
+    @Test
     func runtimeHomeChangesDefaultLogPath() {
         let config = ToasttyLogConfiguration.fromEnvironment(
             ["TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-log-tests/runtime-home"],
