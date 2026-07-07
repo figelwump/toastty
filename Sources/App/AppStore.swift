@@ -370,6 +370,8 @@ final class AppStore: ObservableObject {
     /// once. It originally tracked agent launches, but process-watch rows
     /// should opt into the same expanded session-status treatment.
     @Published private(set) var hasEverLaunchedAgent: Bool
+    @Published private(set) var hasSeenGettingStarted: Bool
+    @Published private(set) var hasAutoPresentedGettingStartedThisSession = false
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
@@ -403,12 +405,14 @@ final class AppStore: ObservableObject {
         state: AppState = .bootstrap(),
         persistTerminalFontPreference: Bool = true,
         initialHasEverLaunchedAgent: Bool = false,
+        initialHasSeenGettingStarted: Bool = false,
         initialAskBeforeQuitting: Bool = true,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit
     ) {
         self.state = state
         hasEverLaunchedAgent = initialHasEverLaunchedAgent
+        hasSeenGettingStarted = initialHasSeenGettingStarted
         askBeforeQuitting = initialAskBeforeQuitting
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
@@ -1722,6 +1726,20 @@ final class AppStore: ObservableObject {
 
     func recordSuccessfulAgentLaunch() {
         recordSessionStatusSidebarExpansionEligibility()
+    }
+
+    @discardableResult
+    func recordGettingStartedAutoPresentationIfNeeded() -> Bool {
+        guard hasAutoPresentedGettingStartedThisSession == false else { return false }
+        hasAutoPresentedGettingStartedThisSession = true
+        return true
+    }
+
+    func markGettingStartedSeen() {
+        guard hasSeenGettingStarted == false else { return }
+        hasSeenGettingStarted = true
+        guard persistUserSettings else { return }
+        ToasttySettingsStore.persistHasSeenGettingStarted(true)
     }
 
     func setAskBeforeQuitting(_ askBeforeQuitting: Bool) {

@@ -165,6 +165,9 @@ struct AppWindowView: View {
                 windowID: windowID,
                 notificationObject: notification.object
             ) else { return }
+            if request.isAutomatic {
+                guard store.recordGettingStartedAutoPresentationIfNeeded() else { return }
+            }
             presentAgentGetStartedFlow(initialStep: request.initialStep)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -235,6 +238,30 @@ struct AppWindowView: View {
         ) != nil
     }
 
+    static func shouldAutoPresentAgentGetStartedFlow(
+        allowsAutoPresentation: Bool,
+        hasSeenGettingStarted: Bool,
+        hasAutoPresentedThisSession: Bool
+    ) -> Bool {
+        allowsAutoPresentation
+            && hasSeenGettingStarted == false
+            && hasAutoPresentedThisSession == false
+    }
+
+    static func agentGetStartedAutoPresentationRequest(
+        windowID: UUID,
+        allowsAutoPresentation: Bool,
+        hasSeenGettingStarted: Bool,
+        hasAutoPresentedThisSession: Bool
+    ) -> AgentGetStartedPresentationRequest? {
+        guard shouldAutoPresentAgentGetStartedFlow(
+            allowsAutoPresentation: allowsAutoPresentation,
+            hasSeenGettingStarted: hasSeenGettingStarted,
+            hasAutoPresentedThisSession: hasAutoPresentedThisSession
+        ) else { return nil }
+        return AgentGetStartedPresentationRequest(windowID: windowID, isAutomatic: true)
+    }
+
     static func agentGetStartedPresentationRequest(
         windowID: UUID,
         notificationObject: Any?
@@ -281,6 +308,9 @@ struct AppWindowView: View {
             initialStep: agentGetStartedInitialStep,
             openAgentProfilesConfiguration: openAgentProfilesConfigurationResult,
             openKeyboardShortcutsReference: openKeyboardShortcutsReferenceResult,
+            markGettingStartedSeen: {
+                store.markGettingStartedSeen()
+            },
             resolveShellIntegrationPreferredShellPath: resolveShellIntegrationPreferredShellPath
         )
     }

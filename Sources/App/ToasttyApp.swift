@@ -1868,6 +1868,7 @@ struct ToasttyApp: App {
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
+    private let allowsGettingStartedAutoPresentation: Bool
     private let disableAnimations: Bool
     private let runtimePaths: ToasttyRuntimePaths
     private let agentLaunchSocketPath: String
@@ -1952,6 +1953,7 @@ struct ToasttyApp: App {
             state: bootstrap.state,
             persistTerminalFontPreference: persistUserSettings,
             initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
+            initialHasSeenGettingStarted: initialToasttySettings.hasSeenGettingStarted,
             initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting
         )
         let agentCatalogStore = AgentCatalogStore()
@@ -2251,6 +2253,7 @@ struct ToasttyApp: App {
         _webPanelRuntimeRegistry = StateObject(wrappedValue: webPanelRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
+        allowsGettingStartedAutoPresentation = persistUserSettings
         disableAnimations = bootstrap.disableAnimations
         self.runtimePaths = runtimePaths
         agentLaunchSocketPath = socketPath
@@ -2546,6 +2549,7 @@ struct ToasttyApp: App {
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
+                allowsGettingStartedAutoPresentation: allowsGettingStartedAutoPresentation,
                 disableAnimations: disableAnimations
             )
             .frame(minWidth: 980, minHeight: 620)

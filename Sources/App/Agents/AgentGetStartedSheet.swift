@@ -90,10 +90,16 @@ enum AgentGetStartedStep: Equatable {
 struct AgentGetStartedPresentationRequest: Equatable {
     let windowID: UUID
     let initialStep: AgentGetStartedStep
+    let isAutomatic: Bool
 
-    init(windowID: UUID, initialStep: AgentGetStartedStep = .chooser) {
+    init(
+        windowID: UUID,
+        initialStep: AgentGetStartedStep = .chooser,
+        isAutomatic: Bool = false
+    ) {
         self.windowID = windowID
         self.initialStep = initialStep
+        self.isAutomatic = isAutomatic
     }
 }
 
@@ -139,6 +145,7 @@ enum AgentGetStartedSheetBehavior {
 struct AgentGetStartedSheet: View {
     let openAgentProfilesConfiguration: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReference: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let markGettingStartedSeen: @MainActor () -> Void
     let resolveShellIntegrationPreferredShellPath: @MainActor () -> String?
 
     @Environment(\.dismiss) private var dismiss
@@ -148,6 +155,8 @@ struct AgentGetStartedSheet: View {
     @State private var openAgentProfilesErrorMessage: String?
     @State private var openKeyboardShortcutsReferenceErrorMessage: String?
     @State private var onboardingPromptCopied = false
+    @State private var dontShowAgain = false
+    @State private var explicitlyOptedOutOfAutoShow = false
     @State private var shellIntegrationTask: Task<Void, Never>?
     @State private var agentStatusHooksTask: Task<Void, Never>?
 
@@ -155,11 +164,13 @@ struct AgentGetStartedSheet: View {
         initialStep: AgentGetStartedStep = .chooser,
         openAgentProfilesConfiguration: @escaping @MainActor () -> Result<Void, AgentGetStartedActionError>,
         openKeyboardShortcutsReference: @escaping @MainActor () -> Result<Void, AgentGetStartedActionError>,
+        markGettingStartedSeen: @escaping @MainActor () -> Void = {},
         resolveShellIntegrationPreferredShellPath: @escaping @MainActor () -> String? = { nil }
     ) {
         _step = State(initialValue: initialStep)
         self.openAgentProfilesConfiguration = openAgentProfilesConfiguration
         self.openKeyboardShortcutsReference = openKeyboardShortcutsReference
+        self.markGettingStartedSeen = markGettingStartedSeen
         self.resolveShellIntegrationPreferredShellPath = resolveShellIntegrationPreferredShellPath
     }
 
@@ -191,6 +202,9 @@ struct AgentGetStartedSheet: View {
             loadInitialStepIfNeeded()
         }
         .onDisappear {
+            if explicitlyOptedOutOfAutoShow {
+                markGettingStartedSeen()
+            }
             if shellIntegrationState.blocksNavigation == false {
                 shellIntegrationTask?.cancel()
             }
@@ -479,10 +493,12 @@ struct AgentGetStartedSheet: View {
         HStack(spacing: 10) {
             switch step {
             case .chooser:
+                dontShowAgainToggle
+
                 Spacer(minLength: 0)
 
                 Button("Done") {
-                    dismiss()
+                    completeAndDismiss()
                 }
                 .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("sheet.agent.get-started.done")
@@ -501,7 +517,7 @@ struct AgentGetStartedSheet: View {
                 Spacer(minLength: 0)
 
                 Button("Done") {
-                    dismiss()
+                    completeAndDismiss()
                 }
                 .disabled(shellIntegrationState.blocksNavigation)
                 .keyboardShortcut(.cancelAction)
@@ -519,7 +535,7 @@ struct AgentGetStartedSheet: View {
                 Spacer(minLength: 0)
 
                 Button("Done") {
-                    dismiss()
+                    completeAndDismiss()
                 }
                 .disabled(agentStatusHooksState.blocksNavigation)
                 .keyboardShortcut(.cancelAction)
@@ -535,7 +551,7 @@ struct AgentGetStartedSheet: View {
                 Spacer(minLength: 0)
 
                 Button("Done") {
-                    dismiss()
+                    completeAndDismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .keyboardShortcut(.cancelAction)
@@ -544,6 +560,23 @@ struct AgentGetStartedSheet: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 16)
+    }
+
+    private var dontShowAgainToggle: some View {
+        Toggle(
+            "Don't show this again",
+            isOn: Binding(
+                get: { dontShowAgain },
+                set: { newValue in
+                    dontShowAgain = newValue
+                    explicitlyOptedOutOfAutoShow = newValue
+                }
+            )
+        )
+        .toggleStyle(.checkbox)
+        .font(.system(size: 12, weight: .regular))
+        .foregroundStyle(ToastyTheme.inactiveText)
+        .accessibilityIdentifier("sheet.agent.get-started.dont-show-again")
     }
 
     private var headerTitle: String {
@@ -938,6 +971,11 @@ struct AgentGetStartedSheet: View {
         pasteboard.clearContents()
         pasteboard.setString(AgentGetStartedSheetBehavior.onboardingPrompt, forType: .string)
         onboardingPromptCopied = true
+    }
+
+    private func completeAndDismiss() {
+        markGettingStartedSeen()
+        dismiss()
     }
 
     private func loadShellIntegrationStatus() {

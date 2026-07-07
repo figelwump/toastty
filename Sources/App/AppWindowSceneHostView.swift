@@ -70,6 +70,7 @@ struct AppWindowSceneHostView: View {
     let sceneCoordinator: AppWindowSceneCoordinator
     let automationLifecycle: AutomationLifecycle?
     let automationStartupError: String?
+    let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
 
     @Environment(\.dismiss) private var dismiss
@@ -109,6 +110,7 @@ struct AppWindowSceneHostView: View {
                     toggleCommandPalette: toggleCommandPalette,
                     presentCommandPalette: presentCommandPalette,
                     onWindowCloseInitiated: handleWindowCloseInitiated,
+                    allowsGettingStartedAutoPresentation: allowsGettingStartedAutoPresentation,
                     disableAnimations: disableAnimations
                 )
             } else {

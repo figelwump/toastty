@@ -4,6 +4,8 @@ import Foundation
 struct ToasttySettings: Equatable {
     /// One-way app-wide latch for sidebar defaults after the first successful agent launch.
     var hasEverLaunchedAgent = false
+    /// One-way app-wide latch suppressing the automatic Getting Started sheet after completion.
+    var hasSeenGettingStarted = false
     /// When false, Cmd+Q quits immediately without checking terminal activity.
     var askBeforeQuitting = true
 }
@@ -11,11 +13,13 @@ struct ToasttySettings: Equatable {
 enum ToasttySettingsStore {
     private static let terminalFontSizeKey = "toastty.terminalFontSizePoints"
     private static let hasEverLaunchedAgentKey = "toastty.hasEverLaunchedAgent"
+    private static let hasSeenGettingStartedKey = "toastty.hasSeenGettingStarted"
     private static let askBeforeQuittingKey = "toastty.askBeforeQuitting"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         return ToasttySettings(
             hasEverLaunchedAgent: loadHasEverLaunchedAgent(userDefaults: userDefaults),
+            hasSeenGettingStarted: loadHasSeenGettingStarted(userDefaults: userDefaults),
             askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults)
         )
     }
@@ -35,6 +39,13 @@ enum ToasttySettingsStore {
         userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) {
         userDefaults.set(hasEverLaunchedAgent, forKey: hasEverLaunchedAgentKey)
+    }
+
+    static func persistHasSeenGettingStarted(
+        _ hasSeenGettingStarted: Bool,
+        userDefaults: UserDefaults = ToasttyAppDefaults.current
+    ) {
+        userDefaults.set(hasSeenGettingStarted, forKey: hasSeenGettingStartedKey)
     }
 
     static func persistAskBeforeQuitting(
@@ -61,6 +72,21 @@ enum ToasttySettingsStore {
 
     private static func loadHasEverLaunchedAgent(userDefaults: UserDefaults) -> Bool {
         guard let storedValue = userDefaults.object(forKey: hasEverLaunchedAgentKey) else {
+            return false
+        }
+
+        switch storedValue {
+        case let value as Bool:
+            return value
+        case let value as NSNumber:
+            return value.boolValue
+        default:
+            return false
+        }
+    }
+
+    private static func loadHasSeenGettingStarted(userDefaults: UserDefaults) -> Bool {
+        guard let storedValue = userDefaults.object(forKey: hasSeenGettingStartedKey) else {
             return false
         }
 

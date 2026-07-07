@@ -18,6 +18,7 @@ struct AppWindowSceneView: View {
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let onWindowCloseInitiated: @MainActor () -> Void
+    let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
 
     @State private var fontHUDValue: FontHUDValue?
@@ -175,6 +176,20 @@ struct AppWindowSceneView: View {
         guard windowState != nil else { return }
         _ = store.send(.selectWindow(windowID: windowID))
         scheduleWindowFocusRestore()
+        presentGettingStartedFlowIfNeeded()
+    }
+
+    private func presentGettingStartedFlowIfNeeded() {
+        guard let request = AppWindowView.agentGetStartedAutoPresentationRequest(
+            windowID: windowID,
+            allowsAutoPresentation: allowsGettingStartedAutoPresentation,
+            hasSeenGettingStarted: store.hasSeenGettingStarted,
+            hasAutoPresentedThisSession: store.hasAutoPresentedGettingStartedThisSession
+        ) else { return }
+        NotificationCenter.default.post(
+            name: .toasttyShowAgentGetStartedFlow,
+            object: request
+        )
     }
 
     private func handleWindowFrameChange(_ frame: CGRectCodable) {

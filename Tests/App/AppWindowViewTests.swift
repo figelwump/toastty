@@ -143,6 +143,7 @@ final class AppWindowViewTests: XCTestCase {
         )
 
         XCTAssertEqual(resolvedRequest, request)
+        XCTAssertFalse(resolvedRequest.isAutomatic)
     }
 
     func testShouldPresentAgentGetStartedFlowIgnoresMismatchedOrMissingWindowIDs() {
@@ -166,5 +167,99 @@ final class AppWindowViewTests: XCTestCase {
                 notificationObject: nil
             )
         )
+    }
+
+    func testShouldAutoPresentAgentGetStartedFlowOnlyForEligibleFirstSessionPresentation() {
+        XCTAssertTrue(
+            AppWindowView.shouldAutoPresentAgentGetStartedFlow(
+                allowsAutoPresentation: true,
+                hasSeenGettingStarted: false,
+                hasAutoPresentedThisSession: false
+            )
+        )
+
+        XCTAssertFalse(
+            AppWindowView.shouldAutoPresentAgentGetStartedFlow(
+                allowsAutoPresentation: false,
+                hasSeenGettingStarted: false,
+                hasAutoPresentedThisSession: false
+            )
+        )
+        XCTAssertFalse(
+            AppWindowView.shouldAutoPresentAgentGetStartedFlow(
+                allowsAutoPresentation: true,
+                hasSeenGettingStarted: true,
+                hasAutoPresentedThisSession: false
+            )
+        )
+        XCTAssertFalse(
+            AppWindowView.shouldAutoPresentAgentGetStartedFlow(
+                allowsAutoPresentation: true,
+                hasSeenGettingStarted: false,
+                hasAutoPresentedThisSession: true
+            )
+        )
+    }
+
+    func testAgentGetStartedAutoPresentationRequestTargetsChooser() throws {
+        let windowID = UUID()
+
+        let request = try XCTUnwrap(
+            AppWindowView.agentGetStartedAutoPresentationRequest(
+                windowID: windowID,
+                allowsAutoPresentation: true,
+                hasSeenGettingStarted: false,
+                hasAutoPresentedThisSession: false
+            )
+        )
+
+        XCTAssertEqual(
+            request,
+            AgentGetStartedPresentationRequest(windowID: windowID, isAutomatic: true)
+        )
+    }
+
+    func testAgentGetStartedAutoPresentationRequestSuppressesIneligibleCases() {
+        XCTAssertNil(
+            AppWindowView.agentGetStartedAutoPresentationRequest(
+                windowID: UUID(),
+                allowsAutoPresentation: false,
+                hasSeenGettingStarted: false,
+                hasAutoPresentedThisSession: false
+            )
+        )
+        XCTAssertNil(
+            AppWindowView.agentGetStartedAutoPresentationRequest(
+                windowID: UUID(),
+                allowsAutoPresentation: true,
+                hasSeenGettingStarted: true,
+                hasAutoPresentedThisSession: false
+            )
+        )
+        XCTAssertNil(
+            AppWindowView.agentGetStartedAutoPresentationRequest(
+                windowID: UUID(),
+                allowsAutoPresentation: true,
+                hasSeenGettingStarted: false,
+                hasAutoPresentedThisSession: true
+            )
+        )
+    }
+
+    func testStoreRecordsGettingStartedAutoPresentationOnlyOncePerSession() {
+        let store = AppStore(persistTerminalFontPreference: false)
+
+        XCTAssertFalse(store.hasAutoPresentedGettingStartedThisSession)
+        XCTAssertTrue(store.recordGettingStartedAutoPresentationIfNeeded())
+        XCTAssertTrue(store.hasAutoPresentedGettingStartedThisSession)
+        XCTAssertFalse(store.recordGettingStartedAutoPresentationIfNeeded())
+    }
+
+    func testStoreMarksGettingStartedSeenWithoutPersistenceWhenDisabled() {
+        let store = AppStore(persistTerminalFontPreference: false)
+
+        XCTAssertFalse(store.hasSeenGettingStarted)
+        store.markGettingStartedSeen()
+        XCTAssertTrue(store.hasSeenGettingStarted)
     }
 }
