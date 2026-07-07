@@ -82,16 +82,7 @@ final class SetupResourcesDriftTests: XCTestCase {
         )
         let knownIDs = Set(AppControlActionID.allCases.map(\.rawValue))
             .union(AppControlQueryID.allCases.map(\.rawValue))
-        let regex = try NSRegularExpression(
-            pattern: #"\b(?:window|workspace|panel|terminal|agent|config|app)\.[A-Za-z0-9._-]+"#
-        )
-        let nsRange = NSRange(content.startIndex..<content.endIndex, in: content)
-        let mentionedIDs = Set(
-            regex.matches(in: content, range: nsRange).compactMap { match -> String? in
-                guard let range = Range(match.range, in: content) else { return nil }
-                return String(content[range])
-            }
-        )
+        let mentionedIDs = try mentionedAppControlIDs(in: content)
 
         XCTAssertFalse(mentionedIDs.isEmpty)
         XCTAssertLessThan(
@@ -102,6 +93,28 @@ final class SetupResourcesDriftTests: XCTestCase {
         XCTAssertTrue(
             mentionedIDs.subtracting(knownIDs).isEmpty,
             "Unknown IDs: \(mentionedIDs.subtracting(knownIDs).sorted().joined(separator: ", "))"
+        )
+    }
+
+    func testOnboardingGuideMentionsOnlyKnownAppControlIDs() throws {
+        let guide = try String(
+            contentsOf: setupResourcesURL().appendingPathComponent("onboarding-guide.md", isDirectory: false),
+            encoding: .utf8
+        )
+        let knownIDs = Set(AppControlActionID.allCases.map(\.rawValue))
+            .union(AppControlQueryID.allCases.map(\.rawValue))
+        let mentionedIDs = try mentionedAppControlIDs(in: guide)
+
+        for expectedActionID in [
+            AppControlActionID.panelScratchpadSetContent.rawValue,
+            AppControlActionID.panelCreateLocalDocument.rawValue,
+            AppControlActionID.panelCreateBrowser.rawValue,
+        ] {
+            XCTAssertTrue(mentionedIDs.contains(expectedActionID), "Guide is missing \(expectedActionID)")
+        }
+        XCTAssertTrue(
+            mentionedIDs.subtracting(knownIDs).isEmpty,
+            "Guide mentions unknown app-control IDs: \(mentionedIDs.subtracting(knownIDs).sorted().joined(separator: ", "))"
         )
     }
 
@@ -121,6 +134,61 @@ final class SetupResourcesDriftTests: XCTestCase {
         ] {
             XCTAssertTrue(guide.contains(command), "Guide is missing \(command)")
         }
+    }
+
+    func testOnboardingGuideCapturesM4FlowDecisions() throws {
+        let guide = try String(
+            contentsOf: setupResourcesURL().appendingPathComponent("onboarding-guide.md", isDirectory: false),
+            encoding: .utf8
+        )
+
+        for requiredText in [
+            "Use your detected agent identity for tone only",
+            "do not gate setup on it",
+            "Fresh users are often unmanaged",
+            "Dry-run shell integration first",
+            "Codex may ask the user to trust the hook once",
+            "Terminal profiles as optional manual setup",
+            "fresh Toastty pane",
+            "--resume",
+            "Install `toastty-capabilities` first",
+            "one explicit OK before `--apply`",
+            "Scratchpad: managed sessions only",
+            "panel.create.local-document",
+            "panel.create.browser",
+            "scope_denied",
+            "Canceling keeps already completed progress intact",
+        ] {
+            XCTAssertTrue(guide.contains(requiredText), "Guide is missing M4 decision text: \(requiredText)")
+        }
+    }
+
+    func testOnboardingGuideDoesNotReintroduceSupersededSkillMatrix() throws {
+        let guide = try String(
+            contentsOf: setupResourcesURL().appendingPathComponent("onboarding-guide.md", isDirectory: false),
+            encoding: .utf8
+        )
+
+        for supersededText in [
+            "Worktree-Create",
+            "toastty-orchestrator-builder",
+            "interview-and-tailor",
+            "interview-and-tailor matrix",
+            "interview & tailor",
+            "tailored copy into each chosen dir",
+        ] {
+            XCTAssertFalse(
+                guide.localizedCaseInsensitiveContains(supersededText),
+                "Guide reintroduced superseded Phase 2 text: \(supersededText)"
+            )
+        }
+
+        let tailorRegex = try NSRegularExpression(pattern: #"(?i)\binterview\s*(?:&|and|-)\s*tailor\b"#)
+        let guideRange = NSRange(guide.startIndex..<guide.endIndex, in: guide)
+        XCTAssertNil(
+            tailorRegex.firstMatch(in: guide, range: guideRange),
+            "Guide reintroduced the superseded interview/tailor matrix concept"
+        )
     }
 
     private func setupResourcesURL() -> URL {
@@ -149,5 +217,18 @@ final class SetupResourcesDriftTests: XCTestCase {
             }
         }
         return files
+    }
+
+    private func mentionedAppControlIDs(in content: String) throws -> Set<String> {
+        let regex = try NSRegularExpression(
+            pattern: #"\b(?:window|workspace|panel|terminal|agent|config|app)\.[A-Za-z0-9._-]+"#
+        )
+        let nsRange = NSRange(content.startIndex..<content.endIndex, in: content)
+        return Set(
+            regex.matches(in: content, range: nsRange).compactMap { match -> String? in
+                guard let range = Range(match.range, in: content) else { return nil }
+                return String(content[range])
+            }
+        )
     }
 }
