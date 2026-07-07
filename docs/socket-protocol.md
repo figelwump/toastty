@@ -96,6 +96,9 @@ Required top-level fields:
 
 Optional top-level fields:
 
+- `callerSessionID: String`
+  - identifies the managed session making a request for cooperative workspace
+    scope enforcement and diagnostics audit attribution
 - `payload: Object`
   - omitted payloads are treated as `{}`
 
@@ -741,8 +744,9 @@ Validation:
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
 - if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
-- explicit `profileID=codex`, `profileID=claude`, and `profileID=pi` can be
-  launched by automation even when no `agents.toml` profile exists.
+- explicit `profileID=codex`, `profileID=claude`, `profileID=opencode`,
+  `profileID=mimocode`, and `profileID=pi` can be launched by automation even
+  when no `agents.toml` profile exists.
 - `initialCommands` entries must be non-blank single-line strings with no NUL
   bytes. The list is capped at 16 entries, and each entry is capped at 4096
   UTF-8 bytes.
@@ -1008,12 +1012,58 @@ Validation:
 
 - `panelID` must refer to a live panel
 - `agent` must be a valid lowercase agent ID
-- Built-in examples include `claude`, `codex`, and `pi`
+- Built-in examples include `claude`, `codex`, `opencode`, `mimocode`, and `pi`
 
 Result:
 
 - `eventType`
 - `stateVersion`
+
+### `session.scope.*`
+
+These are request commands, not event envelopes. They manage cooperative
+workspace scope for active managed sessions. Requests can identify the caller
+with top-level `callerSessionID`; if a scope command omits payload `sessionID`,
+Toastty falls back to that caller session ID.
+
+Common result:
+
+- `sessionID: String`
+- `isScoped: Bool`
+- `workspaceIDs: [UUID string]`
+- `effectiveWorkspaceIDs: [UUID string] | null`
+- `stateVersion?: Int` when the command mutates state
+
+Commands:
+
+- `session.scope.show`
+  - payload `sessionID?: String`
+  - returns the current scope without changing state
+- `session.scope.set_current`
+  - payload `sessionID?: String`
+  - payload `panelID: UUID string`
+  - scopes the caller session to its current workspace only by storing an empty
+    explicit scope
+  - if top-level `callerSessionID` is present, it must match the resolved
+    session ID
+  - rejects when `panelID` does not match the active session or no longer
+    resolves to a Toastty panel
+- `session.scope.set`
+  - payload `sessionID?: String`
+  - payload `workspaceIDs: [UUID string]`
+  - replaces the explicit workspace scope with the supplied workspace IDs
+- `session.scope.add`
+  - payload `sessionID?: String`
+  - payload `workspaceIDs: [UUID string]`
+  - adds the supplied workspace IDs to the existing explicit scope
+- `session.scope.clear`
+  - payload `sessionID?: String`
+  - clears the explicit scope and returns the session to unrestricted
+    automation
+
+Scoped app-control requests that target an unassigned workspace fail with
+`scope_denied`. See [Workspace Scope](agents/workspace-scope.md) for v1
+semantics, inherited child-launch scope, and enforcement coverage.
 
 ### `session.status`
 

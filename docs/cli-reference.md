@@ -73,8 +73,10 @@ toastty diagnostics submit --file <file> [--contact <text>] [--endpoint <url>] [
 ```
 
 Without `--yes`, the command validates the file and prints the upload summary
-without sending anything. With `--yes` and no `--contact`, it uploads the exact
-JSON bytes from `--file`; it does not rebuild or re-redact the bundle.
+without sending anything. `--dry-run` also validates and previews without
+uploading, even when `--yes` is present. With `--yes` and no `--dry-run` or
+`--contact`, it uploads the exact JSON bytes from `--file`; it does not rebuild
+or re-redact the bundle.
 
 When `--contact <text>` is provided, the source file is left unchanged. The
 submit command appends `Contact: <text>` to the diagnostics note in the in-memory
@@ -148,6 +150,10 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
   --window "$WINDOW_ID" \
   title=background-worktree \
   activate=false
+"$TOASTTY_CLI_PATH" action run workspace.select \
+  --window "$WINDOW_ID" \
+  index=2 \
+  focusUnreadSessionPanel=true
 "$TOASTTY_CLI_PATH" action run workspace.move \
   --window "$WINDOW_ID" \
   index=3 \
@@ -180,6 +186,12 @@ printf '%s' "$patch" | "$TOASTTY_CLI_PATH" --json action run panel.scratchpad.pa
 `activate=false`, Toastty appends the workspace without changing the currently
 visible selection, returns the created `workspaceID` and `windowID`, and marks
 the background workspace as `New` in the sidebar until the user visits it once.
+
+`workspace.select` accepts a `workspaceID` selector or a 1-based `index`
+argument. By default it changes only the selected workspace and preserves that
+workspace's selected tab and focused panel. Set `focusUnreadSessionPanel=true`
+when foreground navigation should also focus the newest unread managed-session
+panel visible in the selected workspace tab.
 
 `workspace.move` and `workspace.tab.move` use 1-based `index` and `toIndex`
 arguments. Reordering keeps the selected workspace or tab selected, but changes
@@ -443,6 +455,34 @@ toastty session stop --session <id> [--panel <id>] [--reason <text>]
   --session "$TOASTTY_SESSION_ID" \
   --reason "User cancelled"
 ```
+
+### `session scope`
+
+Manage cooperative workspace scope for an active managed session. Workspace
+scope is an orchestration guardrail, not a security sandbox; see
+[Workspace Scope](agents/workspace-scope.md) for semantics and enforcement
+coverage.
+
+```
+toastty session scope show [--session <id>]
+toastty session scope set-current [--session <id>]
+toastty session scope set --workspace <id> [--workspace <id> ...] [--session <id>]
+toastty session scope add --workspace <id> [--workspace <id> ...] [--session <id>]
+toastty session scope clear [--session <id>]
+```
+
+| Subcommand | Description |
+|---|---|
+| `show` | Print whether the session is unrestricted or workspace-scoped. With `--json`, returns `sessionID`, `isScoped`, `workspaceIDs`, and `effectiveWorkspaceIDs`. |
+| `set-current` | Scope the current managed session to its current workspace only. Requires `TOASTTY_PANEL_ID` and can only target the caller session. |
+| `set` | Replace the explicit workspace scope with the supplied workspace IDs. |
+| `add` | Add workspace IDs to the existing explicit scope. |
+| `clear` | Return the session to unrestricted automation. |
+
+When `--session` is omitted, the CLI uses `TOASTTY_SESSION_ID`. `set-current`
+also uses `TOASTTY_PANEL_ID` to verify the current panel still belongs to a
+Toastty workspace. Use `set` or `add` for another active session or for
+additional workspaces the user explicitly assigned.
 
 ### `session ingest-agent-event`
 
