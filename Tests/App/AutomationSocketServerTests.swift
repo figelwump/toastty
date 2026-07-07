@@ -855,6 +855,132 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func sessionBackgroundActivityProjectsWorkingAndFinishesIdempotently() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-background-activity"
+        let startSessionResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.claude.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startSessionResponse.ok)
+
+        let readyResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.status",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [
+                    "kind": .string(SessionStatusKind.ready.rawValue),
+                    "summary": .string("Ready"),
+                    "detail": .string("Root turn completed"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(readyResponse.ok)
+
+        let activityPayload: [String: AutomationJSONValue] = [
+            "phase": .string(SessionBackgroundActivityPhase.start.rawValue),
+            "activityID": .string("child-activity"),
+            "kind": .string(SessionBackgroundActivityKind.childAgent.rawValue),
+            "displayName": .string("Codex"),
+            "command": .string("codex review"),
+        ]
+        let activityResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                timestamp: "2026-01-01T00:00:00Z",
+                requestID: UUID().uuidString,
+                payload: activityPayload
+            ),
+            socketPath: socketPath
+        )
+        #expect(activityResponse.ok)
+        #expect(activityResponse.result?.string("status") == "accepted")
+
+        let projectedStatus = await MainActor.run {
+            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
+        }
+        #expect(projectedStatus?.kind == .working)
+        #expect(projectedStatus?.detail == "Waiting on 1 child agent")
+
+        let duplicateStartResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                timestamp: "2026-01-01T00:00:01Z",
+                requestID: UUID().uuidString,
+                payload: activityPayload
+            ),
+            socketPath: socketPath
+        )
+        #expect(duplicateStartResponse.ok)
+        #expect(duplicateStartResponse.result?.string("status") == "noop")
+        #expect(duplicateStartResponse.result?.int("stateVersion") == activityResponse.result?.int("stateVersion"))
+
+        let unknownFinishResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.finish.rawValue),
+                    "activityID": .string("missing-child"),
+                    "kind": .string(SessionBackgroundActivityKind.childAgent.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(unknownFinishResponse.ok)
+        #expect(unknownFinishResponse.result?.string("status") == "noop")
+        #expect(unknownFinishResponse.result?.int("stateVersion") == activityResponse.result?.int("stateVersion"))
+
+        let finishResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.finish.rawValue),
+                    "activityID": .string("child-activity"),
+                    "kind": .string(SessionBackgroundActivityKind.childAgent.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(finishResponse.ok)
+        #expect(finishResponse.result?.string("status") == "accepted")
+
+        let finalStatus = await MainActor.run {
+            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
+        }
+        #expect(finalStatus?.kind == .ready)
+        #expect(finalStatus?.detail == "Root turn completed")
+    }
+
+    @Test
     func sessionUpdateFilesCanResolveActiveSessionWithoutPanelID() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {

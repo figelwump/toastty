@@ -1765,6 +1765,68 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
+        case "session.background_activity":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            guard let phaseRaw = event.payload.string("phase"),
+                  let phase = SessionBackgroundActivityPhase(rawValue: phaseRaw) else {
+                throw AutomationSocketError.invalidPayload("phase must be one of: start, finish")
+            }
+            guard let activityID = normalizedOptionalText(event.payload.string("activityID")) else {
+                throw AutomationSocketError.invalidPayload("activityID is required")
+            }
+            guard let kindRaw = event.payload.string("kind"),
+                  let kind = SessionBackgroundActivityKind(rawValue: kindRaw) else {
+                throw AutomationSocketError.invalidPayload("kind must be one of: child_agent")
+            }
+            let processID: Int32?
+            if let rawProcessID = event.payload.int("processID") {
+                guard rawProcessID > 0,
+                      rawProcessID <= Int(Int32.max) else {
+                    throw AutomationSocketError.invalidPayload("processID must be a positive 32-bit integer")
+                }
+                processID = Int32(rawProcessID)
+            } else {
+                processID = nil
+            }
+
+            let didMutate: Bool
+            switch phase {
+            case .start:
+                didMutate = sessionRuntimeStore.updateBackgroundActivity(
+                    sessionID: sessionID,
+                    activity: SessionBackgroundActivity(
+                        id: activityID,
+                        kind: kind,
+                        displayName: event.payload.string("displayName"),
+                        command: event.payload.string("command"),
+                        processID: processID,
+                        startedAt: now,
+                        lastUpdatedAt: now
+                    ),
+                    at: now
+                )
+            case .finish:
+                didMutate = sessionRuntimeStore.finishBackgroundActivity(
+                    sessionID: sessionID,
+                    activityID: activityID,
+                    at: now
+                )
+            }
+            if didMutate {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(didMutate ? "accepted" : "noop"),
+                "stateVersion": .int(stateVersion),
+            ]
+
         case "session.codex_notify_completion":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")

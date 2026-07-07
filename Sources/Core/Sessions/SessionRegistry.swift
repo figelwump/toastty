@@ -101,6 +101,55 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         sessionsByID[sessionID] = record
     }
 
+    @discardableResult
+    public mutating func updateBackgroundActivity(
+        sessionID: String,
+        activity: SessionBackgroundActivity,
+        at now: Date
+    ) -> Bool {
+        guard var record = activeSession(sessionID: sessionID) else { return false }
+        guard record.backgroundActivitiesByID[activity.id] == nil else { return false }
+        record.backgroundActivitiesByID[activity.id] = activity
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    @discardableResult
+    public mutating func finishBackgroundActivity(
+        sessionID: String,
+        activityID: String,
+        at now: Date
+    ) -> Bool {
+        guard var record = activeSession(sessionID: sessionID),
+              record.backgroundActivitiesByID.removeValue(forKey: activityID) != nil else {
+            return false
+        }
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    @discardableResult
+    public mutating func pruneBackgroundActivities(
+        at now: Date,
+        shouldRemove: (SessionBackgroundActivity) -> Bool
+    ) -> Bool {
+        var didMutate = false
+        for sessionID in Array(sessionsByID.keys) {
+            guard var record = activeSession(sessionID: sessionID) else { continue }
+            let previousCount = record.backgroundActivitiesByID.count
+            record.backgroundActivitiesByID = record.backgroundActivitiesByID.filter { _, activity in
+                shouldRemove(activity) == false
+            }
+            guard record.backgroundActivitiesByID.count != previousCount else { continue }
+            record.updatedAt = now
+            sessionsByID[sessionID] = record
+            didMutate = true
+        }
+        return didMutate
+    }
+
     public mutating func setLaterFlag(sessionID: String, isFlagged: Bool) {
         guard var record = sessionsByID[sessionID], record.isActive else { return }
         // Watched processes already act as their own "remind me later" signal via the
@@ -196,6 +245,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
 
     public mutating func stopSession(sessionID: String, at now: Date) {
         guard var record = sessionsByID[sessionID] else { return }
+        record.backgroundActivitiesByID.removeAll()
         record.stoppedAt = now
         record.updatedAt = now
         sessionsByID[sessionID] = record
@@ -206,7 +256,8 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     }
 
     public mutating func removeSession(sessionID: String) {
-        guard let record = sessionsByID.removeValue(forKey: sessionID) else { return }
+        guard var record = sessionsByID.removeValue(forKey: sessionID) else { return }
+        record.backgroundActivitiesByID.removeAll()
         if activeSessionIDByPanelID[record.panelID] == sessionID {
             activeSessionIDByPanelID.removeValue(forKey: record.panelID)
         }
@@ -260,7 +311,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return sessionsByID.values
             .filter { record in
                 record.workspaceID == workspaceID &&
-                record.status != nil &&
+                Self.projectedStatus(from: record) != nil &&
                 record.isActive
             }
             // Keep sidebar session rows stable as tabs switch or session
@@ -290,7 +341,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     }
 
     private static func workspaceSessionStatus(from record: SessionRecord) -> WorkspaceSessionStatus? {
-        guard let status = record.status else { return nil }
+        guard let status = projectedStatus(from: record) else { return nil }
         return WorkspaceSessionStatus(
             sessionID: record.sessionID,
             panelID: record.panelID,
@@ -336,6 +387,32 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         // Stopped sessions should not keep rendering a live working spinner in
         // the panel header after the active sidebar entry disappears.
         return status.kind != .idle && status.kind != .working
+    }
+
+    private static func projectedStatus(from record: SessionRecord) -> SessionStatus? {
+        let outstandingCount = record.backgroundActivitiesByID.count
+        guard outstandingCount > 0 else {
+            return record.status
+        }
+
+        switch record.status?.kind {
+        case .needsApproval, .error, .working:
+            return record.status
+        case .idle, .ready, nil:
+            let childAgentCount = record.backgroundActivitiesByID.values
+                .filter { $0.kind == .childAgent }
+                .count
+            let activityCount = childAgentCount > 0 ? childAgentCount : outstandingCount
+            let singularNoun = childAgentCount > 0 ? "child agent" : "background activity"
+            let pluralNoun = childAgentCount > 0 ? "child agents" : "background activities"
+            let detail: String
+            if activityCount == 1 {
+                detail = "Waiting on 1 \(singularNoun)"
+            } else {
+                detail = "Waiting on \(activityCount) \(pluralNoun)"
+            }
+            return SessionStatus(kind: .working, summary: "Working", detail: detail)
+        }
     }
 }
 

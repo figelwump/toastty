@@ -38,6 +38,48 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func staleBackgroundActivityPruningRestoresBaseStatus() {
+        let store = SessionRuntimeStore(maximumBackgroundActivityAge: 60)
+        defer { store.reset() }
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_000)
+
+        store.startSession(
+            sessionID: "sess-background-prune",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(
+            sessionID: "sess-background-prune",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn completed"),
+            at: now
+        )
+        #expect(store.updateBackgroundActivity(
+            sessionID: "sess-background-prune",
+            activity: SessionBackgroundActivity(
+                id: "child-1",
+                kind: .childAgent,
+                displayName: "Codex",
+                processID: Int32(ProcessInfo.processInfo.processIdentifier),
+                startedAt: now,
+                lastUpdatedAt: now
+            ),
+            at: now
+        ))
+
+        #expect(store.workspaceStatuses(for: workspaceID).first?.status.kind == .working)
+        #expect(store.pruneStaleBackgroundActivities(at: now.addingTimeInterval(30)) == false)
+        #expect(store.workspaceStatuses(for: workspaceID).first?.status.kind == .working)
+        #expect(store.pruneStaleBackgroundActivities(at: now.addingTimeInterval(61)))
+        #expect(store.workspaceStatuses(for: workspaceID).first?.status.kind == .ready)
+    }
+
+    @Test
     func scopeMutationUpdatesPersistedResumeRecordScope() throws {
         let appStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())

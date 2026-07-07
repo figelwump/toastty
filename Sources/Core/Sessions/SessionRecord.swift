@@ -25,6 +25,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var isFlaggedForLater: Bool
     public var usesSessionStatusNotifications: Bool
     public var status: SessionStatus?
+    public var backgroundActivitiesByID: [String: SessionBackgroundActivity]
     public var displayTitleOverride: String?
     public var repoRoot: String?
     public var cwd: String?
@@ -44,6 +45,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         usesSessionStatusNotifications: Bool = false,
         status: SessionStatus? = nil,
+        backgroundActivitiesByID: [String: SessionBackgroundActivity] = [:],
         displayTitleOverride: String? = nil,
         repoRoot: String? = nil,
         cwd: String? = nil,
@@ -62,6 +64,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.usesSessionStatusNotifications = usesSessionStatusNotifications
         self.status = status
+        self.backgroundActivitiesByID = backgroundActivitiesByID
         self.displayTitleOverride = Self.normalizedOptionalText(displayTitleOverride)
         self.repoRoot = repoRoot
         self.cwd = cwd
@@ -90,6 +93,10 @@ public struct SessionRecord: Codable, Equatable, Sendable {
             forKey: .usesSessionStatusNotifications
         ) ?? false
         status = try container.decodeIfPresent(SessionStatus.self, forKey: .status)
+        // Background activity is runtime-only. Do not restore it from persisted
+        // registry snapshots, because child processes from an old app run cannot
+        // safely keep a restored sidebar row in a working state.
+        backgroundActivitiesByID = [:]
         displayTitleOverride = Self.normalizedOptionalText(
             try container.decodeIfPresent(String.self, forKey: .displayTitleOverride)
         )

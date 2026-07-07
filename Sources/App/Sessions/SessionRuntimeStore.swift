@@ -1,5 +1,6 @@
 import AppKit
 import CoreState
+import Darwin
 import Foundation
 
 @MainActor
@@ -25,6 +26,9 @@ final class SessionRuntimeStore: ObservableObject {
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
     private let codexHookApprovalDeferralNanoseconds: UInt64
+    private let backgroundActivityReapIntervalNanoseconds: UInt64
+    private let maximumBackgroundActivityAge: TimeInterval
+    private var backgroundActivityReaperTask: Task<Void, Never>?
     private static let maximumAutoReviewedCodexPermissionTurnIDs = 16
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
@@ -50,11 +54,15 @@ final class SessionRuntimeStore: ObservableObject {
     init(
         sendSessionStatusNotification: @escaping SessionStatusNotificationHandler = SessionRuntimeStore.defaultSendSessionStatusNotification,
         isApplicationActive: @escaping ApplicationActiveHandler = SessionRuntimeStore.defaultIsApplicationActive,
-        codexHookApprovalDeferralNanoseconds: UInt64 = 1_000_000_000
+        codexHookApprovalDeferralNanoseconds: UInt64 = 1_000_000_000,
+        backgroundActivityReapIntervalNanoseconds: UInt64 = 10_000_000_000,
+        maximumBackgroundActivityAge: TimeInterval = 8 * 60 * 60
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
         self.isApplicationActive = isApplicationActive
         self.codexHookApprovalDeferralNanoseconds = codexHookApprovalDeferralNanoseconds
+        self.backgroundActivityReapIntervalNanoseconds = backgroundActivityReapIntervalNanoseconds
+        self.maximumBackgroundActivityAge = maximumBackgroundActivityAge
     }
 
     func bind(store: AppStore) {
@@ -78,6 +86,8 @@ final class SessionRuntimeStore: ObservableObject {
         codexNotifyStateBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
         removeAllPendingCodexHookApprovals()
+        backgroundActivityReaperTask?.cancel()
+        backgroundActivityReaperTask = nil
     }
 
     func startSession(
@@ -229,6 +239,85 @@ final class SessionRuntimeStore: ObservableObject {
             sessionID: sessionID,
             status: storedStatus
         )
+    }
+
+    @discardableResult
+    func updateBackgroundActivity(
+        sessionID: String,
+        activity: SessionBackgroundActivity,
+        at now: Date
+    ) -> Bool {
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.updateBackgroundActivity(sessionID: sessionID, activity: activity, at: now) else {
+            return false
+        }
+        ToasttyLog.debug(
+            "Updated managed session background activity",
+            category: .terminal,
+            metadata: backgroundActivityMetadata(
+                sessionID: sessionID,
+                activity: activity,
+                phase: .start
+            )
+        )
+        publish(nextRegistry, reason: "update_background_activity")
+        return true
+    }
+
+    @discardableResult
+    func finishBackgroundActivity(
+        sessionID: String,
+        activityID: String,
+        at now: Date
+    ) -> Bool {
+        let activity = sessionRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID[activityID]
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.finishBackgroundActivity(sessionID: sessionID, activityID: activityID, at: now) else {
+            return false
+        }
+        ToasttyLog.debug(
+            "Finished managed session background activity",
+            category: .terminal,
+            metadata: backgroundActivityMetadata(
+                sessionID: sessionID,
+                activityID: activityID,
+                activity: activity,
+                phase: .finish
+            )
+        )
+        publish(nextRegistry, reason: "finish_background_activity")
+        return true
+    }
+
+    @discardableResult
+    func pruneStaleBackgroundActivities(at now: Date = Date()) -> Bool {
+        var nextRegistry = sessionRegistry
+        let didMutate = nextRegistry.pruneBackgroundActivities(at: now) { activity in
+            shouldPruneBackgroundActivity(activity, at: now)
+        }
+        guard didMutate else {
+            updateBackgroundActivityReaperState()
+            return false
+        }
+
+        for (sessionID, record) in sessionRegistry.sessionsByID {
+            let nextActivities = nextRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID ?? [:]
+            for (activityID, activity) in record.backgroundActivitiesByID
+                where nextActivities[activityID] == nil {
+                ToasttyLog.info(
+                    "Pruned stale managed session background activity",
+                    category: .terminal,
+                    metadata: backgroundActivityMetadata(
+                        sessionID: sessionID,
+                        activityID: activityID,
+                        activity: activity,
+                        phase: .finish
+                    )
+                )
+            }
+        }
+        publish(nextRegistry, reason: "prune_background_activity")
+        return true
     }
 
     func recordCodexRootTurnInput(
@@ -1157,7 +1246,7 @@ final class SessionRuntimeStore: ObservableObject {
             sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
                 guard let record = sessionRegistry.sessionsByID[sessionID],
                       record.isActive,
-                      let status = record.status,
+                      let status = sessionRegistry.panelStatus(for: panelID)?.status,
                       kinds.contains(status.kind) else {
                     return nil
                 }
@@ -1237,6 +1326,68 @@ final class SessionRuntimeStore: ObservableObject {
             reason: reason
         )
         sessionRegistry = nextRegistry
+        updateBackgroundActivityReaperState()
+    }
+
+    private func updateBackgroundActivityReaperState() {
+        let hasOutstandingActivity = sessionRegistry.sessionsByID.values.contains { record in
+            record.isActive && record.backgroundActivitiesByID.isEmpty == false
+        }
+        if hasOutstandingActivity {
+            scheduleBackgroundActivityReaperIfNeeded()
+        } else {
+            backgroundActivityReaperTask?.cancel()
+            backgroundActivityReaperTask = nil
+        }
+    }
+
+    private func scheduleBackgroundActivityReaperIfNeeded() {
+        guard backgroundActivityReaperTask == nil else { return }
+        let interval = backgroundActivityReapIntervalNanoseconds
+        backgroundActivityReaperTask = Task { [weak self] in
+            while Task.isCancelled == false {
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
+
+                let shouldContinue = await MainActor.run { () -> Bool in
+                    guard let self else { return false }
+                    self.pruneStaleBackgroundActivities(at: Date())
+                    if self.sessionRegistry.sessionsByID.values.contains(where: {
+                        $0.isActive && $0.backgroundActivitiesByID.isEmpty == false
+                    }) {
+                        return true
+                    }
+                    self.backgroundActivityReaperTask = nil
+                    return false
+                }
+                guard shouldContinue else { return }
+            }
+        }
+    }
+
+    private func shouldPruneBackgroundActivity(
+        _ activity: SessionBackgroundActivity,
+        at now: Date
+    ) -> Bool {
+        guard now.timeIntervalSince(activity.lastUpdatedAt) < maximumBackgroundActivityAge else {
+            return true
+        }
+        if let processID = activity.processID {
+            return Self.processIsRunning(processID) == false
+        }
+        return false
+    }
+
+    private static func processIsRunning(_ processID: Int32) -> Bool {
+        guard processID > 0 else { return false }
+        let result = Darwin.kill(pid_t(processID), 0)
+        if result == 0 {
+            return true
+        }
+        return errno != ESRCH
     }
 
     private func logWorkspaceStatusSnapshotChanges(
@@ -2242,6 +2393,27 @@ final class SessionRuntimeStore: ObservableObject {
             return "none"
         }
         return String(fingerprint.prefix(16))
+    }
+
+    private func backgroundActivityMetadata(
+        sessionID: String,
+        activityID: String? = nil,
+        activity: SessionBackgroundActivity?,
+        phase: SessionBackgroundActivityPhase
+    ) -> [String: String] {
+        let record = sessionRegistry.sessionsByID[sessionID]
+        return [
+            "session_id": sessionID,
+            "agent": record?.agent.rawValue ?? "none",
+            "panel_id": record?.panelID.uuidString ?? "none",
+            "workspace_id": record?.workspaceID.uuidString ?? "none",
+            "phase": phase.rawValue,
+            "activity_id": activity?.id ?? activityID ?? "none",
+            "activity_kind": activity?.kind.rawValue ?? "none",
+            "display_name": activity?.displayName ?? "none",
+            "has_command": boolMetadata(activity?.command != nil),
+            "process_id": activity?.processID.map(String.init) ?? "none",
+        ]
     }
 
     private func sessionStartMetadata(
