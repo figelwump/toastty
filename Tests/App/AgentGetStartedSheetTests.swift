@@ -30,6 +30,17 @@ final class AgentGetStartedSheetTests: XCTestCase {
         XCTAssertTrue(AgentGetStartedSheetBehavior.supportedAgentHint.contains("Open a pane"))
     }
 
+    func testChooserCopyMatchesOnboardingDialogDirection() {
+        XCTAssertEqual(
+            AgentGetStartedSheetBehavior.onboardingHeroBody,
+            "Copy the onboarding prompt and paste it into an agent of your choice to get started. The prompt will walk your agent through setting up agents, skills, and profiles in Toastty."
+        )
+        XCTAssertEqual(
+            AgentGetStartedSheetBehavior.manualSetupBody,
+            "Choose manual setup if you had issues with the onboarding prompt, or prefer to setup Toastty manually."
+        )
+    }
+
     func testCodexStatusHooksManualCopyMentionsTrustPrompt() {
         XCTAssertTrue(AgentGetStartedSheetBehavior.codexStatusHooksManualRowBody.contains("trust the hook once"))
     }

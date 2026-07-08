@@ -106,6 +106,8 @@ struct AgentGetStartedPresentationRequest: Equatable {
 enum AgentGetStartedSheetBehavior {
     static let supportedAgentNames = "codex, claude, pi, opencode, mimo"
     static let supportedAgentHint = "Need an agent first? Open a pane and start codex, claude, pi, opencode, or mimo."
+    static let onboardingHeroBody = "Copy the onboarding prompt and paste it into an agent of your choice to get started. The prompt will walk your agent through setting up agents, skills, and profiles in Toastty."
+    static let manualSetupBody = "Choose manual setup if you had issues with the onboarding prompt, or prefer to setup Toastty manually."
     static let codexStatusHooksManualRowBody = "Toastty guides the install; Codex may ask you to trust the hook once."
 
     static let onboardingPrompt = """
@@ -250,6 +252,10 @@ struct AgentGetStartedSheet: View {
                 Text("Manual setup")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(ToastyTheme.primaryText)
+                Text(AgentGetStartedSheetBehavior.manualSetupBody)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 manualFallbackRow(
                     systemImage: "terminal",
@@ -306,7 +312,7 @@ struct AgentGetStartedSheet: View {
                 Text("Set up with your agent")
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
                     .foregroundStyle(ToastyTheme.primaryText)
-                Text("Copy one prompt into an agent running in a Toastty pane. The guide stays in the CLI, so the agent can dry-run each setup step and ask before applying changes.")
+                Text(AgentGetStartedSheetBehavior.onboardingHeroBody)
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(ToastyTheme.inactiveText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -314,17 +320,10 @@ struct AgentGetStartedSheet: View {
 
             benefitsRow
 
-            HStack(alignment: .center, spacing: 8) {
-                Text(AgentGetStartedSheetBehavior.supportedAgentHint)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                Image(systemName: "info.circle")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .help("Supported agents: \(AgentGetStartedSheetBehavior.supportedAgentNames). Any agent can run setup; these are the ones Toastty tracks.")
-                    .accessibilityHidden(true)
-            }
-            .accessibilityElement(children: .ignore)
+            Text(AgentGetStartedSheetBehavior.supportedAgentHint)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel("\(AgentGetStartedSheetBehavior.supportedAgentHint) Supported agents: \(AgentGetStartedSheetBehavior.supportedAgentNames).")
 
             Button {
