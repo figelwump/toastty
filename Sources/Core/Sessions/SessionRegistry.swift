@@ -108,8 +108,20 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         at now: Date
     ) -> Bool {
         guard var record = activeSession(sessionID: sessionID) else { return false }
-        guard record.backgroundActivitiesByID[activity.id] == nil else { return false }
-        record.backgroundActivitiesByID[activity.id] = activity
+        if let existingActivity = record.backgroundActivitiesByID[activity.id] {
+            guard existingActivity.kind == .subagent,
+                  activity.kind == .subagent else {
+                return false
+            }
+            let mergedActivity = Self.mergedBackgroundActivity(
+                existing: existingActivity,
+                incoming: activity
+            )
+            guard mergedActivity != existingActivity else { return false }
+            record.backgroundActivitiesByID[activity.id] = mergedActivity
+        } else {
+            record.backgroundActivitiesByID[activity.id] = activity
+        }
         record.updatedAt = now
         sessionsByID[sessionID] = record
         return true
@@ -125,6 +137,46 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
               record.backgroundActivitiesByID.removeValue(forKey: activityID) != nil else {
             return false
         }
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    @discardableResult
+    public mutating func syncBackgroundActivities(
+        sessionID: String,
+        kind: SessionBackgroundActivityKind,
+        entries: [SessionBackgroundActivity],
+        pendingBackgroundTaskCount: Int,
+        at now: Date
+    ) -> Bool {
+        guard var record = activeSession(sessionID: sessionID) else { return false }
+        var nextActivities = record.backgroundActivitiesByID.filter { _, activity in
+            activity.kind != kind
+        }
+
+        for entry in entries where entry.kind == kind {
+            // Do not allow a sync for one source kind to displace another
+            // source's row when activity IDs collide.
+            guard nextActivities[entry.id] == nil else { continue }
+            if let existingActivity = record.backgroundActivitiesByID[entry.id],
+               existingActivity.kind == kind {
+                nextActivities[entry.id] = Self.mergedBackgroundActivity(
+                    existing: existingActivity,
+                    incoming: entry
+                )
+            } else {
+                nextActivities[entry.id] = entry
+            }
+        }
+
+        let nextPendingBackgroundTaskCount = max(0, pendingBackgroundTaskCount)
+        guard record.backgroundActivitiesByID != nextActivities ||
+            record.pendingBackgroundTaskCount != nextPendingBackgroundTaskCount else {
+            return false
+        }
+        record.backgroundActivitiesByID = nextActivities
+        record.pendingBackgroundTaskCount = nextPendingBackgroundTaskCount
         record.updatedAt = now
         sessionsByID[sessionID] = record
         return true
@@ -246,6 +298,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     public mutating func stopSession(sessionID: String, at now: Date) {
         guard var record = sessionsByID[sessionID] else { return }
         record.backgroundActivitiesByID.removeAll()
+        record.pendingBackgroundTaskCount = 0
         record.stoppedAt = now
         record.updatedAt = now
         sessionsByID[sessionID] = record
@@ -258,6 +311,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     public mutating func removeSession(sessionID: String) {
         guard var record = sessionsByID.removeValue(forKey: sessionID) else { return }
         record.backgroundActivitiesByID.removeAll()
+        record.pendingBackgroundTaskCount = 0
         if activeSessionIDByPanelID[record.panelID] == sessionID {
             activeSessionIDByPanelID.removeValue(forKey: record.panelID)
         }
@@ -391,7 +445,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
 
     private static func projectedStatus(from record: SessionRecord) -> SessionStatus? {
         let outstandingCount = record.backgroundActivitiesByID.count
-        guard outstandingCount > 0 else {
+        guard outstandingCount > 0 || record.pendingBackgroundTaskCount > 0 else {
             return record.status
         }
 
@@ -399,6 +453,13 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         case .needsApproval, .error, .working:
             return record.status
         case .idle, .ready, nil:
+            guard outstandingCount > 0 else {
+                return SessionStatus(
+                    kind: .working,
+                    summary: "Working",
+                    detail: "Waiting on background work"
+                )
+            }
             let childAgentCount = record.backgroundActivitiesByID.values
                 .filter { $0.kind == .childAgent }
                 .count
@@ -447,6 +508,21 @@ private extension SessionRegistry {
             .filter { seenSessionIDs.contains($0) == false }
         normalizedOrder.append(contentsOf: missingSessionIDs)
         return normalizedOrder
+    }
+
+    static func mergedBackgroundActivity(
+        existing: SessionBackgroundActivity,
+        incoming: SessionBackgroundActivity
+    ) -> SessionBackgroundActivity {
+        SessionBackgroundActivity(
+            id: existing.id,
+            kind: existing.kind,
+            displayName: incoming.displayName ?? existing.displayName,
+            command: incoming.command ?? existing.command,
+            processID: incoming.processID ?? existing.processID,
+            startedAt: existing.startedAt,
+            lastUpdatedAt: incoming.lastUpdatedAt
+        )
     }
 }
 

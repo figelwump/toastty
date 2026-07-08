@@ -981,6 +981,198 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func sessionBackgroundActivitySyncAcceptedAndClearsSubagents() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-background-sync"
+        let startSessionResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.claude.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startSessionResponse.ok)
+
+        let readyResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.status",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [
+                    "kind": .string(SessionStatusKind.ready.rawValue),
+                    "summary": .string("Ready"),
+                    "detail": .string("Root turn completed"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(readyResponse.ok)
+
+        let syncResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                timestamp: "2026-01-01T00:00:00Z",
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "entries": .array([
+                        .object([
+                            "id": .string("agent-1"),
+                            "displayName": .string("general-purpose"),
+                            "command": .string("Review the diff"),
+                        ]),
+                    ]),
+                    "pendingCount": .int(1),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(syncResponse.ok)
+        #expect(syncResponse.result?.string("status") == "accepted")
+
+        let syncedRecord = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[sessionID]
+        }
+        #expect(syncedRecord?.backgroundActivitiesByID["agent-1"]?.kind == .subagent)
+        #expect(syncedRecord?.backgroundActivitiesByID["agent-1"]?.displayName == "general-purpose")
+        #expect(syncedRecord?.pendingBackgroundTaskCount == 1)
+        let waitingStatus = await MainActor.run {
+            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
+        }
+        #expect(waitingStatus?.kind == .working)
+
+        let clearResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                timestamp: "2026-01-01T00:00:01Z",
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "entries": .array([]),
+                    "pendingCount": .int(0),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(clearResponse.ok)
+        #expect(clearResponse.result?.string("status") == "accepted")
+
+        let clearedRecord = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[sessionID]
+        }
+        #expect(clearedRecord?.backgroundActivitiesByID.isEmpty == true)
+        #expect(clearedRecord?.pendingBackgroundTaskCount == 0)
+        let finalStatus = await MainActor.run {
+            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
+        }
+        #expect(finalStatus?.kind == .ready)
+    }
+
+    @Test
+    func sessionBackgroundActivitySyncValidatesPayload() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-background-sync-invalid"
+        let startSessionResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.claude.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startSessionResponse.ok)
+
+        let missingEntriesResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "pendingCount": .int(0),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(missingEntriesResponse.ok == false)
+        #expect(missingEntriesResponse.error?.code == "INVALID_PAYLOAD")
+        #expect(missingEntriesResponse.error?.message == "entries must be an array")
+
+        let negativePendingResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "entries": .array([]),
+                    "pendingCount": .int(-1),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(negativePendingResponse.ok == false)
+        #expect(negativePendingResponse.error?.code == "INVALID_PAYLOAD")
+        #expect(negativePendingResponse.error?.message == "pendingCount must be a non-negative integer")
+
+        let invalidEntryResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "entries": .array([.object(["id": .string("   "), "displayName": .int(1)])]),
+                    "pendingCount": .int(0),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(invalidEntryResponse.ok == false)
+        #expect(invalidEntryResponse.error?.code == "INVALID_PAYLOAD")
+        #expect(invalidEntryResponse.error?.message == "entry id is required")
+    }
+
+    @Test
     func sessionUpdateFilesCanResolveActiveSessionWithoutPanelID() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {

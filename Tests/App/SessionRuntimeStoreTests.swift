@@ -80,6 +80,141 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func pidlessSubagentBackgroundActivityUsesThirtyMinuteReapCap() {
+        let store = SessionRuntimeStore(maximumBackgroundActivityAge: 8 * 60 * 60)
+        defer { store.reset() }
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_100)
+
+        store.startSession(
+            sessionID: "sess-subagent-prune",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(
+            sessionID: "sess-subagent-prune",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn completed"),
+            at: now
+        )
+        #expect(store.updateBackgroundActivity(
+            sessionID: "sess-subagent-prune",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                displayName: "general-purpose",
+                startedAt: now,
+                lastUpdatedAt: now
+            ),
+            at: now
+        ))
+
+        #expect(store.pruneStaleBackgroundActivities(at: now.addingTimeInterval(29 * 60)) == false)
+        #expect(store.workspaceStatuses(for: workspaceID).first?.status.kind == .working)
+        #expect(store.pruneStaleBackgroundActivities(at: now.addingTimeInterval(31 * 60)))
+        #expect(store.workspaceStatuses(for: workspaceID).first?.status.kind == .ready)
+    }
+
+    @Test
+    func finishTombstoneBlocksLateSubagentStart() {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_200)
+
+        store.startSession(
+            sessionID: "sess-tombstone-start",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        #expect(store.finishBackgroundActivity(
+            sessionID: "sess-tombstone-start",
+            activityID: "subagent-1",
+            at: now
+        ) == false)
+        #expect(store.updateBackgroundActivity(
+            sessionID: "sess-tombstone-start",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                displayName: "general-purpose",
+                startedAt: now.addingTimeInterval(1),
+                lastUpdatedAt: now.addingTimeInterval(1)
+            ),
+            at: now.addingTimeInterval(1)
+        ) == false)
+        #expect(store.sessionRegistry.sessionsByID["sess-tombstone-start"]?.backgroundActivitiesByID.isEmpty == true)
+    }
+
+    @Test
+    func finishTombstoneBlocksStaleSyncUntilTTLExpires() {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_300)
+
+        store.startSession(
+            sessionID: "sess-tombstone-sync",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        #expect(store.finishBackgroundActivity(
+            sessionID: "sess-tombstone-sync",
+            activityID: "subagent-1",
+            at: now
+        ) == false)
+        #expect(store.syncBackgroundActivities(
+            sessionID: "sess-tombstone-sync",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "subagent-1",
+                    kind: .subagent,
+                    displayName: "general-purpose",
+                    startedAt: now.addingTimeInterval(1),
+                    lastUpdatedAt: now.addingTimeInterval(1)
+                ),
+            ],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(1)
+        ) == false)
+        #expect(store.sessionRegistry.sessionsByID["sess-tombstone-sync"]?.backgroundActivitiesByID.isEmpty == true)
+
+        #expect(store.syncBackgroundActivities(
+            sessionID: "sess-tombstone-sync",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "subagent-1",
+                    kind: .subagent,
+                    displayName: "general-purpose",
+                    startedAt: now.addingTimeInterval(121),
+                    lastUpdatedAt: now.addingTimeInterval(121)
+                ),
+            ],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(121)
+        ))
+        #expect(store.sessionRegistry.sessionsByID["sess-tombstone-sync"]?.backgroundActivitiesByID["subagent-1"] != nil)
+    }
+
+    @Test
     func scopeMutationUpdatesPersistedResumeRecordScope() throws {
         let appStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
@@ -3425,6 +3560,68 @@ struct SessionRuntimeStoreTests {
 
         let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
         #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
+    }
+
+    @Test
+    func readyStatusWithOutstandingSubagentActivitySuppressesNotificationAndUnread() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            },
+            isApplicationActive: { false }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_010)
+
+        sessionStore.startSession(
+            sessionID: "sess-subagent-waiting",
+            agent: .claude,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        #expect(sessionStore.updateBackgroundActivity(
+            sessionID: "sess-subagent-waiting",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                displayName: "general-purpose",
+                startedAt: startedAt.addingTimeInterval(1),
+                lastUpdatedAt: startedAt.addingTimeInterval(1)
+            ),
+            at: startedAt.addingTimeInterval(1)
+        ))
+        sessionStore.updateStatus(
+            sessionID: "sess-subagent-waiting",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Turn complete"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        await settleNotificationTasks()
+
+        let notifications = await recorder.notifications()
+        #expect(notifications.isEmpty)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+        #expect(sessionStore.sessionRegistry.sessionsByID["sess-subagent-waiting"]?.status?.kind == .ready)
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .working)
     }
 
     @Test

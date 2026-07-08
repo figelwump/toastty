@@ -137,6 +137,7 @@ struct SessionRegistryTests {
                     lastUpdatedAt: now
                 ),
             ],
+            pendingBackgroundTaskCount: 2,
             startedAt: now,
             updatedAt: now
         )
@@ -147,6 +148,8 @@ struct SessionRegistryTests {
 
         #expect(object["backgroundActivitiesByID"] == nil)
         #expect(decoded.backgroundActivitiesByID.isEmpty)
+        #expect(object["pendingBackgroundTaskCount"] == nil)
+        #expect(decoded.pendingBackgroundTaskCount == 0)
     }
 
     @Test
@@ -713,6 +716,200 @@ struct SessionRegistryTests {
             .error,
             .working,
         ])
+    }
+
+    @Test
+    func subagentSyncReplacesOnlySubagentActivitiesAndPreservesStartedAt() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 725)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        let didUpdateChildActivity = registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "child-1",
+                kind: .childAgent,
+                displayName: "Codex",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didUpdateChildActivity)
+
+        let didSyncInitialSubagent = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "subagent-1",
+                    kind: .subagent,
+                    displayName: "general-purpose",
+                    startedAt: now.addingTimeInterval(3),
+                    lastUpdatedAt: now.addingTimeInterval(3)
+                ),
+            ],
+            pendingBackgroundTaskCount: 1,
+            at: now.addingTimeInterval(3)
+        )
+        #expect(didSyncInitialSubagent)
+
+        var record = try #require(registry.sessionsByID["parent"])
+        #expect(Set(record.backgroundActivitiesByID.keys) == Set(["child-1", "subagent-1"]))
+        #expect(record.backgroundActivitiesByID["subagent-1"]?.startedAt == now.addingTimeInterval(3))
+        #expect(record.pendingBackgroundTaskCount == 1)
+
+        let didSyncMergedSubagent = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "subagent-1",
+                    kind: .subagent,
+                    command: "Run review",
+                    startedAt: now.addingTimeInterval(4),
+                    lastUpdatedAt: now.addingTimeInterval(4)
+                ),
+            ],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(4)
+        )
+        #expect(didSyncMergedSubagent)
+
+        record = try #require(registry.sessionsByID["parent"])
+        let mergedSubagent = try #require(record.backgroundActivitiesByID["subagent-1"])
+        #expect(mergedSubagent.startedAt == now.addingTimeInterval(3))
+        #expect(mergedSubagent.displayName == "general-purpose")
+        #expect(mergedSubagent.command == "Run review")
+        #expect(mergedSubagent.lastUpdatedAt == now.addingTimeInterval(4))
+        #expect(record.pendingBackgroundTaskCount == 0)
+
+        let didClearSubagents = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(5)
+        )
+        #expect(didClearSubagents)
+
+        record = try #require(registry.sessionsByID["parent"])
+        #expect(Set(record.backgroundActivitiesByID.keys) == Set(["child-1"]))
+        #expect(record.pendingBackgroundTaskCount == 0)
+    }
+
+    @Test
+    func subagentStartUpsertsAndMergesExistingSubagentActivity() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 727)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        let didSyncMinimalSubagent = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "subagent-1",
+                    kind: .subagent,
+                    startedAt: now.addingTimeInterval(1),
+                    lastUpdatedAt: now.addingTimeInterval(1)
+                ),
+            ],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(1)
+        )
+        #expect(didSyncMinimalSubagent)
+
+        let didMergeSubagentStart = registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                displayName: "general-purpose",
+                command: "Review diff",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didMergeSubagentStart)
+
+        let activity = try #require(registry.sessionsByID["parent"]?.backgroundActivitiesByID["subagent-1"])
+        #expect(activity.startedAt == now.addingTimeInterval(1))
+        #expect(activity.displayName == "general-purpose")
+        #expect(activity.command == "Review diff")
+        #expect(activity.lastUpdatedAt == now.addingTimeInterval(2))
+    }
+
+    @Test
+    func pendingBackgroundTaskCountProjectsWaitingWithoutActivities() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 729)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn completed"),
+            at: now.addingTimeInterval(1)
+        )
+        let didSetPendingCount = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTaskCount: 1,
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didSetPendingCount)
+
+        let waitingStatus = try #require(registry.workspaceStatuses(for: workspaceID).first?.status)
+        #expect(waitingStatus.kind == .working)
+        #expect(waitingStatus.detail == "Waiting on background work")
+        #expect(registry.sessionsByID["parent"]?.status?.kind == .ready)
+
+        let didClearPendingCount = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(3)
+        )
+        #expect(didClearPendingCount)
+        #expect(registry.workspaceStatuses(for: workspaceID).first?.status.kind == .ready)
     }
 
     @Test

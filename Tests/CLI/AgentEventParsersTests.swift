@@ -67,6 +67,99 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func claudeStopWithRunningSubagentSyncsBeforeReadyStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Agent launched successfully. Waiting for completion...","background_tasks":[{"id":"a79d12ebe682a90d6","type":"subagent","status":"running","description":"Test background agent sleep command","agent_type":"general-purpose"}],"session_crons":[]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [
+                    SessionBackgroundActivitySyncEntry(
+                        id: "a79d12ebe682a90d6",
+                        displayName: "general-purpose",
+                        command: "Test background agent sleep command"
+                    ),
+                ],
+                pendingBackgroundTaskCount: 0
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Agent launched successfully. Waiting for completion..."
+            ),
+        ])
+    }
+
+    @Test
+    func claudeStopWithOnlyShellTasksSyncsPendingCount() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","last_assistant_message":"Shell still running","background_tasks":[{"id":"shell-1","type":"shell","status":"running","description":"npm test"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 1
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Shell still running"
+            ),
+        ])
+    }
+
+    @Test
+    func claudeStopWithEmptyBackgroundTasksClearsSync() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","last_assistant_message":"DONE-ALL","background_tasks":[]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 0
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "DONE-ALL"
+            ),
+        ])
+    }
+
+    @Test
     func claudePermissionRequestMapsToNeedsApprovalStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,
@@ -127,6 +220,95 @@ struct AgentEventParsersTests {
 
         #expect(postCommands.isEmpty)
         #expect(failureCommands.isEmpty)
+    }
+
+    @Test
+    func claudeForegroundAgentPostToolUseIsIgnored() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"description":"Foreground agent","subagent_type":"general-purpose"},"tool_response":{"description":"Foreground agent done"}}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func claudeAgentPostToolUseAsyncLaunchStartsSubagentActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"description":"Test background agent sleep command","prompt":"...","run_in_background":true,"subagent_type":"general-purpose"},"tool_response":{"agentId":"a79d12ebe682a90d6","canReadOutputFile":false,"description":"Test background agent sleep command","isAsync":true,"outputFile":"/path","prompt":"...","resolvedModel":"claude-haiku-4-5-20251001","status":"async_launched"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "a79d12ebe682a90d6",
+                kind: .subagent,
+                displayName: "general-purpose",
+                command: "Test background agent sleep command",
+                processID: nil
+            ),
+        ])
+    }
+
+    @Test
+    func claudeTaskPostToolUseAsyncLaunchStartsSubagentActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUse","tool_name":"Task","tool_input":{"description":"Ask a task","subagent_type":"reviewer"},"tool_response":{"agentId":"task-agent-1","status":"async_launched"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "task-agent-1",
+                kind: .subagent,
+                displayName: "reviewer",
+                command: "Ask a task",
+                processID: nil
+            ),
+        ])
+    }
+
+    @Test
+    func claudeSubagentStopFinishesSubagentActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStop","agent_id":"a79d12ebe682a90d6","agent_type":"general-purpose","agent_transcript_path":"/path","last_assistant_message":"done","background_tasks":[{"id":"a79d12ebe682a90d6","type":"subagent","status":"running","description":"...","agent_type":"general-purpose"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .finish,
+                activityID: "a79d12ebe682a90d6",
+                kind: .subagent,
+                displayName: nil,
+                command: nil,
+                processID: nil
+            ),
+        ])
     }
 
     @Test

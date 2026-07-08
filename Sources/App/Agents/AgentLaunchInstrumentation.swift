@@ -518,11 +518,32 @@ private extension AgentLaunchInstrumentation {
                 ],
             ],
         ]
+        let agentPostToolUseCommandHook: [String: Any] = [
+            "matcher": "Agent",
+            "hooks": [
+                [
+                    "type": "command",
+                    "command": command,
+                ],
+            ],
+        ]
+        let taskPostToolUseCommandHook: [String: Any] = [
+            "matcher": "Task",
+            "hooks": [
+                [
+                    "type": "command",
+                    "command": command,
+                ],
+            ],
+        ]
 
         var hooks = mergedSettings["hooks"] as? [String: Any] ?? [:]
         appendClaudeHookEntry(commandHook, to: "SessionStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "UserPromptSubmit", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "Stop", in: &hooks)
+        appendClaudeHookEntry(commandHook, to: "SubagentStop", in: &hooks)
+        appendClaudeHookEntry(agentPostToolUseCommandHook, to: "PostToolUse", in: &hooks)
+        appendClaudeHookEntry(taskPostToolUseCommandHook, to: "PostToolUse", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PreToolUse", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PermissionRequest", in: &hooks)
         // Keep both PermissionRequest and Notification coverage. Claude surfaces

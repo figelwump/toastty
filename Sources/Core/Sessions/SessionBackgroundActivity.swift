@@ -2,11 +2,13 @@ import Foundation
 
 public enum SessionBackgroundActivityKind: String, Codable, Equatable, Sendable {
     case childAgent = "child_agent"
+    case subagent
 }
 
 public enum SessionBackgroundActivityPhase: String, Codable, Equatable, Sendable {
     case start
     case finish
+    case sync
 }
 
 public struct SessionBackgroundActivity: Codable, Equatable, Sendable {

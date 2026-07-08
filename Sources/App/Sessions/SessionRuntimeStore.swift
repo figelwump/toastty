@@ -29,7 +29,10 @@ final class SessionRuntimeStore: ObservableObject {
     private let backgroundActivityReapIntervalNanoseconds: UInt64
     private let maximumBackgroundActivityAge: TimeInterval
     private var backgroundActivityReaperTask: Task<Void, Never>?
+    private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private static let maximumAutoReviewedCodexPermissionTurnIDs = 16
+    private static let backgroundActivityFinishTombstoneTTL: TimeInterval = 120
+    private static let maximumPidlessSubagentBackgroundActivityAge: TimeInterval = 30 * 60
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
         let sessionID: String
@@ -85,6 +88,7 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID = [:]
         codexNotifyStateBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
+        backgroundActivityFinishTombstonesBySessionID = [:]
         removeAllPendingCodexHookApprovals()
         backgroundActivityReaperTask?.cancel()
         backgroundActivityReaperTask = nil
@@ -106,6 +110,7 @@ final class SessionRuntimeStore: ObservableObject {
     ) {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
         if agent == .codex, let codexStatusTrackingSource {
             codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
@@ -229,16 +234,29 @@ final class SessionRuntimeStore: ObservableObject {
             )
         }
         publish(nextRegistry, reason: "update_status")
-        clearUnreadForManagedSessionIfNeeded(
-            previousRecord: previousRecord,
+        if shouldSuppressProjectedWaitingSideEffects(
             sessionID: sessionID,
-            status: storedStatus
-        )
-        handleActionableStatusTransitionIfNeeded(
-            previousRecord: previousRecord,
-            sessionID: sessionID,
-            status: storedStatus
-        )
+            status: storedStatus,
+            registry: nextRegistry
+        ) {
+            logProjectedWaitingSuppression(
+                previousRecord: previousRecord,
+                sessionID: sessionID,
+                status: storedStatus,
+                now: now
+            )
+        } else {
+            clearUnreadForManagedSessionIfNeeded(
+                previousRecord: previousRecord,
+                sessionID: sessionID,
+                status: storedStatus
+            )
+            handleActionableStatusTransitionIfNeeded(
+                previousRecord: previousRecord,
+                sessionID: sessionID,
+                status: storedStatus
+            )
+        }
     }
 
     @discardableResult
@@ -247,6 +265,14 @@ final class SessionRuntimeStore: ObservableObject {
         activity: SessionBackgroundActivity,
         at now: Date
     ) -> Bool {
+        pruneBackgroundActivityFinishTombstones(at: now)
+        guard isBackgroundActivityFinishTombstoned(
+            sessionID: sessionID,
+            activityID: activity.id,
+            at: now
+        ) == false else {
+            return false
+        }
         var nextRegistry = sessionRegistry
         guard nextRegistry.updateBackgroundActivity(sessionID: sessionID, activity: activity, at: now) else {
             return false
@@ -265,11 +291,57 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     @discardableResult
+    func syncBackgroundActivities(
+        sessionID: String,
+        kind: SessionBackgroundActivityKind,
+        entries: [SessionBackgroundActivity],
+        pendingBackgroundTaskCount: Int,
+        at now: Date
+    ) -> Bool {
+        pruneBackgroundActivityFinishTombstones(at: now)
+        let filteredEntries = entries.filter { entry in
+            isBackgroundActivityFinishTombstoned(
+                sessionID: sessionID,
+                activityID: entry.id,
+                at: now
+            ) == false
+        }
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.syncBackgroundActivities(
+            sessionID: sessionID,
+            kind: kind,
+            entries: filteredEntries,
+            pendingBackgroundTaskCount: pendingBackgroundTaskCount,
+            at: now
+        ) else {
+            return false
+        }
+        ToasttyLog.debug(
+            "Synced managed session background activities",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "activity_kind": kind.rawValue,
+                "entry_count": String(filteredEntries.count),
+                "skipped_tombstoned_entry_count": String(entries.count - filteredEntries.count),
+                "pending_background_task_count": String(max(0, pendingBackgroundTaskCount)),
+            ]
+        )
+        publish(nextRegistry, reason: "sync_background_activities")
+        return true
+    }
+
+    @discardableResult
     func finishBackgroundActivity(
         sessionID: String,
         activityID: String,
         at now: Date
     ) -> Bool {
+        recordBackgroundActivityFinishTombstone(
+            sessionID: sessionID,
+            activityID: activityID,
+            at: now
+        )
         let activity = sessionRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID[activityID]
         var nextRegistry = sessionRegistry
         guard nextRegistry.finishBackgroundActivity(sessionID: sessionID, activityID: activityID, at: now) else {
@@ -1132,6 +1204,7 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+        backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
         var nextRegistry = sessionRegistry
         if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
@@ -1156,6 +1229,7 @@ final class SessionRuntimeStore: ObservableObject {
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
             codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
             codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
+            backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
             removePendingCodexHookApproval(sessionID: record.sessionID)
         }
         var nextRegistry = sessionRegistry
@@ -1297,6 +1371,7 @@ final class SessionRuntimeStore: ObservableObject {
                 suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
                 codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
                 codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
+                backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
                 removePendingCodexHookApproval(sessionID: record.sessionID)
                 if record.agent == .processWatch {
                     nextRegistry.removeSession(sessionID: record.sessionID)
@@ -1327,6 +1402,77 @@ final class SessionRuntimeStore: ObservableObject {
         )
         sessionRegistry = nextRegistry
         updateBackgroundActivityReaperState()
+    }
+
+    private func shouldSuppressProjectedWaitingSideEffects(
+        sessionID: String,
+        status: SessionStatus,
+        registry: SessionRegistry
+    ) -> Bool {
+        guard status.kind == .ready || status.kind == .idle,
+              let currentRecord = registry.sessionsByID[sessionID],
+              currentRecord.isActive else {
+            return false
+        }
+        return currentRecord.backgroundActivitiesByID.isEmpty == false ||
+            currentRecord.pendingBackgroundTaskCount > 0
+    }
+
+    private func logProjectedWaitingSuppression(
+        previousRecord: SessionRecord?,
+        sessionID: String,
+        status: SessionStatus,
+        now: Date
+    ) {
+        guard let currentRecord = sessionRegistry.sessionsByID[sessionID] else { return }
+        var metadata = sessionStatusTransitionMetadata(
+            previousRecord: previousRecord,
+            currentRecord: currentRecord,
+            status: status,
+            now: now
+        )
+        metadata["reason"] = "projected_waiting_suppression"
+        metadata["background_activity_count"] = String(currentRecord.backgroundActivitiesByID.count)
+        metadata["pending_background_task_count"] = String(currentRecord.pendingBackgroundTaskCount)
+        ToasttyLog.debug(
+            "Suppressed managed session actionable status transition",
+            category: .terminal,
+            metadata: metadata
+        )
+    }
+
+    private func recordBackgroundActivityFinishTombstone(
+        sessionID: String,
+        activityID: String,
+        at now: Date
+    ) {
+        pruneBackgroundActivityFinishTombstones(at: now)
+        backgroundActivityFinishTombstonesBySessionID[sessionID, default: [:]][activityID] = now
+    }
+
+    private func isBackgroundActivityFinishTombstoned(
+        sessionID: String,
+        activityID: String,
+        at now: Date
+    ) -> Bool {
+        pruneBackgroundActivityFinishTombstones(at: now)
+        guard let tombstonedAt = backgroundActivityFinishTombstonesBySessionID[sessionID]?[activityID] else {
+            return false
+        }
+        return now.timeIntervalSince(tombstonedAt) < Self.backgroundActivityFinishTombstoneTTL
+    }
+
+    private func pruneBackgroundActivityFinishTombstones(at now: Date) {
+        for sessionID in Array(backgroundActivityFinishTombstonesBySessionID.keys) {
+            let activeTombstones = backgroundActivityFinishTombstonesBySessionID[sessionID]?.filter { _, tombstonedAt in
+                now.timeIntervalSince(tombstonedAt) < Self.backgroundActivityFinishTombstoneTTL
+            } ?? [:]
+            if activeTombstones.isEmpty {
+                backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
+            } else {
+                backgroundActivityFinishTombstonesBySessionID[sessionID] = activeTombstones
+            }
+        }
     }
 
     private func updateBackgroundActivityReaperState() {
@@ -1372,7 +1518,10 @@ final class SessionRuntimeStore: ObservableObject {
         _ activity: SessionBackgroundActivity,
         at now: Date
     ) -> Bool {
-        guard now.timeIntervalSince(activity.lastUpdatedAt) < maximumBackgroundActivityAge else {
+        let maximumAge = activity.kind == .subagent && activity.processID == nil
+            ? Self.maximumPidlessSubagentBackgroundActivityAge
+            : maximumBackgroundActivityAge
+        guard now.timeIntervalSince(activity.lastUpdatedAt) < maximumAge else {
             return true
         }
         if let processID = activity.processID {
