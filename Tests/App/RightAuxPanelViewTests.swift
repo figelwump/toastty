@@ -148,6 +148,11 @@ final class RightAuxPanelViewTests: XCTestCase {
         XCTAssertNil(RightAuxPanelView.mountedContentTab(in: RightAuxPanelState(isVisible: true)))
     }
 
+    func testEmptyStateRecentlyOpenedActionRequiresRecentItems() {
+        XCTAssertFalse(RightAuxPanelEmptyStateView.showsRecentlyOpenedAction(recentItemCount: 0))
+        XCTAssertTrue(RightAuxPanelEmptyStateView.showsRecentlyOpenedAction(recentItemCount: 1))
+    }
+
     func testSelectedAccentOnlyShowsForActiveRightPanelTab() {
         XCTAssertNil(
             RightAuxPanelTabStrip.selectedAccentColor(

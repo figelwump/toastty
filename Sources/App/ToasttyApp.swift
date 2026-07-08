@@ -1952,7 +1952,8 @@ struct ToasttyApp: App {
             state: bootstrap.state,
             persistTerminalFontPreference: persistUserSettings,
             initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
-            initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting
+            initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
+            recentRightPanelItemsStore: RightPanelRecentItemsStore(runtimePaths: runtimePaths)
         )
         let agentCatalogStore = AgentCatalogStore()
         let initialProfileShortcutRegistry = Self.makeProfileShortcutRegistry(

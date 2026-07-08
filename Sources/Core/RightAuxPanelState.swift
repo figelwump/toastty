@@ -256,6 +256,9 @@ public enum RightAuxPanelTabIdentity: Codable, Equatable, Hashable, Sendable {
             }
             return .browserSession(panelID)
         case .scratchpad:
+            if let documentID = webState.scratchpad?.documentID {
+                return .scratchpad(id: documentID)
+            }
             return .scratchpad(id: panelID)
         case .diff:
             return .diff(id: panelID)
