@@ -83,6 +83,31 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testSessionStatusProjectionChipLabelShowsWaitingOnly() {
+        XCTAssertEqual(
+            SidebarView.sessionStatusProjectionChipLabel(
+                for: .waitingOnChildren(childCount: 2, pendingBackgroundTaskCount: 0)
+            ),
+            "waiting"
+        )
+        XCTAssertNil(SidebarView.sessionStatusProjectionChipLabel(for: .resuming))
+        XCTAssertNil(SidebarView.sessionStatusProjectionChipLabel(for: .none))
+    }
+
+    func testSessionAccessibilityLabelIncludesWaitingProjection() {
+        XCTAssertEqual(
+            SidebarView.sessionAccessibilityLabel(
+                agentName: "Claude Code",
+                chipKind: nil,
+                projection: .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0),
+                detailText: "Reviewing changes",
+                cwd: ".../toastty",
+                isLaterFlagged: false
+            ),
+            "Claude Code, waiting, Reviewing changes, .../toastty"
+        )
+    }
+
     func testSessionIndicatorStateShowsSpinnerOnlyForWorking() {
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .working), .spinner)
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .idle), .hidden)

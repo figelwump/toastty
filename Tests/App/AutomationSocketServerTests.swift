@@ -918,17 +918,20 @@ struct AutomationSocketServerTests {
         #expect(activityResponse.result?.string("status") == "accepted")
 
         let projectedStatus = await MainActor.run {
-            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
+            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first
         }
-        #expect(projectedStatus?.kind == .working)
-        #expect(projectedStatus?.detail == "Waiting on 1 child agent")
+        #expect(projectedStatus?.status.kind == .working)
+        #expect(projectedStatus?.status.detail == "Root turn completed")
+        #expect(projectedStatus?.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
 
         let duplicateStartResponse = try sendEvent(
             AutomationEventEnvelope(
                 eventType: "session.background_activity",
                 sessionID: sessionID,
                 panelID: server.panelID.uuidString,
-                timestamp: "2026-01-01T00:00:01Z",
                 requestID: UUID().uuidString,
                 payload: activityPayload
             ),
@@ -976,8 +979,12 @@ struct AutomationSocketServerTests {
         let finalStatus = await MainActor.run {
             server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
         }
-        #expect(finalStatus?.kind == .ready)
-        #expect(finalStatus?.detail == "Root turn completed")
+        #expect(finalStatus?.kind == .working)
+        #expect(finalStatus?.detail == "Resuming…")
+        let finalProjection = await MainActor.run {
+            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.projection
+        }
+        #expect(finalProjection == .resuming)
     }
 
     @Test
@@ -1063,7 +1070,6 @@ struct AutomationSocketServerTests {
                 eventType: "session.background_activity",
                 sessionID: sessionID,
                 panelID: server.panelID.uuidString,
-                timestamp: "2026-01-01T00:00:01Z",
                 requestID: UUID().uuidString,
                 payload: [
                     "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
@@ -1085,7 +1091,12 @@ struct AutomationSocketServerTests {
         let finalStatus = await MainActor.run {
             server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
         }
-        #expect(finalStatus?.kind == .ready)
+        #expect(finalStatus?.kind == .working)
+        #expect(finalStatus?.detail == "Resuming…")
+        let finalProjection = await MainActor.run {
+            server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.projection
+        }
+        #expect(finalProjection == .resuming)
     }
 
     @Test

@@ -29,6 +29,8 @@ final class SessionRuntimeStore: ObservableObject {
     private let backgroundActivityReapIntervalNanoseconds: UInt64
     private let maximumBackgroundActivityAge: TimeInterval
     private var backgroundActivityReaperTask: Task<Void, Never>?
+    private var resumeGraceRepublishTask: Task<Void, Never>?
+    private var resumeGraceRepublishExpiry: Date?
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private static let maximumAutoReviewedCodexPermissionTurnIDs = 16
     private static let backgroundActivityFinishTombstoneTTL: TimeInterval = 120
@@ -39,6 +41,7 @@ final class SessionRuntimeStore: ObservableObject {
         let panelID: UUID
         let agent: AgentKind
         let statusKind: SessionStatusKind
+        let projection: SessionStatusProjection
         let isActive: Bool
         let isWorkspaceScoped: Bool
 
@@ -48,9 +51,21 @@ final class SessionRuntimeStore: ObservableObject {
                 sessionID,
                 agent.rawValue,
                 statusKind.rawValue,
+                Self.projectionSummary(projection),
                 isActive ? "active" : "stopped",
                 isWorkspaceScoped ? "scoped" : "unscoped",
             ].joined(separator: ":")
+        }
+
+        private static func projectionSummary(_ projection: SessionStatusProjection) -> String {
+            switch projection {
+            case .none:
+                return "projection_none"
+            case .waitingOnChildren(let childCount, let pendingBackgroundTaskCount):
+                return "projection_waiting_children_\(childCount)_pending_\(pendingBackgroundTaskCount)"
+            case .resuming:
+                return "projection_resuming"
+            }
         }
     }
 
@@ -83,6 +98,18 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
+    func unbind() {
+        if let storeActionObserverToken,
+           let store {
+            store.removeActionAppliedObserver(storeActionObserverToken)
+        }
+        storeActionObserverToken = nil
+        store = nil
+        resumeGraceRepublishTask?.cancel()
+        resumeGraceRepublishTask = nil
+        resumeGraceRepublishExpiry = nil
+    }
+
     func reset() {
         sessionRegistry = SessionRegistry()
         suppressedCodexVisibleErrorDetailBySessionID = [:]
@@ -92,6 +119,9 @@ final class SessionRuntimeStore: ObservableObject {
         removeAllPendingCodexHookApprovals()
         backgroundActivityReaperTask?.cancel()
         backgroundActivityReaperTask = nil
+        resumeGraceRepublishTask?.cancel()
+        resumeGraceRepublishTask = nil
+        resumeGraceRepublishExpiry = nil
     }
 
     func startSession(
@@ -145,7 +175,7 @@ final class SessionRuntimeStore: ObservableObject {
                 scopedWorkspaceIDs: scopedWorkspaceIDs
             )
         )
-        publish(nextRegistry, reason: "start_session")
+        publish(nextRegistry, reason: "start_session", at: now)
         synchronizePersistedResumeRecordScope(sessionID: sessionID, in: nextRegistry)
     }
 
@@ -194,7 +224,7 @@ final class SessionRuntimeStore: ObservableObject {
             repoRoot: repoRoot,
             at: now
         )
-        publish(nextRegistry, reason: "update_files")
+        publish(nextRegistry, reason: "update_files", at: now)
     }
 
     func updateStatus(
@@ -203,6 +233,9 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) {
         let previousRecord = sessionRegistry.sessionsByID[sessionID]
+        let previousProjectedStatus = previousRecord.flatMap { record in
+            sessionRegistry.panelStatus(for: record.panelID, at: now)?.status
+        }
         let storedStatus = normalizedStatusForStorage(
             requestedStatus: status,
             previousRecord: previousRecord,
@@ -233,7 +266,7 @@ final class SessionRuntimeStore: ObservableObject {
                 )
             )
         }
-        publish(nextRegistry, reason: "update_status")
+        publish(nextRegistry, reason: "update_status", at: now)
         if shouldSuppressProjectedWaitingSideEffects(
             sessionID: sessionID,
             status: storedStatus,
@@ -253,6 +286,7 @@ final class SessionRuntimeStore: ObservableObject {
             )
             handleActionableStatusTransitionIfNeeded(
                 previousRecord: previousRecord,
+                previousProjectedStatus: previousProjectedStatus,
                 sessionID: sessionID,
                 status: storedStatus
             )
@@ -286,7 +320,7 @@ final class SessionRuntimeStore: ObservableObject {
                 phase: .start
             )
         )
-        publish(nextRegistry, reason: "update_background_activity")
+        publish(nextRegistry, reason: "update_background_activity", at: now)
         return true
     }
 
@@ -327,7 +361,7 @@ final class SessionRuntimeStore: ObservableObject {
                 "pending_background_task_count": String(max(0, pendingBackgroundTaskCount)),
             ]
         )
-        publish(nextRegistry, reason: "sync_background_activities")
+        publish(nextRegistry, reason: "sync_background_activities", at: now)
         return true
     }
 
@@ -357,7 +391,7 @@ final class SessionRuntimeStore: ObservableObject {
                 phase: .finish
             )
         )
-        publish(nextRegistry, reason: "finish_background_activity")
+        publish(nextRegistry, reason: "finish_background_activity", at: now)
         return true
     }
 
@@ -388,7 +422,7 @@ final class SessionRuntimeStore: ObservableObject {
                 )
             }
         }
-        publish(nextRegistry, reason: "prune_background_activity")
+        publish(nextRegistry, reason: "prune_background_activity", at: now)
         return true
     }
 
@@ -1212,7 +1246,7 @@ final class SessionRuntimeStore: ObservableObject {
         } else {
             nextRegistry.stopSession(sessionID: sessionID, at: now)
         }
-        publish(nextRegistry, reason: "stop_session")
+        publish(nextRegistry, reason: "stop_session", at: now)
         if let activeRecord {
             clearPersistedResumeRecord(panelID: activeRecord.panelID)
         }
@@ -1239,18 +1273,18 @@ final class SessionRuntimeStore: ObservableObject {
         } else {
             nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
         }
-        publish(nextRegistry, reason: "stop_session_for_panel")
+        publish(nextRegistry, reason: "stop_session_for_panel", at: now)
         if activeRecord != nil {
             clearPersistedResumeRecord(panelID: panelID)
         }
     }
 
-    func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
-        sessionRegistry.workspaceStatuses(for: workspaceID)
+    func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
+        sessionRegistry.workspaceStatuses(for: workspaceID, at: now)
     }
 
-    func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {
-        sessionRegistry.panelStatus(for: panelID)
+    func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
+        sessionRegistry.panelStatus(for: panelID, at: now)
     }
 
     func isLaterFlagged(sessionID: String) -> Bool {
@@ -1390,18 +1424,25 @@ final class SessionRuntimeStore: ObservableObject {
             }
         }
 
-        publish(nextRegistry, reason: "synchronize_app_state")
+        publish(nextRegistry, reason: "synchronize_app_state", at: now)
     }
 
-    private func publish(_ nextRegistry: SessionRegistry, reason: String) {
-        guard nextRegistry != sessionRegistry else { return }
+    private func publish(
+        _ nextRegistry: SessionRegistry,
+        reason: String,
+        at now: Date = Date(),
+        force: Bool = false
+    ) {
+        guard force || nextRegistry != sessionRegistry else { return }
         logWorkspaceStatusSnapshotChanges(
             previousRegistry: sessionRegistry,
             nextRegistry: nextRegistry,
-            reason: reason
+            reason: reason,
+            at: now
         )
         sessionRegistry = nextRegistry
         updateBackgroundActivityReaperState()
+        updateResumeGraceRepublishState(at: now)
     }
 
     private func shouldSuppressProjectedWaitingSideEffects(
@@ -1514,6 +1555,63 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
+    private func updateResumeGraceRepublishState(at now: Date) {
+        guard let expiry = earliestResumeGraceExpiry(in: sessionRegistry, at: now) else {
+            resumeGraceRepublishTask?.cancel()
+            resumeGraceRepublishTask = nil
+            resumeGraceRepublishExpiry = nil
+            return
+        }
+
+        guard resumeGraceRepublishExpiry != expiry else { return }
+
+        resumeGraceRepublishTask?.cancel()
+        resumeGraceRepublishExpiry = expiry
+        let delay = max(0, expiry.timeIntervalSince(Date()))
+        let delayNanoseconds = UInt64(delay * 1_000_000_000)
+        resumeGraceRepublishTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+            } catch {
+                return
+            }
+
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.resumeGraceRepublishExpiry == expiry else {
+                    return
+                }
+                self.resumeGraceRepublishTask = nil
+                self.resumeGraceRepublishExpiry = nil
+                self.publish(
+                    self.sessionRegistry,
+                    reason: "resume_grace_expired",
+                    at: Date(),
+                    force: true
+                )
+            }
+        }
+    }
+
+    private func earliestResumeGraceExpiry(
+        in registry: SessionRegistry,
+        at now: Date
+    ) -> Date? {
+        registry.sessionsByID.values
+            .filter { record in
+                guard record.isActive,
+                      let lastActivityFinishedAt = record.lastActivityFinishedAt else {
+                    return false
+                }
+                let expiry = lastActivityFinishedAt.addingTimeInterval(SessionRegistry.resumeProjectionGraceInterval)
+                return now < expiry && registry.panelStatus(for: record.panelID, at: now)?.projection == .resuming
+            }
+            .map { record in
+                record.lastActivityFinishedAt!.addingTimeInterval(SessionRegistry.resumeProjectionGraceInterval)
+            }
+            .min()
+    }
+
     private func shouldPruneBackgroundActivity(
         _ activity: SessionBackgroundActivity,
         at now: Date
@@ -1542,7 +1640,8 @@ final class SessionRuntimeStore: ObservableObject {
     private func logWorkspaceStatusSnapshotChanges(
         previousRegistry: SessionRegistry,
         nextRegistry: SessionRegistry,
-        reason: String
+        reason: String,
+        at now: Date
     ) {
         let workspaceIDs = Set(
             previousRegistry.sessionsByID.values.map(\.workspaceID) +
@@ -1551,10 +1650,10 @@ final class SessionRuntimeStore: ObservableObject {
 
         for workspaceID in workspaceIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             let previousRows = workspaceStatusDiagnosticRows(
-                previousRegistry.workspaceStatuses(for: workspaceID)
+                previousRegistry.workspaceStatuses(for: workspaceID, at: now)
             )
             let nextRows = workspaceStatusDiagnosticRows(
-                nextRegistry.workspaceStatuses(for: workspaceID)
+                nextRegistry.workspaceStatuses(for: workspaceID, at: now)
             )
             guard previousRows != nextRows else { continue }
 
@@ -1583,6 +1682,7 @@ final class SessionRuntimeStore: ObservableObject {
                 panelID: status.panelID,
                 agent: status.agent,
                 statusKind: status.status.kind,
+                projection: status.projection,
                 isActive: status.isActive,
                 isWorkspaceScoped: status.isWorkspaceScoped
             )
@@ -2610,6 +2710,7 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func handleActionableStatusTransitionIfNeeded(
         previousRecord: SessionRecord?,
+        previousProjectedStatus: SessionStatus?,
         sessionID: String,
         status: SessionStatus
     ) {
@@ -2617,7 +2718,8 @@ final class SessionRuntimeStore: ObservableObject {
         guard isActionableStatusKind(status.kind) else {
             return
         }
-        guard previousRecord?.status?.kind != status.kind else {
+        let previousEffectiveKind = previousProjectedStatus?.kind ?? previousRecord?.status?.kind
+        guard previousEffectiveKind != status.kind else {
             return
         }
         guard let currentRecord = sessionRegistry.sessionsByID[sessionID],

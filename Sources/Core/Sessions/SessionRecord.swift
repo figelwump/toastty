@@ -25,8 +25,10 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var isFlaggedForLater: Bool
     public var usesSessionStatusNotifications: Bool
     public var status: SessionStatus?
+    public var statusUpdatedAt: Date?
     public var backgroundActivitiesByID: [String: SessionBackgroundActivity]
     public var pendingBackgroundTaskCount: Int
+    public var lastActivityFinishedAt: Date?
     public var displayTitleOverride: String?
     public var repoRoot: String?
     public var cwd: String?
@@ -46,8 +48,10 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         isFlaggedForLater: Bool = false,
         usesSessionStatusNotifications: Bool = false,
         status: SessionStatus? = nil,
+        statusUpdatedAt: Date? = nil,
         backgroundActivitiesByID: [String: SessionBackgroundActivity] = [:],
         pendingBackgroundTaskCount: Int = 0,
+        lastActivityFinishedAt: Date? = nil,
         displayTitleOverride: String? = nil,
         repoRoot: String? = nil,
         cwd: String? = nil,
@@ -66,8 +70,10 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.isFlaggedForLater = isFlaggedForLater
         self.usesSessionStatusNotifications = usesSessionStatusNotifications
         self.status = status
+        self.statusUpdatedAt = statusUpdatedAt
         self.backgroundActivitiesByID = backgroundActivitiesByID
         self.pendingBackgroundTaskCount = max(0, pendingBackgroundTaskCount)
+        self.lastActivityFinishedAt = lastActivityFinishedAt
         self.displayTitleOverride = Self.normalizedOptionalText(displayTitleOverride)
         self.repoRoot = repoRoot
         self.cwd = cwd
@@ -96,11 +102,13 @@ public struct SessionRecord: Codable, Equatable, Sendable {
             forKey: .usesSessionStatusNotifications
         ) ?? false
         status = try container.decodeIfPresent(SessionStatus.self, forKey: .status)
+        statusUpdatedAt = nil
         // Background activity is runtime-only. Do not restore it from persisted
         // registry snapshots, because child processes from an old app run cannot
         // safely keep a restored sidebar row in a working state.
         backgroundActivitiesByID = [:]
         pendingBackgroundTaskCount = 0
+        lastActivityFinishedAt = nil
         displayTitleOverride = Self.normalizedOptionalText(
             try container.decodeIfPresent(String.self, forKey: .displayTitleOverride)
         )

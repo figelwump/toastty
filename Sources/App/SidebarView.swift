@@ -116,6 +116,7 @@ private struct SidebarSessionRowDiagnosticState: Equatable {
     var agent: AgentKind
     var statusKind: SessionStatusKind
     var chipKind: SessionStatusKind?
+    var projection: SessionStatusProjection
     var indicatorState: SessionStatusIndicatorState
     var showsUnreadSessionAccent: Bool
     var canFocusPanel: Bool
@@ -126,6 +127,9 @@ private struct SidebarSessionRowDiagnosticState: Equatable {
     var selectedPanelID: UUID?
 
     var displayState: String {
+        if case .waitingOnChildren = projection {
+            return "waiting_chip"
+        }
         if let chipKind {
             return "\(chipKind.rawValue)_chip"
         }
@@ -991,6 +995,7 @@ struct SidebarView: View {
         let accessibilityLabel = Self.sessionAccessibilityLabel(
             agentName: workspaceSessionStatus.displayTitle,
             chipKind: chipKind,
+            projection: workspaceSessionStatus.projection,
             detailText: normalizedSessionDetail(status.detail),
             cwd: Self.abbreviatedPathLabel(workspaceSessionStatus.cwd),
             isLaterFlagged: isLaterFlagged,
@@ -1010,6 +1015,7 @@ struct SidebarView: View {
             agent: workspaceSessionStatus.agent,
             statusKind: status.kind,
             chipKind: chipKind,
+            projection: workspaceSessionStatus.projection,
             indicatorState: Self.sessionIndicatorState(for: status.kind),
             showsUnreadSessionAccent: showsUnreadSessionAccent,
             canFocusPanel: canFocusPanel,
@@ -1031,6 +1037,7 @@ struct SidebarView: View {
                     sessionStatusLabel(
                         workspaceSessionStatus,
                         status: status,
+                        projection: workspaceSessionStatus.projection,
                         isLaterFlagged: isLaterFlagged,
                         showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isActivePanel: isActivePanel,
@@ -1056,6 +1063,7 @@ struct SidebarView: View {
                 sessionStatusLabel(
                     workspaceSessionStatus,
                     status: status,
+                    projection: workspaceSessionStatus.projection,
                     isLaterFlagged: isLaterFlagged,
                     showsUnreadSessionAccent: showsUnreadSessionAccent,
                     isActivePanel: isActivePanel,
@@ -1104,6 +1112,7 @@ struct SidebarView: View {
     private func sessionStatusLabel(
         _ workspaceSessionStatus: WorkspaceSessionStatus,
         status: SessionStatus,
+        projection: SessionStatusProjection,
         isLaterFlagged: Bool,
         showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
@@ -1140,6 +1149,10 @@ struct SidebarView: View {
 
                 if let chipKind {
                     sessionStatusChip(kind: chipKind)
+                }
+
+                if case .waitingOnChildren = projection {
+                    sessionWaitingChip()
                 }
 
                 if workspaceSessionStatus.isWorkspaceScoped {
@@ -1558,6 +1571,7 @@ struct SidebarView: View {
         metadata["previous_state"] = previousState?.displayState ?? "none"
         metadata["previous_status_kind"] = previousState?.statusKind.rawValue ?? "none"
         metadata["previous_chip_kind"] = previousState?.chipKind?.rawValue ?? "none"
+        metadata["previous_projection"] = previousState.map { Self.sessionStatusProjectionLogValue($0.projection) } ?? "none"
         metadata["previous_unread_accent"] = previousState?.showsUnreadSessionAccent == true ? "true" : "false"
         metadata["previous_active_panel"] = previousState?.isActivePanel == true ? "true" : "false"
 
@@ -1580,6 +1594,7 @@ struct SidebarView: View {
             "agent": state.agent.rawValue,
             "status_kind": state.statusKind.rawValue,
             "chip_kind": state.chipKind?.rawValue ?? "none",
+            "projection": Self.sessionStatusProjectionLogValue(state.projection),
             "indicator_state": Self.sessionIndicatorLogValue(state.indicatorState),
             "display_state": state.displayState,
             "shows_unread_session_accent": state.showsUnreadSessionAccent ? "true" : "false",
@@ -1602,6 +1617,18 @@ struct SidebarView: View {
             .padding(.vertical, 2)
             .background(
                 ToastyTheme.sessionStatusBackgroundColor(for: kind),
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+    }
+
+    private func sessionWaitingChip() -> some View {
+        Text("waiting")
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .foregroundStyle(ToastyTheme.sessionWaitingText)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                ToastyTheme.sessionWaitingBackground,
                 in: RoundedRectangle(cornerRadius: 4)
             )
     }
@@ -2012,6 +2039,26 @@ struct SidebarView: View {
         }
     }
 
+    static func sessionStatusProjectionChipLabel(for projection: SessionStatusProjection) -> String? {
+        switch projection {
+        case .waitingOnChildren:
+            return "waiting"
+        case .none, .resuming:
+            return nil
+        }
+    }
+
+    static func sessionStatusProjectionLogValue(_ projection: SessionStatusProjection) -> String {
+        switch projection {
+        case .none:
+            return "none"
+        case .waitingOnChildren(let childCount, let pendingBackgroundTaskCount):
+            return "waiting_children_\(childCount)_pending_\(pendingBackgroundTaskCount)"
+        case .resuming:
+            return "resuming"
+        }
+    }
+
     static func laterFlagActionTitle(isFlaggedForLater: Bool) -> String {
         isFlaggedForLater ? "Clear Later Flag" : "Flag for Later"
     }
@@ -2019,6 +2066,7 @@ struct SidebarView: View {
     static func sessionAccessibilityLabel(
         agentName: String,
         chipKind: SessionStatusKind?,
+        projection: SessionStatusProjection = .none,
         detailText: String?,
         cwd: String?,
         isLaterFlagged: Bool,
@@ -2027,6 +2075,9 @@ struct SidebarView: View {
         var components = [agentName]
         if let chipKind {
             components.append(sessionStatusChipLabel(for: chipKind))
+        }
+        if let projectionLabel = sessionStatusProjectionChipLabel(for: projection) {
+            components.append(projectionLabel)
         }
         if let workspaceScopeHelpText {
             components.append("workspace-scoped")

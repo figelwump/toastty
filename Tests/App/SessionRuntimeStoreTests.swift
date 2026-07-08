@@ -1,3 +1,4 @@
+import Combine
 import CoreState
 import Foundation
 import Testing
@@ -3622,6 +3623,148 @@ struct SessionRuntimeStoreTests {
         #expect(workspaceAfter.unreadPanelIDs.isEmpty)
         #expect(sessionStore.sessionRegistry.sessionsByID["sess-subagent-waiting"]?.status?.kind == .ready)
         #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .working)
+    }
+
+    @Test
+    func resumeGraceTimerRepublishesRawReadyAfterExpiry() async throws {
+        let sessionStore = SessionRuntimeStore()
+        defer { sessionStore.reset() }
+        var publishCount = 0
+        let cancellable = sessionStore.$sessionRegistry.sink { _ in
+            publishCount += 1
+        }
+        defer { cancellable.cancel() }
+
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let finishAt = Date().addingTimeInterval(
+            -(SessionRegistry.resumeProjectionGraceInterval - 0.4)
+        )
+        let startedAt = finishAt.addingTimeInterval(-3)
+
+        sessionStore.startSession(
+            sessionID: "sess-resume-timer",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-resume-timer",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root complete"),
+            at: finishAt.addingTimeInterval(-2)
+        )
+        #expect(sessionStore.updateBackgroundActivity(
+            sessionID: "sess-resume-timer",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                startedAt: finishAt.addingTimeInterval(-1),
+                lastUpdatedAt: finishAt.addingTimeInterval(-1)
+            ),
+            at: finishAt.addingTimeInterval(-1)
+        ))
+
+        #expect(sessionStore.finishBackgroundActivity(
+            sessionID: "sess-resume-timer",
+            activityID: "subagent-1",
+            at: finishAt
+        ))
+        let publishCountAfterFinish = publishCount
+
+        #expect(sessionStore.panelStatus(for: panelID)?.projection == .resuming)
+        await waitUntil(timeoutNanoseconds: 1_000_000_000) {
+            publishCount > publishCountAfterFinish &&
+                sessionStore.panelStatus(for: panelID)?.projection == SessionStatusProjection.none
+        }
+
+        let status = try #require(sessionStore.panelStatus(for: panelID))
+        #expect(status.status.kind == .ready)
+        #expect(status.status.detail == "Root complete")
+        #expect(status.projection == .none)
+    }
+
+    @Test
+    func readyStatusDuringResumeGraceClearsProjectionAndSendsNotification() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            },
+            isApplicationActive: { false }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let finishAt = Date().addingTimeInterval(-0.1)
+        let startedAt = finishAt.addingTimeInterval(-3)
+
+        sessionStore.startSession(
+            sessionID: "sess-ready-during-grace",
+            agent: .claude,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        #expect(sessionStore.updateBackgroundActivity(
+            sessionID: "sess-ready-during-grace",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                displayName: "general-purpose",
+                startedAt: finishAt.addingTimeInterval(-2),
+                lastUpdatedAt: finishAt.addingTimeInterval(-2)
+            ),
+            at: finishAt.addingTimeInterval(-2)
+        ))
+        sessionStore.updateStatus(
+            sessionID: "sess-ready-during-grace",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Stale complete"),
+            at: finishAt.addingTimeInterval(-1)
+        )
+        await settleNotificationTasks()
+        let staleNotifications = await recorder.notifications()
+        #expect(staleNotifications.isEmpty)
+
+        #expect(sessionStore.finishBackgroundActivity(
+            sessionID: "sess-ready-during-grace",
+            activityID: "subagent-1",
+            at: finishAt
+        ))
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.projection == .resuming)
+
+        sessionStore.updateStatus(
+            sessionID: "sess-ready-during-grace",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Fresh complete"),
+            at: Date()
+        )
+
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+
+        let notification = try #require(await recorder.notifications().first)
+        #expect(notification.title == "Claude Code is ready")
+        #expect(notification.body == "Fresh complete")
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .ready)
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.projection == SessionStatusProjection.none)
     }
 
     @Test

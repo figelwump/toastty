@@ -40,6 +40,8 @@ enum ToastyTheme {
     static let sessionIndicatorSpinnerColor = Color(hex: 0xF5A623)
     static let sessionIdleText = Color(hex: 0xC1AA8A)
     static let sessionIdleBackground = Color(hex: 0xC1AA8A, alpha: 0.1)
+    static let sessionWaitingText = Color(hex: 0xC1AA8A)
+    static let sessionWaitingBackground = Color(hex: 0xC1AA8A, alpha: 0.14)
     static let sessionWorkingText = Color(hex: 0x8B5E34)
     static let sessionWorkingBackground = Color(hex: 0x8B5E34, alpha: 0.12)
     static let sessionNeedsApprovalText = Color(hex: 0xE8A635)

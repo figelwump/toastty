@@ -20,11 +20,18 @@ public struct SessionStatus: Codable, Equatable, Sendable {
     }
 }
 
+public enum SessionStatusProjection: Equatable, Sendable {
+    case none
+    case waitingOnChildren(childCount: Int, pendingBackgroundTaskCount: Int)
+    case resuming
+}
+
 public struct WorkspaceSessionStatus: Equatable, Sendable {
     public var sessionID: String
     public var panelID: UUID
     public var agent: AgentKind
     public var status: SessionStatus
+    public var projection: SessionStatusProjection
     public var displayTitleOverride: String?
     public var cwd: String?
     public var updatedAt: Date
@@ -41,6 +48,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         panelID: UUID,
         agent: AgentKind,
         status: SessionStatus,
+        projection: SessionStatusProjection = .none,
         displayTitleOverride: String? = nil,
         cwd: String?,
         updatedAt: Date,
@@ -52,6 +60,7 @@ public struct WorkspaceSessionStatus: Equatable, Sendable {
         self.panelID = panelID
         self.agent = agent
         self.status = status
+        self.projection = projection
         self.displayTitleOverride = displayTitleOverride
         self.cwd = cwd
         self.updatedAt = updatedAt

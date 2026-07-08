@@ -1,6 +1,8 @@
 import Foundation
 
 public struct SessionRegistry: Codable, Equatable, Sendable {
+    public static let resumeProjectionGraceInterval: TimeInterval = 15
+
     public private(set) var sessionsByID: [String: SessionRecord]
     public private(set) var activeSessionIDByPanelID: [UUID: String]
     public private(set) var sessionOrder: [String]
@@ -97,6 +99,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     ) {
         guard var record = sessionsByID[sessionID], record.isActive else { return }
         record.status = status
+        record.statusUpdatedAt = now
         record.updatedAt = now
         sessionsByID[sessionID] = record
     }
@@ -137,6 +140,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
               record.backgroundActivitiesByID.removeValue(forKey: activityID) != nil else {
             return false
         }
+        record.lastActivityFinishedAt = now
         record.updatedAt = now
         sessionsByID[sessionID] = record
         return true
@@ -171,12 +175,20 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         }
 
         let nextPendingBackgroundTaskCount = max(0, pendingBackgroundTaskCount)
+        let removedActivity = record.backgroundActivitiesByID.contains { id, activity in
+            activity.kind == kind && nextActivities[id] == nil
+        }
+        let clearedPendingBackgroundTasks = record.pendingBackgroundTaskCount > 0 &&
+            nextPendingBackgroundTaskCount == 0
         guard record.backgroundActivitiesByID != nextActivities ||
             record.pendingBackgroundTaskCount != nextPendingBackgroundTaskCount else {
             return false
         }
         record.backgroundActivitiesByID = nextActivities
         record.pendingBackgroundTaskCount = nextPendingBackgroundTaskCount
+        if removedActivity || clearedPendingBackgroundTasks {
+            record.lastActivityFinishedAt = now
+        }
         record.updatedAt = now
         sessionsByID[sessionID] = record
         return true
@@ -195,6 +207,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                 shouldRemove(activity) == false
             }
             guard record.backgroundActivitiesByID.count != previousCount else { continue }
+            record.lastActivityFinishedAt = now
             record.updatedAt = now
             sessionsByID[sessionID] = record
             didMutate = true
@@ -342,9 +355,9 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return record
     }
 
-    public func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {
+    public func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
         if let activeRecord = activeSession(for: panelID) {
-            return Self.workspaceSessionStatus(from: activeRecord)
+            return Self.workspaceSessionStatus(from: activeRecord, at: now)
         }
 
         return sessionsByID.values
@@ -352,11 +365,13 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                 record.panelID == panelID && Self.shouldPresentStoppedPanelStatus(for: record)
             }
             .sorted(by: stoppedWorkspaceStatusSort)
-            .compactMap(Self.workspaceSessionStatus(from:))
+            .compactMap { record in
+                Self.workspaceSessionStatus(from: record, at: now)
+            }
             .first
     }
 
-    public func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
+    public func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
         let orderBySessionID = Dictionary(
             uniqueKeysWithValues: sessionOrder.enumerated().map { offset, sessionID in
                 (sessionID, offset)
@@ -365,7 +380,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return sessionsByID.values
             .filter { record in
                 record.workspaceID == workspaceID &&
-                Self.projectedStatus(from: record) != nil &&
+                Self.projectedStatus(from: record, at: now) != nil &&
                 record.isActive
             }
             // Keep sidebar session rows stable as tabs switch or session
@@ -377,7 +392,9 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                     orderBySessionID: orderBySessionID
                 )
             }
-            .compactMap(Self.workspaceSessionStatus(from:))
+            .compactMap { record in
+                Self.workspaceSessionStatus(from: record, at: now)
+            }
     }
 
     public mutating func pruneStoppedSessions(olderThan cutoff: Date) {
@@ -394,13 +411,17 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         }
     }
 
-    private static func workspaceSessionStatus(from record: SessionRecord) -> WorkspaceSessionStatus? {
-        guard let status = projectedStatus(from: record) else { return nil }
+    private static func workspaceSessionStatus(
+        from record: SessionRecord,
+        at now: Date
+    ) -> WorkspaceSessionStatus? {
+        guard let projected = projectedStatus(from: record, at: now) else { return nil }
         return WorkspaceSessionStatus(
             sessionID: record.sessionID,
             panelID: record.panelID,
             agent: record.agent,
-            status: status,
+            status: projected.status,
+            projection: projected.projection,
             displayTitleOverride: record.displayTitleOverride,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
@@ -443,37 +464,65 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return status.kind != .idle && status.kind != .working
     }
 
-    private static func projectedStatus(from record: SessionRecord) -> SessionStatus? {
-        let outstandingCount = record.backgroundActivitiesByID.count
-        guard outstandingCount > 0 || record.pendingBackgroundTaskCount > 0 else {
-            return record.status
+    private static func projectedStatus(
+        from record: SessionRecord,
+        at now: Date
+    ) -> (status: SessionStatus, projection: SessionStatusProjection)? {
+        guard record.isActive else {
+            return record.status.map { ($0, .none) }
         }
+
+        let outstandingCount = record.backgroundActivitiesByID.count
+        let pendingBackgroundTaskCount = record.pendingBackgroundTaskCount
 
         switch record.status?.kind {
         case .needsApproval, .error, .working:
-            return record.status
+            return record.status.map { ($0, .none) }
         case .idle, .ready, nil:
-            guard outstandingCount > 0 else {
-                return SessionStatus(
-                    kind: .working,
-                    summary: "Working",
-                    detail: "Waiting on background work"
+            if outstandingCount > 0 || pendingBackgroundTaskCount > 0 {
+                return (
+                    SessionStatus(
+                        kind: .working,
+                        summary: "Working",
+                        detail: record.status?.detail
+                    ),
+                    .waitingOnChildren(
+                        childCount: outstandingCount,
+                        pendingBackgroundTaskCount: pendingBackgroundTaskCount
+                    )
                 )
             }
-            let childAgentCount = record.backgroundActivitiesByID.values
-                .filter { $0.kind == .childAgent }
-                .count
-            let activityCount = childAgentCount > 0 ? childAgentCount : outstandingCount
-            let singularNoun = childAgentCount > 0 ? "child agent" : "background activity"
-            let pluralNoun = childAgentCount > 0 ? "child agents" : "background activities"
-            let detail: String
-            if activityCount == 1 {
-                detail = "Waiting on 1 \(singularNoun)"
-            } else {
-                detail = "Waiting on \(activityCount) \(pluralNoun)"
+
+            guard let rawStatus = record.status else {
+                return nil
             }
-            return SessionStatus(kind: .working, summary: "Working", detail: detail)
+            if shouldProjectResuming(record: record, now: now) {
+                return (
+                    SessionStatus(
+                        kind: .working,
+                        summary: "Working",
+                        detail: "Resuming…"
+                    ),
+                    .resuming
+                )
+            }
+            return (rawStatus, .none)
         }
+    }
+
+    private static func shouldProjectResuming(
+        record: SessionRecord,
+        now: Date
+    ) -> Bool {
+        guard record.backgroundActivitiesByID.isEmpty,
+              record.pendingBackgroundTaskCount == 0,
+              let rawStatusKind = record.status?.kind,
+              rawStatusKind == .idle || rawStatusKind == .ready,
+              let lastActivityFinishedAt = record.lastActivityFinishedAt,
+              record.statusUpdatedAt.map({ $0 < lastActivityFinishedAt }) ?? true else {
+            return false
+        }
+        return now < lastActivityFinishedAt.addingTimeInterval(Self.resumeProjectionGraceInterval)
     }
 }
 
