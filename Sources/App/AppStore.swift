@@ -73,6 +73,7 @@ private struct NextActiveCycleAnchor: Equatable {
 }
 
 private enum NextActiveCycleSegment: String, Equatable {
+    case actionRequired = "fallback_attention"
     case workingForward = "fallback_working"
     case later = "fallback_later"
     case workingWrapped = "fallback_working_wrapped"
@@ -1819,28 +1820,6 @@ final class AppStore: ObservableObject {
             return nil
         }
 
-        let attentionPanelIDs = sessionRuntimeStore.activePanelIDs(
-            matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
-        )
-        if let target = nextUnreadOrActiveFallbackTarget(
-            selection: selection,
-            selectedTabID: selectedTabID,
-            matchingPanelIDs: attentionPanelIDs
-        ) {
-            if updatingCycleState {
-                nextActiveCycleState = nil
-            }
-            logNextUnreadOrActivePanelResolution(
-                selection: selection,
-                selectedTabID: selectedTabID,
-                resolution: "fallback_attention",
-                target: target,
-                sessionRuntimeStore: sessionRuntimeStore,
-                cycleResetReason: "attention_preemption"
-            )
-            return target
-        }
-
         let activeCycleResolution = nextUnreadOrActiveCycleTarget(
             selection: selection,
             selectedTabID: selectedTabID,
@@ -1856,27 +1835,6 @@ final class AppStore: ObservableObject {
             cycleResetReason: activeCycleResolution.cycleResetReason
         )
         return activeCycleResolution.target
-    }
-
-    private func nextUnreadOrActiveFallbackTarget(
-        selection: WindowCommandSelection,
-        selectedTabID: UUID,
-        matchingPanelIDs: Set<UUID>,
-        includeCurrentWorkspaceWrap: Bool = true
-    ) -> PanelNavigationTarget? {
-        guard matchingPanelIDs.isEmpty == false else {
-            return nil
-        }
-
-        return state.nextMatchingPanel(
-            fromWindowID: selection.windowID,
-            workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID,
-            includeCurrentWorkspaceWrap: includeCurrentWorkspaceWrap
-        ) { _, panelID in
-            matchingPanelIDs.contains(panelID)
-        }
     }
 
     private func nextUnreadOrActiveCycleTarget(
@@ -1953,6 +1911,9 @@ final class AppStore: ObservableObject {
         anchor: NextActiveCycleAnchor,
         sessionRuntimeStore: SessionRuntimeStore
     ) -> [NextActiveCycleEntry] {
+        let actionRequiredPanelIDs = sessionRuntimeStore.activePanelIDs(
+            matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
+        )
         let workingPanelIDs = sessionRuntimeStore.activePanelIDs(
             matching: Self.nextUnreadOrWorkingFallbackStatusKinds
         )
@@ -1960,9 +1921,20 @@ final class AppStore: ObservableObject {
         var entries: [NextActiveCycleEntry] = []
         var seenPanelIDs = Set<UUID>()
 
+        // Preserve read action-required priority while storing it in the
+        // persisted cycle so repeated jumps can still reach working rows.
+        let actionRequiredTargets = orderedNextUnreadOrActiveFallbackTargets(
+            anchor: anchor,
+            matchingPanelIDs: actionRequiredPanelIDs
+        )
+        entries.append(contentsOf: actionRequiredTargets.map { target in
+            seenPanelIDs.insert(target.panelID)
+            return NextActiveCycleEntry(panelID: target.panelID, segment: .actionRequired)
+        })
+
         let forwardWorkingTargets = orderedNextUnreadOrActiveFallbackTargets(
             anchor: anchor,
-            matchingPanelIDs: workingPanelIDs,
+            matchingPanelIDs: workingPanelIDs.subtracting(seenPanelIDs),
             includeCurrentWorkspaceWrap: false
         )
         entries.append(contentsOf: forwardWorkingTargets.map { target in
@@ -1991,7 +1963,9 @@ final class AppStore: ObservableObject {
         if entries.isEmpty == false,
            let focusedPanelID = anchor.focusedPanelID,
            seenPanelIDs.contains(focusedPanelID) == false {
-            if workingPanelIDs.contains(focusedPanelID) {
+            if actionRequiredPanelIDs.contains(focusedPanelID) {
+                entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .actionRequired))
+            } else if workingPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .workingWrapped))
             } else if laterPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .later))
