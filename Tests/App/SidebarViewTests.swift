@@ -100,11 +100,160 @@ final class SidebarViewTests: XCTestCase {
                 agentName: "Claude Code",
                 chipKind: nil,
                 projection: .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0),
+                childCount: 2,
                 detailText: "Reviewing changes",
                 cwd: ".../toastty",
                 isLaterFlagged: false
             ),
-            "Claude Code, waiting, Reviewing changes, .../toastty"
+            "Claude Code, waiting, 2 sub-agents, Reviewing changes, .../toastty"
+        )
+    }
+
+    func testSessionChildRowsDefaultExpandedAndNeedAttentionForApprovalOrError() {
+        XCTAssertTrue(
+            SidebarView.sessionChildRowsExpanded(
+                sessionID: "parent",
+                expandedSessionChildrenBySessionID: [:]
+            )
+        )
+        XCTAssertFalse(
+            SidebarView.sessionChildRowsExpanded(
+                sessionID: "parent",
+                expandedSessionChildrenBySessionID: ["parent": false]
+            )
+        )
+        XCTAssertTrue(
+            SidebarView.sessionChildRowsNeedAttention([
+                SessionChildRow(
+                    id: "child",
+                    source: .session,
+                    displayName: "Claude Code",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    statusKind: .needsApproval
+                ),
+            ])
+        )
+        XCTAssertFalse(
+            SidebarView.sessionChildRowsNeedAttention([
+                SessionChildRow(
+                    id: "activity",
+                    source: .activity,
+                    displayName: "Explore",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                ),
+            ])
+        )
+    }
+
+    func testSessionChildFocusTargetRoutesSessionsToChildAndActivitiesToParent() {
+        let parentWorkspaceID = UUID()
+        let parentPanelID = UUID()
+        let childWorkspaceID = UUID()
+        let childPanelID = UUID()
+
+        XCTAssertEqual(
+            SidebarView.sessionChildFocusTarget(
+                for: SessionChildRow(
+                    id: "activity",
+                    source: .activity,
+                    displayName: "Explore",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                ),
+                parentWorkspaceID: parentWorkspaceID,
+                parentPanelID: parentPanelID
+            ),
+            SidebarView.SessionChildFocusTarget(workspaceID: parentWorkspaceID, panelID: parentPanelID)
+        )
+        XCTAssertEqual(
+            SidebarView.sessionChildFocusTarget(
+                for: SessionChildRow(
+                    id: "child",
+                    source: .session,
+                    displayName: "Codex",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    panelID: childPanelID,
+                    workspaceID: childWorkspaceID,
+                    sessionID: "child"
+                ),
+                parentWorkspaceID: parentWorkspaceID,
+                parentPanelID: parentPanelID
+            ),
+            SidebarView.SessionChildFocusTarget(workspaceID: childWorkspaceID, panelID: childPanelID)
+        )
+    }
+
+    func testSessionChildWorkspaceTagShowsOnlyForDifferentWorkspace() {
+        let parentWorkspaceID = UUID()
+        let childWorkspaceID = UUID()
+        let child = SessionChildRow(
+            id: "child",
+            source: .session,
+            displayName: "Claude Code",
+            startedAt: Date(timeIntervalSince1970: 1),
+            panelID: UUID(),
+            workspaceID: childWorkspaceID,
+            sessionID: "child"
+        )
+
+        XCTAssertEqual(
+            SidebarView.childWorkspaceTagLabel(
+                for: child,
+                parentWorkspaceID: parentWorkspaceID,
+                workspaceNamesByID: [childWorkspaceID: "wt-sessions"]
+            ),
+            "wt-sessions"
+        )
+        XCTAssertNil(
+            SidebarView.childWorkspaceTagLabel(
+                for: SessionChildRow(
+                    id: "same",
+                    source: .session,
+                    displayName: "Codex",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    panelID: UUID(),
+                    workspaceID: parentWorkspaceID,
+                    sessionID: "same"
+                ),
+                parentWorkspaceID: parentWorkspaceID,
+                workspaceNamesByID: [parentWorkspaceID: "toastty"]
+            )
+        )
+    }
+
+    func testSessionChildAccessibilityLabelIncludesStatusContextWorkspaceAndElapsed() {
+        let child = SessionChildRow(
+            id: "child",
+            source: .session,
+            displayName: "Claude Code",
+            context: "Approve Bash: git push",
+            startedAt: Date(timeIntervalSince1970: 1),
+            statusKind: .needsApproval,
+            panelID: UUID(),
+            workspaceID: UUID(),
+            sessionID: "child"
+        )
+
+        XCTAssertEqual(
+            SidebarView.sessionChildAccessibilityLabel(
+                child: child,
+                workspaceTag: "wt-sessions",
+                elapsedText: nil
+            ),
+            "session child, Claude Code, needs approval, Approve Bash: git push, wt-sessions"
+        )
+        XCTAssertEqual(
+            SidebarView.sessionChildAccessibilityLabel(
+                child: SessionChildRow(
+                    id: "activity",
+                    source: .activity,
+                    displayName: "Explore",
+                    context: "find session callers",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                ),
+                workspaceTag: nil,
+                elapsedText: "3m"
+            ),
+            "activity child, Explore, find session callers, 3m"
         )
     }
 

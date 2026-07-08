@@ -701,7 +701,8 @@ struct WorkspaceView: View {
                 .accessibilityIdentifier(Self.workspaceHeaderSubtitleAccessibilityIdentifier(unreadText: unreadText))
         } else {
             let agentSummary = WorkspaceAgentSummary.make(
-                from: sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+                from: sessionRuntimeStore.workspaceStatuses(for: workspace.id),
+                workspaceID: workspace.id
             )
             if let runningText = Self.workspaceRunningSummaryText(agentSummary: agentSummary) {
                 WorkspaceHeaderSubtitleText(text: runningText)

@@ -1046,7 +1046,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 argv: argv,
                 cwd: normalizedOptionalText(payload.string("cwd")),
                 environment: environment,
-                preflightPolicy: preflightPolicy
+                preflightPolicy: preflightPolicy,
+                parentSessionID: parentSessionID(for: context)
             )
 
             if let preflight = managedLaunchPreflightIfNeeded(for: request) {
@@ -1609,6 +1610,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return nil
         }
         return sessionRuntimeStore.effectiveWorkspaceScope(sessionID: callerSessionID)
+    }
+
+    @MainActor
+    private func parentSessionID(for context: AutomationRequestContext) -> String? {
+        guard let callerSessionID = context.callerSessionID,
+              let caller = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
+              caller.agent != .processWatch else {
+            return nil
+        }
+        return caller.sessionID
     }
 
     @MainActor

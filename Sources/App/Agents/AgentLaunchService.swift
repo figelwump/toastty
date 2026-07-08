@@ -157,6 +157,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         initialPrompt: String? = nil,
         initialCommands: [String] = [],
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
+        parentSessionID: String? = nil,
         focusPolicy: TerminalInputFocusPolicy = .focusTarget
     ) throws -> AgentLaunchResult {
         guard let terminalCommandRouter else {
@@ -189,7 +190,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 panelID: target.panelID,
                 argv: launchArgv,
                 cwd: explicitCWD ?? target.cwd,
-                environment: launchEnvironment
+                environment: launchEnvironment,
+                parentSessionID: parentSessionID
             ),
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
         )

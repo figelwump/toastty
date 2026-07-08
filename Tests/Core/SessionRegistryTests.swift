@@ -159,6 +159,64 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func sessionRecordPersistsParentSessionID() throws {
+        let now = Date(timeIntervalSince1970: 1_011)
+        let record = SessionRecord(
+            sessionID: "child",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            parentSessionID: "parent",
+            startedAt: now,
+            updatedAt: now
+        )
+
+        let data = try JSONEncoder().encode(record)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let decoded = try JSONDecoder().decode(SessionRecord.self, from: data)
+
+        #expect(object["parentSessionID"] as? String == "parent")
+        #expect(decoded.parentSessionID == "parent")
+    }
+
+    @Test
+    func sessionRegistryRoundTripPreservesParentSessionID() throws {
+        var registry = SessionRegistry()
+        let now = Date(timeIntervalSince1970: 1_012)
+        let childPanelID = UUID()
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.startSession(
+            sessionID: "child",
+            agent: .codex,
+            panelID: childPanelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            parentSessionID: "parent",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(1)
+        )
+
+        let decoded = try JSONDecoder().decode(
+            SessionRegistry.self,
+            from: JSONEncoder().encode(registry)
+        )
+
+        #expect(decoded.activeSession(for: childPanelID)?.parentSessionID == "parent")
+    }
+
+    @Test
     func workspaceScopeAccessFollowsCooperativeTruthTable() throws {
         var registry = SessionRegistry()
         let now = Date(timeIntervalSince1970: 1_200)
@@ -1169,6 +1227,213 @@ struct SessionRegistryTests {
 
         #expect(registry.sessionsByID["parent"]?.backgroundActivitiesByID.isEmpty == true)
         #expect(registry.workspaceStatuses(for: workspaceID).isEmpty)
+    }
+
+    @Test
+    func workspaceStatusesAssembleChildRowsFromActivitiesAndSessionsInStableOrder() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let parentPanelID = UUID()
+        let childPanelID = UUID()
+        let now = Date(timeIntervalSince1970: 760)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: parentPanelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Orchestrating"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "activity-later",
+                kind: .subagent,
+                displayName: "Explore",
+                command: "find session callers",
+                startedAt: now.addingTimeInterval(30),
+                lastUpdatedAt: now.addingTimeInterval(30)
+            ),
+            at: now.addingTimeInterval(30)
+        )
+        registry.startSession(
+            sessionID: "child-earlier",
+            agent: .codex,
+            panelID: childPanelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            parentSessionID: "parent",
+            displayTitleOverride: "Codex Review",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(10)
+        )
+        registry.updateStatus(
+            sessionID: "child-earlier",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Running check.sh"),
+            at: now.addingTimeInterval(11)
+        )
+
+        let parentStatus = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(parentStatus.children.map(\.id) == ["child-earlier", "activity-later"])
+        #expect(parentStatus.children.map(\.source) == [.session, .activity])
+        #expect(parentStatus.children[0].displayName == "Codex Review")
+        #expect(parentStatus.children[0].context == "Running check.sh")
+        #expect(parentStatus.children[0].statusKind == .working)
+        #expect(parentStatus.children[0].panelID == childPanelID)
+        #expect(parentStatus.children[0].workspaceID == workspaceID)
+        #expect(parentStatus.children[0].sessionID == "child-earlier")
+        #expect(parentStatus.children[1].displayName == "Explore")
+        #expect(parentStatus.children[1].context == "find session callers")
+        #expect(parentStatus.children[1].statusKind == nil)
+    }
+
+    @Test
+    func sameWorkspaceChildSessionsAreSuppressedAndPromotedWhenParentStops() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 770)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.startSession(
+            sessionID: "child",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            parentSessionID: "parent",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+        registry.updateStatus(
+            sessionID: "child",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Done"),
+            at: now.addingTimeInterval(3)
+        )
+
+        let nestedStatuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(nestedStatuses.map(\.sessionID) == ["parent"])
+        #expect(nestedStatuses.first?.children.compactMap(\.sessionID) == ["child"])
+
+        registry.stopSession(sessionID: "parent", at: now.addingTimeInterval(4))
+
+        #expect(registry.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["child"])
+    }
+
+    @Test
+    func crossWorkspaceChildSessionsStayTopLevelInHomeWorkspaceAndMirrorUnderParent() throws {
+        var registry = SessionRegistry()
+        let parentWorkspaceID = UUID()
+        let childWorkspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 780)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: parentWorkspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.startSession(
+            sessionID: "child",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: childWorkspaceID,
+            parentSessionID: "parent",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+        registry.updateStatus(
+            sessionID: "child",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve git push"),
+            at: now.addingTimeInterval(3)
+        )
+
+        let parentStatus = try #require(registry.workspaceStatuses(for: parentWorkspaceID).first)
+        #expect(parentStatus.children.compactMap(\.sessionID) == ["child"])
+        #expect(parentStatus.children.first?.workspaceID == childWorkspaceID)
+        #expect(parentStatus.children.first?.statusKind == .needsApproval)
+
+        let childHomeStatuses = registry.workspaceStatuses(for: childWorkspaceID)
+        #expect(childHomeStatuses.map(\.sessionID) == ["child"])
+        #expect(childHomeStatuses.first?.parentSessionID == "parent")
+    }
+
+    @Test
+    func workspaceStatusesDoNotSuppressOrNestSessionCycles() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 790)
+
+        registry.startSession(
+            sessionID: "a",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            parentSessionID: "b",
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "a",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.startSession(
+            sessionID: "b",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            parentSessionID: "a",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+        registry.updateStatus(
+            sessionID: "b",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: now.addingTimeInterval(3)
+        )
+
+        let statuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(statuses.map(\.sessionID) == ["a", "b"])
+        #expect(statuses.flatMap(\.children).isEmpty)
     }
 
     @Test

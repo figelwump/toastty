@@ -130,6 +130,7 @@ final class SessionRuntimeStore: ObservableObject {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        parentSessionID: String? = nil,
         usesSessionStatusNotifications: Bool = false,
         codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
         displayTitleOverride: String? = nil,
@@ -154,6 +155,7 @@ final class SessionRuntimeStore: ObservableObject {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            parentSessionID: parentSessionID,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
             displayTitleOverride: displayTitleOverride,
             cwd: cwd,
@@ -170,6 +172,7 @@ final class SessionRuntimeStore: ObservableObject {
                 panelID: panelID,
                 windowID: windowID,
                 workspaceID: workspaceID,
+                parentSessionID: parentSessionID,
                 usesSessionStatusNotifications: usesSessionStatusNotifications,
                 displayTitleOverride: displayTitleOverride,
                 scopedWorkspaceIDs: scopedWorkspaceIDs
@@ -2671,6 +2674,7 @@ final class SessionRuntimeStore: ObservableObject {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        parentSessionID: String?,
         usesSessionStatusNotifications: Bool,
         displayTitleOverride: String?,
         scopedWorkspaceIDs: Set<UUID>?
@@ -2681,6 +2685,7 @@ final class SessionRuntimeStore: ObservableObject {
             "panel_id": panelID.uuidString,
             "window_id": windowID.uuidString,
             "workspace_id": workspaceID.uuidString,
+            "parent_session_id": parentSessionID ?? "none",
             "uses_status_notifications": usesSessionStatusNotifications ? "true" : "false",
             "workspace_scope": scopeMetadata(scopedWorkspaceIDs),
         ]

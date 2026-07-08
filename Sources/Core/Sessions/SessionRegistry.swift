@@ -26,6 +26,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        parentSessionID: String? = nil,
         usesSessionStatusNotifications: Bool = false,
         displayTitleOverride: String? = nil,
         cwd: String?,
@@ -52,6 +53,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            parentSessionID: parentSessionID,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
             displayTitleOverride: displayTitleOverride,
             repoRoot: repoRoot,
@@ -356,8 +358,13 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     }
 
     public func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
+        let activeRecordsByID = activeRecordsByID()
         if let activeRecord = activeSession(for: panelID) {
-            return Self.workspaceSessionStatus(from: activeRecord, at: now)
+            return workspaceSessionStatus(
+                from: activeRecord,
+                activeRecordsByID: activeRecordsByID,
+                at: now
+            )
         }
 
         return sessionsByID.values
@@ -366,12 +373,17 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             }
             .sorted(by: stoppedWorkspaceStatusSort)
             .compactMap { record in
-                Self.workspaceSessionStatus(from: record, at: now)
+                workspaceSessionStatus(
+                    from: record,
+                    activeRecordsByID: activeRecordsByID,
+                    at: now
+                )
             }
             .first
     }
 
     public func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
+        let activeRecordsByID = activeRecordsByID()
         let orderBySessionID = Dictionary(
             uniqueKeysWithValues: sessionOrder.enumerated().map { offset, sessionID in
                 (sessionID, offset)
@@ -381,7 +393,11 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             .filter { record in
                 record.workspaceID == workspaceID &&
                 Self.projectedStatus(from: record, at: now) != nil &&
-                record.isActive
+                record.isActive &&
+                shouldSuppressTopLevelStatus(
+                    for: record,
+                    activeRecordsByID: activeRecordsByID
+                ) == false
             }
             // Keep sidebar session rows stable as tabs switch or session
             // statuses change. New sessions append by creation time.
@@ -393,7 +409,11 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                 )
             }
             .compactMap { record in
-                Self.workspaceSessionStatus(from: record, at: now)
+                workspaceSessionStatus(
+                    from: record,
+                    activeRecordsByID: activeRecordsByID,
+                    at: now
+                )
             }
     }
 
@@ -411,17 +431,23 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         }
     }
 
-    private static func workspaceSessionStatus(
+    private func workspaceSessionStatus(
         from record: SessionRecord,
+        activeRecordsByID: [String: SessionRecord],
         at now: Date
     ) -> WorkspaceSessionStatus? {
-        guard let projected = projectedStatus(from: record, at: now) else { return nil }
+        guard let projected = Self.projectedStatus(from: record, at: now) else { return nil }
         return WorkspaceSessionStatus(
             sessionID: record.sessionID,
             panelID: record.panelID,
+            workspaceID: record.workspaceID,
+            parentSessionID: record.parentSessionID,
             agent: record.agent,
             status: projected.status,
             projection: projected.projection,
+            children: record.isActive
+                ? childRows(for: record, activeRecordsByID: activeRecordsByID, at: now)
+                : [],
             displayTitleOverride: record.displayTitleOverride,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
@@ -429,6 +455,77 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             scopedWorkspaceIDs: record.scopedWorkspaceIDs,
             effectiveScopedWorkspaceIDs: record.scopedWorkspaceIDs.map { $0.union([record.workspaceID]) }
         )
+    }
+
+    private func childRows(
+        for record: SessionRecord,
+        activeRecordsByID: [String: SessionRecord],
+        at now: Date
+    ) -> [SessionChildRow] {
+        let ancestorIDs = Self.ancestorSessionIDs(
+            of: record.sessionID,
+            activeRecordsByID: activeRecordsByID
+        )
+        let activityRows = record.backgroundActivitiesByID.values.map { activity in
+            SessionChildRow(
+                id: activity.id,
+                source: .activity,
+                displayName: activity.displayName ?? Self.defaultActivityDisplayName(for: activity.kind),
+                context: activity.command,
+                startedAt: activity.startedAt
+            )
+        }
+
+        let sessionRows = activeRecordsByID.values.compactMap { candidate -> SessionChildRow? in
+            guard candidate.parentSessionID == record.sessionID,
+                  candidate.sessionID != record.sessionID,
+                  ancestorIDs.contains(candidate.sessionID) == false else {
+                return nil
+            }
+            return SessionChildRow(
+                id: candidate.sessionID,
+                source: .session,
+                displayName: candidate.displayTitleOverride ?? candidate.agent.displayName,
+                context: candidate.status?.detail,
+                startedAt: candidate.startedAt,
+                statusKind: Self.projectedStatus(from: candidate, at: now)?.status.kind,
+                panelID: candidate.panelID,
+                workspaceID: candidate.workspaceID,
+                sessionID: candidate.sessionID
+            )
+        }
+
+        return (activityRows + sessionRows).sorted { lhs, rhs in
+            if lhs.startedAt != rhs.startedAt {
+                return lhs.startedAt < rhs.startedAt
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private func shouldSuppressTopLevelStatus(
+        for record: SessionRecord,
+        activeRecordsByID: [String: SessionRecord]
+    ) -> Bool {
+        guard let parentSessionID = record.parentSessionID,
+              let parent = activeRecordsByID[parentSessionID],
+              parent.workspaceID == record.workspaceID,
+              Self.parentChainHasCycle(
+                  startingAt: record.sessionID,
+                  activeRecordsByID: activeRecordsByID
+              ) == false else {
+            return false
+        }
+        return true
+    }
+
+    private func activeRecordsByID() -> [String: SessionRecord] {
+        Dictionary(uniqueKeysWithValues: sessionsByID.compactMap { element -> (String, SessionRecord)? in
+            let (sessionID, record) = element
+            return record.isActive && activeSessionIDByPanelID[record.panelID] == sessionID
+                ? (sessionID, record)
+                : nil
+        })
     }
 
     private static func stableWorkspaceStatusSort(
@@ -572,6 +669,51 @@ private extension SessionRegistry {
             startedAt: existing.startedAt,
             lastUpdatedAt: incoming.lastUpdatedAt
         )
+    }
+
+    static func defaultActivityDisplayName(for kind: SessionBackgroundActivityKind) -> String {
+        switch kind {
+        case .childAgent:
+            return "Child agent"
+        case .subagent:
+            return "Sub-agent"
+        }
+    }
+
+    static func ancestorSessionIDs(
+        of sessionID: String,
+        activeRecordsByID: [String: SessionRecord]
+    ) -> Set<String> {
+        var ancestors = Set<String>()
+        var visited = Set<String>([sessionID])
+        var nextParentID = activeRecordsByID[sessionID]?.parentSessionID
+
+        while let parentID = nextParentID {
+            ancestors.insert(parentID)
+            guard visited.insert(parentID).inserted else {
+                break
+            }
+            nextParentID = activeRecordsByID[parentID]?.parentSessionID
+        }
+
+        return ancestors
+    }
+
+    static func parentChainHasCycle(
+        startingAt sessionID: String,
+        activeRecordsByID: [String: SessionRecord]
+    ) -> Bool {
+        var visited = Set<String>([sessionID])
+        var nextParentID = activeRecordsByID[sessionID]?.parentSessionID
+
+        while let parentID = nextParentID {
+            guard visited.insert(parentID).inserted else {
+                return true
+            }
+            nextParentID = activeRecordsByID[parentID]?.parentSessionID
+        }
+
+        return false
     }
 }
 

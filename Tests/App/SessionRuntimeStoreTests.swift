@@ -121,6 +121,72 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func workspaceStatusChildrenCombineCrossWorkspaceSessionAndActivityRowsUntilChildStops() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let parentWorkspaceID = UUID()
+        let childWorkspaceID = UUID()
+        let childPanelID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_150)
+
+        store.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: parentWorkspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn complete"),
+            at: now.addingTimeInterval(1)
+        )
+        store.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "activity",
+                kind: .subagent,
+                displayName: "Explore",
+                command: "find status callers",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        store.startSession(
+            sessionID: "child",
+            agent: .codex,
+            panelID: childPanelID,
+            windowID: UUID(),
+            workspaceID: childWorkspaceID,
+            parentSessionID: "parent",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now.addingTimeInterval(3)
+        )
+        store.updateStatus(
+            sessionID: "child",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Running tests"),
+            at: now.addingTimeInterval(4)
+        )
+
+        let parentStatus = try #require(store.workspaceStatuses(for: parentWorkspaceID).first)
+        #expect(parentStatus.children.map(\.id) == ["activity", "child"])
+        #expect(parentStatus.children.map(\.source) == [.activity, .session])
+        #expect(parentStatus.children[1].panelID == childPanelID)
+        #expect(parentStatus.children[1].workspaceID == childWorkspaceID)
+        #expect(parentStatus.children[1].statusKind == .working)
+
+        store.stopSession(sessionID: "child", at: now.addingTimeInterval(5))
+
+        let updatedParentStatus = try #require(store.workspaceStatuses(for: parentWorkspaceID).first)
+        #expect(updatedParentStatus.children.map(\.id) == ["activity"])
+    }
+
+    @Test
     func finishTombstoneBlocksLateSubagentStart() {
         let store = SessionRuntimeStore()
         defer { store.reset() }

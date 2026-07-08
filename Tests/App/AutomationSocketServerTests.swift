@@ -2098,6 +2098,143 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func prepareManagedLaunchWithLiveCallerStampsParentSessionID() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let callerSessionID = "caller-live"
+        try await MainActor.run {
+            server.sessionRuntimeStore.startSession(
+                sessionID: callerSessionID,
+                agent: .claude,
+                panelID: server.panelID,
+                windowID: try #require(server.store.state.windows.first?.id),
+                workspaceID: server.workspaceID,
+                cwd: "/tmp/repo",
+                repoRoot: "/tmp/repo",
+                at: Date(timeIntervalSince1970: 2_000)
+            )
+        }
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                callerSessionID: callerSessionID,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "argv": .array([.string("codex")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        let childSessionID = try #require(response.result?.string("sessionID"))
+        let parentSessionID = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[childSessionID]?.parentSessionID
+        }
+        #expect(parentSessionID == callerSessionID)
+    }
+
+    @Test
+    func prepareManagedLaunchWithoutCallerDoesNotStampParentSessionID() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "argv": .array([.string("codex")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        let childSessionID = try #require(response.result?.string("sessionID"))
+        let parentSessionID = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[childSessionID]?.parentSessionID
+        }
+        #expect(parentSessionID == nil)
+    }
+
+    @Test
+    func prepareManagedLaunchWithStoppedCallerDoesNotStampParentSessionID() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let callerSessionID = "caller-stopped"
+        try await MainActor.run {
+            let now = Date(timeIntervalSince1970: 2_100)
+            server.sessionRuntimeStore.startSession(
+                sessionID: callerSessionID,
+                agent: .claude,
+                panelID: server.panelID,
+                windowID: try #require(server.store.state.windows.first?.id),
+                workspaceID: server.workspaceID,
+                cwd: "/tmp/repo",
+                repoRoot: "/tmp/repo",
+                at: now
+            )
+            server.sessionRuntimeStore.stopSession(
+                sessionID: callerSessionID,
+                at: now.addingTimeInterval(1)
+            )
+        }
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                callerSessionID: callerSessionID,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "argv": .array([.string("codex")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        let childSessionID = try #require(response.result?.string("sessionID"))
+        let parentSessionID = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[childSessionID]?.parentSessionID
+        }
+        #expect(parentSessionID == nil)
+    }
+
+    @Test
     func prepareManagedLaunchInteractivePreflightReturnsPendingWithoutStartingSession() async throws {
         let socketPath = temporarySocketPath()
         let missingStatus = codexHookInstallStatus(state: .notInstalled)

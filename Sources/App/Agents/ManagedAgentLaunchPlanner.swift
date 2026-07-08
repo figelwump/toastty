@@ -112,6 +112,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             panelID: target.panelID,
             windowID: target.windowID,
             workspaceID: target.workspaceID,
+            parentSessionID: request.parentSessionID,
             usesSessionStatusNotifications: true,
             codexStatusTrackingSource: request.agent == .codex ? codexStatusTrackingSource : nil,
             cwd: resolvedCWD,
