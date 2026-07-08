@@ -1284,7 +1284,8 @@ struct SidebarView: View {
                 sessionDetailLabel(
                     detailText ?? " ",
                     statusKind: status.kind,
-                    showsUnreadSessionAccent: showsUnreadSessionAccent
+                    showsUnreadSessionAccent: showsUnreadSessionAccent,
+                    isResuming: projection == .resuming
                 )
             }
 
@@ -1735,6 +1736,10 @@ struct SidebarView: View {
                 ToastyTheme.sessionWaitingBackground,
                 in: RoundedRectangle(cornerRadius: 4)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(ToastyTheme.sessionWaitingChipRing, lineWidth: 1)
+            )
     }
 
     private func sessionWorkspaceScopeHelpText(
@@ -2033,7 +2038,8 @@ struct SidebarView: View {
     private func sessionDetailLabel(
         _ text: String,
         statusKind: SessionStatusKind,
-        showsUnreadSessionAccent: Bool
+        showsUnreadSessionAccent: Bool,
+        isResuming: Bool = false
     ) -> some View {
         // Keep weight inside the Font itself instead of chaining
         // `.fontWeight(...)` after `.italic()`. For these small sidebar labels,
@@ -2049,7 +2055,11 @@ struct SidebarView: View {
         // stream in at varying lengths. The placeholder sets the
         // intrinsic height; the real text overlays it.
         styled
-            .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
+            .foregroundStyle(
+                isResuming
+                    ? ToastyTheme.sessionResumingDetailText
+                    : ToastyTheme.sidebarSessionDetailText
+            )
             .lineLimit(1)
             .truncationMode(.tail)
             .multilineTextAlignment(.leading)
@@ -2480,8 +2490,11 @@ struct SidebarView: View {
     }
 
     static func elapsedChildActivityText(startedAt: Date, now: Date) -> String {
-        let elapsedSeconds = max(0, now.timeIntervalSince(startedAt))
-        return "\(Int(elapsedSeconds / 60))m"
+        let elapsedSeconds = Int(max(0, now.timeIntervalSince(startedAt)))
+        let minutes = elapsedSeconds / 60
+        let seconds = elapsedSeconds % 60
+        guard minutes > 0 else { return "\(seconds)s" }
+        return String(format: "%dm %02ds", minutes, seconds)
     }
 
     static func sessionChildAccessibilityLabel(
