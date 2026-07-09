@@ -535,7 +535,6 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertNil(state.above)
         XCTAssertEqual(state.below?.direction, .below)
         XCTAssertEqual(state.below?.count, 2)
-        XCTAssertEqual(state.below?.targetID, rows[2])
         XCTAssertEqual(state.below?.unreadCount, 1)
     }
 
@@ -557,10 +556,8 @@ final class SidebarViewTests: XCTestCase {
         )
 
         XCTAssertEqual(state.above?.count, 2)
-        XCTAssertEqual(state.above?.targetID, rows[1])
         XCTAssertEqual(state.above?.unreadCount, 1)
         XCTAssertEqual(state.below?.count, 1)
-        XCTAssertEqual(state.below?.targetID, rows[5])
         XCTAssertEqual(state.below?.unreadCount, 0)
     }
 
@@ -580,7 +577,6 @@ final class SidebarViewTests: XCTestCase {
 
         XCTAssertEqual(state.above?.direction, .above)
         XCTAssertEqual(state.above?.count, 2)
-        XCTAssertEqual(state.above?.targetID, rows[1])
         XCTAssertNil(state.below)
     }
 
@@ -599,10 +595,8 @@ final class SidebarViewTests: XCTestCase {
         )
 
         XCTAssertEqual(state.above?.count, 1)
-        XCTAssertEqual(state.above?.targetID, rows[0])
         XCTAssertEqual(state.above?.unreadCount, 1)
         XCTAssertEqual(state.below?.count, 1)
-        XCTAssertEqual(state.below?.targetID, rows[2])
         XCTAssertEqual(state.below?.unreadCount, 0)
     }
 
@@ -649,9 +643,7 @@ final class SidebarViewTests: XCTestCase {
         )
 
         XCTAssertEqual(barelyVisibleState.below?.count, 2)
-        XCTAssertEqual(barelyVisibleState.below?.targetID, rows[1])
         XCTAssertEqual(nearestVisibleState.below?.count, 1)
-        XCTAssertEqual(nearestVisibleState.below?.targetID, rows[2])
     }
 
     func testHiddenSessionPillStateUsesVisibleHeightThresholdWithBoundaryEpsilon() {
@@ -671,9 +663,7 @@ final class SidebarViewTests: XCTestCase {
         )
 
         XCTAssertEqual(state.above?.count, 1)
-        XCTAssertEqual(state.above?.targetID, rows[0])
         XCTAssertEqual(state.below?.count, 1)
-        XCTAssertEqual(state.below?.targetID, rows[3])
     }
 
     func testHiddenSessionPillStateTreatsViewportSpanningTallRowAsVisible() {
@@ -772,16 +762,13 @@ final class SidebarViewTests: XCTestCase {
     }
 
     func testHiddenSessionPillAccessibilityLabelIncludesSignalStates() {
-        let rows = makeSidebarSessionRowIDs(count: 4)
-
         XCTAssertEqual(
             SidebarView.hiddenSessionPillAccessibilityLabel(
                 SidebarView.HiddenSessionPill(
                     direction: .above,
                     count: 1,
                     unreadCount: 0,
-                    hasWorking: false,
-                    targetID: rows[0]
+                    hasWorking: false
                 )
             ),
             "1 session hidden above"
@@ -792,8 +779,7 @@ final class SidebarViewTests: XCTestCase {
                     direction: .below,
                     count: 3,
                     unreadCount: 0,
-                    hasWorking: false,
-                    targetID: rows[0]
+                    hasWorking: false
                 )
             ),
             "3 sessions hidden below"
@@ -804,8 +790,7 @@ final class SidebarViewTests: XCTestCase {
                     direction: .below,
                     count: 3,
                     unreadCount: 2,
-                    hasWorking: false,
-                    targetID: rows[1]
+                    hasWorking: false
                 )
             ),
             "3 sessions hidden below, 2 unread"
@@ -816,8 +801,7 @@ final class SidebarViewTests: XCTestCase {
                     direction: .below,
                     count: 3,
                     unreadCount: 0,
-                    hasWorking: true,
-                    targetID: rows[2]
+                    hasWorking: true
                 )
             ),
             "3 sessions hidden below, working"
@@ -828,35 +812,28 @@ final class SidebarViewTests: XCTestCase {
                     direction: .below,
                     count: 3,
                     unreadCount: 2,
-                    hasWorking: true,
-                    targetID: rows[3]
+                    hasWorking: true
                 )
             ),
             "3 sessions hidden below, 2 unread, working"
         )
     }
 
-    func testHiddenSessionScrollAnchorUsesClearanceWithinUsableRange() {
-        let above = SidebarView.hiddenSessionScrollAnchor(for: .above, viewportHeight: 200)
-        let below = SidebarView.hiddenSessionScrollAnchor(for: .below, viewportHeight: 200)
+    func testHiddenSessionScrollTargetJumpsToListExtremes() {
+        let workspaceIDs = [UUID(), UUID(), UUID()]
 
-        XCTAssertEqual(above.x, 0.5, accuracy: 0.0001)
-        XCTAssertEqual(above.y, 40.0 / 156.0, accuracy: 0.0001)
-        XCTAssertEqual(below.x, 0.5, accuracy: 0.0001)
-        XCTAssertEqual(below.y, 116.0 / 156.0, accuracy: 0.0001)
+        let above = SidebarView.hiddenSessionScrollTarget(for: .above, orderedWorkspaceIDs: workspaceIDs)
+        let below = SidebarView.hiddenSessionScrollTarget(for: .below, orderedWorkspaceIDs: workspaceIDs)
+
+        XCTAssertEqual(above?.workspaceID, workspaceIDs.first)
+        XCTAssertEqual(above?.anchor, .top)
+        XCTAssertEqual(below?.workspaceID, workspaceIDs.last)
+        XCTAssertEqual(below?.anchor, .bottom)
     }
 
-    func testHiddenSessionScrollAnchorClampsForSmallViewports() {
-        let above = SidebarView.hiddenSessionScrollAnchor(for: .above, viewportHeight: 60)
-        let below = SidebarView.hiddenSessionScrollAnchor(for: .below, viewportHeight: 60)
-
-        XCTAssertEqual(above.y, 0.35, accuracy: 0.0001)
-        XCTAssertEqual(below.y, 0.65, accuracy: 0.0001)
-    }
-
-    func testHiddenSessionScrollAnchorFallsBackForInvalidViewports() {
-        XCTAssertEqual(SidebarView.hiddenSessionScrollAnchor(for: .above, viewportHeight: 0), .top)
-        XCTAssertEqual(SidebarView.hiddenSessionScrollAnchor(for: .below, viewportHeight: .infinity), .bottom)
+    func testHiddenSessionScrollTargetIsNilWithoutWorkspaces() {
+        XCTAssertNil(SidebarView.hiddenSessionScrollTarget(for: .above, orderedWorkspaceIDs: []))
+        XCTAssertNil(SidebarView.hiddenSessionScrollTarget(for: .below, orderedWorkspaceIDs: []))
     }
 
     func testWorkspaceDragActivationUsesVerticalThreshold() {

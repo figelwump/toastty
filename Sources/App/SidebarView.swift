@@ -191,7 +191,6 @@ struct SidebarView: View {
         let count: Int
         let unreadCount: Int
         let hasWorking: Bool
-        let targetID: SidebarSessionRowID
     }
 
     struct HiddenSessionPillState: Equatable {
@@ -351,24 +350,22 @@ struct SidebarView: View {
             }
         }
 
-        let abovePill = hiddenAbove.last.map { targetID in
-            HiddenSessionPill(
+        let abovePill = hiddenAbove.isEmpty
+            ? nil
+            : HiddenSessionPill(
                 direction: .above,
                 count: hiddenAbove.count,
                 unreadCount: hiddenAbove.filter { unreadSessionRowIDs.contains($0) }.count,
-                hasWorking: hiddenAbove.contains { workingSessionRowIDs.contains($0) },
-                targetID: targetID
+                hasWorking: hiddenAbove.contains { workingSessionRowIDs.contains($0) }
             )
-        }
-        let belowPill = hiddenBelow.first.map { targetID in
-            HiddenSessionPill(
+        let belowPill = hiddenBelow.isEmpty
+            ? nil
+            : HiddenSessionPill(
                 direction: .below,
                 count: hiddenBelow.count,
                 unreadCount: hiddenBelow.filter { unreadSessionRowIDs.contains($0) }.count,
-                hasWorking: hiddenBelow.contains { workingSessionRowIDs.contains($0) },
-                targetID: targetID
+                hasWorking: hiddenBelow.contains { workingSessionRowIDs.contains($0) }
             )
-        }
 
         return HiddenSessionPillState(above: abovePill, below: belowPill)
     }
@@ -383,30 +380,15 @@ struct SidebarView: View {
         return ToastyTheme.primaryText.opacity(0.30)
     }
 
-    nonisolated static func hiddenSessionScrollAnchor(
+    nonisolated static func hiddenSessionScrollTarget(
         for direction: HiddenSessionDirection,
-        viewportHeight: CGFloat
-    ) -> UnitPoint {
-        guard viewportHeight.isFinite,
-              viewportHeight > 1 else {
-            return direction == .above ? .top : .bottom
-        }
-
-        let estimatedSessionRowHeight: CGFloat = 44
-        let availableScrollableHeight = max(viewportHeight - estimatedSessionRowHeight, 1)
+        orderedWorkspaceIDs: [UUID]
+    ) -> (workspaceID: UUID, anchor: UnitPoint)? {
         switch direction {
         case .above:
-            let topClearance = ToastyTheme.sidebarTopPadding + 8
-            let y = min(0.35, max(0.12, topClearance / availableScrollableHeight))
-            return UnitPoint(x: 0.5, y: y)
-
+            return orderedWorkspaceIDs.first.map { ($0, .top) }
         case .below:
-            let bottomClearance: CGFloat = 40
-            let y = min(
-                0.88,
-                max(0.65, (viewportHeight - bottomClearance - estimatedSessionRowHeight) / availableScrollableHeight)
-            )
-            return UnitPoint(x: 0.5, y: y)
+            return orderedWorkspaceIDs.last.map { ($0, .bottom) }
         }
     }
 
@@ -1868,21 +1850,22 @@ struct SidebarView: View {
         _ pill: HiddenSessionPill,
         using proxy: ScrollViewProxy
     ) {
-        let anchor = hiddenSessionScrollAnchor(for: pill.direction)
+        guard let target = Self.hiddenSessionScrollTarget(
+            for: pill.direction,
+            orderedWorkspaceIDs: store.window(id: windowID)?.workspaceIDs ?? []
+        ) else {
+            return
+        }
 
         Task { @MainActor in
             if accessibilityReduceMotion {
-                proxy.scrollTo(pill.targetID, anchor: anchor)
+                proxy.scrollTo(target.workspaceID, anchor: target.anchor)
             } else {
                 withAnimation(.easeInOut(duration: 0.16)) {
-                    proxy.scrollTo(pill.targetID, anchor: anchor)
+                    proxy.scrollTo(target.workspaceID, anchor: target.anchor)
                 }
             }
         }
-    }
-
-    private func hiddenSessionScrollAnchor(for direction: HiddenSessionDirection) -> UnitPoint {
-        Self.hiddenSessionScrollAnchor(for: direction, viewportHeight: sidebarWorkspaceListViewportHeight)
     }
 
     private func currentSidebarSessionRowIDs() -> [SidebarSessionRowID] {
