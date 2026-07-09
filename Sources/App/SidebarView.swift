@@ -1884,7 +1884,7 @@ struct SidebarView: View {
             }
             .foregroundStyle(ToastyTheme.sidebarDisclosureText)
             .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+            .padding(.vertical, 1.5)
             .background(
                 Capsule()
                     .fill(ToastyTheme.sidebarDisclosureBackground)
