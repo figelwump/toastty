@@ -72,6 +72,8 @@ Install `toastty-capabilities` first into the runtime or runtimes the user choos
 "$TOASTTY_CLI_PATH" setup install-skill toastty-capabilities --runtime all
 ```
 
+When you ask for the OK to apply, restate in one or two plain sentences what the skill does and why the user would want it — a new user will not remember the list from earlier. For `toastty-capabilities`, say something like: "This skill teaches agents like me how to drive Toastty itself — creating workspaces and panels, launching agents, showing visual output, and notifying you — so agents can automate your Toastty workflows for you."
+
 After approval, rerun with `--apply`.
 
 Offer these optional convenience skills after capabilities is handled:
@@ -79,7 +81,7 @@ Offer these optional convenience skills after capabilities is handled:
 - `toastty-scratchpad`: publish visual HTML artifacts into the current Toastty workspace.
 - `toastty-open-markdown`: open local Markdown files as Toastty document panels.
 
-Install each chosen skill the same way: one dry-run, one visible plan, one explicit OK before `--apply`. Do not build a custom skill matrix during setup; install the pristine starter and let the user tailor it later if a real workflow emerges.
+Install each chosen skill the same way: one dry-run, one visible plan, a one-sentence reminder of what the skill does, one explicit OK before `--apply`. Do not build a custom skill matrix during setup; install the pristine starter and let the user tailor it later if a real workflow emerges.
 
 ## Phase 3: Optional Tour
 
