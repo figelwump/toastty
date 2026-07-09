@@ -542,6 +542,7 @@ final class AppControlExecutor {
                 panelID: resolved.panelID,
                 focusPolicy: .preserveFirstResponder
             ) {
+                recordPendingParentSessionIDForSendTextIfNeeded(targetPanelID: resolved.panelID)
                 return .init(
                     didMutateState: false,
                     result: [
@@ -793,6 +794,16 @@ private extension AppControlExecutor {
             return nil
         }
         return caller.sessionID
+    }
+
+    func recordPendingParentSessionIDForSendTextIfNeeded(targetPanelID: UUID) {
+        guard let parentSessionID = parentSessionIDForChildLaunch() else {
+            return
+        }
+        sessionRuntimeStore.recordPendingPanelParentSessionID(
+            parentSessionID: parentSessionID,
+            forPanelID: targetPanelID
+        )
     }
 
     func bindWorkspaceToScopedCallerIfNeeded(

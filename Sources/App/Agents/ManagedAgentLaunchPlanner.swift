@@ -112,6 +112,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             codexStatusTrackingSource: codexStatusTrackingSource
         )
         let launchStart = nowProvider()
+        let parentSessionID = resolvedParentSessionID(
+            for: request,
+            panelID: target.panelID,
+            sessionRuntimeStore: sessionRuntimeStore,
+            at: launchStart
+        )
 
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
@@ -119,7 +125,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             panelID: target.panelID,
             windowID: target.windowID,
             workspaceID: target.workspaceID,
-            parentSessionID: request.parentSessionID,
+            parentSessionID: parentSessionID,
             usesSessionStatusNotifications: true,
             codexStatusTrackingSource: request.agent == .codex ? codexStatusTrackingSource : nil,
             cwd: resolvedCWD,
@@ -333,6 +339,22 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return .hooks
         }
         return codexStatusTrackingSourceProvider()
+    }
+
+    private func resolvedParentSessionID(
+        for request: ManagedAgentLaunchRequest,
+        panelID: UUID,
+        sessionRuntimeStore: SessionRuntimeStore,
+        at now: Date
+    ) -> String? {
+        if let parentSessionID = request.parentSessionID {
+            sessionRuntimeStore.discardPendingPanelParentSessionID(forPanelID: panelID)
+            return parentSessionID
+        }
+        return sessionRuntimeStore.consumePendingPanelParentSessionID(
+            forPanelID: panelID,
+            at: now
+        )
     }
 
     private func logCodexStatusTrackingSourceIfNeeded(

@@ -405,6 +405,43 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func profileNotFoundErrorListsAvailableProfiles() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let agentCatalogProvider = TestAgentCatalogProvider(
+            profiles: [
+                AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"]),
+                AgentProfile(id: "claude", displayName: "Claude Code", argv: ["claude"]),
+                AgentProfile(id: "pi", displayName: "Pi", argv: ["pi"]),
+            ]
+        )
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
+        )
+
+        do {
+            _ = try service.launch(profileID: "missing")
+            Issue.record("Expected profileNotFound")
+        } catch let error as AgentLaunchError {
+            #expect(
+                error.errorDescription ==
+                    "Toastty could not find an agent profile named 'missing' in ~/.toastty/agents.toml. Available profiles: codex, claude, pi."
+            )
+        } catch {
+            Issue.record("Expected AgentLaunchError, got \(error)")
+        }
+    }
+
+    @Test
     func launchCancelsNativeSessionObservationWhenSendTextFails() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()

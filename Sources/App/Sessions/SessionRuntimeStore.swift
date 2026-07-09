@@ -23,6 +23,7 @@ final class SessionRuntimeStore: ObservableObject {
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
     private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
     private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
+    private var pendingPanelParentSessionIDs: [UUID: PendingPanelParentSessionID] = [:]
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
     private let codexHookApprovalDeferralNanoseconds: UInt64
@@ -34,7 +35,13 @@ final class SessionRuntimeStore: ObservableObject {
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private static let maximumAutoReviewedCodexPermissionTurnIDs = 16
     private static let backgroundActivityFinishTombstoneTTL: TimeInterval = 120
+    private static let pendingPanelParentSessionIDTTL: TimeInterval = 120
     private static let maximumPidlessSubagentBackgroundActivityAge: TimeInterval = 30 * 60
+
+    private struct PendingPanelParentSessionID: Equatable {
+        let sessionID: String
+        let recordedAt: Date
+    }
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
         let sessionID: String
@@ -116,6 +123,7 @@ final class SessionRuntimeStore: ObservableObject {
         codexNotifyStateBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
         backgroundActivityFinishTombstonesBySessionID = [:]
+        pendingPanelParentSessionIDs = [:]
         removeAllPendingCodexHookApprovals()
         backgroundActivityReaperTask?.cancel()
         backgroundActivityReaperTask = nil
@@ -1243,6 +1251,7 @@ final class SessionRuntimeStore: ObservableObject {
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
+        removePendingPanelParentSessionIDs(parentSessionID: sessionID)
         var nextRegistry = sessionRegistry
         if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
             nextRegistry.removeSession(sessionID: sessionID)
@@ -1268,6 +1277,7 @@ final class SessionRuntimeStore: ObservableObject {
             codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
             backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
             removePendingCodexHookApproval(sessionID: record.sessionID)
+            removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
         }
         var nextRegistry = sessionRegistry
         if let record = sessionRegistry.activeSession(for: panelID),
@@ -1308,6 +1318,47 @@ final class SessionRuntimeStore: ObservableObject {
 
     func allowsWorkspaceAutomation(callerSessionID: String?, of workspaceID: UUID) -> Bool {
         sessionRegistry.allowsWorkspaceAutomation(callerSessionID: callerSessionID, of: workspaceID)
+    }
+
+    @discardableResult
+    func recordPendingPanelParentSessionID(
+        parentSessionID: String,
+        forPanelID panelID: UUID,
+        at now: Date = Date()
+    ) -> Bool {
+        prunePendingPanelParentSessionIDs(at: now)
+        guard let parent = sessionRegistry.activeSession(sessionID: parentSessionID),
+              parent.agent != .processWatch,
+              parent.panelID != panelID else {
+            return false
+        }
+        pendingPanelParentSessionIDs[panelID] = PendingPanelParentSessionID(
+            sessionID: parent.sessionID,
+            recordedAt: now
+        )
+        return true
+    }
+
+    func consumePendingPanelParentSessionID(
+        forPanelID panelID: UUID,
+        at now: Date = Date()
+    ) -> String? {
+        prunePendingPanelParentSessionIDs(at: now)
+        guard let claim = pendingPanelParentSessionIDs[panelID] else {
+            return nil
+        }
+        guard let parent = sessionRegistry.activeSession(sessionID: claim.sessionID),
+              parent.agent != .processWatch,
+              parent.panelID != panelID else {
+            pendingPanelParentSessionIDs.removeValue(forKey: panelID)
+            return nil
+        }
+        pendingPanelParentSessionIDs.removeValue(forKey: panelID)
+        return parent.sessionID
+    }
+
+    func discardPendingPanelParentSessionID(forPanelID panelID: UUID) {
+        pendingPanelParentSessionIDs.removeValue(forKey: panelID)
     }
 
     @discardableResult
@@ -1516,6 +1567,18 @@ final class SessionRuntimeStore: ObservableObject {
             } else {
                 backgroundActivityFinishTombstonesBySessionID[sessionID] = activeTombstones
             }
+        }
+    }
+
+    private func prunePendingPanelParentSessionIDs(at now: Date) {
+        pendingPanelParentSessionIDs = pendingPanelParentSessionIDs.filter { _, claim in
+            now.timeIntervalSince(claim.recordedAt) < Self.pendingPanelParentSessionIDTTL
+        }
+    }
+
+    private func removePendingPanelParentSessionIDs(parentSessionID: String) {
+        pendingPanelParentSessionIDs = pendingPanelParentSessionIDs.filter { _, claim in
+            claim.sessionID != parentSessionID
         }
     }
 

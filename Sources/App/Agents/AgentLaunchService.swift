@@ -33,7 +33,7 @@ struct AgentLaunchResult: Equatable {
 enum AgentLaunchError: LocalizedError, Equatable {
     case serviceUnavailable
     case noProfilesConfigured
-    case profileNotFound(profileID: String)
+    case profileNotFound(profileID: String, availableProfileIDs: [String])
     case noSelectedWorkspace
     case workspaceDoesNotExist
     case workspaceHasNoTerminalPanel
@@ -55,8 +55,14 @@ enum AgentLaunchError: LocalizedError, Equatable {
             return "Agent launch is unavailable."
         case .noProfilesConfigured:
             return "No agents are configured. Edit ~/.toastty/agents.toml and try again."
-        case .profileNotFound(let profileID):
-            return "Toastty could not find an agent profile named '\(profileID)' in ~/.toastty/agents.toml."
+        case .profileNotFound(let profileID, let availableProfileIDs):
+            let availableProfiles: String
+            if availableProfileIDs.isEmpty {
+                availableProfiles = "No profiles are configured."
+            } else {
+                availableProfiles = "Available profiles: \(availableProfileIDs.joined(separator: ", "))."
+            }
+            return "Toastty could not find an agent profile named '\(profileID)' in ~/.toastty/agents.toml. \(availableProfiles)"
         case .noSelectedWorkspace:
             return "Select a workspace with a terminal panel before launching an agent."
         case .workspaceDoesNotExist:
@@ -167,14 +173,20 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             if agentCatalogProvider.catalog.profiles.isEmpty {
                 throw AgentLaunchError.noProfilesConfigured
             }
-            throw AgentLaunchError.profileNotFound(profileID: profileID)
+            throw AgentLaunchError.profileNotFound(
+                profileID: profileID,
+                availableProfileIDs: availableProfileIDs()
+            )
         }
 
         let target = try resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)
         try ensurePanelAppearsInteractive(panelID: target.panelID, terminalCommandRouter: terminalCommandRouter)
 
         guard let agent = AgentKind(rawValue: launchProfile.id) else {
-            throw AgentLaunchError.profileNotFound(profileID: launchProfile.id)
+            throw AgentLaunchError.profileNotFound(
+                profileID: launchProfile.id,
+                availableProfileIDs: availableProfileIDs()
+            )
         }
         let explicitCWD = try normalizedExplicitWorkingDirectory(cwd)
         let launchEnvironment = try validatedLaunchEnvironment(environment)
@@ -255,6 +267,10 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             return nil
         }
         return Self.implicitProfile(for: agent)
+    }
+
+    private func availableProfileIDs() -> [String] {
+        agentCatalogProvider.catalog.profiles.map(\.id)
     }
 
     private static func supportsImplicitProfile(_ agent: AgentKind) -> Bool {

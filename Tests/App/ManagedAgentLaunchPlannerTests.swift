@@ -92,6 +92,259 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testPendingPanelParentClaimAdoptsLiveParentForManagedLaunch() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_010)
+        let fixture = try makePlannerFixture(nowProvider: { now })
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let parentSessionID = "pending-parent-live"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: targetPanelID,
+                at: now
+            )
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID,
+            parentSessionID
+        )
+    }
+
+    func testExpiredPendingPanelParentClaimDoesNotAdoptParent() throws {
+        let recordedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let fixture = try makePlannerFixture(
+            nowProvider: { recordedAt.addingTimeInterval(121) }
+        )
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let parentSessionID = "pending-parent-expired"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: targetPanelID,
+                at: recordedAt
+            )
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID)
+    }
+
+    func testPendingPanelParentClaimWithStoppedParentDoesNotAdoptParent() throws {
+        let recordedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let fixture = try makePlannerFixture(
+            nowProvider: { recordedAt.addingTimeInterval(2) }
+        )
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let parentSessionID = "pending-parent-stopped"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID,
+            at: recordedAt
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: targetPanelID,
+                at: recordedAt
+            )
+        )
+        fixture.sessionRuntimeStore.stopSession(
+            sessionID: parentSessionID,
+            at: recordedAt.addingTimeInterval(1)
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID)
+    }
+
+    func testPendingPanelParentClaimIsNotRecordedForOwnPanel() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_010)
+        let fixture = try makePlannerFixture(nowProvider: { now })
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let parentSessionID = "pending-parent-own-panel"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+
+        XCTAssertFalse(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: fixture.panelID,
+                at: now
+            )
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID)
+    }
+
+    func testExplicitParentSessionIDWinsOverPendingPanelParentClaim() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_010)
+        let fixture = try makePlannerFixture(nowProvider: { now })
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let pendingParentSessionID = "pending-parent-loses"
+        let explicitParentSessionID = "explicit-parent-wins"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: pendingParentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: explicitParentSessionID,
+            panelID: UUID(),
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: pendingParentSessionID,
+                forPanelID: targetPanelID,
+                at: now
+            )
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo",
+                parentSessionID: explicitParentSessionID
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID,
+            explicitParentSessionID
+        )
+    }
+
+    func testPendingPanelParentClaimIsConsumedAfterAdoption() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_010)
+        let fixture = try makePlannerFixture(nowProvider: { now })
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let parentSessionID = "pending-parent-consumed"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: targetPanelID,
+                at: now
+            )
+        )
+
+        let firstPlan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let secondPlan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[firstPlan.sessionID]?.parentSessionID,
+            parentSessionID
+        )
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[secondPlan.sessionID]?.parentSessionID)
+    }
+
     func testCodexLaunchPlanUsesHooksForStatusAndRecordsSessionContextWhenHooksAreAvailable() throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
@@ -1219,6 +1472,43 @@ private func makePlannerFixture(
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
+}
+
+@MainActor
+private func splitTargetPanel(
+    in store: AppStore,
+    workspaceID: UUID,
+    excluding sourcePanelID: UUID
+) throws -> UUID {
+    XCTAssertTrue(store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal)))
+    return try XCTUnwrap(
+        store.state.workspacesByID[workspaceID]?
+            .layoutTree
+            .allSlotInfos
+            .map(\.panelID)
+            .first { $0 != sourcePanelID }
+    )
+}
+
+@MainActor
+private func startManagedSession(
+    in sessionRuntimeStore: SessionRuntimeStore,
+    sessionID: String,
+    panelID: UUID,
+    store: AppStore,
+    workspaceID: UUID,
+    at now: Date = Date(timeIntervalSince1970: 1_700_000_000)
+) throws {
+    sessionRuntimeStore.startSession(
+        sessionID: sessionID,
+        agent: .claude,
+        panelID: panelID,
+        windowID: try XCTUnwrap(store.state.windows.first?.id),
+        workspaceID: workspaceID,
+        cwd: "/tmp/repo",
+        repoRoot: "/tmp/repo",
+        at: now
+    )
 }
 
 private func claudeArtifactsDirectory(from plan: ManagedAgentLaunchPlan) throws -> URL {
