@@ -629,6 +629,8 @@ final class DisplayShortcutInterceptor {
     enum ShortcutAction: Equatable {
         case commandPalette
         case closePanel
+        case consumeShortcut
+        case createWindow
         case createBrowser
         case createBrowserTab
         case createScratchpad
@@ -719,6 +721,18 @@ final class DisplayShortcutInterceptor {
         if Self.isCommandPaletteShortcut(event),
            appOwnedWindowID != nil {
             return .commandPalette
+        }
+        if Self.isRepeatedNewWindowShortcut(event),
+           canConsumeRepeatedWindowShortcut() {
+            return .consumeShortcut
+        }
+        if Self.isNewWindowShortcut(event),
+           canCreateWindowFromShortcut(appOwnedWindowID: appOwnedWindowID) {
+            return .createWindow
+        }
+        if Self.isRepeatedNewTabShortcut(event),
+           canConsumeRepeatedWindowShortcut() {
+            return .consumeShortcut
         }
         if let shortcutNumber = Self.tabSelectionShortcutNumber(for: event),
            appOwnedWindowID != nil {
@@ -886,6 +900,10 @@ final class DisplayShortcutInterceptor {
             toggleCommandPalette(appOwnedWindowID)
         case .closePanel:
             closeFocusedPanel(preferredWindowID: appOwnedWindowID)
+        case .consumeShortcut:
+            true
+        case .createWindow:
+            createWindow(preferredWindowID: appOwnedWindowID)
         case .createBrowser:
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .rightPanel)
         case .createBrowserTab:
@@ -893,7 +911,7 @@ final class DisplayShortcutInterceptor {
         case .createScratchpad:
             createScratchpad(preferredWindowID: appOwnedWindowID)
         case .createWorkspaceTab:
-            createWorkspaceTab()
+            createWorkspaceTab(preferredWindowID: appOwnedWindowID)
         case .increaseTextSize:
             adjustTextSize(direction: .increase, preferredWindowID: appOwnedWindowID)
         case .decreaseTextSize:
@@ -967,6 +985,36 @@ final class DisplayShortcutInterceptor {
         guard event.type == .keyDown,
               event.isARepeat == false,
               event.charactersIgnoringModifiers?.lowercased() == "t" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func isRepeatedNewTabShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat,
+              event.charactersIgnoringModifiers?.lowercased() == "t" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func isNewWindowShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "n" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func isRepeatedNewWindowShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat,
+              event.charactersIgnoringModifiers?.lowercased() == "n" else {
             return false
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -1361,11 +1409,31 @@ final class DisplayShortcutInterceptor {
         return currentToasttyAppOwnedWindowID(in: store)
     }
 
+    private func canConsumeRepeatedWindowShortcut() -> Bool {
+        guard store != nil else { return false }
+        return NSApp.modalWindow == nil
+    }
+
+    private func canCreateWindowFromShortcut(appOwnedWindowID: UUID?) -> Bool {
+        guard let store else { return false }
+        guard NSApp.modalWindow == nil else {
+            return false
+        }
+        if appOwnedWindowID != nil {
+            return true
+        }
+        return store.state.windows.isEmpty
+    }
+
     private func closeFocusedPanel(preferredWindowID: UUID? = nil) -> Bool {
         guard let store else { return false }
         guard let preferredWindowID = preferredWindowID ?? appOwnedShortcutWindowID() else { return false }
         let preferredWorkspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id
         guard focusedPanelCommandController.closeFocusedPanel(in: preferredWorkspaceID).consumesShortcut else {
+            if let window = store.window(id: preferredWindowID),
+               window.workspaceIDs.isEmpty {
+                return closeEmptyWindow(windowID: preferredWindowID)
+            }
             // Cmd+W is app-owned for normal workspace windows. If there is no
             // panel to close in that context, swallow the shortcut rather than
             // falling back to AppKit's native window-close path.
@@ -1374,9 +1442,30 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
-    private func createWorkspaceTab() -> Bool {
+    private func closeEmptyWindow(windowID: UUID) -> Bool {
         guard let store else { return false }
-        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        let window = NSApp.windows.first { $0.identifier?.rawValue == windowID.uuidString }
+        guard store.send(.closeWindow(windowID: windowID), source: .command("close_empty_window")) else {
+            return false
+        }
+        ToasttyLog.info(
+            "Closed empty window from app-owned shortcut",
+            category: .store,
+            metadata: ["window_id": windowID.uuidString]
+        )
+        window?.close()
+        return true
+    }
+
+    private func createWindow(preferredWindowID: UUID?) -> Bool {
+        guard let store else { return false }
+        let commandWindowID = preferredWindowID ?? currentToasttyWorkspaceCommandWindowID(in: store)
+        return store.createWindowFromCommand(preferredWindowID: commandWindowID)
+    }
+
+    private func createWorkspaceTab(preferredWindowID: UUID?) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
     }
 

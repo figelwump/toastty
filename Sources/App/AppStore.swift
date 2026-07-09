@@ -1587,13 +1587,33 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     func createWindowFromCommand(preferredWindowID: UUID?) -> Bool {
+        let windowIDsBeforeCreate = Set(state.windows.map(\.id))
+        let windowCountBeforeCreate = state.windows.count
         let selection = commandSelection(preferredWindowID: preferredWindowID)
-        return send(
+        let didCreateWindow = send(
             .createWindow(
                 seed: windowLaunchSeed(from: selection),
                 initialFrame: commandCreateWindowFrame(cascadingFromSourceWindow: selection != nil)
             )
         )
+        guard didCreateWindow else {
+            return false
+        }
+        let createdWindowID = state.windows
+            .map(\.id)
+            .first { windowIDsBeforeCreate.contains($0) == false }
+        ToasttyLog.info(
+            "Created window from command",
+            category: .store,
+            metadata: [
+                "preferred_window_id": preferredWindowID?.uuidString ?? "<none>",
+                "source_window_id": selection?.windowID.uuidString ?? "<none>",
+                "created_window_id": createdWindowID?.uuidString ?? "<unknown>",
+                "window_count_before": String(windowCountBeforeCreate),
+                "window_count_after": String(state.windows.count),
+            ]
+        )
+        return true
     }
 
     @discardableResult

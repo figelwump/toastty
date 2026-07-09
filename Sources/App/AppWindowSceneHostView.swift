@@ -165,6 +165,18 @@ struct AppWindowSceneHostView: View {
             in: store.state,
             excluding: Set(boundWindowID.map { [$0] } ?? [])
         )
+        if missingWindowIDs.count > 1 {
+            ToasttyLog.info(
+                "Opening multiple missing state windows during scene sync",
+                category: .state,
+                metadata: [
+                    "missing_window_count": String(missingWindowIDs.count),
+                    "missing_window_ids": missingWindowIDs.map(\.uuidString).joined(separator: ","),
+                    "bound_window_id": boundWindowID?.uuidString ?? "<none>",
+                    "state_window_count": String(store.state.windows.count),
+                ]
+            )
+        }
         for _ in missingWindowIDs {
             openWindow(id: AppWindowSceneID.value)
         }
