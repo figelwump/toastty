@@ -22,6 +22,7 @@ enum ToastyTheme {
     static let sidebarSessionDetailText = Color(hex: 0xD0C8C0)
     static let sidebarSessionPathText = Color(hex: 0xB7AEA5)
     static let shortcutBadgeText = Color(hex: 0xB8B8B8)
+    static let hiddenSessionPillText = Color(hex: 0xD9D4CE)
     static let workspaceAgentCountActiveBackground = Color(hex: 0xF5A623, alpha: 0.15)
     static let workspaceUnreadPillBackground = Color(hex: 0x5BA08A, alpha: 0.14)
     static let sidebarSessionActiveBackground = Color(hex: 0x3D3D3D)

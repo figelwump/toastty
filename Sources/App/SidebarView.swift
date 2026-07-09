@@ -189,7 +189,8 @@ struct SidebarView: View {
     struct HiddenSessionPill: Equatable {
         let direction: HiddenSessionDirection
         let count: Int
-        let hasUnread: Bool
+        let unreadCount: Int
+        let hasWorking: Bool
         let targetID: SidebarSessionRowID
     }
 
@@ -303,6 +304,7 @@ struct SidebarView: View {
         orderedSessionRowIDs: [SidebarSessionRowID],
         measuredSessionRowFramesByID: [SidebarSessionRowID: CGRect],
         unreadSessionRowIDs: Set<SidebarSessionRowID>,
+        workingSessionRowIDs: Set<SidebarSessionRowID> = [],
         viewportHeight: CGFloat,
         visibleTop: CGFloat = ToastyTheme.sidebarTopPadding,
         minimumVisibleFraction: CGFloat = 0.5,
@@ -353,7 +355,8 @@ struct SidebarView: View {
             HiddenSessionPill(
                 direction: .above,
                 count: hiddenAbove.count,
-                hasUnread: hiddenAbove.contains { unreadSessionRowIDs.contains($0) },
+                unreadCount: hiddenAbove.filter { unreadSessionRowIDs.contains($0) }.count,
+                hasWorking: hiddenAbove.contains { workingSessionRowIDs.contains($0) },
                 targetID: targetID
             )
         }
@@ -361,12 +364,23 @@ struct SidebarView: View {
             HiddenSessionPill(
                 direction: .below,
                 count: hiddenBelow.count,
-                hasUnread: hiddenBelow.contains { unreadSessionRowIDs.contains($0) },
+                unreadCount: hiddenBelow.filter { unreadSessionRowIDs.contains($0) }.count,
+                hasWorking: hiddenBelow.contains { workingSessionRowIDs.contains($0) },
                 targetID: targetID
             )
         }
 
         return HiddenSessionPillState(above: abovePill, below: belowPill)
+    }
+
+    static func hiddenSessionPillBorderColor(_ pill: HiddenSessionPill) -> Color {
+        if pill.unreadCount > 0 {
+            return ToastyTheme.badgeBlue.opacity(0.70)
+        }
+        if pill.hasWorking {
+            return ToastyTheme.accent.opacity(0.60)
+        }
+        return ToastyTheme.primaryText.opacity(0.30)
     }
 
     nonisolated static func hiddenSessionScrollAnchor(
@@ -590,6 +604,7 @@ struct SidebarView: View {
             orderedSessionRowIDs: currentSidebarSessionRowIDs(),
             measuredSessionRowFramesByID: measuredSessionRowFramesByID,
             unreadSessionRowIDs: currentUnreadSidebarSessionRowIDs(),
+            workingSessionRowIDs: currentWorkingSidebarSessionRowIDs(),
             viewportHeight: sidebarWorkspaceListViewportHeight,
             visibleTop: ToastyTheme.sidebarTopPadding
         )
@@ -604,33 +619,38 @@ struct SidebarView: View {
             Button {
                 scrollToHiddenSession(pill, using: proxy)
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Image(systemName: pill.direction.iconName)
                         .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(ToastyTheme.hiddenSessionPillText)
 
-                    if pill.hasUnread {
-                        Circle()
-                            .fill(ToastyTheme.badgeBlue)
-                            .frame(width: 6, height: 6)
-                            .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
-                            .accessibilityHidden(true)
+                    if pill.hasWorking {
+                        SessionStatusIndicator(state: .spinner, size: 8, lineWidth: 1.4)
+                    }
+
+                    if pill.unreadCount > 0 {
+                        HStack(spacing: 3) {
+                            Circle()
+                                .fill(ToastyTheme.badgeBlue)
+                                .frame(width: 6, height: 6)
+                                .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
+
+                            Text("\(pill.unreadCount)")
+                                .font(ToastyTheme.fontWorkspaceAgentCount)
+                                .foregroundStyle(ToastyTheme.badgeBlue)
+                        }
+                        .accessibilityHidden(true)
                     }
                 }
-                .foregroundStyle(pill.hasUnread ? ToastyTheme.badgeBlue : ToastyTheme.inactiveText)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3.5)
                 .background(
                     Capsule()
-                        .fill(ToastyTheme.surfaceBackground.opacity(0.88))
+                        .fill(ToastyTheme.elevatedBackground)
                 )
                 .overlay {
                     Capsule()
-                        .stroke(
-                            pill.hasUnread
-                                ? ToastyTheme.badgeBlue.opacity(0.70)
-                                : ToastyTheme.primaryText.opacity(0.18),
-                            lineWidth: 1
-                        )
+                        .stroke(Self.hiddenSessionPillBorderColor(pill), lineWidth: 1)
                 }
                 .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 3)
             }
@@ -1907,6 +1927,30 @@ struct SidebarView: View {
         )
     }
 
+    private func currentWorkingSidebarSessionRowIDs() -> Set<SidebarSessionRowID> {
+        guard let window = store.window(id: windowID) else { return [] }
+
+        return Set(
+            window.workspaceIDs.flatMap { workspaceID -> [SidebarSessionRowID] in
+                guard store.state.workspacesByID[workspaceID] != nil else { return [] }
+
+                return sessionRuntimeStore
+                    .workspaceStatuses(for: workspaceID)
+                    .compactMap { workspaceSessionStatus in
+                        guard workspaceSessionStatus.status.kind == .working else {
+                            return nil
+                        }
+
+                        return SidebarSessionRowID(
+                            workspaceID: workspaceID,
+                            sessionID: workspaceSessionStatus.sessionID,
+                            panelID: workspaceSessionStatus.panelID
+                        )
+                    }
+            }
+        )
+    }
+
     private func pruneTransientSidebarState() {
         if let renamingWorkspaceID,
            store.state.workspacesByID[renamingWorkspaceID] == nil {
@@ -2046,8 +2090,14 @@ struct SidebarView: View {
 
     static func hiddenSessionPillAccessibilityLabel(_ pill: HiddenSessionPill) -> String {
         let sessionLabel = pill.count == 1 ? "session" : "sessions"
-        let unreadSuffix = pill.hasUnread ? ", unread" : ""
-        return "\(pill.count) \(sessionLabel) hidden \(pill.direction.accessibilityDirection)\(unreadSuffix)"
+        var label = "\(pill.count) \(sessionLabel) hidden \(pill.direction.accessibilityDirection)"
+        if pill.unreadCount > 0 {
+            label += ", \(pill.unreadCount) unread"
+        }
+        if pill.hasWorking {
+            label += ", working"
+        }
+        return label
     }
 
     static func canFocusSessionPanel(_ panelID: UUID, in workspace: WorkspaceState) -> Bool {

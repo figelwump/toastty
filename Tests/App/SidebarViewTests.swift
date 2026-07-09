@@ -536,7 +536,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(state.below?.direction, .below)
         XCTAssertEqual(state.below?.count, 2)
         XCTAssertEqual(state.below?.targetID, rows[2])
-        XCTAssertEqual(state.below?.hasUnread, true)
+        XCTAssertEqual(state.below?.unreadCount, 1)
     }
 
     func testHiddenSessionPillStateCountsBothDirectionsInMiddle() {
@@ -558,10 +558,10 @@ final class SidebarViewTests: XCTestCase {
 
         XCTAssertEqual(state.above?.count, 2)
         XCTAssertEqual(state.above?.targetID, rows[1])
-        XCTAssertEqual(state.above?.hasUnread, true)
+        XCTAssertEqual(state.above?.unreadCount, 1)
         XCTAssertEqual(state.below?.count, 1)
         XCTAssertEqual(state.below?.targetID, rows[5])
-        XCTAssertEqual(state.below?.hasUnread, false)
+        XCTAssertEqual(state.below?.unreadCount, 0)
     }
 
     func testHiddenSessionPillStateCountsOnlyAboveAtBottomOfList() {
@@ -600,10 +600,10 @@ final class SidebarViewTests: XCTestCase {
 
         XCTAssertEqual(state.above?.count, 1)
         XCTAssertEqual(state.above?.targetID, rows[0])
-        XCTAssertEqual(state.above?.hasUnread, true)
+        XCTAssertEqual(state.above?.unreadCount, 1)
         XCTAssertEqual(state.below?.count, 1)
         XCTAssertEqual(state.below?.targetID, rows[2])
-        XCTAssertEqual(state.below?.hasUnread, false)
+        XCTAssertEqual(state.below?.unreadCount, 0)
     }
 
     func testHiddenSessionPillStateTreatsHalfVisibleRowsAsVisible() {
@@ -715,21 +715,72 @@ final class SidebarViewTests: XCTestCase {
             visibleTop: 32
         )
 
-        XCTAssertEqual(visibleUnreadState.above?.hasUnread, false)
-        XCTAssertEqual(visibleUnreadState.below?.hasUnread, false)
-        XCTAssertEqual(hiddenUnreadState.above?.hasUnread, true)
-        XCTAssertEqual(hiddenUnreadState.below?.hasUnread, true)
+        XCTAssertEqual(visibleUnreadState.above?.unreadCount, 0)
+        XCTAssertEqual(visibleUnreadState.below?.unreadCount, 0)
+        XCTAssertEqual(hiddenUnreadState.above?.unreadCount, 1)
+        XCTAssertEqual(hiddenUnreadState.below?.unreadCount, 1)
     }
 
-    func testHiddenSessionPillAccessibilityLabelIncludesDirectionCountAndUnreadState() {
-        let rows = makeSidebarSessionRowIDs(count: 2)
+    func testHiddenSessionPillStateAggregatesWorkingOnlyFromHiddenRows() {
+        let rows = makeSidebarSessionRowIDs(count: 4)
+        let framesByID: [SidebarView.SidebarSessionRowID: CGRect] = [
+            rows[0]: CGRect(x: 0, y: -70, width: 240, height: 40),
+            rows[1]: CGRect(x: 0, y: 60, width: 240, height: 40),
+            rows[2]: CGRect(x: 0, y: 110, width: 240, height: 40),
+            rows[3]: CGRect(x: 0, y: 220, width: 240, height: 40),
+        ]
+        let visibleWorkingState = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: framesByID,
+            unreadSessionRowIDs: [],
+            workingSessionRowIDs: [rows[1]],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+        let hiddenWorkingState = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: framesByID,
+            unreadSessionRowIDs: [],
+            workingSessionRowIDs: [rows[0], rows[3]],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+
+        XCTAssertEqual(visibleWorkingState.above?.hasWorking, false)
+        XCTAssertEqual(visibleWorkingState.below?.hasWorking, false)
+        XCTAssertEqual(hiddenWorkingState.above?.hasWorking, true)
+        XCTAssertEqual(hiddenWorkingState.below?.hasWorking, true)
+    }
+
+    func testHiddenSessionPillStateDefaultsWorkingRowsToEmpty() {
+        let rows = makeSidebarSessionRowIDs(count: 4)
+        let state = SidebarView.hiddenSessionPillState(
+            orderedSessionRowIDs: rows,
+            measuredSessionRowFramesByID: [
+                rows[0]: CGRect(x: 0, y: -70, width: 240, height: 40),
+                rows[1]: CGRect(x: 0, y: 60, width: 240, height: 40),
+                rows[2]: CGRect(x: 0, y: 110, width: 240, height: 40),
+                rows[3]: CGRect(x: 0, y: 220, width: 240, height: 40),
+            ],
+            unreadSessionRowIDs: [],
+            viewportHeight: 200,
+            visibleTop: 32
+        )
+
+        XCTAssertEqual(state.above?.hasWorking, false)
+        XCTAssertEqual(state.below?.hasWorking, false)
+    }
+
+    func testHiddenSessionPillAccessibilityLabelIncludesSignalStates() {
+        let rows = makeSidebarSessionRowIDs(count: 4)
 
         XCTAssertEqual(
             SidebarView.hiddenSessionPillAccessibilityLabel(
                 SidebarView.HiddenSessionPill(
                     direction: .above,
                     count: 1,
-                    hasUnread: false,
+                    unreadCount: 0,
+                    hasWorking: false,
                     targetID: rows[0]
                 )
             ),
@@ -739,12 +790,49 @@ final class SidebarViewTests: XCTestCase {
             SidebarView.hiddenSessionPillAccessibilityLabel(
                 SidebarView.HiddenSessionPill(
                     direction: .below,
-                    count: 2,
-                    hasUnread: true,
+                    count: 3,
+                    unreadCount: 0,
+                    hasWorking: false,
+                    targetID: rows[0]
+                )
+            ),
+            "3 sessions hidden below"
+        )
+        XCTAssertEqual(
+            SidebarView.hiddenSessionPillAccessibilityLabel(
+                SidebarView.HiddenSessionPill(
+                    direction: .below,
+                    count: 3,
+                    unreadCount: 2,
+                    hasWorking: false,
                     targetID: rows[1]
                 )
             ),
-            "2 sessions hidden below, unread"
+            "3 sessions hidden below, 2 unread"
+        )
+        XCTAssertEqual(
+            SidebarView.hiddenSessionPillAccessibilityLabel(
+                SidebarView.HiddenSessionPill(
+                    direction: .below,
+                    count: 3,
+                    unreadCount: 0,
+                    hasWorking: true,
+                    targetID: rows[2]
+                )
+            ),
+            "3 sessions hidden below, working"
+        )
+        XCTAssertEqual(
+            SidebarView.hiddenSessionPillAccessibilityLabel(
+                SidebarView.HiddenSessionPill(
+                    direction: .below,
+                    count: 3,
+                    unreadCount: 2,
+                    hasWorking: true,
+                    targetID: rows[3]
+                )
+            ),
+            "3 sessions hidden below, 2 unread, working"
         )
     }
 
