@@ -968,6 +968,35 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherIgnoresMultiAgentEntriesBeforeCutoff() async throws {
+        // Entries at 05:41 predate the cutoff; the spawn at 06:10 does not.
+        let cutoff = ISO8601DateFormatter().date(from: "2026-07-09T06:00:00Z")!
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp": "2026-07-09T05:41:47.374Z", "type": "response_item", "payload": {"type": "function_call", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"stale spawn\"}", "call_id": "call_stale"}}
+                {"timestamp": "2026-07-09T05:41:47.881Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_stale", "output": "{\"agent_id\":\"stale-agent-id\",\"nickname\":\"Stale\"}"}}
+                {"timestamp": "2026-07-09T06:10:01.000Z", "type": "response_item", "payload": {"type": "function_call", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"fresh spawn\"}", "call_id": "call_fresh"}}
+                {"timestamp": "2026-07-09T06:10:02.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_fresh", "output": "{\"agent_id\":\"fresh-agent-id\",\"nickname\":\"Fresh\"}"}}
+                """#,
+            expectedCount: 1,
+            multiAgentEventCutoff: cutoff
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started Fresh",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "fresh-agent-id",
+                    kind: .subagent,
+                    displayName: "Fresh",
+                    command: "fresh spawn"
+                )
+            ),
+        ])
+    }
+
     func testWatcherParsesMultiAgentFixtureAsSubagentActivities() async throws {
         let events = try await recordEvents(
             from:
@@ -1143,7 +1172,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
     private func recordEvents(
         from contents: String,
         expectedCount: Int,
-        pollIntervalNanoseconds: UInt64 = 10_000_000
+        pollIntervalNanoseconds: UInt64 = 10_000_000,
+        multiAgentEventCutoff: Date? = nil
     ) async throws -> [CodexSessionLogEvent] {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
@@ -1153,7 +1183,11 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         eventsExpectation?.expectedFulfillmentCount = expectedCount
         eventsExpectation?.assertForOverFulfill = true
 
-        let watcher = CodexSessionLogWatcher(logURL: logURL, pollIntervalNanoseconds: pollIntervalNanoseconds) { event in
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: pollIntervalNanoseconds,
+            multiAgentEventCutoff: multiAgentEventCutoff
+        ) { event in
             await recorder.append(event)
             eventsExpectation?.fulfill()
         }

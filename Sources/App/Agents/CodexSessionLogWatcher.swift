@@ -173,15 +173,21 @@ final class CodexSessionLogWatcher {
     private let logURL: URL
     private let pollIntervalNanoseconds: UInt64
     private let eventHandler: EventHandler
+    // Ignore multi-agent lifecycle entries recorded before this instant.
+    // Rollout files can be re-claimed across launches (workspace restore),
+    // and replaying pre-launch spawns would resurrect dead collab agents.
+    private let multiAgentEventCutoff: Date?
     private var task: Task<Void, Never>?
 
     init(
         logURL: URL,
         pollIntervalNanoseconds: UInt64 = 250_000_000,
+        multiAgentEventCutoff: Date? = nil,
         eventHandler: @escaping EventHandler
     ) {
         self.logURL = logURL
         self.pollIntervalNanoseconds = pollIntervalNanoseconds
+        self.multiAgentEventCutoff = multiAgentEventCutoff
         self.eventHandler = eventHandler
     }
 
@@ -191,6 +197,7 @@ final class CodexSessionLogWatcher {
         task = Self.makePollingTask(
             logURL: logURL,
             pollIntervalNanoseconds: pollIntervalNanoseconds,
+            multiAgentEventCutoff: multiAgentEventCutoff,
             eventHandler: eventHandler
         )
     }
@@ -208,6 +215,7 @@ private extension CodexSessionLogWatcher {
     static func makePollingTask(
         logURL: URL,
         pollIntervalNanoseconds: UInt64,
+        multiAgentEventCutoff: Date? = nil,
         eventHandler: @escaping EventHandler
     ) -> Task<Void, Never> {
         Task.detached(priority: .utility) {
@@ -228,6 +236,7 @@ private extension CodexSessionLogWatcher {
                     seenKeys: &seenKeys,
                     sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
                     pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                    multiAgentEventCutoff: multiAgentEventCutoff,
                     eventHandler: eventHandler
                 )
 
@@ -243,6 +252,7 @@ private extension CodexSessionLogWatcher {
                         seenKeys: &seenKeys,
                         sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
                         pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                        multiAgentEventCutoff: multiAgentEventCutoff,
                         eventHandler: eventHandler
                     )
                     break
@@ -255,7 +265,8 @@ private extension CodexSessionLogWatcher {
                 bufferedRemainder,
                 seenKeys: &seenKeys,
                 sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-                pendingMultiAgentCalls: &pendingMultiAgentCalls
+                pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                multiAgentEventCutoff: multiAgentEventCutoff
             )
             if events.isEmpty == false {
                 for event in events {
@@ -273,6 +284,7 @@ private extension CodexSessionLogWatcher {
         seenKeys: inout Set<String>,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
         pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil,
         eventHandler: @escaping EventHandler
     ) async {
         while let delta = readDelta(from: logURL, handle: &handle, offset: &offset) {
@@ -282,6 +294,7 @@ private extension CodexSessionLogWatcher {
                 seenKeys: &seenKeys,
                 sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
                 pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                multiAgentEventCutoff: multiAgentEventCutoff,
                 eventHandler: eventHandler
             )
         }
@@ -293,6 +306,7 @@ private extension CodexSessionLogWatcher {
         seenKeys: inout Set<String>,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
         pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil,
         eventHandler: @escaping EventHandler
     ) async {
         guard delta.isEmpty == false else {
@@ -309,7 +323,8 @@ private extension CodexSessionLogWatcher {
                 lineData: Data(lineData),
                 seenKeys: &seenKeys,
                 sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-                pendingMultiAgentCalls: &pendingMultiAgentCalls
+                pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                multiAgentEventCutoff: multiAgentEventCutoff
             )
             guard events.isEmpty == false else {
                 continue
@@ -375,7 +390,8 @@ private extension CodexSessionLogWatcher {
         _ bufferedRemainder: Data,
         seenKeys: inout Set<String>,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
-        pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls
+        pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil
     ) -> [CodexSessionLogEvent] {
         guard bufferedRemainder.isEmpty == false else {
             return []
@@ -384,7 +400,8 @@ private extension CodexSessionLogWatcher {
             lineData: bufferedRemainder,
             seenKeys: &seenKeys,
             sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-            pendingMultiAgentCalls: &pendingMultiAgentCalls
+            pendingMultiAgentCalls: &pendingMultiAgentCalls,
+            multiAgentEventCutoff: multiAgentEventCutoff
         )
     }
 
@@ -392,7 +409,8 @@ private extension CodexSessionLogWatcher {
         lineData: Data,
         seenKeys: inout Set<String>,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
-        pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls
+        pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil
     ) -> [CodexSessionLogEvent] {
         guard let normalizedLineData = normalizedJSONLineData(from: lineData),
               let object = try? JSONSerialization.jsonObject(with: normalizedLineData) as? [String: Any] else {
@@ -418,7 +436,8 @@ private extension CodexSessionLogWatcher {
             object: object,
             fallbackLine: fallbackLine,
             seenKeys: &seenKeys,
-            pendingCalls: &pendingMultiAgentCalls
+            pendingCalls: &pendingMultiAgentCalls,
+            multiAgentEventCutoff: multiAgentEventCutoff
         )
         if backgroundActivityEvents.isEmpty == false {
             return backgroundActivityEvents
@@ -462,11 +481,19 @@ private extension CodexSessionLogWatcher {
         object: [String: Any],
         fallbackLine: String,
         seenKeys: inout Set<String>,
-        pendingCalls: inout CodexMultiAgentPendingCalls
+        pendingCalls: inout CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil
     ) -> [CodexSessionLogEvent] {
         guard normalizedString(object["type"]) == "response_item",
               let payload = object["payload"] as? [String: Any],
               let type = normalizedString(payload["type"]) else {
+            return []
+        }
+        if let multiAgentEventCutoff,
+           let eventDate = rolloutEntryDate(from: object),
+           eventDate < multiAgentEventCutoff {
+            // Replayed history from before this managed session launched;
+            // those collab agents died with their original process.
             return []
         }
 
@@ -574,6 +601,12 @@ private extension CodexSessionLogWatcher {
         default:
             return []
         }
+    }
+
+    static func rolloutEntryDate(from object: [String: Any]) -> Date? {
+        guard let raw = normalizedString(object["timestamp"]) else { return nil }
+        return (try? Date(raw, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+            ?? (try? Date(raw, strategy: Date.ISO8601FormatStyle()))
     }
 
     static func multiAgentToolName(rawName: String, namespace: String?) -> String? {

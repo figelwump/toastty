@@ -724,6 +724,18 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         }
 
         let previousWatcher = codexRolloutWatchersBySessionID[sessionID]?.watcher
+        if previousWatcher != nil {
+            // A replaced rollout claim means every subagent row sourced from the
+            // old file is stale (e.g. a restored pane briefly claimed the prior
+            // launch's rollout). The new file's replay rebuilds current state.
+            _ = sessionRuntimeStore?.syncBackgroundActivities(
+                sessionID: sessionID,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 0,
+                at: nowProvider()
+            )
+        }
         let watcher = makeCodexRolloutSessionLogWatcher(sessionID: sessionID, logURL: logURL)
         codexRolloutWatchersBySessionID[sessionID] = CodexRolloutSessionLogWatcherRegistration(
             logURL: logURL,
@@ -750,7 +762,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         sessionID: String,
         logURL: URL
     ) -> CodexSessionLogWatcher {
-        CodexSessionLogWatcher(logURL: logURL) { [weak self] event in
+        // Rollout files can be re-claimed across launches (workspace restore);
+        // collab lifecycle entries older than this managed session belong to a
+        // process that no longer exists.
+        let multiAgentEventCutoff = sessionRuntimeStore?.sessionRegistry
+            .activeSession(sessionID: sessionID)?
+            .startedAt
+        return CodexSessionLogWatcher(
+            logURL: logURL,
+            multiAgentEventCutoff: multiAgentEventCutoff
+        ) { [weak self] event in
             await self?.handleCodexRolloutSessionLogEvent(
                 event,
                 sessionID: sessionID,

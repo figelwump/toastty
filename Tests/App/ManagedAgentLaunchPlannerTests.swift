@@ -927,6 +927,26 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             firstRolloutURL.path
         )
 
+        // Subagent rows sourced from the first rollout are stale once the
+        // claim moves to a different file and must not survive the swap.
+        let staleActivityDate = Date()
+        _ = fixture.sessionRuntimeStore.updateBackgroundActivity(
+            sessionID: plan.sessionID,
+            activity: SessionBackgroundActivity(
+                id: "stale-collab-agent",
+                kind: .subagent,
+                displayName: "Stale",
+                startedAt: staleActivityDate,
+                lastUpdatedAt: staleActivityDate
+            ),
+            at: staleActivityDate
+        )
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry
+                .sessionsByID[plan.sessionID]?.backgroundActivitiesByID.count,
+            1
+        )
+
         XCTAssertTrue(
             fixture.store.send(
                 .updateTerminalPanelResumeRecord(
@@ -941,6 +961,11 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertEqual(
             fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
             secondRolloutURL.path
+        )
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry
+                .sessionsByID[plan.sessionID]?.backgroundActivitiesByID.isEmpty,
+            true
         )
 
         fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
@@ -1059,12 +1084,16 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"task_started"}}}"#,
             to: rolloutURL
         )
+        // Entries must postdate the session start or the multi-agent replay
+        // cutoff (correctly) discards them as prior-launch history.
+        let freshEntryTimestamp = Date().addingTimeInterval(60)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
         try appendCodexSessionLogLine(
-            #"{"timestamp":"2026-07-09T05:41:47.374Z","type":"response_item","payload":{"type":"function_call","id":"fc_spawn","name":"spawn_agent","namespace":"multi_agent_v1","arguments":"{\"agent_type\":\"default\",\"message\":\"Run focused checks\"}","call_id":"call_spawn"}}"#,
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call","id":"fc_spawn","name":"spawn_agent","namespace":"multi_agent_v1","arguments":"{\"agent_type\":\"default\",\"message\":\"Run focused checks\"}","call_id":"call_spawn"}}"#,
             to: rolloutURL
         )
         try appendCodexSessionLogLine(
-            #"{"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\",\"nickname\":\"Focused check\"}"}}"#,
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\",\"nickname\":\"Focused check\"}"}}"#,
             to: rolloutURL
         )
 
