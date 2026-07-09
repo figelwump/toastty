@@ -1046,7 +1046,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 argv: argv,
                 cwd: normalizedOptionalText(payload.string("cwd")),
                 environment: environment,
-                preflightPolicy: preflightPolicy
+                preflightPolicy: preflightPolicy,
+                parentSessionID: parentSessionID(for: context)
             )
 
             if let preflight = managedLaunchPreflightIfNeeded(for: request) {
@@ -1612,6 +1613,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
+    private func parentSessionID(for context: AutomationRequestContext) -> String? {
+        guard let callerSessionID = context.callerSessionID,
+              let caller = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
+              caller.agent != .processWatch else {
+            return nil
+        }
+        return caller.sessionID
+    }
+
+    @MainActor
     private func enforceWorkspaceAutomationAccess(
         _ workspaceID: UUID,
         context: AutomationRequestContext
@@ -1762,6 +1773,115 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             stateVersion += 1
             return [
                 "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.background_activity":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            guard let phaseRaw = event.payload.string("phase"),
+                  let phase = SessionBackgroundActivityPhase(rawValue: phaseRaw) else {
+                throw AutomationSocketError.invalidPayload("phase must be one of: start, finish, sync")
+            }
+            guard let kindRaw = event.payload.string("kind"),
+                  let kind = SessionBackgroundActivityKind(rawValue: kindRaw) else {
+                throw AutomationSocketError.invalidPayload("kind must be one of: child_agent, subagent")
+            }
+
+            let didMutate: Bool
+            switch phase {
+            case .start:
+                guard let activityID = normalizedOptionalText(event.payload.string("activityID")) else {
+                    throw AutomationSocketError.invalidPayload("activityID is required")
+                }
+                let processID: Int32?
+                if let rawProcessID = event.payload.int("processID") {
+                    guard rawProcessID > 0,
+                          rawProcessID <= Int(Int32.max) else {
+                        throw AutomationSocketError.invalidPayload("processID must be a positive 32-bit integer")
+                    }
+                    processID = Int32(rawProcessID)
+                } else {
+                    processID = nil
+                }
+                didMutate = sessionRuntimeStore.updateBackgroundActivity(
+                    sessionID: sessionID,
+                    activity: SessionBackgroundActivity(
+                        id: activityID,
+                        kind: kind,
+                        displayName: event.payload.string("displayName"),
+                        command: event.payload.string("command"),
+                        processID: processID,
+                        startedAt: now,
+                        lastUpdatedAt: now
+                    ),
+                    at: now
+                )
+            case .finish:
+                guard let activityID = normalizedOptionalText(event.payload.string("activityID")) else {
+                    throw AutomationSocketError.invalidPayload("activityID is required")
+                }
+                didMutate = sessionRuntimeStore.finishBackgroundActivity(
+                    sessionID: sessionID,
+                    activityID: activityID,
+                    at: now
+                )
+            case .sync:
+                guard kind == .subagent else {
+                    throw AutomationSocketError.invalidPayload("sync kind must be subagent")
+                }
+                guard let pendingCount = event.payload.int("pendingCount"),
+                      pendingCount >= 0 else {
+                    throw AutomationSocketError.invalidPayload("pendingCount must be a non-negative integer")
+                }
+                guard case .array(let entryValues)? = event.payload["entries"] else {
+                    throw AutomationSocketError.invalidPayload("entries must be an array")
+                }
+                let entries = try entryValues.map { value -> SessionBackgroundActivity in
+                    guard case .object(let object) = value else {
+                        throw AutomationSocketError.invalidPayload("entries must be an array of objects")
+                    }
+                    guard let id = normalizedOptionalText(object.string("id")) else {
+                        throw AutomationSocketError.invalidPayload("entry id is required")
+                    }
+                    if let displayNameValue = object["displayName"] {
+                        guard case .string(_) = displayNameValue else {
+                            throw AutomationSocketError.invalidPayload("entry displayName must be a string")
+                        }
+                    }
+                    if let commandValue = object["command"] {
+                        guard case .string(_) = commandValue else {
+                            throw AutomationSocketError.invalidPayload("entry command must be a string")
+                        }
+                    }
+                    return SessionBackgroundActivity(
+                        id: id,
+                        kind: kind,
+                        displayName: normalizedOptionalText(object.string("displayName")),
+                        command: normalizedOptionalText(object.string("command")),
+                        startedAt: now,
+                        lastUpdatedAt: now
+                    )
+                }
+                didMutate = sessionRuntimeStore.syncBackgroundActivities(
+                    sessionID: sessionID,
+                    kind: kind,
+                    entries: entries,
+                    pendingBackgroundTaskCount: pendingCount,
+                    at: now
+                )
+            }
+            if didMutate {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(didMutate ? "accepted" : "noop"),
                 "stateVersion": .int(stateVersion),
             ]
 

@@ -42,11 +42,16 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertNotNil(hooks["SessionStart"])
         XCTAssertNotNil(hooks["UserPromptSubmit"])
         XCTAssertNotNil(hooks["Stop"])
+        XCTAssertNotNil(hooks["SubagentStop"])
         XCTAssertNotNil(hooks["PreToolUse"])
-        XCTAssertNil(hooks["PostToolUse"])
+        XCTAssertNotNil(hooks["PostToolUse"])
         XCTAssertNil(hooks["PostToolUseFailure"])
         XCTAssertNotNil(hooks["PermissionRequest"])
         XCTAssertNotNil(hooks["Notification"])
+
+        let postToolUseEntries = try XCTUnwrap(hooks["PostToolUse"] as? [[String: Any]])
+        XCTAssertNotNil(postToolUseEntries.first { ($0["matcher"] as? String) == "Agent" })
+        XCTAssertNotNil(postToolUseEntries.first { ($0["matcher"] as? String) == "Task" })
 
         let notificationEntries = try XCTUnwrap(hooks["Notification"] as? [[String: Any]])
         let matcherEntry = notificationEntries.first { entry in

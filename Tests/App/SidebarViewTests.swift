@@ -83,6 +83,322 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testSessionStatusProjectionChipLabelShowsWaitingOnly() {
+        XCTAssertEqual(
+            SidebarView.sessionStatusProjectionChipLabel(
+                for: .waitingOnChildren(childCount: 2, pendingBackgroundTaskCount: 0)
+            ),
+            "waiting"
+        )
+        XCTAssertNil(SidebarView.sessionStatusProjectionChipLabel(for: .resuming))
+        XCTAssertNil(SidebarView.sessionStatusProjectionChipLabel(for: .none))
+    }
+
+    func testSessionAccessibilityLabelIncludesWaitingProjection() {
+        XCTAssertEqual(
+            SidebarView.sessionAccessibilityLabel(
+                agentName: "Claude Code",
+                chipKind: nil,
+                projection: .waitingOnChildren(childCount: 1, pendingBackgroundTaskCount: 0),
+                childCount: 2,
+                detailText: "Reviewing changes",
+                cwd: ".../toastty",
+                isLaterFlagged: false
+            ),
+            "Claude Code, waiting, 2 sub-agents, Reviewing changes, .../toastty"
+        )
+    }
+
+    func testSessionChildRowsDefaultExpandedAndNeedAttentionForApprovalOrError() {
+        XCTAssertTrue(
+            SidebarView.sessionChildRowsExpanded(
+                sessionID: "parent",
+                expandedSessionChildrenBySessionID: [:]
+            )
+        )
+        XCTAssertFalse(
+            SidebarView.sessionChildRowsExpanded(
+                sessionID: "parent",
+                expandedSessionChildrenBySessionID: ["parent": false]
+            )
+        )
+        XCTAssertTrue(
+            SidebarView.sessionChildRowsNeedAttention([
+                SessionChildRow(
+                    id: "child",
+                    source: .session,
+                    displayName: "Claude Code",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    statusKind: .needsApproval
+                ),
+            ])
+        )
+        XCTAssertFalse(
+            SidebarView.sessionChildRowsNeedAttention([
+                SessionChildRow(
+                    id: "activity",
+                    source: .activity,
+                    displayName: "Explore",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                ),
+            ])
+        )
+    }
+
+    func testSessionChildFocusTargetRoutesSessionsToChildAndActivitiesToParent() {
+        let parentWorkspaceID = UUID()
+        let parentPanelID = UUID()
+        let childWorkspaceID = UUID()
+        let childPanelID = UUID()
+
+        XCTAssertEqual(
+            SidebarView.sessionChildFocusTarget(
+                for: SessionChildRow(
+                    id: "activity",
+                    source: .activity,
+                    displayName: "Explore",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                ),
+                parentWorkspaceID: parentWorkspaceID,
+                parentPanelID: parentPanelID
+            ),
+            SidebarView.SessionChildFocusTarget(workspaceID: parentWorkspaceID, panelID: parentPanelID)
+        )
+        XCTAssertEqual(
+            SidebarView.sessionChildFocusTarget(
+                for: SessionChildRow(
+                    id: "child",
+                    source: .session,
+                    displayName: "Codex",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    panelID: childPanelID,
+                    workspaceID: childWorkspaceID,
+                    sessionID: "child"
+                ),
+                parentWorkspaceID: parentWorkspaceID,
+                parentPanelID: parentPanelID
+            ),
+            SidebarView.SessionChildFocusTarget(workspaceID: childWorkspaceID, panelID: childPanelID)
+        )
+    }
+
+    func testSessionChildWorkspaceTagShowsOnlyForDifferentWorkspace() {
+        let parentWorkspaceID = UUID()
+        let childWorkspaceID = UUID()
+        let child = SessionChildRow(
+            id: "child",
+            source: .session,
+            displayName: "Claude Code",
+            startedAt: Date(timeIntervalSince1970: 1),
+            panelID: UUID(),
+            workspaceID: childWorkspaceID,
+            sessionID: "child"
+        )
+
+        XCTAssertEqual(
+            SidebarView.childWorkspaceTagLabel(
+                for: child,
+                parentWorkspaceID: parentWorkspaceID,
+                workspaceNamesByID: [childWorkspaceID: "wt-sessions"]
+            ),
+            "wt-sessions"
+        )
+        XCTAssertNil(
+            SidebarView.childWorkspaceTagLabel(
+                for: SessionChildRow(
+                    id: "same",
+                    source: .session,
+                    displayName: "Codex",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    panelID: UUID(),
+                    workspaceID: parentWorkspaceID,
+                    sessionID: "same"
+                ),
+                parentWorkspaceID: parentWorkspaceID,
+                workspaceNamesByID: [parentWorkspaceID: "toastty"]
+            )
+        )
+    }
+
+    func testSessionChildHoverTipModelCarriesActivityDescriptionAndMeta() throws {
+        let start = try localDate(hour: 12, minute: 4)
+
+        XCTAssertEqual(
+            SidebarView.sessionChildHoverTipModel(
+                child: SessionChildRow(
+                    id: "activity",
+                    source: .activity,
+                    displayName: "Explore",
+                    context: "agent: find session log callers",
+                    startedAt: start
+                ),
+                workspaceName: nil,
+                elapsedText: "2m 30s",
+                now: start.addingTimeInterval(150)
+            ),
+            SessionChildHoverTipModel(
+                name: "Explore",
+                typeLabel: "sub-agent",
+                statusDotColorKind: .working,
+                bodyText: "agent: find session log callers",
+                metaItems: ["running · 2m 30s", "started 12:04"]
+            )
+        )
+    }
+
+    func testSessionChildHoverTipModelCarriesSessionApprovalAndRemoteWorkspace() throws {
+        let start = try localDate(hour: 12, minute: 4)
+
+        XCTAssertEqual(
+            SidebarView.sessionChildHoverTipModel(
+                child: SessionChildRow(
+                    id: "child-session",
+                    source: .session,
+                    displayName: "Claude Code",
+                    context: "Approve Bash: git push",
+                    startedAt: start,
+                    statusKind: .needsApproval,
+                    sessionID: "child-session"
+                ),
+                workspaceName: "wt-sessions",
+                elapsedText: nil,
+                now: start
+            ),
+            SessionChildHoverTipModel(
+                name: "Claude Code",
+                typeLabel: "session",
+                statusDotColorKind: .needsApproval,
+                bodyText: "Approve Bash: git push",
+                metaItems: ["needs approval", "wt-sessions"]
+            )
+        )
+    }
+
+    func testSessionChildHoverTipModelCarriesBareChild() throws {
+        let start = try localDate(hour: 12, minute: 4)
+
+        XCTAssertEqual(
+            SidebarView.sessionChildHoverTipModel(
+                child: SessionChildRow(
+                    id: "bare",
+                    source: .activity,
+                    displayName: "Codex",
+                    context: nil,
+                    startedAt: start
+                ),
+                workspaceName: nil,
+                elapsedText: nil,
+                now: start
+            ),
+            SessionChildHoverTipModel(
+                name: "Codex",
+                typeLabel: "sub-agent",
+                statusDotColorKind: .working,
+                bodyText: nil,
+                metaItems: ["running · 0s", "started 12:04"]
+            )
+        )
+    }
+
+    func testHoverTipOriginPlacesTipBelowAnchorLeftEdge() {
+        let origin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: 120, y: 500, width: 180, height: 24),
+            tipSize: CGSize(width: 320, height: 100),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800)
+        )
+
+        XCTAssertEqual(origin, CGPoint(x: 120, y: 394))
+    }
+
+    func testHoverTipOriginFlipsAboveNearBottomEdge() {
+        let origin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: 120, y: 40, width: 180, height: 24),
+            tipSize: CGSize(width: 320, height: 100),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800)
+        )
+
+        XCTAssertEqual(origin, CGPoint(x: 120, y: 70))
+    }
+
+    func testHoverTipOriginClampsHorizontally() {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 800)
+
+        let rightClampedOrigin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: 850, y: 500, width: 120, height: 24),
+            tipSize: CGSize(width: 320, height: 100),
+            visibleFrame: visibleFrame
+        )
+        let leftClampedOrigin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: -40, y: 500, width: 120, height: 24),
+            tipSize: CGSize(width: 320, height: 100),
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(rightClampedOrigin, CGPoint(x: 680, y: 394))
+        XCTAssertEqual(leftClampedOrigin, CGPoint(x: 0, y: 394))
+    }
+
+    func testElapsedChildActivityTextFormatsSecondsAndMinutes() {
+        let start = Date(timeIntervalSince1970: 0)
+        XCTAssertEqual(
+            SidebarView.elapsedChildActivityText(startedAt: start, now: start.addingTimeInterval(52)),
+            "52s"
+        )
+        XCTAssertEqual(
+            SidebarView.elapsedChildActivityText(startedAt: start, now: start.addingTimeInterval(242)),
+            "4m 02s"
+        )
+    }
+
+    func testChildActivityDotPhaseOffsetIsStableAndBounded() {
+        let first = SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-1")
+        let second = SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-1")
+        XCTAssertEqual(first, second)
+        XCTAssertGreaterThanOrEqual(first, 0)
+        XCTAssertLessThan(first, 2)
+        XCTAssertNotEqual(
+            SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-1"),
+            SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-2")
+        )
+    }
+
+    func testSessionChildAccessibilityLabelIncludesStatusContextWorkspaceAndElapsed() {
+        let child = SessionChildRow(
+            id: "child",
+            source: .session,
+            displayName: "Claude Code",
+            context: "Approve Bash: git push",
+            startedAt: Date(timeIntervalSince1970: 1),
+            statusKind: .needsApproval,
+            panelID: UUID(),
+            workspaceID: UUID(),
+            sessionID: "child"
+        )
+
+        XCTAssertEqual(
+            SidebarView.sessionChildAccessibilityLabel(
+                child: child,
+                workspaceTag: "wt-sessions",
+                elapsedText: nil
+            ),
+            "session child, Claude Code, needs approval, Approve Bash: git push, wt-sessions"
+        )
+        XCTAssertEqual(
+            SidebarView.sessionChildAccessibilityLabel(
+                child: SessionChildRow(
+                    id: "activity",
+                    source: .activity,
+                    displayName: "Explore",
+                    context: "find session callers",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                ),
+                workspaceTag: nil,
+                elapsedText: "3m"
+            ),
+            "activity child, Explore, find session callers, 3m"
+        )
+    }
+
     func testSessionIndicatorStateShowsSpinnerOnlyForWorking() {
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .working), .spinner)
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .idle), .hidden)
@@ -1916,6 +2232,18 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return nil
+    }
+
+    private func localDate(hour: Int, minute: Int) throws -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 7,
+            day: 9,
+            hour: hour,
+            minute: minute
+        )))
     }
 
     private func renderedTextValues(in rootView: NSView) -> [String] {

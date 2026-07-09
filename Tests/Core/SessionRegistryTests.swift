@@ -118,6 +118,105 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func sessionRecordDoesNotPersistRuntimeBackgroundActivity() throws {
+        let now = Date(timeIntervalSince1970: 1_010)
+        let record = SessionRecord(
+            sessionID: "runtime-activity",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            statusUpdatedAt: now.addingTimeInterval(1),
+            backgroundActivitiesByID: [
+                "child-1": SessionBackgroundActivity(
+                    id: "child-1",
+                    kind: .childAgent,
+                    displayName: "Codex",
+                    command: "codex review",
+                    processID: 12_345,
+                    startedAt: now,
+                    lastUpdatedAt: now
+                ),
+            ],
+            pendingBackgroundTaskCount: 2,
+            lastActivityFinishedAt: now.addingTimeInterval(2),
+            startedAt: now,
+            updatedAt: now
+        )
+
+        let data = try JSONEncoder().encode(record)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let decoded = try JSONDecoder().decode(SessionRecord.self, from: data)
+
+        #expect(object["backgroundActivitiesByID"] == nil)
+        #expect(decoded.backgroundActivitiesByID.isEmpty)
+        #expect(object["pendingBackgroundTaskCount"] == nil)
+        #expect(decoded.pendingBackgroundTaskCount == 0)
+        #expect(object["statusUpdatedAt"] == nil)
+        #expect(decoded.statusUpdatedAt == nil)
+        #expect(object["lastActivityFinishedAt"] == nil)
+        #expect(decoded.lastActivityFinishedAt == nil)
+    }
+
+    @Test
+    func sessionRecordPersistsParentSessionID() throws {
+        let now = Date(timeIntervalSince1970: 1_011)
+        let record = SessionRecord(
+            sessionID: "child",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            parentSessionID: "parent",
+            startedAt: now,
+            updatedAt: now
+        )
+
+        let data = try JSONEncoder().encode(record)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let decoded = try JSONDecoder().decode(SessionRecord.self, from: data)
+
+        #expect(object["parentSessionID"] as? String == "parent")
+        #expect(decoded.parentSessionID == "parent")
+    }
+
+    @Test
+    func sessionRegistryRoundTripPreservesParentSessionID() throws {
+        var registry = SessionRegistry()
+        let now = Date(timeIntervalSince1970: 1_012)
+        let childPanelID = UUID()
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.startSession(
+            sessionID: "child",
+            agent: .codex,
+            panelID: childPanelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            parentSessionID: "parent",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(1)
+        )
+
+        let decoded = try JSONDecoder().decode(
+            SessionRegistry.self,
+            from: JSONEncoder().encode(registry)
+        )
+
+        #expect(decoded.activeSession(for: childPanelID)?.parentSessionID == "parent")
+    }
+
+    @Test
     func workspaceScopeAccessFollowsCooperativeTruthTable() throws {
         var registry = SessionRegistry()
         let now = Date(timeIntervalSince1970: 1_200)
@@ -568,6 +667,819 @@ struct SessionRegistryTests {
         #expect(workspaceStatus.status.detail == "Refactoring dashboard to server components")
         #expect(workspaceStatus.cwd == "/repo")
         #expect(workspaceStatus.isActive)
+    }
+
+    @Test
+    func backgroundActivityProjectsReadyAndStatuslessSessionsAsWorking() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let readyPanelID = UUID()
+        let statuslessPanelID = UUID()
+        let now = Date(timeIntervalSince1970: 710)
+
+        registry.startSession(
+            sessionID: "ready-parent",
+            agent: .claude,
+            panelID: readyPanelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "ready-parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn ended"),
+            at: now.addingTimeInterval(1)
+        )
+        let didUpdateReadyActivity = registry.updateBackgroundActivity(
+            sessionID: "ready-parent",
+            activity: SessionBackgroundActivity(
+                id: "child-1",
+                kind: .childAgent,
+                displayName: "Codex",
+                command: "codex review",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didUpdateReadyActivity)
+
+        registry.startSession(
+            sessionID: "statusless-parent",
+            agent: .claude,
+            panelID: statuslessPanelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now.addingTimeInterval(3)
+        )
+        let didUpdateStatuslessActivity = registry.updateBackgroundActivity(
+            sessionID: "statusless-parent",
+            activity: SessionBackgroundActivity(
+                id: "child-2",
+                kind: .childAgent,
+                displayName: "Claude Code",
+                startedAt: now.addingTimeInterval(4),
+                lastUpdatedAt: now.addingTimeInterval(4)
+            ),
+            at: now.addingTimeInterval(4)
+        )
+        #expect(didUpdateStatuslessActivity)
+
+        let statuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(statuses.map(\.sessionID) == ["ready-parent", "statusless-parent"])
+        #expect(statuses.map(\.status.kind) == [.working, .working])
+        #expect(statuses.first?.status.detail == "Root turn ended")
+        #expect(statuses.first?.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
+        #expect(statuses.last?.status.detail == nil)
+        #expect(statuses.last?.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
+        #expect(registry.sessionsByID["ready-parent"]?.status?.kind == .ready)
+        #expect(registry.panelStatus(for: readyPanelID)?.status.kind == .working)
+        #expect(registry.panelStatus(for: readyPanelID)?.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
+    }
+
+    @Test
+    func codexSubagentActivityProjectsRawReadyAsWaitingOnChildren() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 715)
+
+        registry.startSession(
+            sessionID: "codex-parent",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "codex-parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn ended"),
+            at: now.addingTimeInterval(1)
+        )
+        let didUpdateActivity = registry.updateBackgroundActivity(
+            sessionID: "codex-parent",
+            activity: SessionBackgroundActivity(
+                id: "agent-1",
+                kind: .subagent,
+                displayName: "Herschel",
+                command: "Inspect the diff",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didUpdateActivity)
+
+        let status = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(status.sessionID == "codex-parent")
+        #expect(status.status.kind == .working)
+        #expect(status.status.detail == "Root turn ended")
+        #expect(status.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
+        #expect(registry.sessionsByID["codex-parent"]?.status?.kind == .ready)
+    }
+
+    @Test
+    func backgroundActivityDoesNotOverrideActionableOrWorkingStatuses() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 720)
+
+        for (sessionID, kind) in [
+            ("approval", SessionStatusKind.needsApproval),
+            ("error", SessionStatusKind.error),
+            ("working", SessionStatusKind.working),
+        ] {
+            registry.startSession(
+                sessionID: sessionID,
+                agent: .claude,
+                panelID: UUID(),
+                windowID: UUID(),
+                workspaceID: workspaceID,
+                cwd: nil,
+                repoRoot: nil,
+                at: now
+            )
+            registry.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: kind, summary: kind.rawValue, detail: "base"),
+                at: now.addingTimeInterval(1)
+            )
+            registry.updateBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: "child-\(sessionID)",
+                    kind: .childAgent,
+                    startedAt: now.addingTimeInterval(2),
+                    lastUpdatedAt: now.addingTimeInterval(2)
+                ),
+                at: now.addingTimeInterval(2)
+            )
+        }
+
+        #expect(registry.workspaceStatuses(for: workspaceID).map(\.status.kind) == [
+            .needsApproval,
+            .error,
+            .working,
+        ])
+        #expect(registry.workspaceStatuses(for: workspaceID).map(\.projection) == [
+            .none,
+            .none,
+            .none,
+        ])
+    }
+
+    @Test
+    func subagentSyncReplacesOnlySubagentActivitiesAndPreservesStartedAt() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 725)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        let didUpdateChildActivity = registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "child-1",
+                kind: .childAgent,
+                displayName: "Codex",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didUpdateChildActivity)
+
+        let didSyncInitialSubagent = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "subagent-1",
+                    kind: .subagent,
+                    displayName: "general-purpose",
+                    startedAt: now.addingTimeInterval(3),
+                    lastUpdatedAt: now.addingTimeInterval(3)
+                ),
+            ],
+            pendingBackgroundTaskCount: 1,
+            at: now.addingTimeInterval(3)
+        )
+        #expect(didSyncInitialSubagent)
+
+        var record = try #require(registry.sessionsByID["parent"])
+        #expect(Set(record.backgroundActivitiesByID.keys) == Set(["child-1", "subagent-1"]))
+        #expect(record.backgroundActivitiesByID["subagent-1"]?.startedAt == now.addingTimeInterval(3))
+        #expect(record.pendingBackgroundTaskCount == 1)
+
+        let didSyncMergedSubagent = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "subagent-1",
+                    kind: .subagent,
+                    command: "Run review",
+                    startedAt: now.addingTimeInterval(4),
+                    lastUpdatedAt: now.addingTimeInterval(4)
+                ),
+            ],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(4)
+        )
+        #expect(didSyncMergedSubagent)
+
+        record = try #require(registry.sessionsByID["parent"])
+        let mergedSubagent = try #require(record.backgroundActivitiesByID["subagent-1"])
+        #expect(mergedSubagent.startedAt == now.addingTimeInterval(3))
+        #expect(mergedSubagent.displayName == "general-purpose")
+        #expect(mergedSubagent.command == "Run review")
+        #expect(mergedSubagent.lastUpdatedAt == now.addingTimeInterval(4))
+        #expect(record.pendingBackgroundTaskCount == 0)
+
+        let didClearSubagents = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(5)
+        )
+        #expect(didClearSubagents)
+
+        record = try #require(registry.sessionsByID["parent"])
+        #expect(Set(record.backgroundActivitiesByID.keys) == Set(["child-1"]))
+        #expect(record.pendingBackgroundTaskCount == 0)
+    }
+
+    @Test
+    func subagentStartUpsertsAndMergesExistingSubagentActivity() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 727)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        let didSyncMinimalSubagent = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivity(
+                    id: "subagent-1",
+                    kind: .subagent,
+                    startedAt: now.addingTimeInterval(1),
+                    lastUpdatedAt: now.addingTimeInterval(1)
+                ),
+            ],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(1)
+        )
+        #expect(didSyncMinimalSubagent)
+
+        let didMergeSubagentStart = registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                displayName: "general-purpose",
+                command: "Review diff",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didMergeSubagentStart)
+
+        let activity = try #require(registry.sessionsByID["parent"]?.backgroundActivitiesByID["subagent-1"])
+        #expect(activity.startedAt == now.addingTimeInterval(1))
+        #expect(activity.displayName == "general-purpose")
+        #expect(activity.command == "Review diff")
+        #expect(activity.lastUpdatedAt == now.addingTimeInterval(2))
+    }
+
+    @Test
+    func pendingBackgroundTaskCountProjectsWaitingWithoutActivities() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 729)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn completed"),
+            at: now.addingTimeInterval(1)
+        )
+        let didSetPendingCount = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTaskCount: 1,
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didSetPendingCount)
+
+        let waitingStatus = try #require(registry.workspaceStatuses(for: workspaceID).first?.status)
+        #expect(waitingStatus.kind == .working)
+        #expect(waitingStatus.detail == "Root turn completed")
+        #expect(registry.workspaceStatuses(for: workspaceID).first?.projection == .waitingOnChildren(
+            childCount: 0,
+            pendingBackgroundTaskCount: 1
+        ))
+        #expect(registry.sessionsByID["parent"]?.status?.kind == .ready)
+
+        let didClearPendingCount = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTaskCount: 0,
+            at: now.addingTimeInterval(3)
+        )
+        #expect(didClearPendingCount)
+        let resumingStatus = try #require(
+            registry.workspaceStatuses(for: workspaceID, at: now.addingTimeInterval(4)).first
+        )
+        #expect(resumingStatus.status.kind == .working)
+        #expect(resumingStatus.status.detail == "Resuming…")
+        #expect(resumingStatus.projection == .resuming)
+    }
+
+    @Test
+    func lastFinishedActivityProjectsStaleReadyAsResumingInsideGraceWindow() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 731)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn completed"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        registry.finishBackgroundActivity(
+            sessionID: "parent",
+            activityID: "subagent-1",
+            at: now.addingTimeInterval(3)
+        )
+
+        let status = try #require(registry.workspaceStatuses(
+            for: workspaceID,
+            at: now.addingTimeInterval(4)
+        ).first)
+        #expect(status.status == SessionStatus(kind: .working, summary: "Working", detail: "Resuming…"))
+        #expect(status.projection == .resuming)
+    }
+
+    @Test
+    func resumingProjectionExpiresToRawReadyAfterGraceWindow() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 732)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn completed"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        registry.finishBackgroundActivity(
+            sessionID: "parent",
+            activityID: "subagent-1",
+            at: now.addingTimeInterval(3)
+        )
+
+        let status = try #require(registry.workspaceStatuses(
+            for: workspaceID,
+            at: now.addingTimeInterval(3 + SessionRegistry.resumeProjectionGraceInterval)
+        ).first)
+        #expect(status.status == SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn completed"))
+        #expect(status.projection == .none)
+    }
+
+    @Test
+    func freshRawStatusEndsResumingProjectionImmediately() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 733)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Stale ready"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "subagent-1",
+                kind: .subagent,
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        registry.finishBackgroundActivity(
+            sessionID: "parent",
+            activityID: "subagent-1",
+            at: now.addingTimeInterval(3)
+        )
+        #expect(registry.workspaceStatuses(
+            for: workspaceID,
+            at: now.addingTimeInterval(4)
+        ).first?.projection == .resuming)
+
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Fresh ready"),
+            at: now.addingTimeInterval(5)
+        )
+
+        let status = try #require(registry.workspaceStatuses(
+            for: workspaceID,
+            at: now.addingTimeInterval(6)
+        ).first)
+        #expect(status.status == SessionStatus(kind: .ready, summary: "Ready", detail: "Fresh ready"))
+        #expect(status.projection == .none)
+    }
+
+    @Test
+    func backgroundActivitiesFinishIndependentlyAndClearOnStop() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 730)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        for id in ["child-1", "child-2"] {
+            registry.updateBackgroundActivity(
+                sessionID: "parent",
+                activity: SessionBackgroundActivity(
+                    id: id,
+                    kind: .childAgent,
+                    startedAt: now.addingTimeInterval(2),
+                    lastUpdatedAt: now.addingTimeInterval(2)
+                ),
+                at: now.addingTimeInterval(2)
+            )
+        }
+
+        let waitingStatus = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(waitingStatus.status.detail == nil)
+        #expect(waitingStatus.projection == .waitingOnChildren(
+            childCount: 2,
+            pendingBackgroundTaskCount: 0
+        ))
+        let didFinishMissing = registry.finishBackgroundActivity(
+            sessionID: "parent",
+            activityID: "missing",
+            at: now.addingTimeInterval(3)
+        )
+        #expect(didFinishMissing == false)
+        let didFinishFirst = registry.finishBackgroundActivity(
+            sessionID: "parent",
+            activityID: "child-1",
+            at: now.addingTimeInterval(4)
+        )
+        #expect(didFinishFirst)
+        #expect(registry.workspaceStatuses(for: workspaceID).first?.status.kind == .working)
+        #expect(registry.workspaceStatuses(for: workspaceID).first?.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
+        let didFinishSecond = registry.finishBackgroundActivity(
+            sessionID: "parent",
+            activityID: "child-2",
+            at: now.addingTimeInterval(5)
+        )
+        #expect(didFinishSecond)
+        #expect(registry.workspaceStatuses(for: workspaceID, at: now.addingTimeInterval(30)).first?.status.kind == .ready)
+
+        registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "child-3",
+                kind: .childAgent,
+                startedAt: now.addingTimeInterval(6),
+                lastUpdatedAt: now.addingTimeInterval(6)
+            ),
+            at: now.addingTimeInterval(6)
+        )
+        registry.stopSession(sessionID: "parent", at: now.addingTimeInterval(7))
+
+        #expect(registry.sessionsByID["parent"]?.backgroundActivitiesByID.isEmpty == true)
+        #expect(registry.workspaceStatuses(for: workspaceID).isEmpty)
+    }
+
+    @Test
+    func workspaceStatusesAssembleChildRowsFromActivitiesAndSessionsInStableOrder() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let parentPanelID = UUID()
+        let childPanelID = UUID()
+        let now = Date(timeIntervalSince1970: 760)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: parentPanelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Orchestrating"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "activity-later",
+                kind: .subagent,
+                displayName: "Explore",
+                command: "find session callers",
+                startedAt: now.addingTimeInterval(30),
+                lastUpdatedAt: now.addingTimeInterval(30)
+            ),
+            at: now.addingTimeInterval(30)
+        )
+        registry.startSession(
+            sessionID: "child-earlier",
+            agent: .codex,
+            panelID: childPanelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            parentSessionID: "parent",
+            displayTitleOverride: "Codex Review",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(10)
+        )
+        registry.updateStatus(
+            sessionID: "child-earlier",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Running check.sh"),
+            at: now.addingTimeInterval(11)
+        )
+
+        let parentStatus = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(parentStatus.children.map(\.id) == ["child-earlier", "activity-later"])
+        #expect(parentStatus.children.map(\.source) == [.session, .activity])
+        #expect(parentStatus.children[0].displayName == "Codex Review")
+        #expect(parentStatus.children[0].context == "Running check.sh")
+        #expect(parentStatus.children[0].statusKind == .working)
+        #expect(parentStatus.children[0].panelID == childPanelID)
+        #expect(parentStatus.children[0].workspaceID == workspaceID)
+        #expect(parentStatus.children[0].sessionID == "child-earlier")
+        #expect(parentStatus.children[1].displayName == "Explore")
+        #expect(parentStatus.children[1].context == "find session callers")
+        #expect(parentStatus.children[1].statusKind == nil)
+    }
+
+    @Test
+    func sameWorkspaceChildSessionsAreSuppressedAndPromotedWhenParentStops() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 770)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.startSession(
+            sessionID: "child",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            parentSessionID: "parent",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+        registry.updateStatus(
+            sessionID: "child",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Done"),
+            at: now.addingTimeInterval(3)
+        )
+
+        let nestedStatuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(nestedStatuses.map(\.sessionID) == ["parent"])
+        #expect(nestedStatuses.first?.children.compactMap(\.sessionID) == ["child"])
+
+        registry.stopSession(sessionID: "parent", at: now.addingTimeInterval(4))
+
+        #expect(registry.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["child"])
+    }
+
+    @Test
+    func crossWorkspaceChildSessionsStayTopLevelInHomeWorkspaceAndMirrorUnderParent() throws {
+        var registry = SessionRegistry()
+        let parentWorkspaceID = UUID()
+        let childWorkspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 780)
+
+        registry.startSession(
+            sessionID: "parent",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: parentWorkspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "parent",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.startSession(
+            sessionID: "child",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: childWorkspaceID,
+            parentSessionID: "parent",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+        registry.updateStatus(
+            sessionID: "child",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Approve git push"),
+            at: now.addingTimeInterval(3)
+        )
+
+        let parentStatus = try #require(registry.workspaceStatuses(for: parentWorkspaceID).first)
+        #expect(parentStatus.children.compactMap(\.sessionID) == ["child"])
+        #expect(parentStatus.children.first?.workspaceID == childWorkspaceID)
+        #expect(parentStatus.children.first?.statusKind == .needsApproval)
+
+        let childHomeStatuses = registry.workspaceStatuses(for: childWorkspaceID)
+        #expect(childHomeStatuses.map(\.sessionID) == ["child"])
+        #expect(childHomeStatuses.first?.parentSessionID == "parent")
+    }
+
+    @Test
+    func workspaceStatusesDoNotSuppressOrNestSessionCycles() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 790)
+
+        registry.startSession(
+            sessionID: "a",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            parentSessionID: "b",
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "a",
+            status: SessionStatus(kind: .ready, summary: "Ready"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.startSession(
+            sessionID: "b",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            parentSessionID: "a",
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+        registry.updateStatus(
+            sessionID: "b",
+            status: SessionStatus(kind: .working, summary: "Working"),
+            at: now.addingTimeInterval(3)
+        )
+
+        let statuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(statuses.map(\.sessionID) == ["a", "b"])
+        #expect(statuses.flatMap(\.children).isEmpty)
     }
 
     @Test

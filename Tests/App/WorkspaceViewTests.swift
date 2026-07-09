@@ -1292,13 +1292,17 @@ final class WorkspaceViewTests: XCTestCase {
         _ agent: AgentKind,
         _ kind: SessionStatusKind,
         panelID: UUID = UUID(),
+        workspaceID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+        children: [SessionChildRow] = [],
         isActive: Bool = true
     ) -> WorkspaceSessionStatus {
         WorkspaceSessionStatus(
             sessionID: UUID().uuidString,
             panelID: panelID,
+            workspaceID: workspaceID,
             agent: agent,
             status: SessionStatus(kind: kind, summary: ""),
+            children: children,
             cwd: nil,
             updatedAt: Date(timeIntervalSince1970: 1),
             isActive: isActive
@@ -1324,6 +1328,45 @@ final class WorkspaceViewTests: XCTestCase {
             makeAgentStatus(.processWatch, .working),
         ])
         XCTAssertEqual(summary.running, 1)
+        XCTAssertEqual(summary.active, 1)
+    }
+
+    func testWorkspaceAgentSummaryCountsSameWorkspaceNestedSessionChildren() {
+        let workspaceID = UUID()
+        let summary = WorkspaceAgentSummary.make(
+            from: [
+                makeAgentStatus(
+                    .claude,
+                    .ready,
+                    workspaceID: workspaceID,
+                    children: [
+                        SessionChildRow(
+                            id: "nested",
+                            source: .session,
+                            displayName: "Codex",
+                            startedAt: Date(timeIntervalSince1970: 2),
+                            statusKind: .working,
+                            panelID: UUID(),
+                            workspaceID: workspaceID,
+                            sessionID: "nested"
+                        ),
+                        SessionChildRow(
+                            id: "mirror",
+                            source: .session,
+                            displayName: "Claude Code",
+                            startedAt: Date(timeIntervalSince1970: 3),
+                            statusKind: .working,
+                            panelID: UUID(),
+                            workspaceID: UUID(),
+                            sessionID: "mirror"
+                        ),
+                    ]
+                ),
+            ],
+            workspaceID: workspaceID
+        )
+
+        XCTAssertEqual(summary.running, 2)
         XCTAssertEqual(summary.active, 1)
     }
 

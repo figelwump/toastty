@@ -45,17 +45,48 @@ enum ClaudeHookEventParser {
                 ),
             ]
 
-        case "PostToolUse", "PostToolUseFailure":
+        case "PostToolUse":
+            return postToolUseCommands(sessionID: sessionID, panelID: panelID, from: object)
+
+        case "PostToolUseFailure":
             return []
 
         case "Stop":
-            return [
+            var commands: [CLICommand] = []
+            if object.keys.contains("background_tasks") {
+                commands.append(
+                    stopBackgroundActivitySyncCommand(
+                        sessionID: sessionID,
+                        panelID: panelID,
+                        from: object
+                    )
+                )
+            }
+            commands.append(
                 .sessionStatus(
                     sessionID: sessionID,
                     panelID: panelID,
                     kind: .ready,
                     summary: "Ready",
                     detail: normalizedSummaryText(object["last_assistant_message"]) ?? "Turn complete"
+                )
+            )
+            return commands
+
+        case "SubagentStop":
+            guard let agentID = normalizedString(object["agent_id"]) else {
+                return []
+            }
+            return [
+                .sessionBackgroundActivity(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    phase: .finish,
+                    activityID: agentID,
+                    kind: .subagent,
+                    displayName: nil,
+                    command: nil,
+                    processID: nil
                 ),
             ]
 
@@ -95,6 +126,70 @@ enum ClaudeHookEventParser {
                 cwd: normalizedPathString(object["cwd"])
             ),
         ]
+    }
+
+    private static func postToolUseCommands(
+        sessionID: String,
+        panelID: UUID?,
+        from object: [String: Any]
+    ) -> [CLICommand] {
+        guard let toolName = normalizedString(object["tool_name"]),
+              ["agent", "task"].contains(toolName.lowercased()),
+              let toolResponse = object["tool_response"] as? [String: Any],
+              normalizedString(toolResponse["status"]) == "async_launched",
+              let agentID = normalizedString(toolResponse["agentId"]) else {
+            return []
+        }
+        let toolInput = object["tool_input"] as? [String: Any] ?? [:]
+        let displayName = normalizedString(toolInput["subagent_type"]) ?? "Sub-agent"
+        let command = normalizedString(toolResponse["description"])
+            ?? normalizedString(toolInput["description"])
+
+        return [
+            .sessionBackgroundActivity(
+                sessionID: sessionID,
+                panelID: panelID,
+                phase: .start,
+                activityID: agentID,
+                kind: .subagent,
+                displayName: displayName,
+                command: command,
+                processID: nil
+            ),
+        ]
+    }
+
+    private static func stopBackgroundActivitySyncCommand(
+        sessionID: String,
+        panelID: UUID?,
+        from object: [String: Any]
+    ) -> CLICommand {
+        let backgroundTasks = object["background_tasks"] as? [[String: Any]] ?? []
+        var entries: [SessionBackgroundActivitySyncEntry] = []
+        var pendingBackgroundTaskCount = 0
+
+        for task in backgroundTasks {
+            if normalizedString(task["type"]) == "subagent" {
+                guard let id = normalizedString(task["id"]) else { continue }
+                entries.append(
+                    SessionBackgroundActivitySyncEntry(
+                        id: id,
+                        displayName: normalizedString(task["agent_type"]) ?? "Sub-agent",
+                        command: normalizedString(task["description"])
+                    )
+                )
+            } else {
+                pendingBackgroundTaskCount += 1
+            }
+        }
+
+        return .sessionBackgroundActivitySync(
+            sessionID: sessionID,
+            panelID: panelID,
+            kind: .subagent,
+            entries: entries,
+            pendingBackgroundTaskCount: pendingBackgroundTaskCount
+        )
     }
 
     private static func notificationCommands(

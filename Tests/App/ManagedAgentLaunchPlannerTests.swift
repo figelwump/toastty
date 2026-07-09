@@ -92,6 +92,259 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testPendingPanelParentClaimAdoptsLiveParentForManagedLaunch() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_010)
+        let fixture = try makePlannerFixture(nowProvider: { now })
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let parentSessionID = "pending-parent-live"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: targetPanelID,
+                at: now
+            )
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID,
+            parentSessionID
+        )
+    }
+
+    func testExpiredPendingPanelParentClaimDoesNotAdoptParent() throws {
+        let recordedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let fixture = try makePlannerFixture(
+            nowProvider: { recordedAt.addingTimeInterval(121) }
+        )
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let parentSessionID = "pending-parent-expired"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: targetPanelID,
+                at: recordedAt
+            )
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID)
+    }
+
+    func testPendingPanelParentClaimWithStoppedParentDoesNotAdoptParent() throws {
+        let recordedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let fixture = try makePlannerFixture(
+            nowProvider: { recordedAt.addingTimeInterval(2) }
+        )
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let parentSessionID = "pending-parent-stopped"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID,
+            at: recordedAt
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: targetPanelID,
+                at: recordedAt
+            )
+        )
+        fixture.sessionRuntimeStore.stopSession(
+            sessionID: parentSessionID,
+            at: recordedAt.addingTimeInterval(1)
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID)
+    }
+
+    func testPendingPanelParentClaimIsNotRecordedForOwnPanel() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_010)
+        let fixture = try makePlannerFixture(nowProvider: { now })
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let parentSessionID = "pending-parent-own-panel"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+
+        XCTAssertFalse(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: fixture.panelID,
+                at: now
+            )
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID)
+    }
+
+    func testExplicitParentSessionIDWinsOverPendingPanelParentClaim() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_010)
+        let fixture = try makePlannerFixture(nowProvider: { now })
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let pendingParentSessionID = "pending-parent-loses"
+        let explicitParentSessionID = "explicit-parent-wins"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: pendingParentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: explicitParentSessionID,
+            panelID: UUID(),
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: pendingParentSessionID,
+                forPanelID: targetPanelID,
+                at: now
+            )
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo",
+                parentSessionID: explicitParentSessionID
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID,
+            explicitParentSessionID
+        )
+    }
+
+    func testPendingPanelParentClaimIsConsumedAfterAdoption() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_010)
+        let fixture = try makePlannerFixture(nowProvider: { now })
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        let targetPanelID = try splitTargetPanel(
+            in: fixture.store,
+            workspaceID: workspaceID,
+            excluding: fixture.panelID
+        )
+        let parentSessionID = "pending-parent-consumed"
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: parentSessionID,
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID
+        )
+        XCTAssertTrue(
+            fixture.sessionRuntimeStore.recordPendingPanelParentSessionID(
+                parentSessionID: parentSessionID,
+                forPanelID: targetPanelID,
+                at: now
+            )
+        )
+
+        let firstPlan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let secondPlan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[firstPlan.sessionID]?.parentSessionID,
+            parentSessionID
+        )
+        XCTAssertNil(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[secondPlan.sessionID]?.parentSessionID)
+    }
+
     func testCodexLaunchPlanUsesHooksForStatusAndRecordsSessionContextWhenHooksAreAvailable() throws {
         let fixture = try makePlannerFixture(
             codexStatusTrackingSourceProvider: { .hooks }
@@ -783,6 +1036,338 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertFalse(observer.cancelledSessionIDs.contains(claimantPlan.sessionID))
     }
 
+    func testCodexRolloutClaimStartsCollabWatcherForActiveSession() throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(sessionFilePath: rolloutURL.path)
+                )
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
+            rolloutURL.path
+        )
+    }
+
+    func testCodexRolloutClaimBeforeLaunchRegistrationStartsCollabWatcher() throws {
+        let launchStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? FileManager.default.removeItem(at: rolloutURL) }
+        let fixture = try makePlannerFixture(
+            terminalState: TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "/tmp/repo",
+                resumeRecord: codexResumeRecord(
+                    sessionFilePath: rolloutURL.path,
+                    capturedAt: launchStart
+                )
+            ),
+            nowProvider: { launchStart }
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertEqual(
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
+            rolloutURL.path
+        )
+    }
+
+    func testCodexRolloutWatcherIgnoresStalePreexistingResumeRecord() throws {
+        let launchStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? FileManager.default.removeItem(at: rolloutURL) }
+        let fixture = try makePlannerFixture(
+            terminalState: TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "/tmp/repo",
+                resumeRecord: codexResumeRecord(
+                    sessionFilePath: rolloutURL.path,
+                    capturedAt: launchStart.addingTimeInterval(-1)
+                )
+            ),
+            nowProvider: { launchStart }
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertNil(fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID])
+    }
+
+    func testCodexRolloutWatcherRestartsOnPathChangeAndStopsWithSession() async throws {
+        let fixture = try makePlannerFixture()
+        let firstRolloutURL = temporaryJSONLURL()
+        let secondRolloutURL = temporaryJSONLURL()
+        defer {
+            try? fixture.fileManager.removeItem(at: firstRolloutURL)
+            try? fixture.fileManager.removeItem(at: secondRolloutURL)
+        }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(
+                        nativeSessionID: "first-\(UUID().uuidString)",
+                        sessionFilePath: firstRolloutURL.path
+                    )
+                )
+            )
+        )
+        XCTAssertEqual(
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
+            firstRolloutURL.path
+        )
+
+        // Subagent rows sourced from the first rollout are stale once the
+        // claim moves to a different file and must not survive the swap.
+        let staleActivityDate = Date()
+        _ = fixture.sessionRuntimeStore.updateBackgroundActivity(
+            sessionID: plan.sessionID,
+            activity: SessionBackgroundActivity(
+                id: "stale-collab-agent",
+                kind: .subagent,
+                displayName: "Stale",
+                startedAt: staleActivityDate,
+                lastUpdatedAt: staleActivityDate
+            ),
+            at: staleActivityDate
+        )
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry
+                .sessionsByID[plan.sessionID]?.backgroundActivitiesByID.count,
+            1
+        )
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(
+                        nativeSessionID: "second-\(UUID().uuidString)",
+                        sessionFilePath: secondRolloutURL.path
+                    )
+                )
+            )
+        )
+        XCTAssertEqual(
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
+            secondRolloutURL.path
+        )
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry
+                .sessionsByID[plan.sessionID]?.backgroundActivitiesByID.isEmpty,
+            true
+        )
+
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        await waitUntil {
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID] == nil
+        }
+
+        XCTAssertNil(fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID])
+    }
+
+    func testCodexRolloutWatcherAttachesWhenCodexInstrumentationFails() async throws {
+        let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? FileManager.default.removeItem(at: rolloutURL) }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        XCTAssertNil(plan.environment["CODEX_TUI_SESSION_LOG_PATH"])
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(sessionFilePath: rolloutURL.path)
+                )
+            )
+        )
+        XCTAssertEqual(
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
+            rolloutURL.path
+        )
+
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        await waitUntil {
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID] == nil
+        }
+        XCTAssertNil(fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID])
+    }
+
+    func testCodexRolloutWatcherDoesNotAttachForNonCodexSession() throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try claudeArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: ManagedAgentResumeRecord(
+                        agent: .claude,
+                        nativeSessionID: UUID().uuidString,
+                        sessionFilePath: rolloutURL.path,
+                        cwd: "/tmp/repo",
+                        capturedAt: Date()
+                    )
+                )
+            )
+        )
+
+        XCTAssertNil(fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID])
+    }
+
+    func testCodexRolloutWatcherOnlyHandlesBackgroundActivityEvents() async throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(sessionFilePath: rolloutURL.path)
+                )
+            )
+        )
+        XCTAssertEqual(
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
+            rolloutURL.path
+        )
+
+        try appendCodexSessionLogLine(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-root","msg":{"type":"task_started"}}}"#,
+            to: rolloutURL
+        )
+        // Entries must postdate the session start or the multi-agent replay
+        // cutoff (correctly) discards them as prior-launch history.
+        let freshEntryTimestamp = Date().addingTimeInterval(60)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call","id":"fc_spawn","name":"spawn_agent","namespace":"multi_agent_v1","arguments":"{\"agent_type\":\"default\",\"message\":\"Run focused checks\"}","call_id":"call_spawn"}}"#,
+            to: rolloutURL
+        )
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\",\"nickname\":\"Focused check\"}"}}"#,
+            to: rolloutURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["agent-1"] != nil
+        }
+
+        let activeSession = try XCTUnwrap(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)
+        )
+        XCTAssertEqual(
+            activeSession.status,
+            SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+        )
+        XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.displayName, "Focused check")
+        XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.command, "Run focused checks")
+    }
+
     func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let plan = try fixture.planner.prepareManagedLaunch(
@@ -842,6 +1427,7 @@ private func makePlannerFixture(
     repositoryRootResolver: @escaping @MainActor (String?) -> RepositoryRootResolution = {
         RepositoryRootLocator.inferRepoRootBestEffort(from: $0)
     },
+    nowProvider: @escaping @Sendable () -> Date = Date.init,
     nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
     codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
     codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
@@ -875,6 +1461,7 @@ private func makePlannerFixture(
         sessionRuntimeStore: sessionRuntimeStore,
         fileManager: fileManager,
         repositoryRootResolver: repositoryRootResolver,
+        nowProvider: nowProvider,
         cliExecutablePathProvider: { "/bin/sh" },
         socketPathProvider: { "/tmp/toastty-tests.sock" },
         codexStatusTrackingSourceProvider: codexStatusTrackingSourceProvider,
@@ -885,6 +1472,43 @@ private func makePlannerFixture(
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
+}
+
+@MainActor
+private func splitTargetPanel(
+    in store: AppStore,
+    workspaceID: UUID,
+    excluding sourcePanelID: UUID
+) throws -> UUID {
+    XCTAssertTrue(store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal)))
+    return try XCTUnwrap(
+        store.state.workspacesByID[workspaceID]?
+            .layoutTree
+            .allSlotInfos
+            .map(\.panelID)
+            .first { $0 != sourcePanelID }
+    )
+}
+
+@MainActor
+private func startManagedSession(
+    in sessionRuntimeStore: SessionRuntimeStore,
+    sessionID: String,
+    panelID: UUID,
+    store: AppStore,
+    workspaceID: UUID,
+    at now: Date = Date(timeIntervalSince1970: 1_700_000_000)
+) throws {
+    sessionRuntimeStore.startSession(
+        sessionID: sessionID,
+        agent: .claude,
+        panelID: panelID,
+        windowID: try XCTUnwrap(store.state.windows.first?.id),
+        workspaceID: workspaceID,
+        cwd: "/tmp/repo",
+        repoRoot: "/tmp/repo",
+        at: now
+    )
 }
 
 private func claudeArtifactsDirectory(from plan: ManagedAgentLaunchPlan) throws -> URL {
@@ -911,6 +1535,26 @@ private func codexArtifactsDirectory(from plan: ManagedAgentLaunchPlan) throws -
 private func codexSessionLogURL(from plan: ManagedAgentLaunchPlan) throws -> URL {
     let path = try XCTUnwrap(plan.environment["CODEX_TUI_SESSION_LOG_PATH"])
     return URL(fileURLWithPath: path)
+}
+
+private func temporaryJSONLURL() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("toastty-codex-rollout-\(UUID().uuidString).jsonl", isDirectory: false)
+}
+
+private func codexResumeRecord(
+    nativeSessionID: String = UUID().uuidString,
+    sessionFilePath: String,
+    cwd: String = "/tmp/repo",
+    capturedAt: Date = Date()
+) -> ManagedAgentResumeRecord {
+    ManagedAgentResumeRecord(
+        agent: .codex,
+        nativeSessionID: nativeSessionID,
+        sessionFilePath: sessionFilePath,
+        cwd: cwd,
+        capturedAt: capturedAt
+    )
 }
 
 private func appendCodexSessionLogLine(_ line: String, to url: URL) throws {

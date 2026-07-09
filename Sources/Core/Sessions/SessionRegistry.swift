@@ -1,6 +1,8 @@
 import Foundation
 
 public struct SessionRegistry: Codable, Equatable, Sendable {
+    public static let resumeProjectionGraceInterval: TimeInterval = 15
+
     public private(set) var sessionsByID: [String: SessionRecord]
     public private(set) var activeSessionIDByPanelID: [UUID: String]
     public private(set) var sessionOrder: [String]
@@ -24,6 +26,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        parentSessionID: String? = nil,
         usesSessionStatusNotifications: Bool = false,
         displayTitleOverride: String? = nil,
         cwd: String?,
@@ -50,6 +53,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            parentSessionID: parentSessionID,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
             displayTitleOverride: displayTitleOverride,
             repoRoot: repoRoot,
@@ -97,8 +101,120 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     ) {
         guard var record = sessionsByID[sessionID], record.isActive else { return }
         record.status = status
+        record.statusUpdatedAt = now
         record.updatedAt = now
         sessionsByID[sessionID] = record
+    }
+
+    @discardableResult
+    public mutating func updateBackgroundActivity(
+        sessionID: String,
+        activity: SessionBackgroundActivity,
+        at now: Date
+    ) -> Bool {
+        guard var record = activeSession(sessionID: sessionID) else { return false }
+        if let existingActivity = record.backgroundActivitiesByID[activity.id] {
+            guard existingActivity.kind == .subagent,
+                  activity.kind == .subagent else {
+                return false
+            }
+            let mergedActivity = Self.mergedBackgroundActivity(
+                existing: existingActivity,
+                incoming: activity
+            )
+            guard mergedActivity != existingActivity else { return false }
+            record.backgroundActivitiesByID[activity.id] = mergedActivity
+        } else {
+            record.backgroundActivitiesByID[activity.id] = activity
+        }
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    @discardableResult
+    public mutating func finishBackgroundActivity(
+        sessionID: String,
+        activityID: String,
+        at now: Date
+    ) -> Bool {
+        guard var record = activeSession(sessionID: sessionID),
+              record.backgroundActivitiesByID.removeValue(forKey: activityID) != nil else {
+            return false
+        }
+        record.lastActivityFinishedAt = now
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    @discardableResult
+    public mutating func syncBackgroundActivities(
+        sessionID: String,
+        kind: SessionBackgroundActivityKind,
+        entries: [SessionBackgroundActivity],
+        pendingBackgroundTaskCount: Int,
+        at now: Date
+    ) -> Bool {
+        guard var record = activeSession(sessionID: sessionID) else { return false }
+        var nextActivities = record.backgroundActivitiesByID.filter { _, activity in
+            activity.kind != kind
+        }
+
+        for entry in entries where entry.kind == kind {
+            // Do not allow a sync for one source kind to displace another
+            // source's row when activity IDs collide.
+            guard nextActivities[entry.id] == nil else { continue }
+            if let existingActivity = record.backgroundActivitiesByID[entry.id],
+               existingActivity.kind == kind {
+                nextActivities[entry.id] = Self.mergedBackgroundActivity(
+                    existing: existingActivity,
+                    incoming: entry
+                )
+            } else {
+                nextActivities[entry.id] = entry
+            }
+        }
+
+        let nextPendingBackgroundTaskCount = max(0, pendingBackgroundTaskCount)
+        let removedActivity = record.backgroundActivitiesByID.contains { id, activity in
+            activity.kind == kind && nextActivities[id] == nil
+        }
+        let clearedPendingBackgroundTasks = record.pendingBackgroundTaskCount > 0 &&
+            nextPendingBackgroundTaskCount == 0
+        guard record.backgroundActivitiesByID != nextActivities ||
+            record.pendingBackgroundTaskCount != nextPendingBackgroundTaskCount else {
+            return false
+        }
+        record.backgroundActivitiesByID = nextActivities
+        record.pendingBackgroundTaskCount = nextPendingBackgroundTaskCount
+        if removedActivity || clearedPendingBackgroundTasks {
+            record.lastActivityFinishedAt = now
+        }
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+        return true
+    }
+
+    @discardableResult
+    public mutating func pruneBackgroundActivities(
+        at now: Date,
+        shouldRemove: (SessionBackgroundActivity) -> Bool
+    ) -> Bool {
+        var didMutate = false
+        for sessionID in Array(sessionsByID.keys) {
+            guard var record = activeSession(sessionID: sessionID) else { continue }
+            let previousCount = record.backgroundActivitiesByID.count
+            record.backgroundActivitiesByID = record.backgroundActivitiesByID.filter { _, activity in
+                shouldRemove(activity) == false
+            }
+            guard record.backgroundActivitiesByID.count != previousCount else { continue }
+            record.lastActivityFinishedAt = now
+            record.updatedAt = now
+            sessionsByID[sessionID] = record
+            didMutate = true
+        }
+        return didMutate
     }
 
     public mutating func setLaterFlag(sessionID: String, isFlagged: Bool) {
@@ -196,6 +312,8 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
 
     public mutating func stopSession(sessionID: String, at now: Date) {
         guard var record = sessionsByID[sessionID] else { return }
+        record.backgroundActivitiesByID.removeAll()
+        record.pendingBackgroundTaskCount = 0
         record.stoppedAt = now
         record.updatedAt = now
         sessionsByID[sessionID] = record
@@ -206,7 +324,9 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     }
 
     public mutating func removeSession(sessionID: String) {
-        guard let record = sessionsByID.removeValue(forKey: sessionID) else { return }
+        guard var record = sessionsByID.removeValue(forKey: sessionID) else { return }
+        record.backgroundActivitiesByID.removeAll()
+        record.pendingBackgroundTaskCount = 0
         if activeSessionIDByPanelID[record.panelID] == sessionID {
             activeSessionIDByPanelID.removeValue(forKey: record.panelID)
         }
@@ -237,9 +357,14 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return record
     }
 
-    public func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {
+    public func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
+        let activeRecordsByID = activeRecordsByID()
         if let activeRecord = activeSession(for: panelID) {
-            return Self.workspaceSessionStatus(from: activeRecord)
+            return workspaceSessionStatus(
+                from: activeRecord,
+                activeRecordsByID: activeRecordsByID,
+                at: now
+            )
         }
 
         return sessionsByID.values
@@ -247,11 +372,18 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                 record.panelID == panelID && Self.shouldPresentStoppedPanelStatus(for: record)
             }
             .sorted(by: stoppedWorkspaceStatusSort)
-            .compactMap(Self.workspaceSessionStatus(from:))
+            .compactMap { record in
+                workspaceSessionStatus(
+                    from: record,
+                    activeRecordsByID: activeRecordsByID,
+                    at: now
+                )
+            }
             .first
     }
 
-    public func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
+    public func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
+        let activeRecordsByID = activeRecordsByID()
         let orderBySessionID = Dictionary(
             uniqueKeysWithValues: sessionOrder.enumerated().map { offset, sessionID in
                 (sessionID, offset)
@@ -260,8 +392,12 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return sessionsByID.values
             .filter { record in
                 record.workspaceID == workspaceID &&
-                record.status != nil &&
-                record.isActive
+                Self.projectedStatus(from: record, at: now) != nil &&
+                record.isActive &&
+                shouldSuppressTopLevelStatus(
+                    for: record,
+                    activeRecordsByID: activeRecordsByID
+                ) == false
             }
             // Keep sidebar session rows stable as tabs switch or session
             // statuses change. New sessions append by creation time.
@@ -272,7 +408,13 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
                     orderBySessionID: orderBySessionID
                 )
             }
-            .compactMap(Self.workspaceSessionStatus(from:))
+            .compactMap { record in
+                workspaceSessionStatus(
+                    from: record,
+                    activeRecordsByID: activeRecordsByID,
+                    at: now
+                )
+            }
     }
 
     public mutating func pruneStoppedSessions(olderThan cutoff: Date) {
@@ -289,13 +431,23 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         }
     }
 
-    private static func workspaceSessionStatus(from record: SessionRecord) -> WorkspaceSessionStatus? {
-        guard let status = record.status else { return nil }
+    private func workspaceSessionStatus(
+        from record: SessionRecord,
+        activeRecordsByID: [String: SessionRecord],
+        at now: Date
+    ) -> WorkspaceSessionStatus? {
+        guard let projected = Self.projectedStatus(from: record, at: now) else { return nil }
         return WorkspaceSessionStatus(
             sessionID: record.sessionID,
             panelID: record.panelID,
+            workspaceID: record.workspaceID,
+            parentSessionID: record.parentSessionID,
             agent: record.agent,
-            status: status,
+            status: projected.status,
+            projection: projected.projection,
+            children: record.isActive
+                ? childRows(for: record, activeRecordsByID: activeRecordsByID, at: now)
+                : [],
             displayTitleOverride: record.displayTitleOverride,
             cwd: record.cwd,
             updatedAt: record.updatedAt,
@@ -303,6 +455,77 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             scopedWorkspaceIDs: record.scopedWorkspaceIDs,
             effectiveScopedWorkspaceIDs: record.scopedWorkspaceIDs.map { $0.union([record.workspaceID]) }
         )
+    }
+
+    private func childRows(
+        for record: SessionRecord,
+        activeRecordsByID: [String: SessionRecord],
+        at now: Date
+    ) -> [SessionChildRow] {
+        let ancestorIDs = Self.ancestorSessionIDs(
+            of: record.sessionID,
+            activeRecordsByID: activeRecordsByID
+        )
+        let activityRows = record.backgroundActivitiesByID.values.map { activity in
+            SessionChildRow(
+                id: activity.id,
+                source: .activity,
+                displayName: activity.displayName ?? Self.defaultActivityDisplayName(for: activity.kind),
+                context: activity.command,
+                startedAt: activity.startedAt
+            )
+        }
+
+        let sessionRows = activeRecordsByID.values.compactMap { candidate -> SessionChildRow? in
+            guard candidate.parentSessionID == record.sessionID,
+                  candidate.sessionID != record.sessionID,
+                  ancestorIDs.contains(candidate.sessionID) == false else {
+                return nil
+            }
+            return SessionChildRow(
+                id: candidate.sessionID,
+                source: .session,
+                displayName: candidate.displayTitleOverride ?? candidate.agent.displayName,
+                context: candidate.status?.detail,
+                startedAt: candidate.startedAt,
+                statusKind: Self.projectedStatus(from: candidate, at: now)?.status.kind,
+                panelID: candidate.panelID,
+                workspaceID: candidate.workspaceID,
+                sessionID: candidate.sessionID
+            )
+        }
+
+        return (activityRows + sessionRows).sorted { lhs, rhs in
+            if lhs.startedAt != rhs.startedAt {
+                return lhs.startedAt < rhs.startedAt
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private func shouldSuppressTopLevelStatus(
+        for record: SessionRecord,
+        activeRecordsByID: [String: SessionRecord]
+    ) -> Bool {
+        guard let parentSessionID = record.parentSessionID,
+              let parent = activeRecordsByID[parentSessionID],
+              parent.workspaceID == record.workspaceID,
+              Self.parentChainHasCycle(
+                  startingAt: record.sessionID,
+                  activeRecordsByID: activeRecordsByID
+              ) == false else {
+            return false
+        }
+        return true
+    }
+
+    private func activeRecordsByID() -> [String: SessionRecord] {
+        Dictionary(uniqueKeysWithValues: sessionsByID.compactMap { element -> (String, SessionRecord)? in
+            let (sessionID, record) = element
+            return record.isActive && activeSessionIDByPanelID[record.panelID] == sessionID
+                ? (sessionID, record)
+                : nil
+        })
     }
 
     private static func stableWorkspaceStatusSort(
@@ -337,6 +560,67 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         // the panel header after the active sidebar entry disappears.
         return status.kind != .idle && status.kind != .working
     }
+
+    private static func projectedStatus(
+        from record: SessionRecord,
+        at now: Date
+    ) -> (status: SessionStatus, projection: SessionStatusProjection)? {
+        guard record.isActive else {
+            return record.status.map { ($0, .none) }
+        }
+
+        let outstandingCount = record.backgroundActivitiesByID.count
+        let pendingBackgroundTaskCount = record.pendingBackgroundTaskCount
+
+        switch record.status?.kind {
+        case .needsApproval, .error, .working:
+            return record.status.map { ($0, .none) }
+        case .idle, .ready, nil:
+            if outstandingCount > 0 || pendingBackgroundTaskCount > 0 {
+                return (
+                    SessionStatus(
+                        kind: .working,
+                        summary: "Working",
+                        detail: record.status?.detail
+                    ),
+                    .waitingOnChildren(
+                        childCount: outstandingCount,
+                        pendingBackgroundTaskCount: pendingBackgroundTaskCount
+                    )
+                )
+            }
+
+            guard let rawStatus = record.status else {
+                return nil
+            }
+            if shouldProjectResuming(record: record, now: now) {
+                return (
+                    SessionStatus(
+                        kind: .working,
+                        summary: "Working",
+                        detail: "Resuming…"
+                    ),
+                    .resuming
+                )
+            }
+            return (rawStatus, .none)
+        }
+    }
+
+    private static func shouldProjectResuming(
+        record: SessionRecord,
+        now: Date
+    ) -> Bool {
+        guard record.backgroundActivitiesByID.isEmpty,
+              record.pendingBackgroundTaskCount == 0,
+              let rawStatusKind = record.status?.kind,
+              rawStatusKind == .idle || rawStatusKind == .ready,
+              let lastActivityFinishedAt = record.lastActivityFinishedAt,
+              record.statusUpdatedAt.map({ $0 < lastActivityFinishedAt }) ?? true else {
+            return false
+        }
+        return now < lastActivityFinishedAt.addingTimeInterval(Self.resumeProjectionGraceInterval)
+    }
 }
 
 private extension SessionRegistry {
@@ -370,6 +654,66 @@ private extension SessionRegistry {
             .filter { seenSessionIDs.contains($0) == false }
         normalizedOrder.append(contentsOf: missingSessionIDs)
         return normalizedOrder
+    }
+
+    static func mergedBackgroundActivity(
+        existing: SessionBackgroundActivity,
+        incoming: SessionBackgroundActivity
+    ) -> SessionBackgroundActivity {
+        SessionBackgroundActivity(
+            id: existing.id,
+            kind: existing.kind,
+            displayName: incoming.displayName ?? existing.displayName,
+            command: incoming.command ?? existing.command,
+            processID: incoming.processID ?? existing.processID,
+            startedAt: existing.startedAt,
+            lastUpdatedAt: incoming.lastUpdatedAt
+        )
+    }
+
+    static func defaultActivityDisplayName(for kind: SessionBackgroundActivityKind) -> String {
+        switch kind {
+        case .childAgent:
+            return "Child agent"
+        case .subagent:
+            return "Sub-agent"
+        }
+    }
+
+    static func ancestorSessionIDs(
+        of sessionID: String,
+        activeRecordsByID: [String: SessionRecord]
+    ) -> Set<String> {
+        var ancestors = Set<String>()
+        var visited = Set<String>([sessionID])
+        var nextParentID = activeRecordsByID[sessionID]?.parentSessionID
+
+        while let parentID = nextParentID {
+            ancestors.insert(parentID)
+            guard visited.insert(parentID).inserted else {
+                break
+            }
+            nextParentID = activeRecordsByID[parentID]?.parentSessionID
+        }
+
+        return ancestors
+    }
+
+    static func parentChainHasCycle(
+        startingAt sessionID: String,
+        activeRecordsByID: [String: SessionRecord]
+    ) -> Bool {
+        var visited = Set<String>([sessionID])
+        var nextParentID = activeRecordsByID[sessionID]?.parentSessionID
+
+        while let parentID = nextParentID {
+            guard visited.insert(parentID).inserted else {
+                return true
+            }
+            nextParentID = activeRecordsByID[parentID]?.parentSessionID
+        }
+
+        return false
     }
 }
 

@@ -968,6 +968,183 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherIgnoresMultiAgentEntriesBeforeCutoff() async throws {
+        // Entries at 05:41 predate the cutoff; the spawn at 06:10 does not.
+        let cutoff = ISO8601DateFormatter().date(from: "2026-07-09T06:00:00Z")!
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp": "2026-07-09T05:41:47.374Z", "type": "response_item", "payload": {"type": "function_call", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"stale spawn\"}", "call_id": "call_stale"}}
+                {"timestamp": "2026-07-09T05:41:47.881Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_stale", "output": "{\"agent_id\":\"stale-agent-id\",\"nickname\":\"Stale\"}"}}
+                {"timestamp": "2026-07-09T06:10:01.000Z", "type": "response_item", "payload": {"type": "function_call", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"fresh spawn\"}", "call_id": "call_fresh"}}
+                {"timestamp": "2026-07-09T06:10:02.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_fresh", "output": "{\"agent_id\":\"fresh-agent-id\",\"nickname\":\"Fresh\"}"}}
+                """#,
+            expectedCount: 1,
+            multiAgentEventCutoff: cutoff
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started Fresh",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "fresh-agent-id",
+                    kind: .subagent,
+                    displayName: "Fresh",
+                    command: "fresh spawn"
+                )
+            ),
+        ])
+    }
+
+    func testWatcherParsesMultiAgentFixtureAsSubagentActivities() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp": "2026-07-09T05:41:47.374Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_01adacd050d2bed9016a4f349b59c88195b2dc9e9fb19e352d", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"Reply with exactly the single word: done\"}", "call_id": "call_xKGDxu7LPYxEiAiAWXwGYJVl", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:47.397Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_01adacd050d2bed9016a4f349b59e0819584d369de5229f896", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"Reply with exactly the single word: done\"}", "call_id": "call_JkGuvNP9Ih7rl4tZEqtd1yxu", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:47.881Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_xKGDxu7LPYxEiAiAWXwGYJVl", "output": "{\"agent_id\":\"019f4565-7efd-7393-aefc-a600f5e0724e\",\"nickname\":\"Herschel\"}", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:48.340Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_JkGuvNP9Ih7rl4tZEqtd1yxu", "output": "{\"agent_id\":\"019f4565-80fa-7c03-915a-9e48e5b869a9\",\"nickname\":\"Halley\"}", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:50.780Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_01adacd050d2bed9016a4f349df3f88195afce3bb18c7ad3c0", "name": "wait_agent", "namespace": "multi_agent_v1", "arguments": "{\"targets\":[\"019f4565-7efd-7393-aefc-a600f5e0724e\",\"019f4565-80fa-7c03-915a-9e48e5b869a9\"],\"timeout_ms\":60000}", "call_id": "call_d9kje1jqhIHq9DsE4zg6Dy3d", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:51.209Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_d9kje1jqhIHq9DsE4zg6Dy3d", "output": "{\"status\":{\"019f4565-7efd-7393-aefc-a600f5e0724e\":{\"completed\":\"done\"}},\"timed_out\":false}", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:53.216Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_01adacd050d2bed9016a4f34a0ca7c819589f4994647c114cc", "name": "wait_agent", "namespace": "multi_agent_v1", "arguments": "{\"targets\":[\"019f4565-80fa-7c03-915a-9e48e5b869a9\"],\"timeout_ms\":60000}", "call_id": "call_8crieQN3luM8YuC2fp6sqAo4", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:53.230Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_8crieQN3luM8YuC2fp6sqAo4", "output": "{\"status\":{\"019f4565-80fa-7c03-915a-9e48e5b869a9\":{\"completed\":\"done\"}},\"timed_out\":false}", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                """#,
+            expectedCount: 4
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started Herschel",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "019f4565-7efd-7393-aefc-a600f5e0724e",
+                    kind: .subagent,
+                    displayName: "Herschel",
+                    command: "Reply with exactly the single word: done"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started Halley",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "019f4565-80fa-7c03-915a-9e48e5b869a9",
+                    kind: .subagent,
+                    displayName: "Halley",
+                    command: "Reply with exactly the single word: done"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "019f4565-7efd-7393-aefc-a600f5e0724e",
+                    kind: .subagent
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "019f4565-80fa-7c03-915a-9e48e5b869a9",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
+    func testWatcherIgnoresUnknownMultiAgentOutputCallID() async throws {
+        let events = try await recordEvents(
+            from: #"""
+                {"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_missing","output":"{\"agent_id\":\"agent-1\",\"nickname\":\"Herschel\"}"}}
+                """#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherDoesNotFinishTimedOutMultiAgentWaitWithoutTerminalStatus() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:50.780Z","type":"response_item","payload":{"type":"function_call","name":"wait_agent","namespace":"multi_agent_v1","arguments":"{\"targets\":[\"agent-1\"],\"timeout_ms\":1}","call_id":"call_wait"}}
+                {"timestamp":"2026-07-09T05:41:51.209Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_wait","output":"{\"status\":{\"agent-1\":{\"pending\":\"still running\"}},\"timed_out\":true}"}}
+                """#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherParsesMultiAgentNamePrefixWhenNamespaceIsAbsent() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:47.374Z","type":"response_item","payload":{"type":"function_call","name":"multi_agent_v1.spawn_agent","arguments":"{\"agent_type\":\"reviewer\",\"message\":\"Inspect the diff\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\"}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started reviewer",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "agent-1",
+                    kind: .subagent,
+                    displayName: "reviewer",
+                    command: "Inspect the diff"
+                )
+            ),
+        ])
+    }
+
+    func testWatcherTreatsCloseAgentOutputAsFinish() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:53.216Z","type":"response_item","payload":{"type":"function_call","name":"close_agent","namespace":"multi_agent_v1","arguments":"{\"agent_id\":\"agent-1\"}","call_id":"call_close"}}
+                {"timestamp":"2026-07-09T05:41:53.230Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_close","output":"{\"agent_id\":\"agent-1\"}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "agent-1",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
+    func testWatcherFallsBackToCloseAgentArgumentsWhenOutputHasNoAgentID() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:53.216Z","type":"response_item","payload":{"type":"function_call","name":"close_agent","namespace":"multi_agent_v1","arguments":"{\"agent_id\":\"agent-1\"}","call_id":"call_close"}}
+                {"timestamp":"2026-07-09T05:41:53.230Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_close","output":"{\"ok\":true}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "agent-1",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
     private func makeLogURL() throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-codex-watcher-tests-\(UUID().uuidString)", isDirectory: true)
@@ -995,7 +1172,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
     private func recordEvents(
         from contents: String,
         expectedCount: Int,
-        pollIntervalNanoseconds: UInt64 = 10_000_000
+        pollIntervalNanoseconds: UInt64 = 10_000_000,
+        multiAgentEventCutoff: Date? = nil
     ) async throws -> [CodexSessionLogEvent] {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
@@ -1005,7 +1183,11 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         eventsExpectation?.expectedFulfillmentCount = expectedCount
         eventsExpectation?.assertForOverFulfill = true
 
-        let watcher = CodexSessionLogWatcher(logURL: logURL, pollIntervalNanoseconds: pollIntervalNanoseconds) { event in
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: pollIntervalNanoseconds,
+            multiAgentEventCutoff: multiAgentEventCutoff
+        ) { event in
             await recorder.append(event)
             eventsExpectation?.fulfill()
         }

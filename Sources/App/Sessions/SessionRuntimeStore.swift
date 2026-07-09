@@ -1,5 +1,6 @@
 import AppKit
 import CoreState
+import Darwin
 import Foundation
 
 @MainActor
@@ -22,16 +23,32 @@ final class SessionRuntimeStore: ObservableObject {
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
     private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
     private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
+    private var pendingPanelParentSessionIDs: [UUID: PendingPanelParentSessionID] = [:]
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
     private let codexHookApprovalDeferralNanoseconds: UInt64
+    private let backgroundActivityReapIntervalNanoseconds: UInt64
+    private let maximumBackgroundActivityAge: TimeInterval
+    private var backgroundActivityReaperTask: Task<Void, Never>?
+    private var resumeGraceRepublishTask: Task<Void, Never>?
+    private var resumeGraceRepublishExpiry: Date?
+    private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
     private static let maximumAutoReviewedCodexPermissionTurnIDs = 16
+    private static let backgroundActivityFinishTombstoneTTL: TimeInterval = 120
+    private static let pendingPanelParentSessionIDTTL: TimeInterval = 120
+    private static let maximumPidlessSubagentBackgroundActivityAge: TimeInterval = 30 * 60
+
+    private struct PendingPanelParentSessionID: Equatable {
+        let sessionID: String
+        let recordedAt: Date
+    }
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
         let sessionID: String
         let panelID: UUID
         let agent: AgentKind
         let statusKind: SessionStatusKind
+        let projection: SessionStatusProjection
         let isActive: Bool
         let isWorkspaceScoped: Bool
 
@@ -41,20 +58,36 @@ final class SessionRuntimeStore: ObservableObject {
                 sessionID,
                 agent.rawValue,
                 statusKind.rawValue,
+                Self.projectionSummary(projection),
                 isActive ? "active" : "stopped",
                 isWorkspaceScoped ? "scoped" : "unscoped",
             ].joined(separator: ":")
+        }
+
+        private static func projectionSummary(_ projection: SessionStatusProjection) -> String {
+            switch projection {
+            case .none:
+                return "projection_none"
+            case .waitingOnChildren(let childCount, let pendingBackgroundTaskCount):
+                return "projection_waiting_children_\(childCount)_pending_\(pendingBackgroundTaskCount)"
+            case .resuming:
+                return "projection_resuming"
+            }
         }
     }
 
     init(
         sendSessionStatusNotification: @escaping SessionStatusNotificationHandler = SessionRuntimeStore.defaultSendSessionStatusNotification,
         isApplicationActive: @escaping ApplicationActiveHandler = SessionRuntimeStore.defaultIsApplicationActive,
-        codexHookApprovalDeferralNanoseconds: UInt64 = 1_000_000_000
+        codexHookApprovalDeferralNanoseconds: UInt64 = 1_000_000_000,
+        backgroundActivityReapIntervalNanoseconds: UInt64 = 10_000_000_000,
+        maximumBackgroundActivityAge: TimeInterval = 8 * 60 * 60
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
         self.isApplicationActive = isApplicationActive
         self.codexHookApprovalDeferralNanoseconds = codexHookApprovalDeferralNanoseconds
+        self.backgroundActivityReapIntervalNanoseconds = backgroundActivityReapIntervalNanoseconds
+        self.maximumBackgroundActivityAge = maximumBackgroundActivityAge
     }
 
     func bind(store: AppStore) {
@@ -72,12 +105,31 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
+    func unbind() {
+        if let storeActionObserverToken,
+           let store {
+            store.removeActionAppliedObserver(storeActionObserverToken)
+        }
+        storeActionObserverToken = nil
+        store = nil
+        resumeGraceRepublishTask?.cancel()
+        resumeGraceRepublishTask = nil
+        resumeGraceRepublishExpiry = nil
+    }
+
     func reset() {
         sessionRegistry = SessionRegistry()
         suppressedCodexVisibleErrorDetailBySessionID = [:]
         codexNotifyStateBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
+        backgroundActivityFinishTombstonesBySessionID = [:]
+        pendingPanelParentSessionIDs = [:]
         removeAllPendingCodexHookApprovals()
+        backgroundActivityReaperTask?.cancel()
+        backgroundActivityReaperTask = nil
+        resumeGraceRepublishTask?.cancel()
+        resumeGraceRepublishTask = nil
+        resumeGraceRepublishExpiry = nil
     }
 
     func startSession(
@@ -86,6 +138,7 @@ final class SessionRuntimeStore: ObservableObject {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        parentSessionID: String? = nil,
         usesSessionStatusNotifications: Bool = false,
         codexStatusTrackingSource: CodexStatusTrackingSource? = nil,
         displayTitleOverride: String? = nil,
@@ -96,6 +149,7 @@ final class SessionRuntimeStore: ObservableObject {
     ) {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
         if agent == .codex, let codexStatusTrackingSource {
             codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
@@ -109,6 +163,7 @@ final class SessionRuntimeStore: ObservableObject {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            parentSessionID: parentSessionID,
             usesSessionStatusNotifications: usesSessionStatusNotifications,
             displayTitleOverride: displayTitleOverride,
             cwd: cwd,
@@ -125,12 +180,13 @@ final class SessionRuntimeStore: ObservableObject {
                 panelID: panelID,
                 windowID: windowID,
                 workspaceID: workspaceID,
+                parentSessionID: parentSessionID,
                 usesSessionStatusNotifications: usesSessionStatusNotifications,
                 displayTitleOverride: displayTitleOverride,
                 scopedWorkspaceIDs: scopedWorkspaceIDs
             )
         )
-        publish(nextRegistry, reason: "start_session")
+        publish(nextRegistry, reason: "start_session", at: now)
         synchronizePersistedResumeRecordScope(sessionID: sessionID, in: nextRegistry)
     }
 
@@ -179,7 +235,7 @@ final class SessionRuntimeStore: ObservableObject {
             repoRoot: repoRoot,
             at: now
         )
-        publish(nextRegistry, reason: "update_files")
+        publish(nextRegistry, reason: "update_files", at: now)
     }
 
     func updateStatus(
@@ -188,6 +244,9 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) {
         let previousRecord = sessionRegistry.sessionsByID[sessionID]
+        let previousProjectedStatus = previousRecord.flatMap { record in
+            sessionRegistry.panelStatus(for: record.panelID, at: now)?.status
+        }
         let storedStatus = normalizedStatusForStorage(
             requestedStatus: status,
             previousRecord: previousRecord,
@@ -218,17 +277,164 @@ final class SessionRuntimeStore: ObservableObject {
                 )
             )
         }
-        publish(nextRegistry, reason: "update_status")
-        clearUnreadForManagedSessionIfNeeded(
-            previousRecord: previousRecord,
+        publish(nextRegistry, reason: "update_status", at: now)
+        if shouldSuppressProjectedWaitingSideEffects(
             sessionID: sessionID,
-            status: storedStatus
-        )
-        handleActionableStatusTransitionIfNeeded(
-            previousRecord: previousRecord,
+            status: storedStatus,
+            registry: nextRegistry
+        ) {
+            logProjectedWaitingSuppression(
+                previousRecord: previousRecord,
+                sessionID: sessionID,
+                status: storedStatus,
+                now: now
+            )
+        } else {
+            clearUnreadForManagedSessionIfNeeded(
+                previousRecord: previousRecord,
+                sessionID: sessionID,
+                status: storedStatus
+            )
+            handleActionableStatusTransitionIfNeeded(
+                previousRecord: previousRecord,
+                previousProjectedStatus: previousProjectedStatus,
+                sessionID: sessionID,
+                status: storedStatus
+            )
+        }
+    }
+
+    @discardableResult
+    func updateBackgroundActivity(
+        sessionID: String,
+        activity: SessionBackgroundActivity,
+        at now: Date
+    ) -> Bool {
+        pruneBackgroundActivityFinishTombstones(at: now)
+        guard isBackgroundActivityFinishTombstoned(
             sessionID: sessionID,
-            status: storedStatus
+            activityID: activity.id,
+            at: now
+        ) == false else {
+            return false
+        }
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.updateBackgroundActivity(sessionID: sessionID, activity: activity, at: now) else {
+            return false
+        }
+        ToasttyLog.debug(
+            "Updated managed session background activity",
+            category: .terminal,
+            metadata: backgroundActivityMetadata(
+                sessionID: sessionID,
+                activity: activity,
+                phase: .start
+            )
         )
+        publish(nextRegistry, reason: "update_background_activity", at: now)
+        return true
+    }
+
+    @discardableResult
+    func syncBackgroundActivities(
+        sessionID: String,
+        kind: SessionBackgroundActivityKind,
+        entries: [SessionBackgroundActivity],
+        pendingBackgroundTaskCount: Int,
+        at now: Date
+    ) -> Bool {
+        pruneBackgroundActivityFinishTombstones(at: now)
+        let filteredEntries = entries.filter { entry in
+            isBackgroundActivityFinishTombstoned(
+                sessionID: sessionID,
+                activityID: entry.id,
+                at: now
+            ) == false
+        }
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.syncBackgroundActivities(
+            sessionID: sessionID,
+            kind: kind,
+            entries: filteredEntries,
+            pendingBackgroundTaskCount: pendingBackgroundTaskCount,
+            at: now
+        ) else {
+            return false
+        }
+        ToasttyLog.debug(
+            "Synced managed session background activities",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "activity_kind": kind.rawValue,
+                "entry_count": String(filteredEntries.count),
+                "skipped_tombstoned_entry_count": String(entries.count - filteredEntries.count),
+                "pending_background_task_count": String(max(0, pendingBackgroundTaskCount)),
+            ]
+        )
+        publish(nextRegistry, reason: "sync_background_activities", at: now)
+        return true
+    }
+
+    @discardableResult
+    func finishBackgroundActivity(
+        sessionID: String,
+        activityID: String,
+        at now: Date
+    ) -> Bool {
+        recordBackgroundActivityFinishTombstone(
+            sessionID: sessionID,
+            activityID: activityID,
+            at: now
+        )
+        let activity = sessionRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID[activityID]
+        var nextRegistry = sessionRegistry
+        guard nextRegistry.finishBackgroundActivity(sessionID: sessionID, activityID: activityID, at: now) else {
+            return false
+        }
+        ToasttyLog.debug(
+            "Finished managed session background activity",
+            category: .terminal,
+            metadata: backgroundActivityMetadata(
+                sessionID: sessionID,
+                activityID: activityID,
+                activity: activity,
+                phase: .finish
+            )
+        )
+        publish(nextRegistry, reason: "finish_background_activity", at: now)
+        return true
+    }
+
+    @discardableResult
+    func pruneStaleBackgroundActivities(at now: Date = Date()) -> Bool {
+        var nextRegistry = sessionRegistry
+        let didMutate = nextRegistry.pruneBackgroundActivities(at: now) { activity in
+            shouldPruneBackgroundActivity(activity, at: now)
+        }
+        guard didMutate else {
+            updateBackgroundActivityReaperState()
+            return false
+        }
+
+        for (sessionID, record) in sessionRegistry.sessionsByID {
+            let nextActivities = nextRegistry.sessionsByID[sessionID]?.backgroundActivitiesByID ?? [:]
+            for (activityID, activity) in record.backgroundActivitiesByID
+                where nextActivities[activityID] == nil {
+                ToasttyLog.info(
+                    "Pruned stale managed session background activity",
+                    category: .terminal,
+                    metadata: backgroundActivityMetadata(
+                        sessionID: sessionID,
+                        activityID: activityID,
+                        activity: activity,
+                        phase: .finish
+                    )
+                )
+            }
+        }
+        publish(nextRegistry, reason: "prune_background_activity", at: now)
+        return true
     }
 
     func recordCodexRootTurnInput(
@@ -1043,14 +1249,16 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+        backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
+        removePendingPanelParentSessionIDs(parentSessionID: sessionID)
         var nextRegistry = sessionRegistry
         if sessionRegistry.sessionsByID[sessionID]?.agent == .processWatch {
             nextRegistry.removeSession(sessionID: sessionID)
         } else {
             nextRegistry.stopSession(sessionID: sessionID, at: now)
         }
-        publish(nextRegistry, reason: "stop_session")
+        publish(nextRegistry, reason: "stop_session", at: now)
         if let activeRecord {
             clearPersistedResumeRecord(panelID: activeRecord.panelID)
         }
@@ -1067,7 +1275,9 @@ final class SessionRuntimeStore: ObservableObject {
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
             codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
             codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
+            backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
             removePendingCodexHookApproval(sessionID: record.sessionID)
+            removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
         }
         var nextRegistry = sessionRegistry
         if let record = sessionRegistry.activeSession(for: panelID),
@@ -1076,18 +1286,18 @@ final class SessionRuntimeStore: ObservableObject {
         } else {
             nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
         }
-        publish(nextRegistry, reason: "stop_session_for_panel")
+        publish(nextRegistry, reason: "stop_session_for_panel", at: now)
         if activeRecord != nil {
             clearPersistedResumeRecord(panelID: panelID)
         }
     }
 
-    func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
-        sessionRegistry.workspaceStatuses(for: workspaceID)
+    func workspaceStatuses(for workspaceID: UUID, at now: Date = Date()) -> [WorkspaceSessionStatus] {
+        sessionRegistry.workspaceStatuses(for: workspaceID, at: now)
     }
 
-    func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {
-        sessionRegistry.panelStatus(for: panelID)
+    func panelStatus(for panelID: UUID, at now: Date = Date()) -> WorkspaceSessionStatus? {
+        sessionRegistry.panelStatus(for: panelID, at: now)
     }
 
     func isLaterFlagged(sessionID: String) -> Bool {
@@ -1108,6 +1318,47 @@ final class SessionRuntimeStore: ObservableObject {
 
     func allowsWorkspaceAutomation(callerSessionID: String?, of workspaceID: UUID) -> Bool {
         sessionRegistry.allowsWorkspaceAutomation(callerSessionID: callerSessionID, of: workspaceID)
+    }
+
+    @discardableResult
+    func recordPendingPanelParentSessionID(
+        parentSessionID: String,
+        forPanelID panelID: UUID,
+        at now: Date = Date()
+    ) -> Bool {
+        prunePendingPanelParentSessionIDs(at: now)
+        guard let parent = sessionRegistry.activeSession(sessionID: parentSessionID),
+              parent.agent != .processWatch,
+              parent.panelID != panelID else {
+            return false
+        }
+        pendingPanelParentSessionIDs[panelID] = PendingPanelParentSessionID(
+            sessionID: parent.sessionID,
+            recordedAt: now
+        )
+        return true
+    }
+
+    func consumePendingPanelParentSessionID(
+        forPanelID panelID: UUID,
+        at now: Date = Date()
+    ) -> String? {
+        prunePendingPanelParentSessionIDs(at: now)
+        guard let claim = pendingPanelParentSessionIDs[panelID] else {
+            return nil
+        }
+        guard let parent = sessionRegistry.activeSession(sessionID: claim.sessionID),
+              parent.agent != .processWatch,
+              parent.panelID != panelID else {
+            pendingPanelParentSessionIDs.removeValue(forKey: panelID)
+            return nil
+        }
+        pendingPanelParentSessionIDs.removeValue(forKey: panelID)
+        return parent.sessionID
+    }
+
+    func discardPendingPanelParentSessionID(forPanelID panelID: UUID) {
+        pendingPanelParentSessionIDs.removeValue(forKey: panelID)
     }
 
     @discardableResult
@@ -1157,7 +1408,7 @@ final class SessionRuntimeStore: ObservableObject {
             sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
                 guard let record = sessionRegistry.sessionsByID[sessionID],
                       record.isActive,
-                      let status = record.status,
+                      let status = sessionRegistry.panelStatus(for: panelID)?.status,
                       kinds.contains(status.kind) else {
                     return nil
                 }
@@ -1208,6 +1459,7 @@ final class SessionRuntimeStore: ObservableObject {
                 suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
                 codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
                 codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
+                backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
                 removePendingCodexHookApproval(sessionID: record.sessionID)
                 if record.agent == .processWatch {
                     nextRegistry.removeSession(sessionID: record.sessionID)
@@ -1226,23 +1478,236 @@ final class SessionRuntimeStore: ObservableObject {
             }
         }
 
-        publish(nextRegistry, reason: "synchronize_app_state")
+        publish(nextRegistry, reason: "synchronize_app_state", at: now)
     }
 
-    private func publish(_ nextRegistry: SessionRegistry, reason: String) {
-        guard nextRegistry != sessionRegistry else { return }
+    private func publish(
+        _ nextRegistry: SessionRegistry,
+        reason: String,
+        at now: Date = Date(),
+        force: Bool = false
+    ) {
+        guard force || nextRegistry != sessionRegistry else { return }
         logWorkspaceStatusSnapshotChanges(
             previousRegistry: sessionRegistry,
             nextRegistry: nextRegistry,
-            reason: reason
+            reason: reason,
+            at: now
         )
         sessionRegistry = nextRegistry
+        updateBackgroundActivityReaperState()
+        updateResumeGraceRepublishState(at: now)
+    }
+
+    private func shouldSuppressProjectedWaitingSideEffects(
+        sessionID: String,
+        status: SessionStatus,
+        registry: SessionRegistry
+    ) -> Bool {
+        guard status.kind == .ready || status.kind == .idle,
+              let currentRecord = registry.sessionsByID[sessionID],
+              currentRecord.isActive else {
+            return false
+        }
+        return currentRecord.backgroundActivitiesByID.isEmpty == false ||
+            currentRecord.pendingBackgroundTaskCount > 0
+    }
+
+    private func logProjectedWaitingSuppression(
+        previousRecord: SessionRecord?,
+        sessionID: String,
+        status: SessionStatus,
+        now: Date
+    ) {
+        guard let currentRecord = sessionRegistry.sessionsByID[sessionID] else { return }
+        var metadata = sessionStatusTransitionMetadata(
+            previousRecord: previousRecord,
+            currentRecord: currentRecord,
+            status: status,
+            now: now
+        )
+        metadata["reason"] = "projected_waiting_suppression"
+        metadata["background_activity_count"] = String(currentRecord.backgroundActivitiesByID.count)
+        metadata["pending_background_task_count"] = String(currentRecord.pendingBackgroundTaskCount)
+        ToasttyLog.debug(
+            "Suppressed managed session actionable status transition",
+            category: .terminal,
+            metadata: metadata
+        )
+    }
+
+    private func recordBackgroundActivityFinishTombstone(
+        sessionID: String,
+        activityID: String,
+        at now: Date
+    ) {
+        pruneBackgroundActivityFinishTombstones(at: now)
+        backgroundActivityFinishTombstonesBySessionID[sessionID, default: [:]][activityID] = now
+    }
+
+    private func isBackgroundActivityFinishTombstoned(
+        sessionID: String,
+        activityID: String,
+        at now: Date
+    ) -> Bool {
+        pruneBackgroundActivityFinishTombstones(at: now)
+        guard let tombstonedAt = backgroundActivityFinishTombstonesBySessionID[sessionID]?[activityID] else {
+            return false
+        }
+        return now.timeIntervalSince(tombstonedAt) < Self.backgroundActivityFinishTombstoneTTL
+    }
+
+    private func pruneBackgroundActivityFinishTombstones(at now: Date) {
+        for sessionID in Array(backgroundActivityFinishTombstonesBySessionID.keys) {
+            let activeTombstones = backgroundActivityFinishTombstonesBySessionID[sessionID]?.filter { _, tombstonedAt in
+                now.timeIntervalSince(tombstonedAt) < Self.backgroundActivityFinishTombstoneTTL
+            } ?? [:]
+            if activeTombstones.isEmpty {
+                backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
+            } else {
+                backgroundActivityFinishTombstonesBySessionID[sessionID] = activeTombstones
+            }
+        }
+    }
+
+    private func prunePendingPanelParentSessionIDs(at now: Date) {
+        pendingPanelParentSessionIDs = pendingPanelParentSessionIDs.filter { _, claim in
+            now.timeIntervalSince(claim.recordedAt) < Self.pendingPanelParentSessionIDTTL
+        }
+    }
+
+    private func removePendingPanelParentSessionIDs(parentSessionID: String) {
+        pendingPanelParentSessionIDs = pendingPanelParentSessionIDs.filter { _, claim in
+            claim.sessionID != parentSessionID
+        }
+    }
+
+    private func updateBackgroundActivityReaperState() {
+        let hasOutstandingActivity = sessionRegistry.sessionsByID.values.contains { record in
+            record.isActive && record.backgroundActivitiesByID.isEmpty == false
+        }
+        if hasOutstandingActivity {
+            scheduleBackgroundActivityReaperIfNeeded()
+        } else {
+            backgroundActivityReaperTask?.cancel()
+            backgroundActivityReaperTask = nil
+        }
+    }
+
+    private func scheduleBackgroundActivityReaperIfNeeded() {
+        guard backgroundActivityReaperTask == nil else { return }
+        let interval = backgroundActivityReapIntervalNanoseconds
+        backgroundActivityReaperTask = Task { [weak self] in
+            while Task.isCancelled == false {
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
+
+                let shouldContinue = await MainActor.run { () -> Bool in
+                    guard let self else { return false }
+                    self.pruneStaleBackgroundActivities(at: Date())
+                    if self.sessionRegistry.sessionsByID.values.contains(where: {
+                        $0.isActive && $0.backgroundActivitiesByID.isEmpty == false
+                    }) {
+                        return true
+                    }
+                    self.backgroundActivityReaperTask = nil
+                    return false
+                }
+                guard shouldContinue else { return }
+            }
+        }
+    }
+
+    private func updateResumeGraceRepublishState(at now: Date) {
+        guard let expiry = earliestResumeGraceExpiry(in: sessionRegistry, at: now) else {
+            resumeGraceRepublishTask?.cancel()
+            resumeGraceRepublishTask = nil
+            resumeGraceRepublishExpiry = nil
+            return
+        }
+
+        guard resumeGraceRepublishExpiry != expiry else { return }
+
+        resumeGraceRepublishTask?.cancel()
+        resumeGraceRepublishExpiry = expiry
+        let delay = max(0, expiry.timeIntervalSince(Date()))
+        let delayNanoseconds = UInt64(delay * 1_000_000_000)
+        resumeGraceRepublishTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+            } catch {
+                return
+            }
+
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.resumeGraceRepublishExpiry == expiry else {
+                    return
+                }
+                self.resumeGraceRepublishTask = nil
+                self.resumeGraceRepublishExpiry = nil
+                self.publish(
+                    self.sessionRegistry,
+                    reason: "resume_grace_expired",
+                    at: Date(),
+                    force: true
+                )
+            }
+        }
+    }
+
+    private func earliestResumeGraceExpiry(
+        in registry: SessionRegistry,
+        at now: Date
+    ) -> Date? {
+        registry.sessionsByID.values
+            .filter { record in
+                guard record.isActive,
+                      let lastActivityFinishedAt = record.lastActivityFinishedAt else {
+                    return false
+                }
+                let expiry = lastActivityFinishedAt.addingTimeInterval(SessionRegistry.resumeProjectionGraceInterval)
+                return now < expiry && registry.panelStatus(for: record.panelID, at: now)?.projection == .resuming
+            }
+            .map { record in
+                record.lastActivityFinishedAt!.addingTimeInterval(SessionRegistry.resumeProjectionGraceInterval)
+            }
+            .min()
+    }
+
+    private func shouldPruneBackgroundActivity(
+        _ activity: SessionBackgroundActivity,
+        at now: Date
+    ) -> Bool {
+        let maximumAge = activity.kind == .subagent && activity.processID == nil
+            ? Self.maximumPidlessSubagentBackgroundActivityAge
+            : maximumBackgroundActivityAge
+        guard now.timeIntervalSince(activity.lastUpdatedAt) < maximumAge else {
+            return true
+        }
+        if let processID = activity.processID {
+            return Self.processIsRunning(processID) == false
+        }
+        return false
+    }
+
+    private static func processIsRunning(_ processID: Int32) -> Bool {
+        guard processID > 0 else { return false }
+        let result = Darwin.kill(pid_t(processID), 0)
+        if result == 0 {
+            return true
+        }
+        return errno != ESRCH
     }
 
     private func logWorkspaceStatusSnapshotChanges(
         previousRegistry: SessionRegistry,
         nextRegistry: SessionRegistry,
-        reason: String
+        reason: String,
+        at now: Date
     ) {
         let workspaceIDs = Set(
             previousRegistry.sessionsByID.values.map(\.workspaceID) +
@@ -1251,10 +1716,10 @@ final class SessionRuntimeStore: ObservableObject {
 
         for workspaceID in workspaceIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             let previousRows = workspaceStatusDiagnosticRows(
-                previousRegistry.workspaceStatuses(for: workspaceID)
+                previousRegistry.workspaceStatuses(for: workspaceID, at: now)
             )
             let nextRows = workspaceStatusDiagnosticRows(
-                nextRegistry.workspaceStatuses(for: workspaceID)
+                nextRegistry.workspaceStatuses(for: workspaceID, at: now)
             )
             guard previousRows != nextRows else { continue }
 
@@ -1283,6 +1748,7 @@ final class SessionRuntimeStore: ObservableObject {
                 panelID: status.panelID,
                 agent: status.agent,
                 statusKind: status.status.kind,
+                projection: status.projection,
                 isActive: status.isActive,
                 isWorkspaceScoped: status.isWorkspaceScoped
             )
@@ -2244,12 +2710,34 @@ final class SessionRuntimeStore: ObservableObject {
         return String(fingerprint.prefix(16))
     }
 
+    private func backgroundActivityMetadata(
+        sessionID: String,
+        activityID: String? = nil,
+        activity: SessionBackgroundActivity?,
+        phase: SessionBackgroundActivityPhase
+    ) -> [String: String] {
+        let record = sessionRegistry.sessionsByID[sessionID]
+        return [
+            "session_id": sessionID,
+            "agent": record?.agent.rawValue ?? "none",
+            "panel_id": record?.panelID.uuidString ?? "none",
+            "workspace_id": record?.workspaceID.uuidString ?? "none",
+            "phase": phase.rawValue,
+            "activity_id": activity?.id ?? activityID ?? "none",
+            "activity_kind": activity?.kind.rawValue ?? "none",
+            "display_name": activity?.displayName ?? "none",
+            "has_command": boolMetadata(activity?.command != nil),
+            "process_id": activity?.processID.map(String.init) ?? "none",
+        ]
+    }
+
     private func sessionStartMetadata(
         sessionID: String,
         agent: AgentKind,
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        parentSessionID: String?,
         usesSessionStatusNotifications: Bool,
         displayTitleOverride: String?,
         scopedWorkspaceIDs: Set<UUID>?
@@ -2260,6 +2748,7 @@ final class SessionRuntimeStore: ObservableObject {
             "panel_id": panelID.uuidString,
             "window_id": windowID.uuidString,
             "workspace_id": workspaceID.uuidString,
+            "parent_session_id": parentSessionID ?? "none",
             "uses_status_notifications": usesSessionStatusNotifications ? "true" : "false",
             "workspace_scope": scopeMetadata(scopedWorkspaceIDs),
         ]
@@ -2289,6 +2778,7 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func handleActionableStatusTransitionIfNeeded(
         previousRecord: SessionRecord?,
+        previousProjectedStatus: SessionStatus?,
         sessionID: String,
         status: SessionStatus
     ) {
@@ -2296,7 +2786,8 @@ final class SessionRuntimeStore: ObservableObject {
         guard isActionableStatusKind(status.kind) else {
             return
         }
-        guard previousRecord?.status?.kind != status.kind else {
+        let previousEffectiveKind = previousProjectedStatus?.kind ?? previousRecord?.status?.kind
+        guard previousEffectiveKind != status.kind else {
             return
         }
         guard let currentRecord = sessionRegistry.sessionsByID[sessionID],

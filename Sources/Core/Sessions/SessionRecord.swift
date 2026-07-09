@@ -22,9 +22,14 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var panelID: UUID
     public var windowID: UUID
     public var workspaceID: UUID
+    public var parentSessionID: String?
     public var isFlaggedForLater: Bool
     public var usesSessionStatusNotifications: Bool
     public var status: SessionStatus?
+    public var statusUpdatedAt: Date?
+    public var backgroundActivitiesByID: [String: SessionBackgroundActivity]
+    public var pendingBackgroundTaskCount: Int
+    public var lastActivityFinishedAt: Date?
     public var displayTitleOverride: String?
     public var repoRoot: String?
     public var cwd: String?
@@ -41,9 +46,14 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        parentSessionID: String? = nil,
         isFlaggedForLater: Bool = false,
         usesSessionStatusNotifications: Bool = false,
         status: SessionStatus? = nil,
+        statusUpdatedAt: Date? = nil,
+        backgroundActivitiesByID: [String: SessionBackgroundActivity] = [:],
+        pendingBackgroundTaskCount: Int = 0,
+        lastActivityFinishedAt: Date? = nil,
         displayTitleOverride: String? = nil,
         repoRoot: String? = nil,
         cwd: String? = nil,
@@ -59,9 +69,14 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.panelID = panelID
         self.windowID = windowID
         self.workspaceID = workspaceID
+        self.parentSessionID = Self.normalizedOptionalText(parentSessionID)
         self.isFlaggedForLater = isFlaggedForLater
         self.usesSessionStatusNotifications = usesSessionStatusNotifications
         self.status = status
+        self.statusUpdatedAt = statusUpdatedAt
+        self.backgroundActivitiesByID = backgroundActivitiesByID
+        self.pendingBackgroundTaskCount = max(0, pendingBackgroundTaskCount)
+        self.lastActivityFinishedAt = lastActivityFinishedAt
         self.displayTitleOverride = Self.normalizedOptionalText(displayTitleOverride)
         self.repoRoot = repoRoot
         self.cwd = cwd
@@ -84,12 +99,22 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         panelID = try container.decode(UUID.self, forKey: .panelID)
         windowID = try container.decode(UUID.self, forKey: .windowID)
         workspaceID = try container.decode(UUID.self, forKey: .workspaceID)
+        parentSessionID = Self.normalizedOptionalText(
+            try container.decodeIfPresent(String.self, forKey: .parentSessionID)
+        )
         isFlaggedForLater = try container.decodeIfPresent(Bool.self, forKey: .isFlaggedForLater) ?? false
         usesSessionStatusNotifications = try container.decodeIfPresent(
             Bool.self,
             forKey: .usesSessionStatusNotifications
         ) ?? false
         status = try container.decodeIfPresent(SessionStatus.self, forKey: .status)
+        statusUpdatedAt = nil
+        // Background activity is runtime-only. Do not restore it from persisted
+        // registry snapshots, because child processes from an old app run cannot
+        // safely keep a restored sidebar row in a working state.
+        backgroundActivitiesByID = [:]
+        pendingBackgroundTaskCount = 0
+        lastActivityFinishedAt = nil
         displayTitleOverride = Self.normalizedOptionalText(
             try container.decodeIfPresent(String.self, forKey: .displayTitleOverride)
         )
@@ -110,6 +135,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         try container.encode(panelID, forKey: .panelID)
         try container.encode(windowID, forKey: .windowID)
         try container.encode(workspaceID, forKey: .workspaceID)
+        try container.encodeIfPresent(parentSessionID, forKey: .parentSessionID)
         try container.encode(isFlaggedForLater, forKey: .isFlaggedForLater)
         try container.encode(usesSessionStatusNotifications, forKey: .usesSessionStatusNotifications)
         try container.encodeIfPresent(status, forKey: .status)
@@ -132,6 +158,7 @@ private extension SessionRecord {
         case panelID
         case windowID
         case workspaceID
+        case parentSessionID
         case isFlaggedForLater
         case usesSessionStatusNotifications
         case status

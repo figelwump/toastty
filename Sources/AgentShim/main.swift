@@ -86,6 +86,27 @@ private enum AgentCommandShim {
                 ]
             )
             )
+            if passThroughReasons == ["session_id_present"],
+               let cliPath = normalizedNonEmpty(
+                   resolvedLaunchEnvironment[ToasttyLaunchContextEnvironment.cliPathKey]
+               ),
+               let sessionID = normalizedNonEmpty(
+                   resolvedLaunchEnvironment[ToasttyLaunchContextEnvironment.sessionIDKey]
+               ),
+               let panelIDValue = normalizedNonEmpty(
+                   resolvedLaunchEnvironment[ToasttyLaunchContextEnvironment.panelIDKey]
+               ),
+               let panelID = UUID(uuidString: panelIDValue) {
+                return spawnAndWaitTrackingBackgroundActivity(
+                    cliPath: cliPath,
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    invocation: invocation,
+                    executablePath: realBinaryPath,
+                    argv: invocation.argv,
+                    environment: resolvedLaunchEnvironment
+                )
+            }
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
@@ -509,6 +530,48 @@ private enum AgentCommandShim {
         )
     }
 
+    private static func emitBackgroundActivity(
+        cliPath: String,
+        sessionID: String,
+        panelID: UUID,
+        phase: SessionBackgroundActivityPhase,
+        activityID: String,
+        invocation: Invocation,
+        processID: pid_t?,
+        environment: [String: String]
+    ) {
+        var arguments = [
+            "session",
+            "background-activity",
+            phase.rawValue,
+            "--session",
+            sessionID,
+            "--panel",
+            panelID.uuidString,
+            "--activity",
+            activityID,
+            "--kind",
+            SessionBackgroundActivityKind.childAgent.rawValue,
+        ]
+        if phase == .start {
+            arguments.append(contentsOf: [
+                "--display-name",
+                invocation.agent.displayName,
+                "--command",
+                truncatedCommand(invocation.argv),
+            ])
+            if let processID, processID > 0 {
+                arguments.append(contentsOf: ["--pid", String(processID)])
+            }
+        }
+
+        _ = runCLI(
+            cliPath: cliPath,
+            arguments: arguments,
+            environment: environment
+        )
+    }
+
     private static func runCLI(
         cliPath: String,
         arguments: [String],
@@ -554,6 +617,53 @@ private enum AgentCommandShim {
             return 1
         }
 
+        return waitForProcess(spawnedChildPID)
+    }
+
+    private static func spawnAndWaitTrackingBackgroundActivity(
+        cliPath: String,
+        sessionID: String,
+        panelID: UUID,
+        invocation: Invocation,
+        executablePath: String,
+        argv: [String],
+        environment: [String: String]
+    ) -> Int32 {
+        let spawnedChildPID = spawnProcess(
+            executablePath: executablePath,
+            argv: argv,
+            environment: environment
+        )
+        guard spawnedChildPID > 0 else {
+            return 1
+        }
+
+        let activityID = UUID().uuidString
+        emitBackgroundActivity(
+            cliPath: cliPath,
+            sessionID: sessionID,
+            panelID: panelID,
+            phase: .start,
+            activityID: activityID,
+            invocation: invocation,
+            processID: spawnedChildPID,
+            environment: environment
+        )
+        let exitStatus = waitForProcess(spawnedChildPID)
+        emitBackgroundActivity(
+            cliPath: cliPath,
+            sessionID: sessionID,
+            panelID: panelID,
+            phase: .finish,
+            activityID: activityID,
+            invocation: invocation,
+            processID: nil,
+            environment: environment
+        )
+        return exitStatus
+    }
+
+    private static func waitForProcess(_ spawnedChildPID: pid_t) -> Int32 {
         let previousSIGINT = Darwin.signal(SIGINT, SIG_IGN)
         let previousSIGQUIT = Darwin.signal(SIGQUIT, SIG_IGN)
         defer {
@@ -576,6 +686,12 @@ private enum AgentCommandShim {
             return 128 + childTerminatingSignal(waitStatus)
         }
         return 1
+    }
+
+    private static func truncatedCommand(_ argv: [String], limit: Int = 512) -> String {
+        let command = argv.joined(separator: " ")
+        guard command.count > limit else { return command }
+        return String(command.prefix(limit))
     }
 
     private static func spawnProcess(

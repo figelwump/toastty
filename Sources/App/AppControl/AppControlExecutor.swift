@@ -500,6 +500,7 @@ final class AppControlExecutor {
                 initialPrompt: args.stringValue("initialPrompt"),
                 initialCommands: try agentLaunchInitialCommands(args: args),
                 inheritedScopedWorkspaceIDs: inheritedWorkspaceScopeForChildLaunch(),
+                parentSessionID: parentSessionIDForChildLaunch(),
                 focusPolicy: .preserveFirstResponder
             )
             try bindWorkspaceToScopedCallerIfNeeded(result.workspaceID, operation: action.rawValue)
@@ -541,6 +542,7 @@ final class AppControlExecutor {
                 panelID: resolved.panelID,
                 focusPolicy: .preserveFirstResponder
             ) {
+                recordPendingParentSessionIDForSendTextIfNeeded(targetPanelID: resolved.panelID)
                 return .init(
                     didMutateState: false,
                     result: [
@@ -803,6 +805,25 @@ private extension AppControlExecutor {
             return nil
         }
         return sessionRuntimeStore.effectiveWorkspaceScope(sessionID: callerSessionID)
+    }
+
+    func parentSessionIDForChildLaunch() -> String? {
+        guard let callerSessionID = requestContext().callerSessionID,
+              let caller = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
+              caller.agent != .processWatch else {
+            return nil
+        }
+        return caller.sessionID
+    }
+
+    func recordPendingParentSessionIDForSendTextIfNeeded(targetPanelID: UUID) {
+        guard let parentSessionID = parentSessionIDForChildLaunch() else {
+            return
+        }
+        sessionRuntimeStore.recordPendingPanelParentSessionID(
+            parentSessionID: parentSessionID,
+            forPanelID: targetPanelID
+        )
     }
 
     func bindWorkspaceToScopedCallerIfNeeded(

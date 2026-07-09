@@ -63,6 +63,34 @@ struct AgentShimExecutableTests {
         #expect(agentLog.contains("agent --managed-plan"))
         #expect(agentLog.contains("session=sess-preflight"))
     }
+
+    @Test
+    func inheritedSessionPassThroughReportsBackgroundActivity() throws {
+        let fixture = try AgentShimExecutableFixture.make()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-parent"
+        )
+
+        #expect(result.exitStatus == 7)
+        #expect(result.stderr.isEmpty)
+
+        let cliLog = try fixture.cliLogContents()
+        #expect(cliLog.contains("agent prepare-managed-launch") == false)
+        #expect(cliLog.contains("session background-activity start --session sess-parent"))
+        #expect(cliLog.contains("--panel \(fixture.panelID.uuidString)"))
+        #expect(cliLog.contains("--kind child_agent"))
+        #expect(cliLog.contains("--display-name Codex"))
+        #expect(cliLog.contains("--pid "))
+        #expect(cliLog.contains("session background-activity finish --session sess-parent"))
+
+        let agentLog = try fixture.agentLogContents()
+        #expect(agentLog.contains("agent --typed-in-terminal"))
+        #expect(agentLog.contains("session=sess-parent"))
+        #expect(agentLog.contains("panel=\(fixture.panelID.uuidString)"))
+    }
 }
 
 private struct AgentShimExecutableFixture {
@@ -118,7 +146,10 @@ private struct AgentShimExecutableFixture {
         )
     }
 
-    func run(preflightDecision: ManagedAgentLaunchPreflightDecisionKind) throws -> AgentShimRunResult {
+    func run(
+        preflightDecision: ManagedAgentLaunchPreflightDecisionKind,
+        inheritedSessionID: String? = nil
+    ) throws -> AgentShimRunResult {
         let process = Process()
         process.executableURL = shimLinkURL
         process.arguments = ["--typed-in-terminal"]
@@ -133,7 +164,7 @@ private struct AgentShimExecutableFixture {
         environment["PWD"] = "/tmp/repo"
         environment[ToasttyLaunchContextEnvironment.cliPathKey] = fakeCLIURL.path
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = panelID.uuidString
-        environment[ToasttyLaunchContextEnvironment.sessionIDKey] = nil
+        environment[ToasttyLaunchContextEnvironment.sessionIDKey] = inheritedSessionID
         environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = nil
         environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = nil
         environment["TOASTTY_LOG_DISABLE"] = "1"

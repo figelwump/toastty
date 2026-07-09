@@ -606,6 +606,135 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func sessionBackgroundActivityBuildsEventEnvelope() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "background-activity", "start",
+                "--session", "sess-parent",
+                "--panel", panelID.uuidString,
+                "--activity", "activity-1",
+                "--kind", "child_agent",
+                "--display-name", "Codex",
+                "--command", "codex review",
+                "--pid", "12345",
+            ],
+            environment: [:]
+        )
+
+        guard case .sessionBackgroundActivity(
+            let sessionID,
+            let parsedPanelID,
+            let phase,
+            let activityID,
+            let kind,
+            let displayName,
+            let command,
+            let processID
+        ) = invocation.command else {
+            Issue.record("expected session background activity command")
+            return
+        }
+
+        #expect(sessionID == "sess-parent")
+        #expect(parsedPanelID == panelID)
+        #expect(phase == .start)
+        #expect(activityID == "activity-1")
+        #expect(kind == .childAgent)
+        #expect(displayName == "Codex")
+        #expect(command == "codex review")
+        #expect(processID == 12_345)
+
+        let envelope = invocation.command.makeEventEnvelope(requestID: "activity-request")
+        #expect(envelope.eventType == "session.background_activity")
+        #expect(envelope.sessionID == "sess-parent")
+        #expect(envelope.panelID == panelID.uuidString)
+        #expect(envelope.payload.string("phase") == "start")
+        #expect(envelope.payload.string("activityID") == "activity-1")
+        #expect(envelope.payload.string("kind") == "child_agent")
+        #expect(envelope.payload.string("displayName") == "Codex")
+        #expect(envelope.payload.string("command") == "codex review")
+        #expect(envelope.payload.int("processID") == 12_345)
+    }
+
+    @Test
+    func sessionBackgroundActivityFallsBackToLaunchContextEnvironment() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "background-activity", "finish",
+                "--activity", "activity-1",
+                "--kind", "child_agent",
+            ],
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-env",
+                "TOASTTY_PANEL_ID": panelID.uuidString,
+            ]
+        )
+
+        guard case .sessionBackgroundActivity(
+            let sessionID,
+            let parsedPanelID,
+            let phase,
+            let activityID,
+            let kind,
+            let displayName,
+            let command,
+            let processID
+        ) = invocation.command else {
+            Issue.record("expected session background activity command")
+            return
+        }
+
+        #expect(sessionID == "sess-env")
+        #expect(parsedPanelID == panelID)
+        #expect(phase == .finish)
+        #expect(activityID == "activity-1")
+        #expect(kind == .childAgent)
+        #expect(displayName == nil)
+        #expect(command == nil)
+        #expect(processID == nil)
+    }
+
+    @Test
+    func sessionBackgroundActivitySyncBuildsEventEnvelope() throws {
+        let panelID = UUID()
+        let command = CLICommand.sessionBackgroundActivitySync(
+            sessionID: "sess-parent",
+            panelID: panelID,
+            kind: .subagent,
+            entries: [
+                SessionBackgroundActivitySyncEntry(
+                    id: "agent-1",
+                    displayName: "general-purpose",
+                    command: "Review the diff"
+                ),
+            ],
+            pendingBackgroundTaskCount: 2
+        )
+
+        let envelope = command.makeEventEnvelope(requestID: "sync-request")
+        #expect(envelope.eventType == "session.background_activity")
+        #expect(envelope.sessionID == "sess-parent")
+        #expect(envelope.panelID == panelID.uuidString)
+        #expect(envelope.payload.string("phase") == "sync")
+        #expect(envelope.payload.string("kind") == "subagent")
+        #expect(envelope.payload.int("pendingCount") == 2)
+        guard case .array(let entries)? = envelope.payload["entries"] else {
+            Issue.record("expected entries array")
+            return
+        }
+        let firstEntry = try #require(entries.first)
+        guard case .object(let entry) = firstEntry else {
+            Issue.record("expected entry object")
+            return
+        }
+        #expect(entry.string("id") == "agent-1")
+        #expect(entry.string("displayName") == "general-purpose")
+        #expect(entry.string("command") == "Review the diff")
+    }
+
+    @Test
     func sessionStartAcceptsCustomAgentIDs() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(

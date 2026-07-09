@@ -7,6 +7,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
     public let cwd: String?
     public let environment: [String: String]
     public let preflightPolicy: ManagedAgentLaunchPreflightPolicy
+    public let parentSessionID: String?
 
     private enum CodingKeys: String, CodingKey {
         case agent
@@ -15,6 +16,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         case cwd
         case environment
         case preflightPolicy
+        case parentSessionID
     }
 
     public init(
@@ -23,7 +25,8 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         argv: [String],
         cwd: String?,
         environment: [String: String] = [:],
-        preflightPolicy: ManagedAgentLaunchPreflightPolicy = .skip
+        preflightPolicy: ManagedAgentLaunchPreflightPolicy = .skip,
+        parentSessionID: String? = nil
     ) {
         self.agent = agent
         self.panelID = panelID
@@ -31,6 +34,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         self.cwd = cwd
         self.environment = environment
         self.preflightPolicy = preflightPolicy
+        self.parentSessionID = Self.normalizedOptionalText(parentSessionID)
     }
 
     public init(from decoder: any Decoder) throws {
@@ -44,6 +48,19 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
             ManagedAgentLaunchPreflightPolicy.self,
             forKey: .preflightPolicy
         ) ?? .skip
+        parentSessionID = Self.normalizedOptionalText(
+            try container.decodeIfPresent(String.self, forKey: .parentSessionID)
+        )
+    }
+}
+
+private extension ManagedAgentLaunchRequest {
+    static func normalizedOptionalText(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
     }
 }
 
