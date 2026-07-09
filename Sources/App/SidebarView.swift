@@ -179,6 +179,10 @@ struct SidebarView: View {
         let panelID: UUID
     }
 
+    private static let sessionChildStartedTimeFormat = Date.FormatStyle()
+        .hour(.defaultDigits(amPM: .omitted))
+        .minute(.twoDigits)
+
     struct WorkspaceDragState: Equatable {
         let workspaceID: UUID
         let sourceIndex: Int
@@ -1959,12 +1963,19 @@ struct SidebarView: View {
             for: child,
             parentWorkspaceID: parentWorkspaceID
         )
+        let elapsedText = child.source == .activity
+            ? Self.elapsedChildActivityText(startedAt: child.startedAt, now: now)
+            : nil
         let accessibilityLabel = Self.sessionChildAccessibilityLabel(
             child: child,
             workspaceTag: workspaceTag,
-            elapsedText: child.source == .activity
-                ? Self.elapsedChildActivityText(startedAt: child.startedAt, now: now)
-                : nil
+            elapsedText: child.source == .activity ? elapsedText : nil
+        )
+        let hoverTipModel = Self.sessionChildHoverTipModel(
+            child: child,
+            workspaceName: workspaceTag,
+            elapsedText: elapsedText,
+            now: now
         )
 
         return Button {
@@ -1995,8 +2006,8 @@ struct SidebarView: View {
 
                 Spacer(minLength: 0)
 
-                if child.source == .activity {
-                    Text(Self.elapsedChildActivityText(startedAt: child.startedAt, now: now))
+                if let elapsedText {
+                    Text(elapsedText)
                         .font(ToastyTheme.fontWorkspaceSessionChildMeta)
                         .foregroundStyle(ToastyTheme.sidebarChildMetaText)
                         .monospacedDigit()
@@ -2010,45 +2021,66 @@ struct SidebarView: View {
             .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
-        // App-wide NSInitialToolTipDelay is 250ms, so this reads as a fast
-        // hover tooltip carrying the full text the narrow row truncates.
-        .background {
-            SidebarTooltipBridge(
-                text: Self.sessionChildTooltipText(
-                    child: child,
-                    workspaceTag: workspaceTag,
-                    elapsedText: child.source == .activity
-                        ? Self.elapsedChildActivityText(startedAt: child.startedAt, now: now)
-                        : nil
-                )
-            )
-            .allowsHitTesting(false)
+        .hoverTip(id: child.sidebarStableID, refreshID: hoverTipModel) {
+            SessionChildHoverTipCard(model: hoverTipModel)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier("sidebar.workspace.sessionChild.\(child.sidebarStableID)")
     }
 
-    static func sessionChildTooltipText(
+    static func sessionChildHoverTipModel(
         child: SessionChildRow,
-        workspaceTag: String?,
-        elapsedText: String?
-    ) -> String {
-        var text = child.displayName
-        if let context = child.context, context.isEmpty == false {
-            text += " — \(context)"
+        workspaceName: String?,
+        elapsedText: String?,
+        now: Date
+    ) -> SessionChildHoverTipModel {
+        let bodyText = normalizedSidebarHelperText(child.context)
+        let typeLabel: String
+        let statusDotColorKind: SessionChildHoverTipModel.StatusDotColorKind
+        var metaItems: [String]
+
+        switch child.source {
+        case .activity:
+            typeLabel = "sub-agent"
+            statusDotColorKind = .working
+            let resolvedElapsedText = normalizedSidebarHelperText(elapsedText)
+                ?? elapsedChildActivityText(startedAt: child.startedAt, now: now)
+            metaItems = [
+                "running · \(resolvedElapsedText)",
+                "started \(child.startedAt.formatted(sessionChildStartedTimeFormat))",
+            ]
+        case .session:
+            typeLabel = "session"
+            statusDotColorKind = SessionChildHoverTipModel.StatusDotColorKind(statusKind: child.statusKind)
+            metaItems = [sessionChildHoverTipStatusLabel(for: child.statusKind)]
+            if let workspaceName = normalizedSidebarHelperText(workspaceName) {
+                metaItems.append(workspaceName)
+            }
         }
-        var suffixes: [String] = []
-        if let statusKind = child.statusKind, statusKind != .working {
-            suffixes.append(SidebarView.sessionStatusChipLabel(for: statusKind))
+
+        return SessionChildHoverTipModel(
+            name: child.displayName,
+            typeLabel: typeLabel,
+            statusDotColorKind: statusDotColorKind,
+            bodyText: bodyText,
+            metaItems: metaItems
+        )
+    }
+
+    static func sessionChildHoverTipStatusLabel(for kind: SessionStatusKind?) -> String {
+        switch kind ?? .idle {
+        case .idle:
+            return "idle"
+        case .working:
+            return "working"
+        case .needsApproval:
+            return "needs approval"
+        case .ready:
+            return "ready"
+        case .error:
+            return "error"
         }
-        if let elapsedText { suffixes.append(elapsedText) }
-        if let workspaceTag { suffixes.append(workspaceTag) }
-        let filtered = suffixes.filter { $0.isEmpty == false }
-        if filtered.isEmpty == false {
-            text += " (\(filtered.joined(separator: " · ")))"
-        }
-        return text
     }
 
     @ViewBuilder

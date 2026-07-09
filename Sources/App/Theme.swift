@@ -38,6 +38,13 @@ enum ToastyTheme {
     static let sidebarDisclosureBorder = Color(hex: 0x4E4841)
     static let sidebarDisclosureText = Color(hex: 0xE0D9D0)
     static let sidebarWorkspaceTagBackground = Color(hex: 0xB7AEA5, alpha: 0.12)
+    static let hoverTipBackground = Color(hex: 0x26231F)
+    static let hoverTipBorder = Color(hex: 0x4E4841)
+    static let hoverTipText = Color(hex: 0xE9E2D9)
+    static let hoverTipBodyText = Color(hex: 0xCFC7BC)
+    static let hoverTipMutedText = Color(hex: 0xA79D91)
+    static let hoverTipDivider = Color(hex: 0x35312C)
+    static let hoverTipTagBackground = Color(hex: 0xB7AEA5, alpha: 0.12)
 
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)

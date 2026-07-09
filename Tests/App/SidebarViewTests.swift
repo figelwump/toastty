@@ -220,51 +220,122 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testSessionChildTooltipTextCarriesFullDescriptionAndMeta() {
+    func testSessionChildHoverTipModelCarriesActivityDescriptionAndMeta() throws {
+        let start = try localDate(hour: 12, minute: 4)
+
         XCTAssertEqual(
-            SidebarView.sessionChildTooltipText(
+            SidebarView.sessionChildHoverTipModel(
                 child: SessionChildRow(
                     id: "activity",
                     source: .activity,
                     displayName: "Explore",
                     context: "agent: find session log callers",
-                    startedAt: Date(timeIntervalSince1970: 1)
+                    startedAt: start
                 ),
-                workspaceTag: nil,
-                elapsedText: "2m 30s"
+                workspaceName: nil,
+                elapsedText: "2m 30s",
+                now: start.addingTimeInterval(150)
             ),
-            "Explore — agent: find session log callers (2m 30s)"
+            SessionChildHoverTipModel(
+                name: "Explore",
+                typeLabel: "sub-agent",
+                statusDotColorKind: .working,
+                bodyText: "agent: find session log callers",
+                metaItems: ["running · 2m 30s", "started 12:04"]
+            )
         )
+    }
+
+    func testSessionChildHoverTipModelCarriesSessionApprovalAndRemoteWorkspace() throws {
+        let start = try localDate(hour: 12, minute: 4)
+
         XCTAssertEqual(
-            SidebarView.sessionChildTooltipText(
+            SidebarView.sessionChildHoverTipModel(
                 child: SessionChildRow(
                     id: "child-session",
                     source: .session,
                     displayName: "Claude Code",
                     context: "Approve Bash: git push",
-                    startedAt: Date(timeIntervalSince1970: 1),
+                    startedAt: start,
                     statusKind: .needsApproval,
                     sessionID: "child-session"
                 ),
-                workspaceTag: "wt-sessions",
-                elapsedText: nil
+                workspaceName: "wt-sessions",
+                elapsedText: nil,
+                now: start
             ),
-            "Claude Code — Approve Bash: git push (needs approval · wt-sessions)"
+            SessionChildHoverTipModel(
+                name: "Claude Code",
+                typeLabel: "session",
+                statusDotColorKind: .needsApproval,
+                bodyText: "Approve Bash: git push",
+                metaItems: ["needs approval", "wt-sessions"]
+            )
         )
+    }
+
+    func testSessionChildHoverTipModelCarriesBareChild() throws {
+        let start = try localDate(hour: 12, minute: 4)
+
         XCTAssertEqual(
-            SidebarView.sessionChildTooltipText(
+            SidebarView.sessionChildHoverTipModel(
                 child: SessionChildRow(
                     id: "bare",
                     source: .activity,
                     displayName: "Codex",
                     context: nil,
-                    startedAt: Date(timeIntervalSince1970: 1)
+                    startedAt: start
                 ),
-                workspaceTag: nil,
-                elapsedText: nil
+                workspaceName: nil,
+                elapsedText: nil,
+                now: start
             ),
-            "Codex"
+            SessionChildHoverTipModel(
+                name: "Codex",
+                typeLabel: "sub-agent",
+                statusDotColorKind: .working,
+                bodyText: nil,
+                metaItems: ["running · 0s", "started 12:04"]
+            )
         )
+    }
+
+    func testHoverTipOriginPlacesTipBelowAnchorLeftEdge() {
+        let origin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: 120, y: 500, width: 180, height: 24),
+            tipSize: CGSize(width: 320, height: 100),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800)
+        )
+
+        XCTAssertEqual(origin, CGPoint(x: 120, y: 394))
+    }
+
+    func testHoverTipOriginFlipsAboveNearBottomEdge() {
+        let origin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: 120, y: 40, width: 180, height: 24),
+            tipSize: CGSize(width: 320, height: 100),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800)
+        )
+
+        XCTAssertEqual(origin, CGPoint(x: 120, y: 70))
+    }
+
+    func testHoverTipOriginClampsHorizontally() {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 800)
+
+        let rightClampedOrigin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: 850, y: 500, width: 120, height: 24),
+            tipSize: CGSize(width: 320, height: 100),
+            visibleFrame: visibleFrame
+        )
+        let leftClampedOrigin = HoverTipPresenter.tipOrigin(
+            anchor: CGRect(x: -40, y: 500, width: 120, height: 24),
+            tipSize: CGSize(width: 320, height: 100),
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(rightClampedOrigin, CGPoint(x: 680, y: 394))
+        XCTAssertEqual(leftClampedOrigin, CGPoint(x: 0, y: 394))
     }
 
     func testElapsedChildActivityTextFormatsSecondsAndMinutes() {
@@ -2096,6 +2167,18 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return nil
+    }
+
+    private func localDate(hour: Int, minute: Int) throws -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 7,
+            day: 9,
+            hour: hour,
+            minute: minute
+        )))
     }
 
     private func renderedTextValues(in rootView: NSView) -> [String] {
