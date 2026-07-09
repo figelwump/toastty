@@ -148,7 +148,7 @@ enum AgentGetStartedSheetBehavior {
 struct AgentGetStartedSheet: View {
     let openAgentProfilesConfiguration: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReference: @MainActor () -> Result<Void, AgentGetStartedActionError>
-    let markGettingStartedSeen: @MainActor () -> Void
+    let suppressGettingStarted: @MainActor () -> Void
     let resolveShellIntegrationPreferredShellPath: @MainActor () -> String?
 
     @Environment(\.dismiss) private var dismiss
@@ -167,13 +167,13 @@ struct AgentGetStartedSheet: View {
         initialStep: AgentGetStartedStep = .chooser,
         openAgentProfilesConfiguration: @escaping @MainActor () -> Result<Void, AgentGetStartedActionError>,
         openKeyboardShortcutsReference: @escaping @MainActor () -> Result<Void, AgentGetStartedActionError>,
-        markGettingStartedSeen: @escaping @MainActor () -> Void = {},
+        suppressGettingStarted: @escaping @MainActor () -> Void = {},
         resolveShellIntegrationPreferredShellPath: @escaping @MainActor () -> String? = { nil }
     ) {
         _step = State(initialValue: initialStep)
         self.openAgentProfilesConfiguration = openAgentProfilesConfiguration
         self.openKeyboardShortcutsReference = openKeyboardShortcutsReference
-        self.markGettingStartedSeen = markGettingStartedSeen
+        self.suppressGettingStarted = suppressGettingStarted
         self.resolveShellIntegrationPreferredShellPath = resolveShellIntegrationPreferredShellPath
     }
 
@@ -206,7 +206,7 @@ struct AgentGetStartedSheet: View {
         }
         .onDisappear {
             if explicitlyOptedOutOfAutoShow {
-                markGettingStartedSeen()
+                suppressGettingStarted()
             }
             if shellIntegrationState.blocksNavigation == false {
                 shellIntegrationTask?.cancel()
@@ -1028,7 +1028,6 @@ struct AgentGetStartedSheet: View {
     }
 
     private func completeAndDismiss() {
-        markGettingStartedSeen()
         dismiss()
     }
 

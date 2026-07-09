@@ -128,6 +128,23 @@ final class AppWindowViewTests: XCTestCase {
         )
     }
 
+    func testManualAgentGetStartedPresentationBypassesAutoSuppressionState() {
+        let windowID = UUID()
+        let suppressedStore = AppStore(
+            persistTerminalFontPreference: false,
+            initialHasSuppressedGettingStarted: true,
+            gettingStartedSetupFootprint: GettingStartedSetupFootprint(hasAgentProfiles: true)
+        )
+
+        XCTAssertFalse(suppressedStore.shouldShowGettingStartedTopBarButton)
+        XCTAssertTrue(
+            AppWindowView.shouldPresentAgentGetStartedFlow(
+                windowID: windowID,
+                notificationObject: windowID
+            )
+        )
+    }
+
     func testAgentGetStartedPresentationRequestPreservesInitialStep() throws {
         let windowID = UUID()
         let request = AgentGetStartedPresentationRequest(
@@ -173,7 +190,7 @@ final class AppWindowViewTests: XCTestCase {
         XCTAssertTrue(
             AppWindowView.shouldAutoPresentAgentGetStartedFlow(
                 allowsAutoPresentation: true,
-                hasSeenGettingStarted: false,
+                hasSuppressedGettingStarted: false,
                 hasAutoPresentedThisSession: false
             )
         )
@@ -181,21 +198,21 @@ final class AppWindowViewTests: XCTestCase {
         XCTAssertFalse(
             AppWindowView.shouldAutoPresentAgentGetStartedFlow(
                 allowsAutoPresentation: false,
-                hasSeenGettingStarted: false,
+                hasSuppressedGettingStarted: false,
                 hasAutoPresentedThisSession: false
             )
         )
         XCTAssertFalse(
             AppWindowView.shouldAutoPresentAgentGetStartedFlow(
                 allowsAutoPresentation: true,
-                hasSeenGettingStarted: true,
+                hasSuppressedGettingStarted: true,
                 hasAutoPresentedThisSession: false
             )
         )
         XCTAssertFalse(
             AppWindowView.shouldAutoPresentAgentGetStartedFlow(
                 allowsAutoPresentation: true,
-                hasSeenGettingStarted: false,
+                hasSuppressedGettingStarted: false,
                 hasAutoPresentedThisSession: true
             )
         )
@@ -208,7 +225,7 @@ final class AppWindowViewTests: XCTestCase {
             AppWindowView.agentGetStartedAutoPresentationRequest(
                 windowID: windowID,
                 allowsAutoPresentation: true,
-                hasSeenGettingStarted: false,
+                hasSuppressedGettingStarted: false,
                 hasAutoPresentedThisSession: false
             )
         )
@@ -224,7 +241,7 @@ final class AppWindowViewTests: XCTestCase {
             AppWindowView.agentGetStartedAutoPresentationRequest(
                 windowID: UUID(),
                 allowsAutoPresentation: false,
-                hasSeenGettingStarted: false,
+                hasSuppressedGettingStarted: false,
                 hasAutoPresentedThisSession: false
             )
         )
@@ -232,7 +249,7 @@ final class AppWindowViewTests: XCTestCase {
             AppWindowView.agentGetStartedAutoPresentationRequest(
                 windowID: UUID(),
                 allowsAutoPresentation: true,
-                hasSeenGettingStarted: true,
+                hasSuppressedGettingStarted: true,
                 hasAutoPresentedThisSession: false
             )
         )
@@ -240,7 +257,7 @@ final class AppWindowViewTests: XCTestCase {
             AppWindowView.agentGetStartedAutoPresentationRequest(
                 windowID: UUID(),
                 allowsAutoPresentation: true,
-                hasSeenGettingStarted: false,
+                hasSuppressedGettingStarted: false,
                 hasAutoPresentedThisSession: true
             )
         )
@@ -255,11 +272,23 @@ final class AppWindowViewTests: XCTestCase {
         XCTAssertFalse(store.recordGettingStartedAutoPresentationIfNeeded())
     }
 
-    func testStoreMarksGettingStartedSeenWithoutPersistenceWhenDisabled() {
+    func testStoreSuppressesGettingStartedWithoutPersistenceWhenDisabled() {
         let store = AppStore(persistTerminalFontPreference: false)
 
-        XCTAssertFalse(store.hasSeenGettingStarted)
-        store.markGettingStartedSeen()
-        XCTAssertTrue(store.hasSeenGettingStarted)
+        XCTAssertFalse(store.hasSuppressedGettingStarted)
+        XCTAssertTrue(store.shouldShowGettingStartedTopBarButton)
+        store.suppressGettingStarted()
+        XCTAssertTrue(store.hasSuppressedGettingStarted)
+        XCTAssertFalse(store.shouldShowGettingStartedTopBarButton)
+    }
+
+    func testStoreHidesGettingStartedTopBarButtonWhenSetupFootprintExists() {
+        let store = AppStore(
+            persistTerminalFontPreference: false,
+            gettingStartedSetupFootprint: GettingStartedSetupFootprint(hasAgentProfiles: true)
+        )
+
+        XCTAssertFalse(store.hasSuppressedGettingStarted)
+        XCTAssertFalse(store.shouldShowGettingStartedTopBarButton)
     }
 }

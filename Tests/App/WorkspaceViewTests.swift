@@ -71,18 +71,36 @@ final class WorkspaceViewTests: XCTestCase {
 
         let model = WorkspaceAgentTopBarModel(
             catalog: catalog,
-            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: catalog)
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: catalog),
+            showsGettingStartedButton: false
         )
 
         XCTAssertFalse(model.showsTopBarButtons)
         XCTAssertTrue(model.actions.isEmpty)
         XCTAssertFalse(model.showsAddAgentsButton)
+    }
 
+    func testWorkspaceAgentTopBarModelShowsGetStartedWhenAgentButtonsDisabled() {
         let emptyHiddenCatalog = AgentCatalog(profiles: [], showsTopBarButtons: false)
         let emptyHiddenModel = WorkspaceAgentTopBarModel(
             catalog: emptyHiddenCatalog,
-            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog)
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog),
+            showsGettingStartedButton: true
         )
+
+        XCTAssertFalse(emptyHiddenModel.showsTopBarButtons)
+        XCTAssertTrue(emptyHiddenModel.actions.isEmpty)
+        XCTAssertTrue(emptyHiddenModel.showsAddAgentsButton)
+    }
+
+    func testWorkspaceAgentTopBarModelHidesGetStartedWhenSetupIsComplete() {
+        let emptyHiddenCatalog = AgentCatalog(profiles: [], showsTopBarButtons: false)
+        let emptyHiddenModel = WorkspaceAgentTopBarModel(
+            catalog: emptyHiddenCatalog,
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog),
+            showsGettingStartedButton: false
+        )
+
         XCTAssertFalse(emptyHiddenModel.showsAddAgentsButton)
     }
 

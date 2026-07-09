@@ -240,23 +240,23 @@ struct AppWindowView: View {
 
     static func shouldAutoPresentAgentGetStartedFlow(
         allowsAutoPresentation: Bool,
-        hasSeenGettingStarted: Bool,
+        hasSuppressedGettingStarted: Bool,
         hasAutoPresentedThisSession: Bool
     ) -> Bool {
         allowsAutoPresentation
-            && hasSeenGettingStarted == false
+            && hasSuppressedGettingStarted == false
             && hasAutoPresentedThisSession == false
     }
 
     static func agentGetStartedAutoPresentationRequest(
         windowID: UUID,
         allowsAutoPresentation: Bool,
-        hasSeenGettingStarted: Bool,
+        hasSuppressedGettingStarted: Bool,
         hasAutoPresentedThisSession: Bool
     ) -> AgentGetStartedPresentationRequest? {
         guard shouldAutoPresentAgentGetStartedFlow(
             allowsAutoPresentation: allowsAutoPresentation,
-            hasSeenGettingStarted: hasSeenGettingStarted,
+            hasSuppressedGettingStarted: hasSuppressedGettingStarted,
             hasAutoPresentedThisSession: hasAutoPresentedThisSession
         ) else { return nil }
         return AgentGetStartedPresentationRequest(windowID: windowID, isAutomatic: true)
@@ -308,8 +308,8 @@ struct AppWindowView: View {
             initialStep: agentGetStartedInitialStep,
             openAgentProfilesConfiguration: openAgentProfilesConfigurationResult,
             openKeyboardShortcutsReference: openKeyboardShortcutsReferenceResult,
-            markGettingStartedSeen: {
-                store.markGettingStartedSeen()
+            suppressGettingStarted: {
+                store.suppressGettingStarted()
             },
             resolveShellIntegrationPreferredShellPath: resolveShellIntegrationPreferredShellPath
         )

@@ -51,7 +51,7 @@ Top-level options:
 
 | Option | Default | Description |
 |---|---|---|
-| `showTopBarButtons` | `true` | Set to `false` to hide dedicated agent buttons from the top bar, including the empty-state `Get Started…` button. Agent menu entries, command palette results, keyboard shortcuts, and typed-command shims still work. |
+| `showTopBarButtons` | `true` | Set to `false` to hide dedicated agent launch buttons from the top bar. Agent menu entries, command palette results, keyboard shortcuts, and typed-command shims still work. |
 
 Profile fields:
 
@@ -141,7 +141,7 @@ argv = ["codex"]
 
 The profile ID is stored as an `AgentKind` internally. When a launch resolves to `AgentKind.codex`, `AgentKind.claude`, `AgentKind.opencode`, `AgentKind.mimocode`, or `AgentKind.pi`, Toastty activates the corresponding instrumentation path. When the ID is anything else, the command runs as-is with only the base session context injected.
 
-Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. Add `showTopBarButtons = false` before any profile table to keep agent launch buttons out of the top bar while preserving the menu, command palette, and shortcuts.
+Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. Add `showTopBarButtons = false` before any profile table to keep configured agent launch buttons out of the top bar while preserving the menu, command palette, and shortcuts.
 
 ### Wrapper-compatible launch commands
 

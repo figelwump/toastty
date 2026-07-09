@@ -370,7 +370,7 @@ final class AppStore: ObservableObject {
     /// once. It originally tracked agent launches, but process-watch rows
     /// should opt into the same expanded session-status treatment.
     @Published private(set) var hasEverLaunchedAgent: Bool
-    @Published private(set) var hasSeenGettingStarted: Bool
+    @Published private(set) var hasSuppressedGettingStarted: Bool
     @Published private(set) var hasAutoPresentedGettingStartedThisSession = false
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
@@ -396,6 +396,7 @@ final class AppStore: ObservableObject {
 
     private let reducer = AppReducer()
     private let persistUserSettings: Bool
+    private let gettingStartedSetupFootprint: GettingStartedSetupFootprint
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private let windowActivationHandler: WindowActivationHandler
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
@@ -405,19 +406,28 @@ final class AppStore: ObservableObject {
         state: AppState = .bootstrap(),
         persistTerminalFontPreference: Bool = true,
         initialHasEverLaunchedAgent: Bool = false,
-        initialHasSeenGettingStarted: Bool = false,
+        initialHasSuppressedGettingStarted: Bool = false,
         initialAskBeforeQuitting: Bool = true,
+        gettingStartedSetupFootprint: GettingStartedSetupFootprint = GettingStartedSetupFootprint(),
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit
     ) {
         self.state = state
         hasEverLaunchedAgent = initialHasEverLaunchedAgent
-        hasSeenGettingStarted = initialHasSeenGettingStarted
+        hasSuppressedGettingStarted = initialHasSuppressedGettingStarted
         askBeforeQuitting = initialAskBeforeQuitting
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
+        self.gettingStartedSetupFootprint = gettingStartedSetupFootprint
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
         self.windowActivationHandler = windowActivationHandler
+    }
+
+    var shouldShowGettingStartedTopBarButton: Bool {
+        GettingStartedEligibility.shouldShowTopBarButton(
+            hasSuppressedGettingStarted: hasSuppressedGettingStarted,
+            setupFootprint: gettingStartedSetupFootprint
+        )
     }
 
     @discardableResult
@@ -1735,11 +1745,11 @@ final class AppStore: ObservableObject {
         return true
     }
 
-    func markGettingStartedSeen() {
-        guard hasSeenGettingStarted == false else { return }
-        hasSeenGettingStarted = true
+    func suppressGettingStarted() {
+        guard hasSuppressedGettingStarted == false else { return }
+        hasSuppressedGettingStarted = true
         guard persistUserSettings else { return }
-        ToasttySettingsStore.persistHasSeenGettingStarted(true)
+        ToasttySettingsStore.persistHasSuppressedGettingStarted(true)
     }
 
     func setAskBeforeQuitting(_ askBeforeQuitting: Bool) {

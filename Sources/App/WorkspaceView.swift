@@ -529,7 +529,8 @@ struct WorkspaceView: View {
     private var agentTopBarModel: WorkspaceAgentTopBarModel {
         WorkspaceAgentTopBarModel(
             catalog: agentCatalogStore.catalog,
-            profileShortcutRegistry: profileShortcutRegistry
+            profileShortcutRegistry: profileShortcutRegistry,
+            showsGettingStartedButton: store.shouldShowGettingStartedTopBarButton
         )
     }
 
@@ -3565,15 +3566,20 @@ struct WorkspaceAgentTopBarModel: Equatable {
 
     let actions: [Action]
     let showsTopBarButtons: Bool
+    let showsGettingStartedButton: Bool
+    private let hasConfiguredAgentProfiles: Bool
 
     var showsAddAgentsButton: Bool {
-        showsTopBarButtons && actions.isEmpty
+        showsGettingStartedButton && hasConfiguredAgentProfiles == false
     }
 
     init(
         catalog: AgentCatalog,
-        profileShortcutRegistry: ProfileShortcutRegistry
+        profileShortcutRegistry: ProfileShortcutRegistry,
+        showsGettingStartedButton: Bool = true
     ) {
+        self.showsGettingStartedButton = showsGettingStartedButton
+        hasConfiguredAgentProfiles = catalog.profiles.isEmpty == false
         showsTopBarButtons = catalog.showsTopBarButtons
         guard catalog.showsTopBarButtons else {
             actions = []

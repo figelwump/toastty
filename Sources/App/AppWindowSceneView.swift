@@ -183,7 +183,7 @@ struct AppWindowSceneView: View {
         guard let request = AppWindowView.agentGetStartedAutoPresentationRequest(
             windowID: windowID,
             allowsAutoPresentation: allowsGettingStartedAutoPresentation,
-            hasSeenGettingStarted: store.hasSeenGettingStarted,
+            hasSuppressedGettingStarted: store.hasSuppressedGettingStarted,
             hasAutoPresentedThisSession: store.hasAutoPresentedGettingStartedThisSession
         ) else { return }
         NotificationCenter.default.post(

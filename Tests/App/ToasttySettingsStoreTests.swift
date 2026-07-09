@@ -10,8 +10,9 @@ final class ToasttySettingsStoreTests: XCTestCase {
         let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
 
         XCTAssertFalse(settings.hasEverLaunchedAgent)
-        XCTAssertFalse(settings.hasSeenGettingStarted)
+        XCTAssertFalse(settings.hasSuppressedGettingStarted)
         XCTAssertTrue(settings.askBeforeQuitting)
+        XCTAssertFalse(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testPersistHasEverLaunchedAgentStoresAndLoadsFlag() {
@@ -21,19 +22,21 @@ final class ToasttySettingsStoreTests: XCTestCase {
         let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
 
         XCTAssertTrue(settings.hasEverLaunchedAgent)
-        XCTAssertFalse(settings.hasSeenGettingStarted)
+        XCTAssertFalse(settings.hasSuppressedGettingStarted)
         XCTAssertTrue(settings.askBeforeQuitting)
+        XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
-    func testPersistHasSeenGettingStartedStoresAndLoadsFlag() {
+    func testPersistHasSuppressedGettingStartedStoresAndLoadsFlag() {
         let userDefaults = makeUserDefaults()
 
-        ToasttySettingsStore.persistHasSeenGettingStarted(true, userDefaults: userDefaults)
+        ToasttySettingsStore.persistHasSuppressedGettingStarted(true, userDefaults: userDefaults)
         let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
 
-        XCTAssertTrue(settings.hasSeenGettingStarted)
+        XCTAssertTrue(settings.hasSuppressedGettingStarted)
         XCTAssertFalse(settings.hasEverLaunchedAgent)
         XCTAssertTrue(settings.askBeforeQuitting)
+        XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testPersistAskBeforeQuittingStoresAndLoadsFlag() {
@@ -44,7 +47,16 @@ final class ToasttySettingsStoreTests: XCTestCase {
 
         XCTAssertFalse(settings.askBeforeQuitting)
         XCTAssertFalse(settings.hasEverLaunchedAgent)
-        XCTAssertFalse(settings.hasSeenGettingStarted)
+        XCTAssertFalse(settings.hasSuppressedGettingStarted)
+        XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
+    }
+
+    func testAppKitDefaultPreferencesDoNotCountAsToasttyPersistedSettings() {
+        let userDefaults = makeUserDefaults()
+
+        AppKitDefaultPreferences.apply(to: userDefaults, standardDefaults: userDefaults)
+
+        XCTAssertFalse(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testLegacyTerminalFontSizePointsLoadsStoredOverride() {
@@ -55,6 +67,7 @@ final class ToasttySettingsStoreTests: XCTestCase {
             ToasttySettingsStore.legacyTerminalFontSizePoints(userDefaults: userDefaults),
             13.5
         )
+        XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testClearLegacyTerminalFontSizePointsRemovesStoredOverride() {
@@ -64,6 +77,7 @@ final class ToasttySettingsStoreTests: XCTestCase {
         ToasttySettingsStore.clearLegacyTerminalFontSizePoints(userDefaults: userDefaults)
 
         XCTAssertNil(ToasttySettingsStore.legacyTerminalFontSizePoints(userDefaults: userDefaults))
+        XCTAssertFalse(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testLegacyTerminalFontSizePointsClampsStoredOverride() {

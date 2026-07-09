@@ -1905,14 +1905,29 @@ struct ToasttyApp: App {
         let processInfo = ProcessInfo.processInfo
         let runtimePaths = ToasttyRuntimePaths.resolve(environment: processInfo.environment)
         let isInteractiveSession = AppLifecycleDelegate.isInteractiveSession(processInfo)
-        Self.prepareRuntimeEnvironment(processInfo: processInfo)
-        Self.ensureTerminalProfilesTemplateExists()
-        Self.refreshManagedShellIntegrationSnippetIfInstalled(processInfo: processInfo)
-        Self.configureWindowPersistenceDefaults()
-        let usesPersistentPreferences = AutomationConfig.parse(
+        let automationConfig = AutomationConfig.parse(
             arguments: processInfo.arguments,
             environment: processInfo.environment
-        ) == nil
+        )
+        let usesPersistentPreferences = automationConfig == nil
+        let initialGettingStartedSetupFootprint = usesPersistentPreferences
+            ? GettingStartedEligibility.setupFootprint(
+                runtimePaths: runtimePaths,
+                userDefaults: ToasttyAppDefaults.current,
+                homeDirectoryPath: NSHomeDirectory(),
+                environment: processInfo.environment
+            )
+            : GettingStartedSetupFootprint()
+        let shouldCreateStartupSetupTemplates = GettingStartedEligibility.shouldCreateStartupSetupTemplates(
+            usesPersistentPreferences: usesPersistentPreferences,
+            setupFootprint: initialGettingStartedSetupFootprint
+        )
+        Self.prepareRuntimeEnvironment(processInfo: processInfo)
+        if shouldCreateStartupSetupTemplates {
+            Self.ensureTerminalProfilesTemplateExists()
+        }
+        Self.refreshManagedShellIntegrationSnippetIfInstalled(processInfo: processInfo)
+        Self.configureWindowPersistenceDefaults()
         let terminalProfileStore = TerminalProfileStore()
         let initialToasttyConfig = usesPersistentPreferences ? ToasttyConfigStore.load() : ToasttyConfig()
         let initialToasttySettings = usesPersistentPreferences ? ToasttySettingsStore.load() : ToasttySettings()
@@ -1928,7 +1943,8 @@ struct ToasttyApp: App {
             : nil
         let bootstrap = AppBootstrap.make(
             processInfo: processInfo,
-            defaultTerminalProfileID: initialDefaultTerminalProfileID
+            defaultTerminalProfileID: initialDefaultTerminalProfileID,
+            createAgentProfilesTemplate: shouldCreateStartupSetupTemplates
         )
         if usesPersistentPreferences {
             Self.prunePaneRestoreFiles(
@@ -1948,13 +1964,14 @@ struct ToasttyApp: App {
             automationConfig: bootstrap.automationConfig,
             socketPathOverride: socketPath
         )
-        let persistUserSettings = bootstrap.automationConfig == nil
+        let persistUserSettings = usesPersistentPreferences
         let store = AppStore(
             state: bootstrap.state,
             persistTerminalFontPreference: persistUserSettings,
             initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
-            initialHasSeenGettingStarted: initialToasttySettings.hasSeenGettingStarted,
-            initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting
+            initialHasSuppressedGettingStarted: initialToasttySettings.hasSuppressedGettingStarted,
+            initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
+            gettingStartedSetupFootprint: initialGettingStartedSetupFootprint
         )
         let agentCatalogStore = AgentCatalogStore()
         let initialProfileShortcutRegistry = Self.makeProfileShortcutRegistry(
@@ -2253,7 +2270,10 @@ struct ToasttyApp: App {
         _webPanelRuntimeRegistry = StateObject(wrappedValue: webPanelRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
-        allowsGettingStartedAutoPresentation = persistUserSettings
+        allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
+            usesPersistentPreferences: persistUserSettings,
+            setupFootprint: initialGettingStartedSetupFootprint
+        )
         disableAnimations = bootstrap.disableAnimations
         self.runtimePaths = runtimePaths
         agentLaunchSocketPath = socketPath

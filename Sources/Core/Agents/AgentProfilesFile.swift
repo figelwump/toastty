@@ -66,8 +66,8 @@ public enum AgentProfilesFile {
         # buttons and shortcuts without relaunching.
         #
         # Top-level options:
-        #   showTopBarButtons — set false to hide agent buttons, including
-        #                       Get Started…, from the top bar.
+        #   showTopBarButtons — set false to hide configured agent launch
+        #                       buttons from the top bar.
         # showTopBarButtons = true
         #
         # Profile fields:
