@@ -1931,7 +1931,7 @@ struct SidebarView: View {
                     )
                 }
             }
-            .padding(.leading, 7)
+            .padding(.leading, 6)
             .overlay(alignment: .leading) {
                 Rectangle()
                     .fill(ToastyTheme.sidebarChildRail)
@@ -1939,7 +1939,7 @@ struct SidebarView: View {
                     .padding(.vertical, 2)
             }
         }
-        .padding(.leading, 13)
+        .padding(.leading, 6)
         .padding(.top, 3)
         .padding(.bottom, 2)
     }
@@ -2010,20 +2010,60 @@ struct SidebarView: View {
             .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
+        // App-wide NSInitialToolTipDelay is 250ms, so this reads as a fast
+        // hover tooltip carrying the full text the narrow row truncates.
+        .background {
+            SidebarTooltipBridge(
+                text: Self.sessionChildTooltipText(
+                    child: child,
+                    workspaceTag: workspaceTag,
+                    elapsedText: child.source == .activity
+                        ? Self.elapsedChildActivityText(startedAt: child.startedAt, now: now)
+                        : nil
+                )
+            )
+            .allowsHitTesting(false)
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier("sidebar.workspace.sessionChild.\(child.sidebarStableID)")
+    }
+
+    static func sessionChildTooltipText(
+        child: SessionChildRow,
+        workspaceTag: String?,
+        elapsedText: String?
+    ) -> String {
+        var text = child.displayName
+        if let context = child.context, context.isEmpty == false {
+            text += " — \(context)"
+        }
+        var suffixes: [String] = []
+        if let statusKind = child.statusKind, statusKind != .working {
+            suffixes.append(SidebarView.sessionStatusChipLabel(for: statusKind))
+        }
+        if let elapsedText { suffixes.append(elapsedText) }
+        if let workspaceTag { suffixes.append(workspaceTag) }
+        let filtered = suffixes.filter { $0.isEmpty == false }
+        if filtered.isEmpty == false {
+            text += " (\(filtered.joined(separator: " · ")))"
+        }
+        return text
     }
 
     @ViewBuilder
     private func sessionChildStatusView(for child: SessionChildRow) -> some View {
         switch child.source {
         case .activity:
-            SessionStatusIndicator(state: .spinner, size: 7, lineWidth: 1.2)
+            SessionChildActivityDot(
+                phaseOffset: SessionChildActivityDot.phaseOffset(forStableID: child.sidebarStableID)
+            )
         case .session:
             switch child.statusKind {
             case .working:
-                SessionStatusIndicator(state: .spinner, size: 7, lineWidth: 1.2)
+                SessionChildActivityDot(
+                    phaseOffset: SessionChildActivityDot.phaseOffset(forStableID: child.sidebarStableID)
+                )
             case .needsApproval, .error, .ready:
                 if let statusKind = child.statusKind {
                     sessionStatusChip(kind: statusKind)

@@ -220,6 +220,77 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testSessionChildTooltipTextCarriesFullDescriptionAndMeta() {
+        XCTAssertEqual(
+            SidebarView.sessionChildTooltipText(
+                child: SessionChildRow(
+                    id: "activity",
+                    source: .activity,
+                    displayName: "Explore",
+                    context: "agent: find session log callers",
+                    startedAt: Date(timeIntervalSince1970: 1)
+                ),
+                workspaceTag: nil,
+                elapsedText: "2m 30s"
+            ),
+            "Explore — agent: find session log callers (2m 30s)"
+        )
+        XCTAssertEqual(
+            SidebarView.sessionChildTooltipText(
+                child: SessionChildRow(
+                    id: "child-session",
+                    source: .session,
+                    displayName: "Claude Code",
+                    context: "Approve Bash: git push",
+                    startedAt: Date(timeIntervalSince1970: 1),
+                    statusKind: .needsApproval,
+                    sessionID: "child-session"
+                ),
+                workspaceTag: "wt-sessions",
+                elapsedText: nil
+            ),
+            "Claude Code — Approve Bash: git push (needs approval · wt-sessions)"
+        )
+        XCTAssertEqual(
+            SidebarView.sessionChildTooltipText(
+                child: SessionChildRow(
+                    id: "bare",
+                    source: .activity,
+                    displayName: "Codex",
+                    context: nil,
+                    startedAt: Date(timeIntervalSince1970: 1)
+                ),
+                workspaceTag: nil,
+                elapsedText: nil
+            ),
+            "Codex"
+        )
+    }
+
+    func testElapsedChildActivityTextFormatsSecondsAndMinutes() {
+        let start = Date(timeIntervalSince1970: 0)
+        XCTAssertEqual(
+            SidebarView.elapsedChildActivityText(startedAt: start, now: start.addingTimeInterval(52)),
+            "52s"
+        )
+        XCTAssertEqual(
+            SidebarView.elapsedChildActivityText(startedAt: start, now: start.addingTimeInterval(242)),
+            "4m 02s"
+        )
+    }
+
+    func testChildActivityDotPhaseOffsetIsStableAndBounded() {
+        let first = SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-1")
+        let second = SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-1")
+        XCTAssertEqual(first, second)
+        XCTAssertGreaterThanOrEqual(first, 0)
+        XCTAssertLessThan(first, 2)
+        XCTAssertNotEqual(
+            SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-1"),
+            SessionChildActivityDot.phaseOffset(forStableID: "activity:agent-2")
+        )
+    }
+
     func testSessionChildAccessibilityLabelIncludesStatusContextWorkspaceAndElapsed() {
         let child = SessionChildRow(
             id: "child",
