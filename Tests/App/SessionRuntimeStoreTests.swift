@@ -121,6 +121,67 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func duplicateCodexSubagentStartsUpsertSingleBackgroundActivity() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_125)
+
+        store.startSession(
+            sessionID: "sess-codex-subagent-upsert",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        store.updateStatus(
+            sessionID: "sess-codex-subagent-upsert",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn ended"),
+            at: now.addingTimeInterval(1)
+        )
+
+        #expect(store.updateBackgroundActivity(
+            sessionID: "sess-codex-subagent-upsert",
+            activity: SessionBackgroundActivity(
+                id: "agent-1",
+                kind: .subagent,
+                displayName: "Herschel",
+                command: "Inspect the diff",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.updateBackgroundActivity(
+            sessionID: "sess-codex-subagent-upsert",
+            activity: SessionBackgroundActivity(
+                id: "agent-1",
+                kind: .subagent,
+                displayName: "Herschel",
+                command: "Inspect the diff",
+                startedAt: now.addingTimeInterval(3),
+                lastUpdatedAt: now.addingTimeInterval(3)
+            ),
+            at: now.addingTimeInterval(3)
+        ))
+
+        let activities = try #require(
+            store.sessionRegistry.sessionsByID["sess-codex-subagent-upsert"]?.backgroundActivitiesByID
+        )
+        #expect(activities.count == 1)
+        let activity = try #require(activities["agent-1"])
+        #expect(activity.startedAt == now.addingTimeInterval(2))
+        #expect(activity.lastUpdatedAt == now.addingTimeInterval(3))
+        #expect(store.workspaceStatuses(for: workspaceID).first?.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
+    }
+
+    @Test
     func workspaceStatusChildrenCombineCrossWorkspaceSessionAndActivityRowsUntilChildStops() throws {
         let store = SessionRuntimeStore()
         defer { store.reset() }

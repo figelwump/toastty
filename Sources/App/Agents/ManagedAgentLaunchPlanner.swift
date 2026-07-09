@@ -523,6 +523,34 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         switch event.kind {
         case .sessionConfigured:
             return
+        case .backgroundActivityStarted:
+            guard let activity = event.backgroundActivity else {
+                return
+            }
+            let now = nowProvider()
+            _ = sessionRuntimeStore.updateBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: activity.activityID,
+                    kind: activity.kind,
+                    displayName: activity.displayName,
+                    command: activity.command,
+                    startedAt: now,
+                    lastUpdatedAt: now
+                ),
+                at: now
+            )
+            return
+        case .backgroundActivityFinished:
+            guard let activity = event.backgroundActivity else {
+                return
+            }
+            _ = sessionRuntimeStore.finishBackgroundActivity(
+                sessionID: sessionID,
+                activityID: activity.activityID,
+                at: nowProvider()
+            )
+            return
         case .turnContextUpdated:
             sessionRuntimeStore.recordCodexOverrideTurnContext(
                 sessionID: sessionID,

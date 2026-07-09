@@ -751,6 +751,52 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func codexSubagentActivityProjectsRawReadyAsWaitingOnChildren() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 715)
+
+        registry.startSession(
+            sessionID: "codex-parent",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "codex-parent",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Root turn ended"),
+            at: now.addingTimeInterval(1)
+        )
+        let didUpdateActivity = registry.updateBackgroundActivity(
+            sessionID: "codex-parent",
+            activity: SessionBackgroundActivity(
+                id: "agent-1",
+                kind: .subagent,
+                displayName: "Herschel",
+                command: "Inspect the diff",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        )
+        #expect(didUpdateActivity)
+
+        let status = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(status.sessionID == "codex-parent")
+        #expect(status.status.kind == .working)
+        #expect(status.status.detail == "Root turn ended")
+        #expect(status.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
+        #expect(registry.sessionsByID["codex-parent"]?.status?.kind == .ready)
+    }
+
+    @Test
     func backgroundActivityDoesNotOverrideActionableOrWorkingStatuses() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()
