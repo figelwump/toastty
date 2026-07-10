@@ -3,7 +3,7 @@ import Foundation
 
 enum ProfileShellIntegrationMessaging {
     static let restartNotice = """
-    New shells will pick it up automatically. Existing tmux or zmx sessions may need to restart or re-source that init file before live titles update and restored-pane command recall takes effect.
+    Open a new Toastty pane to load the integration. Existing nested shells and tmux or zmx sessions may need to restart or re-source the init file shown above before live titles, manual agent tracking, and restored-pane command recall take effect.
     """
 
     static func managedSnippetPlanLine(for status: ProfileShellIntegrationInstallStatus) -> String {

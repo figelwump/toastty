@@ -46,6 +46,93 @@ final class AgentGetStartedSheetTests: XCTestCase {
         XCTAssertTrue(AgentGetStartedSheetBehavior.codexStatusHooksManualRowBody.contains("trust the hook once"))
     }
 
+    func testShellIntegrationCopyExplainsUserVisibleBenefits() {
+        let copy = [
+            AgentGetStartedSheetBehavior.shellIntegrationManualRowBody,
+            AgentGetStartedSheetBehavior.shellIntegrationDetailBody,
+        ].joined(separator: " ")
+
+        XCTAssertTrue(copy.contains("live titles"))
+        XCTAssertTrue(copy.contains("history"))
+        XCTAssertTrue(copy.contains("manually started agent"))
+        XCTAssertTrue(copy.contains("nested shells"))
+        XCTAssertTrue(copy.contains("tmux"))
+        XCTAssertTrue(copy.contains("zmx"))
+    }
+
+    func testShellIntegrationRestartNoticeExplainsHowToActivateChanges() {
+        let notice = ProfileShellIntegrationMessaging.restartNotice
+
+        XCTAssertTrue(notice.contains("Open a new Toastty pane"))
+        XCTAssertTrue(notice.contains("nested shells"))
+        XCTAssertTrue(notice.contains("restart or re-source"))
+        XCTAssertTrue(notice.contains("tmux"))
+        XCTAssertTrue(notice.contains("zmx"))
+    }
+
+    func testShellIntegrationSetupActionDistinguishesInstallUpdateAndRepair() {
+        let installStatus = makeStatus(
+            needsManagedSnippetWrite: true,
+            needsInitFileUpdate: true,
+            createsInitFile: true
+        )
+        let updateStatus = makeStatus(
+            needsManagedSnippetWrite: true,
+            needsInitFileUpdate: false,
+            createsInitFile: false
+        )
+        let repairStatus = makeStatus(
+            needsManagedSnippetWrite: false,
+            needsInitFileUpdate: true,
+            createsInitFile: false
+        )
+        let installedStatus = makeStatus(
+            needsManagedSnippetWrite: false,
+            needsInitFileUpdate: false,
+            createsInitFile: false
+        )
+
+        XCTAssertEqual(
+            AgentGetStartedShellIntegrationSetupAction.required(for: installStatus)?.buttonTitle,
+            "Install Shell Integration"
+        )
+        XCTAssertEqual(
+            AgentGetStartedShellIntegrationSetupAction.required(for: updateStatus)?.buttonTitle,
+            "Update Shell Integration"
+        )
+        XCTAssertEqual(
+            AgentGetStartedShellIntegrationSetupAction.required(for: repairStatus)?.buttonTitle,
+            "Repair Shell Integration"
+        )
+        XCTAssertNil(AgentGetStartedShellIntegrationSetupAction.required(for: installedStatus))
+    }
+
+    func testShellIntegrationChooserBadgeReflectsSetupState() {
+        let updateStatus = makeStatus(
+            needsManagedSnippetWrite: true,
+            needsInitFileUpdate: false,
+            createsInitFile: false
+        )
+        let installedStatus = makeStatus(
+            needsManagedSnippetWrite: false,
+            needsInitFileUpdate: false,
+            createsInitFile: false
+        )
+
+        XCTAssertEqual(
+            AgentGetStartedShellIntegrationStepState.installable(updateStatus).chooserBadge,
+            AgentGetStartedSetupBadge(title: "Update available", tone: .attention)
+        )
+        XCTAssertEqual(
+            AgentGetStartedShellIntegrationStepState.alreadyInstalled(installedStatus).chooserBadge,
+            AgentGetStartedSetupBadge(title: "Installed", tone: .ready)
+        )
+        XCTAssertEqual(
+            AgentGetStartedShellIntegrationStepState.unavailable("Unsupported shell").chooserBadge,
+            AgentGetStartedSetupBadge(title: "Needs attention", tone: .error)
+        )
+    }
+
     func testLoadedStateUsesInstallableCaseWhenFilesStillNeedUpdates() {
         let status = makeStatus(
             needsManagedSnippetWrite: true,

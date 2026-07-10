@@ -27,6 +27,80 @@ enum AgentGetStartedShellIntegrationStepState: Equatable {
     }
 }
 
+enum AgentGetStartedShellIntegrationSetupAction: Equatable {
+    case install
+    case update
+    case repair
+
+    static func required(for status: ProfileShellIntegrationInstallStatus) -> Self? {
+        switch (status.needsManagedSnippetWrite, status.needsInitFileUpdate) {
+        case (true, true):
+            return .install
+        case (true, false):
+            return .update
+        case (false, true):
+            return .repair
+        case (false, false):
+            return nil
+        }
+    }
+
+    var buttonTitle: String {
+        switch self {
+        case .install:
+            return "Install Shell Integration"
+        case .update:
+            return "Update Shell Integration"
+        case .repair:
+            return "Repair Shell Integration"
+        }
+    }
+
+    var badgeTitle: String {
+        switch self {
+        case .install:
+            return "Not installed"
+        case .update:
+            return "Update available"
+        case .repair:
+            return "Needs repair"
+        }
+    }
+}
+
+enum AgentGetStartedSetupBadgeTone: Equatable {
+    case neutral
+    case attention
+    case ready
+    case error
+}
+
+struct AgentGetStartedSetupBadge: Equatable {
+    let title: String
+    let tone: AgentGetStartedSetupBadgeTone
+}
+
+extension AgentGetStartedShellIntegrationStepState {
+    var chooserBadge: AgentGetStartedSetupBadge {
+        switch self {
+        case .loading:
+            return AgentGetStartedSetupBadge(title: "Checking…", tone: .neutral)
+        case .installable(let status):
+            let action = AgentGetStartedShellIntegrationSetupAction.required(for: status)
+            return AgentGetStartedSetupBadge(
+                title: action?.badgeTitle ?? "Needs attention",
+                tone: .attention
+            )
+        case .alreadyInstalled, .installSucceeded:
+            return AgentGetStartedSetupBadge(title: "Installed", tone: .ready)
+        case .installing:
+            return AgentGetStartedSetupBadge(title: "Installing…", tone: .neutral)
+        case .unavailable, .installFailed:
+            return AgentGetStartedSetupBadge(title: "Needs attention", tone: .error)
+        }
+    }
+}
+
 enum AgentGetStartedShellIntegrationStepResolver {
     static func loadedState(
         from status: ProfileShellIntegrationInstallStatus
@@ -108,6 +182,8 @@ enum AgentGetStartedSheetBehavior {
     static let supportedAgentHint = "Need an agent first? Open a pane and start codex, claude, pi, opencode, or mimo."
     static let onboardingHeroBody = "Copy the onboarding prompt and paste it into an agent of your choice to get started. The prompt will walk your agent through setting up agents, skills, and profiles in Toastty."
     static let manualSetupBody = "Choose manual setup if you had issues with the onboarding prompt, or prefer to setup Toastty manually."
+    static let shellIntegrationManualRowBody = "Enable live titles, restored pane history, and manually started agent tracking—including inside tmux and zmx."
+    static let shellIntegrationDetailBody = "Keep live terminal titles current, restore each pane's recent command history, and connect manually started agents to Toastty—including in nested shells and tmux or zmx sessions."
     static let codexStatusHooksManualRowBody = "Toastty guides the install; Codex may ask you to trust the hook once."
 
     static let onboardingPrompt = """
@@ -204,6 +280,11 @@ struct AgentGetStartedSheet: View {
         .onAppear {
             loadInitialStepIfNeeded()
         }
+        .onChange(of: step) { _, newStep in
+            if newStep == .chooser {
+                loadShellIntegrationStatus()
+            }
+        }
         .onDisappear {
             if explicitlyOptedOutOfAutoShow {
                 suppressGettingStarted()
@@ -260,7 +341,8 @@ struct AgentGetStartedSheet: View {
                 manualFallbackRow(
                     systemImage: "terminal",
                     title: "Shell integration",
-                    body: "Track agents you start by hand."
+                    body: AgentGetStartedSheetBehavior.shellIntegrationManualRowBody,
+                    badge: shellIntegrationState.chooserBadge
                 ) {
                     showShellIntegrationStep()
                 }
@@ -407,7 +489,7 @@ struct AgentGetStartedSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             sectionCard(
                 title: "Shell Integration",
-                body: "Shell integration keeps agent sessions visible on the sidebar and preserves terminal history across restarts."
+                body: AgentGetStartedSheetBehavior.shellIntegrationDetailBody
             ) {
                 shellIntegrationStateContent
             }
@@ -712,7 +794,7 @@ struct AgentGetStartedSheet: View {
 
         case .installable(let status):
             shellIntegrationStatusContent(status: status)
-            Button("Install Integration") {
+            Button(shellIntegrationActionTitle(for: status)) {
                 installShellIntegration(status: status)
             }
             .keyboardShortcut(.defaultAction)
@@ -773,7 +855,7 @@ struct AgentGetStartedSheet: View {
                 backgroundColor: ToastyTheme.sessionErrorBackground,
                 identifier: "sheet.agent.get-started.error.install"
             )
-            Button("Install Integration") {
+            Button(shellIntegrationActionTitle(for: status)) {
                 installShellIntegration(status: status)
             }
             .keyboardShortcut(.defaultAction)
@@ -830,6 +912,7 @@ struct AgentGetStartedSheet: View {
         systemImage: String,
         title: String,
         body: String,
+        badge: AgentGetStartedSetupBadge? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -852,6 +935,10 @@ struct AgentGetStartedSheet: View {
 
                 Spacer(minLength: 8)
 
+                if let badge {
+                    setupBadge(badge)
+                }
+
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ToastyTheme.inactiveText)
@@ -867,6 +954,43 @@ struct AgentGetStartedSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+
+    private func setupBadge(_ badge: AgentGetStartedSetupBadge) -> some View {
+        Text(badge.title)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundStyle(setupBadgeTextColor(for: badge.tone))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(setupBadgeBackgroundColor(for: badge.tone))
+            .clipShape(Capsule())
+            .fixedSize()
+    }
+
+    private func setupBadgeTextColor(for tone: AgentGetStartedSetupBadgeTone) -> Color {
+        switch tone {
+        case .neutral:
+            return ToastyTheme.inactiveText
+        case .attention:
+            return ToastyTheme.sessionNeedsApprovalText
+        case .ready:
+            return ToastyTheme.sessionReadyText
+        case .error:
+            return ToastyTheme.sessionErrorText
+        }
+    }
+
+    private func setupBadgeBackgroundColor(for tone: AgentGetStartedSetupBadgeTone) -> Color {
+        switch tone {
+        case .neutral:
+            return ToastyTheme.subtleBorder
+        case .attention:
+            return ToastyTheme.sessionNeedsApprovalBackground
+        case .ready:
+            return ToastyTheme.sessionReadyBackground
+        case .error:
+            return ToastyTheme.sessionErrorBackground
+        }
     }
 
     private func shellIntegrationStatusContent(
@@ -973,11 +1097,20 @@ struct AgentGetStartedSheet: View {
         switch step {
         case .shellIntegration:
             loadShellIntegrationStatus()
+        case .chooser:
+            loadShellIntegrationStatus()
         case .agentStatusHooks:
             loadAgentStatusHooksStatus()
-        case .chooser, .keyboardShortcuts:
+        case .keyboardShortcuts:
             break
         }
+    }
+
+    private func shellIntegrationActionTitle(
+        for status: ProfileShellIntegrationInstallStatus
+    ) -> String {
+        AgentGetStartedShellIntegrationSetupAction.required(for: status)?.buttonTitle
+            ?? "Install Shell Integration"
     }
 
     private func showShellIntegrationStep() {
