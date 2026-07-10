@@ -13,6 +13,7 @@ final class AgentGetStartedSheetTests: XCTestCase {
         let prompt = AgentGetStartedSheetBehavior.onboardingPrompt
 
         XCTAssertTrue(prompt.contains("dry-run every setup command first"))
+        XCTAssertTrue(prompt.contains("pass --dry-run"))
         XCTAssertTrue(prompt.contains("wait for my explicit OK"))
         XCTAssertTrue(prompt.contains("--apply"))
     }

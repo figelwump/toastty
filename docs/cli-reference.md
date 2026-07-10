@@ -95,10 +95,12 @@ scripts are installed later by `setup install-skill`.
 Dry-run or install Toastty's shell integration for zsh, bash, or fish.
 
 ```
-toastty setup install-shell-integration [--shell zsh|bash|fish] [--apply]
+toastty setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
 ```
 
-Without `--apply`, the command reports planned file writes only. With
+Without `--apply`, the command reports planned file writes only; `--dry-run`
+names that default explicitly so agent-composed commands carry visible
+read-only intent, and it is a usage error combined with `--apply`. With
 `--apply`, it writes Toastty's managed shell snippet and updates the selected
 shell init file. Run this from a Toastty terminal pane so the CLI can verify the
 Toastty launch context.
@@ -110,11 +112,13 @@ global hook file; other supported agents receive status integration through
 Toastty-managed launches.
 
 ```
-toastty setup install-hooks --agent codex [--apply]
+toastty setup install-hooks --agent codex [--dry-run | --apply]
 ```
 
 Without `--apply`, the command reports planned writes to the Codex hooks file
-and Toastty forwarder script. With `--apply`, it writes those files directly.
+and Toastty forwarder script; `--dry-run` names that default explicitly and is
+a usage error combined with `--apply`. With `--apply`, it writes those files
+directly.
 Codex may ask the user to trust updated hooks the next time it starts.
 
 ### `setup install-skill`
@@ -122,8 +126,11 @@ Codex may ask the user to trust updated hooks the next time it starts.
 Dry-run or install a bundled starter skill.
 
 ```
-toastty setup install-skill <name> [--runtime agents|claude|codex|all] [--apply]
+toastty setup install-skill <name> [--runtime agents|claude|codex|all] [--dry-run | --apply]
 ```
+
+Without `--apply`, the command reports planned file writes only; `--dry-run`
+names that default explicitly and is a usage error combined with `--apply`.
 
 `--runtime agents` installs under the preferred shared user root
 `~/.agents/skills` and is the default. `--runtime claude` installs under

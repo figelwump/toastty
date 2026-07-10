@@ -144,6 +144,75 @@ struct SetupCommandRunnerTests {
     }
 
     @Test
+    func setupInstallShellIntegrationParsesExplicitDryRun() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["setup", "install-shell-integration", "--dry-run"],
+            environment: [:]
+        )
+
+        guard case .setup(.installShellIntegration(let shell, let apply)) = invocation.command else {
+            Issue.record("expected setup install-shell-integration command")
+            return
+        }
+
+        #expect(shell == nil)
+        #expect(apply == false)
+    }
+
+    @Test
+    func setupInstallHooksParsesExplicitDryRun() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["setup", "install-hooks", "--agent", "codex", "--dry-run"],
+            environment: [:]
+        )
+
+        guard case .setup(.installHooks(let agent, let apply)) = invocation.command else {
+            Issue.record("expected setup install-hooks command")
+            return
+        }
+
+        #expect(agent == .codex)
+        #expect(apply == false)
+    }
+
+    @Test
+    func setupInstallSkillParsesExplicitDryRun() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["setup", "install-skill", "toastty-capabilities", "--runtime", "all", "--dry-run"],
+            environment: [:]
+        )
+
+        guard case .setup(.installSkill(let name, let runtime, let apply)) = invocation.command else {
+            Issue.record("expected setup install-skill command")
+            return
+        }
+
+        #expect(name == "toastty-capabilities")
+        #expect(runtime == .all)
+        #expect(apply == false)
+    }
+
+    @Test(arguments: [
+        ["setup", "install-shell-integration", "--dry-run", "--apply"],
+        ["setup", "install-hooks", "--agent", "codex", "--dry-run", "--apply"],
+        ["setup", "install-skill", "toastty-capabilities", "--dry-run", "--apply"],
+    ])
+    func setupInstallCommandsRejectDryRunCombinedWithApply(arguments: [String]) {
+        do {
+            _ = try ToasttyCLI.parse(arguments: arguments, environment: [:])
+            Issue.record("expected parse failure")
+        } catch let error as ToasttyCLIError {
+            guard case .usage(let message) = error else {
+                Issue.record("expected usage error")
+                return
+            }
+            #expect(message.contains("either --dry-run or --apply"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
     func setupRejectsMissingSubcommand() {
         do {
             _ = try ToasttyCLI.parse(

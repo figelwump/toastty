@@ -552,9 +552,9 @@ public enum ToasttyCLI {
       toastty [--json] setup guide [--format text|md]
       toastty [--json] setup skills list
       toastty [--json] setup print-skill <name>
-      toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--apply]
-      toastty [--json] setup install-hooks --agent <id> [--apply]
-      toastty [--json] setup install-skill <name> [--runtime agents|claude|codex|all] [--apply]
+      toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
+      toastty [--json] setup install-hooks --agent <id> [--dry-run | --apply]
+      toastty [--json] setup install-skill <name> [--runtime agents|claude|codex|all] [--dry-run | --apply]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
@@ -675,19 +675,24 @@ public enum ToasttyCLI {
             let parsed = try parseCommandArguments(
                 remainingArguments,
                 valueOptions: ["--shell"],
-                flagOptions: ["--apply"]
+                flagOptions: ["--dry-run", "--apply"]
             )
             guard parsed.positionals.isEmpty else {
                 throw ToasttyCLIError.usage("setup install-shell-integration does not accept positional arguments\n\n\(usage)")
             }
             let shell = try parsed.singleValue("--shell").map(parseSetupShell)
-            return .setup(.installShellIntegration(shell: shell, apply: parsed.hasFlag("--apply")))
+            return .setup(
+                .installShellIntegration(
+                    shell: shell,
+                    apply: try parseSetupApplyFlag(parsed, subcommand: "install-shell-integration")
+                )
+            )
 
         case "install-hooks":
             let parsed = try parseCommandArguments(
                 remainingArguments,
                 valueOptions: ["--agent"],
-                flagOptions: ["--apply"]
+                flagOptions: ["--dry-run", "--apply"]
             )
             guard parsed.positionals.isEmpty else {
                 throw ToasttyCLIError.usage("setup install-hooks does not accept positional arguments\n\n\(usage)")
@@ -696,13 +701,18 @@ public enum ToasttyCLI {
             guard let agent = AgentKind(rawValue: agentValue) else {
                 throw ToasttyCLIError.usage("--agent must be a lowercase agent ID")
             }
-            return .setup(.installHooks(agent: agent, apply: parsed.hasFlag("--apply")))
+            return .setup(
+                .installHooks(
+                    agent: agent,
+                    apply: try parseSetupApplyFlag(parsed, subcommand: "install-hooks")
+                )
+            )
 
         case "install-skill":
             let parsed = try parseCommandArguments(
                 remainingArguments,
                 valueOptions: ["--runtime"],
-                flagOptions: ["--apply"]
+                flagOptions: ["--dry-run", "--apply"]
             )
             guard parsed.positionals.count == 1 else {
                 throw ToasttyCLIError.usage("setup install-skill requires <name>\n\n\(usage)")
@@ -715,13 +725,27 @@ public enum ToasttyCLI {
                 .installSkill(
                     name: parsed.positionals[0],
                     runtime: runtime,
-                    apply: parsed.hasFlag("--apply")
+                    apply: try parseSetupApplyFlag(parsed, subcommand: "install-skill")
                 )
             )
 
         default:
             throw ToasttyCLIError.usage("unknown setup subcommand: \(subcommand)\n\n\(usage)")
         }
+    }
+
+    // --dry-run is the default behavior made explicit, so agent-composed commands
+    // carry visible read-only intent; it therefore conflicts with --apply.
+    private static func parseSetupApplyFlag(
+        _ parsed: ParsedCommandArguments,
+        subcommand: String
+    ) throws -> Bool {
+        if parsed.hasFlag("--dry-run"), parsed.hasFlag("--apply") {
+            throw ToasttyCLIError.usage(
+                "setup \(subcommand) accepts either --dry-run or --apply, not both\n\n\(usage)"
+            )
+        }
+        return parsed.hasFlag("--apply")
     }
 
     private static func parseSetupShell(_ value: String) throws -> ProfileShellIntegrationShell {

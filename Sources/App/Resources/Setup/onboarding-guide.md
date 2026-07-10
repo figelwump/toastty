@@ -29,26 +29,28 @@ Tell the user what will happen:
 - `toastty setup guide --format md` prints this guide as Markdown.
 - `toastty setup skills list` lists starter skills bundled with Toastty.
 - `toastty setup print-skill <name>` previews a bundled skill's `SKILL.md`.
-- `toastty setup install-shell-integration [--shell zsh|bash|fish] [--apply]` installs shell integration.
-- `toastty setup install-hooks --agent codex [--apply]` installs Codex status hooks.
-- `toastty setup install-skill <name> [--runtime agents|claude|codex|all] [--apply]` installs bundled starter skills.
+- `toastty setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]` installs shell integration.
+- `toastty setup install-hooks --agent codex [--dry-run | --apply]` installs Codex status hooks.
+- `toastty setup install-skill <name> [--runtime agents|claude|codex|all] [--dry-run | --apply]` installs bundled starter skills.
 
 Prefer `"$TOASTTY_CLI_PATH"` over a shell-resolved `toastty`; it targets the running app that launched the pane. Add `--json` when structured output is more useful than text.
+
+Install commands without `--apply` are already dry runs, but pass `--dry-run` explicitly anyway: it keeps the read-only intent visible in the command itself, to the user and to any command-approval tooling in your runtime. `--dry-run` and `--apply` are mutually exclusive.
 
 ## Phase 1: Make It Work
 
 Dry-run shell integration first:
 
 ```bash
-"$TOASTTY_CLI_PATH" setup install-shell-integration
+"$TOASTTY_CLI_PATH" setup install-shell-integration --dry-run
 ```
 
-Show the planned writes and warnings. After explicit approval, rerun the same command with `--apply`. If the user needs a specific shell, add `--shell zsh`, `--shell bash`, or `--shell fish`.
+Show the planned writes and warnings. After explicit approval, rerun the same command with `--apply` in place of `--dry-run`. If the user needs a specific shell, add `--shell zsh`, `--shell bash`, or `--shell fish`.
 
 If the agent is Codex, dry-run status hooks next and warn that Codex may ask the user to trust the hook once:
 
 ```bash
-"$TOASTTY_CLI_PATH" setup install-hooks --agent codex
+"$TOASTTY_CLI_PATH" setup install-hooks --agent codex --dry-run
 ```
 
 After approval, apply with `--apply`. For Claude Code, OpenCode, MiMo Code, and Pi, explain that Toastty injects status integration when those agents are launched through Toastty; no global hook install is needed.
@@ -69,7 +71,7 @@ List the bundled skills and preview the centerpiece:
 Install `toastty-capabilities` first into the runtime or runtimes the user chooses. Dry-run the selected install, show files and conflicts, ask for approval, then apply:
 
 ```bash
-"$TOASTTY_CLI_PATH" setup install-skill toastty-capabilities --runtime all
+"$TOASTTY_CLI_PATH" setup install-skill toastty-capabilities --runtime all --dry-run
 ```
 
 Use `agents` for the preferred shared `~/.agents/skills` target; it is the default and is discovered by Codex and other Agent Skills-compatible runtimes. Use `claude` for `~/.claude/skills` and `codex` only when the user specifically wants a Codex-only copy under `~/.codex/skills`. `all` installs to the shared Agents target plus Claude without creating a duplicate Codex-specific copy.
@@ -85,7 +87,7 @@ Offer these optional convenience skills after capabilities is handled:
 - `toastty-scratchpad`: publish visual HTML artifacts into the current Toastty workspace.
 - `toastty-open-markdown`: open local Markdown files as Toastty document panels.
 
-Install each chosen skill the same way: one dry-run, one visible plan, a one-sentence reminder of what the skill does, one explicit OK before `--apply`. Do not build a custom skill matrix during setup; install the pristine starter and let the user tailor it later if a real workflow emerges.
+Install each chosen skill the same way: one `--dry-run`, one visible plan, a one-sentence reminder of what the skill does, one explicit OK before `--apply`. Do not build a custom skill matrix during setup; install the pristine starter and let the user tailor it later if a real workflow emerges.
 
 ## Phase 3: Optional Tour
 
@@ -110,6 +112,7 @@ Use action descriptors for current parameters. Do not copy a stale catalog into 
 
 - Narrate what you are about to do before doing it.
 - Show planned file writes before applying setup changes.
+- Pass `--dry-run` explicitly on install commands when previewing, even though it is the default.
 - Wait for an explicit OK before every `--apply`.
 - Prefer `"$TOASTTY_CLI_PATH"` for all Toastty commands.
 - Treat `scope_denied` as a cooperative workspace boundary, not an error to work around.

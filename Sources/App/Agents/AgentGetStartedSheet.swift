@@ -115,7 +115,7 @@ enum AgentGetStartedSheetBehavior {
 
     "$TOASTTY_CLI_PATH" setup guide
 
-    Read the guide, narrate each step, dry-run every setup command first, show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.
+    Read the guide, narrate each step, dry-run every setup command first (pass --dry-run), show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.
     """
 
     static func dismissDisabled(

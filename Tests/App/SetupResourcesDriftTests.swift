@@ -212,6 +212,8 @@ final class SetupResourcesDriftTests: XCTestCase {
             "do not gate setup on it",
             "Fresh users are often unmanaged",
             "Dry-run shell integration first",
+            "install-shell-integration --dry-run",
+            "`--dry-run` and `--apply` are mutually exclusive",
             "Codex may ask the user to trust the hook once",
             "Terminal profiles as optional manual setup",
             "fresh Toastty pane",
