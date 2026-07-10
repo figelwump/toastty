@@ -15,6 +15,9 @@ ARCHIVED_AGENT_SHIM_RELATIVE_PATHS=(
   "usr/local/bin/toastty_agent_shim"
 )
 BUNDLED_AGENT_SHIM_RELATIVE_PATH="Contents/Helpers/${AGENT_SHIM_NAME}"
+THIRD_PARTY_NOTICES_RELATIVE_PATH="Contents/Resources/ThirdPartyNotices.txt"
+THIRD_PARTY_NOTICES_SOURCE_PATH="$ROOT_DIR/Sources/App/Resources/ThirdPartyNotices.txt"
+THIRD_PARTY_NOTICES_GENERATOR="$ROOT_DIR/scripts/release/generate-third-party-notices.mjs"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 GHOSTTY_RELEASE_METADATA_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.metadata.env"
 SPARKLE_TOOLS_DIRECTORY=""
@@ -317,8 +320,12 @@ ensure_ghostty_release_metadata() {
   load_ghostty_release_metadata
 
   [[ -n "$GHOSTTY_COMMIT" ]] || fail "Ghostty release metadata is missing GHOSTTY_COMMIT; reinstall the artifact from a Ghostty checkout or pass GHOSTTY_COMMIT"
+  [[ -n "$GHOSTTY_SOURCE_REPO" ]] || fail "Ghostty release metadata is missing GHOSTTY_SOURCE_REPO; reinstall the artifact from a Ghostty checkout"
   [[ -n "$GHOSTTY_BUILD_FLAGS" ]] || fail "Ghostty release metadata is missing GHOSTTY_BUILD_FLAGS; reinstall the artifact with GHOSTTY_BUILD_FLAGS set"
   [[ "$GHOSTTY_SOURCE_DIRTY" == "0" ]] || fail "Ghostty release metadata reports a non-clean source snapshot (GHOSTTY_SOURCE_DIRTY=$GHOSTTY_SOURCE_DIRTY); rebuild/install Ghostty from a clean source tree"
+  [[ -d "$GHOSTTY_SOURCE_REPO" ]] || fail "Ghostty source checkout is unavailable: $GHOSTTY_SOURCE_REPO"
+  git -C "$GHOSTTY_SOURCE_REPO" cat-file -e "${GHOSTTY_COMMIT}^{commit}" 2>/dev/null \
+    || fail "Ghostty source checkout does not contain the recorded release commit: $GHOSTTY_COMMIT"
 
   if [[ -z "$GHOSTTY_COMMIT_SHORT" ]]; then
     GHOSTTY_COMMIT_SHORT="${GHOSTTY_COMMIT:0:12}"
@@ -540,6 +547,27 @@ bundle_agent_shim_into_exported_app() {
   bundle_helper_into_exported_app "${AGENT_SHIM_NAME} helper" "$archived_agent_shim_path" "$bundled_agent_shim_path"
 }
 
+verify_third_party_notices_source() {
+  log "Verifying third-party notices against pinned dependencies"
+  (
+    cd "$ROOT_DIR/WebPanels/LocalDocumentApp"
+    npm ci --omit=dev --no-audit --no-fund
+  )
+  GHOSTTY_SOURCE_REPO="$GHOSTTY_SOURCE_REPO" \
+    GHOSTTY_COMMIT="$GHOSTTY_COMMIT" \
+    "$THIRD_PARTY_NOTICES_GENERATOR" --check
+}
+
+verify_app_third_party_notices() {
+  local app_path="$1"
+  local bundled_notices_path="$app_path/$THIRD_PARTY_NOTICES_RELATIVE_PATH"
+
+  [[ -f "$bundled_notices_path" ]] \
+    || fail "app is missing third-party notices at $bundled_notices_path"
+  cmp -s "$THIRD_PARTY_NOTICES_SOURCE_PATH" "$bundled_notices_path" \
+    || fail "app third-party notices do not match $THIRD_PARTY_NOTICES_SOURCE_PATH"
+}
+
 verify_exported_app() {
   local exported_build_number=""
   local exported_feed_url=""
@@ -548,6 +576,7 @@ verify_exported_app() {
   local exported_version=""
 
   [[ -d "$EXPORTED_APP_PATH" ]] || fail "exported app not found at $EXPORTED_APP_PATH"
+  verify_app_third_party_notices "$EXPORTED_APP_PATH"
   log "Verifying exported app signature"
   codesign --verify --deep --strict --verbose=2 "$EXPORTED_APP_PATH"
 
@@ -768,6 +797,8 @@ verify_dmg_excludes_transient_folders() {
     fi
   done
 
+  verify_app_third_party_notices "$verify_mount_point/$APP_BUNDLE_NAME"
+
   detach_disk_image_with_retries "$verify_device" \
     || fail "failed to detach compressed DMG verification mount"
 }
@@ -854,6 +885,8 @@ require_command security
 require_command ditto
 require_command osascript
 require_command git
+require_command node
+require_command npm
 
 require_env TOASTTY_VERSION
 require_env TOASTTY_BUILD_NUMBER
@@ -897,6 +930,7 @@ mkdir -p "$RELEASE_DIR"
 cd "$ROOT_DIR"
 
 install_tuist_dependencies
+verify_third_party_notices_source
 write_export_options_plist
 generate_workspace
 verify_generated_diagnostics_injection

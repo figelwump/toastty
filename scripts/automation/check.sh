@@ -3,20 +3,118 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
-ARCH="$(uname -m)"
-if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
-  ARCH="arm64"
-fi
+RUNTIME_OWNERSHIP_SELF_TEST="$ROOT_DIR/scripts/automation/runtime-ownership-self-test.sh"
+CLEANUP_DEV_RUNS_SELF_TEST="$ROOT_DIR/scripts/automation/cleanup-dev-runs-self-test.sh"
 MANIFEST_VALIDATION_VERSION="9.9.9"
 MANIFEST_VALIDATION_BUILD_NUMBER="42"
 MANIFEST_VALIDATE_LOG=""
 MANIFEST_EMPTY_VALUE_LOG=""
+
+log() {
+  printf '[check] %s\n' "$*"
+}
+
+warn() {
+  printf 'warning: %s\n' "$*" >&2
+}
+
+fail() {
+  printf 'error: %s\n' "$*" >&2
+  exit 10
+}
+
+require_command() {
+  local command_name="$1"
+  command -v "$command_name" >/dev/null 2>&1 \
+    || fail "required command not found: $command_name"
+}
+
+resolve_arch() {
+  local resolved_arch="${ARCH:-}"
+
+  if [[ -z "$resolved_arch" ]]; then
+    if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
+      resolved_arch="arm64"
+    else
+      resolved_arch="$(uname -m)"
+    fi
+  fi
+
+  case "$resolved_arch" in
+    arm64|x86_64)
+      printf '%s\n' "$resolved_arch"
+      ;;
+    *)
+      fail "unsupported ARCH value: $resolved_arch"
+      ;;
+  esac
+}
+
+ghostty_fallback_explicitly_requested() {
+  [[ "${TUIST_DISABLE_GHOSTTY:-}" == "1" || "${TOASTTY_DISABLE_GHOSTTY:-}" == "1" ]]
+}
+
+verify_ghostty_test_contract() {
+  local project_file="$ROOT_DIR/toastty.xcodeproj/project.pbxproj"
+
+  if rg -q 'TOASTTY_HAS_GHOSTTY_KIT' "$project_file"; then
+    log "Ghostty-backed app and test coverage is enabled."
+    return 0
+  fi
+
+  if ghostty_fallback_explicitly_requested; then
+    warn "Running the explicitly requested fallback gate without Ghostty-backed test suites."
+    return 0
+  fi
+
+  echo "error: the full local gate requires Ghostty-backed app and test coverage." >&2
+  echo "Bootstrap a Ghostty artifact, or explicitly request fallback validation with TUIST_DISABLE_GHOSTTY=1." >&2
+  return 1
+}
+
+run_web_panel_tests() {
+  local package_dir
+
+  for package_dir in \
+    "$ROOT_DIR/WebPanels/LocalDocumentApp" \
+    "$ROOT_DIR/WebPanels/ScratchpadApp"; do
+    log "Installing and testing $(basename "$package_dir")"
+    (
+      cd "$package_dir"
+      npm ci --no-audit --no-fund
+      npm test
+    ) || return 1
+  done
+}
+
+run_app_tests() {
+  local -a xcodebuild_arguments=(
+    test
+    -workspace toastty.xcworkspace
+    -scheme ToasttyApp
+    -destination "platform=macOS,arch=${ARCH}"
+  )
+
+  if ghostty_fallback_explicitly_requested; then
+    xcodebuild_arguments+=(
+      'OTHER_SWIFT_FLAGS=$(inherited) -DTOASTTY_EXPLICIT_GHOSTTY_TEST_FALLBACK'
+    )
+  fi
+
+  xcodebuild "${xcodebuild_arguments[@]}"
+}
+
+ARCH="$(resolve_arch)"
 
 cleanup() {
   rm -f "$MANIFEST_VALIDATE_LOG" "$MANIFEST_EMPTY_VALUE_LOG"
 }
 
 trap cleanup EXIT
+
+require_command jq
+require_command npm
+require_command rg
 
 run_tuist() {
   if command -v sv >/dev/null 2>&1; then
@@ -222,12 +320,28 @@ validate_manifest_version_inputs() {
   fi
 }
 
+if ! "$RUNTIME_OWNERSHIP_SELF_TEST"; then
+  exit 10
+fi
+
+if ! "$CLEANUP_DEV_RUNS_SELF_TEST"; then
+  exit 10
+fi
+
+if ! run_web_panel_tests; then
+  exit 10
+fi
+
 if ! validate_manifest_version_inputs; then
   restore_default_workspace
   exit 10
 fi
 
 if ! "$BOOTSTRAP_WORKTREE_SCRIPT"; then
+  exit 10
+fi
+
+if ! verify_ghostty_test_contract; then
   exit 10
 fi
 
@@ -263,9 +377,6 @@ if ! "$ROOT_DIR/scripts/automation/workspace-tabs-smoke.sh"; then
   exit 10
 fi
 
-if ! xcodebuild test \
-  -workspace toastty.xcworkspace \
-  -scheme ToasttyApp \
-  -destination "platform=macOS,arch=${ARCH}"; then
+if ! run_app_tests; then
   exit 11
 fi
