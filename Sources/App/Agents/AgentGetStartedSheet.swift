@@ -308,15 +308,10 @@ struct AgentGetStartedSheet: View {
 
     private var onboardingHero: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Set up with your agent")
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .foregroundStyle(ToastyTheme.primaryText)
-                Text(AgentGetStartedSheetBehavior.onboardingHeroBody)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(AgentGetStartedSheetBehavior.onboardingHeroBody)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .fixedSize(horizontal: false, vertical: true)
 
             benefitsRow
 
