@@ -96,6 +96,71 @@ final class SetupResourcesDriftTests: XCTestCase {
         )
     }
 
+    func testCapabilitiesSkillDocumentsBoundedChildLaunchHandoff() throws {
+        let content = try String(
+            contentsOf: setupResourcesURL()
+                .appendingPathComponent("starter-skills", isDirectory: true)
+                .appendingPathComponent("toastty-capabilities", isDirectory: true)
+                .appendingPathComponent("SKILL.md", isDirectory: false),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(
+            content.contains(
+                "The `--workspace` selector on `agent.launch` chooses where the child is placed; "
+                    + "it does not assign the child's exact workspace scope."
+            )
+        )
+        XCTAssertTrue(content.contains("not pre-execution isolation"))
+        XCTAssertTrue(content.contains("Do not put child-scoping commands in `initialCommands`"))
+        XCTAssertTrue(content.contains("For an existing workspace"))
+
+        let sectionStart = try XCTUnwrap(
+            content.range(of: "### Launch A Workspace-Bounded Child Agent")
+        )
+        let contentFromSection = content[sectionStart.lowerBound...]
+        let sectionEnd = try XCTUnwrap(
+            contentFromSection.range(of: "### Open Browser And Local Document Panels")
+        )
+        let launchSection = contentFromSection[..<sectionEnd.lowerBound]
+
+        let orderedCommandFragments = [
+            "--json session scope show \\\n    --session \"$TOASTTY_SESSION_ID\"",
+            "--json session scope set-current \\\n      --session \"$TOASTTY_SESSION_ID\"",
+            "--json action run workspace.create",
+            "--json action run agent.launch",
+            "--json session scope set \\\n    --session \"$child_session_id\" \\\n    --workspace \"$workspace_id\"",
+            "--json session scope show \\\n    --session \"$child_session_id\"",
+        ]
+
+        var remainingSection = launchSection[...]
+        for fragment in orderedCommandFragments {
+            guard let fragmentRange = remainingSection.range(of: fragment) else {
+                XCTFail("Bounded child launch example is missing ordered fragment: \(fragment)")
+                return
+            }
+            remainingSection = remainingSection[fragmentRange.upperBound...]
+        }
+
+        for verification in [
+            "if [ -z \"${TOASTTY_SESSION_ID:-}\" ] || [ -z \"${TOASTTY_PANEL_ID:-}\" ]",
+            "parent_began_unrestricted=\"false\"",
+            "launch_attempted=\"false\"",
+            "trap report_launch_failure EXIT",
+            "--json session scope clear",
+            "Restored the parent session to its previous unrestricted state",
+            "x.get(\"isScoped\") is True",
+            "x.get(\"workspaceIDs\") == [w]",
+            "x.get(\"effectiveWorkspaceIDs\") == [w]",
+            "child may already exist and the child may be running with broader inherited scope",
+        ] {
+            XCTAssertTrue(
+                launchSection.contains(verification),
+                "Bounded child launch example is missing verification: \(verification)"
+            )
+        }
+    }
+
     func testOnboardingGuideMentionsOnlyKnownAppControlIDs() throws {
         let guide = try String(
             contentsOf: setupResourcesURL().appendingPathComponent("onboarding-guide.md", isDirectory: false),
