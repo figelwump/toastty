@@ -99,8 +99,9 @@ Artifacts are stored in `artifacts/` (gitignored). Manual captures go in `artifa
 ### Retention And Cleanup
 
 `scripts/automation/artifact-retention.json` is the versioned retention policy.
-`./scripts/automation/cleanup-artifacts.sh` evaluates it in dry-run mode;
-pass `--apply` to delete eligible directories. The managed categories are:
+`./scripts/automation/cleanup-artifacts.sh --dry-run` explicitly previews the
+policy without deleting anything; pass `--apply` to delete eligible
+directories. The managed categories are:
 
 - `dev-runs`: inactive, safely owned runs older than 24 hours
 - `remote-tests` and `remote-gui`: passing runs older than 7 days, and failed,
@@ -116,9 +117,10 @@ used by scheduled cleanup.
 
 The repository does not invoke cleanup from smoke, remote, Computer Use, or
 release scripts. Configure a once-daily Codex App scheduled task in this local
-project to run:
+project to run a preview before applying the same policy:
 
 ```bash
+./scripts/automation/cleanup-artifacts.sh --dry-run
 ./scripts/automation/cleanup-artifacts.sh --apply
 ```
 

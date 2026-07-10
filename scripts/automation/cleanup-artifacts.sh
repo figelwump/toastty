@@ -8,6 +8,7 @@ ARTIFACTS_ROOT="${TOASTTY_ARTIFACTS_ROOT:-$DEFAULT_ARTIFACTS_ROOT}"
 POLICY_FILE="${TOASTTY_ARTIFACT_RETENTION_CONFIG:-$DEFAULT_POLICY_FILE}"
 TESTING="${TOASTTY_ARTIFACT_CLEANUP_TESTING:-0}"
 APPLY=0
+DRY_RUN_REQUESTED=0
 INCLUDE_UNOWNED=0
 VERBOSE=0
 SELECTED_CATEGORY=""
@@ -32,6 +33,7 @@ Safely evaluates Toastty's gitignored artifact categories against
 scripts/automation/artifact-retention.json. The default is a dry run.
 
 Options:
+  --dry-run           Explicitly evaluate and report without deleting anything.
   --apply             Delete eligible artifact directories.
   --category <name>   Evaluate only one configured category.
   --include-unowned   Allow old dev-runs without instance.json to be eligible.
@@ -69,6 +71,9 @@ while [[ $# -gt 0 ]]; do
     --apply)
       APPLY=1
       ;;
+    --dry-run)
+      DRY_RUN_REQUESTED=1
+      ;;
     --category)
       [[ $# -ge 2 ]] || fail "--category requires a value"
       SELECTED_CATEGORY="$2"
@@ -91,6 +96,10 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if (( APPLY == 1 && DRY_RUN_REQUESTED == 1 )); then
+  fail "--dry-run and --apply cannot be combined"
+fi
 
 if [[ "$TESTING" != "1" ]]; then
   [[ "$ARTIFACTS_ROOT" == "$DEFAULT_ARTIFACTS_ROOT" ]] \

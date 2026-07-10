@@ -111,9 +111,14 @@ write_result "remote-gui" "old-timeout" "timeout" "2020-01-01T00:00:00Z"
 mkdir -p "$ARTIFACTS_ROOT/release/old-release"
 age_directory "$ARTIFACTS_ROOT/release/old-release"
 
-dry_run_output="$(run_cleanup --category dev-runs)"
+dry_run_output="$(run_cleanup --dry-run --category dev-runs)"
 if [[ ! -d "$ARTIFACTS_ROOT/dev-runs/stale-owned" ]]; then
   echo "error: the default dry run deleted an eligible directory" >&2
+  exit 1
+fi
+
+if run_cleanup --dry-run --apply >/dev/null 2>&1; then
+  echo "error: --dry-run and --apply should be mutually exclusive" >&2
   exit 1
 fi
 if ! printf '%s\n' "$dry_run_output" | grep -q 'eligible category=dev-runs .*stale-owned'; then

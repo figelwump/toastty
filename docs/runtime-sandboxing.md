@@ -140,13 +140,13 @@ managed artifact categories against `scripts/automation/artifact-retention.json`
 It defaults to a dry run:
 
 ```bash
-./scripts/automation/cleanup-artifacts.sh
+./scripts/automation/cleanup-artifacts.sh --dry-run
 ```
 
 Useful variants:
 
 ```bash
-./scripts/automation/cleanup-artifacts.sh --category dev-runs
+./scripts/automation/cleanup-artifacts.sh --dry-run --category dev-runs
 ./scripts/automation/cleanup-artifacts.sh --apply
 ./scripts/automation/cleanup-artifacts.sh --category dev-runs --include-unowned --apply
 ```

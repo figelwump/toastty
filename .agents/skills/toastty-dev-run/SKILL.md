@@ -31,7 +31,7 @@ Do not use this skill for release builds or pure unit-test work.
 8. Before any required local `peekaboo` interaction, run `peekaboo permissions --json`. If Accessibility is not granted, stop and ask the user to grant local Accessibility before continuing. Do not keep trying local `peekaboo` or improvise local screenshot/menu workarounds after a failed permissions preflight. If the user does not want to grant it locally, switch to the remote GUI path.
 9. Inspect logs and runtime state inside the same runtime home you launched. Do not inspect shared `~/.toastty` data for an isolated run.
 10. Runtime-isolated dev/test runs must not rewrite the user's login shell files. Shell integration installation is intentionally disabled when runtime isolation is enabled.
-11. Clean up only the sandbox you launched. Use `./scripts/automation/cleanup-artifacts.sh --category dev-runs` to preview stale run cleanup, add `--apply` only when deletion is intended, and never delete paths for a still-running PID.
+11. Clean up only the sandbox you launched. Use `./scripts/automation/cleanup-artifacts.sh --dry-run --category dev-runs` to preview stale run cleanup, use `--apply` only when deletion is intended, and never delete paths for a still-running PID.
 
 ## Validation planning
 
