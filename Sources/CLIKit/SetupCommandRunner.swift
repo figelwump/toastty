@@ -22,6 +22,7 @@ enum StarterSkill: String, CaseIterable, Codable, Equatable {
 }
 
 enum SetupSkillRuntime: String, CaseIterable, Codable, Equatable {
+    case agents
     case claude
     case codex
     case all

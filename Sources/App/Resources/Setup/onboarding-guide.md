@@ -31,7 +31,7 @@ Tell the user what will happen:
 - `toastty setup print-skill <name>` previews a bundled skill's `SKILL.md`.
 - `toastty setup install-shell-integration [--shell zsh|bash|fish] [--apply]` installs shell integration.
 - `toastty setup install-hooks --agent codex [--apply]` installs Codex status hooks.
-- `toastty setup install-skill <name> [--runtime claude|codex|all] [--apply]` installs bundled starter skills.
+- `toastty setup install-skill <name> [--runtime agents|claude|codex|all] [--apply]` installs bundled starter skills.
 
 Prefer `"$TOASTTY_CLI_PATH"` over a shell-resolved `toastty`; it targets the running app that launched the pane. Add `--json` when structured output is more useful than text.
 
@@ -71,6 +71,10 @@ Install `toastty-capabilities` first into the runtime or runtimes the user choos
 ```bash
 "$TOASTTY_CLI_PATH" setup install-skill toastty-capabilities --runtime all
 ```
+
+Use `agents` for the preferred shared `~/.agents/skills` target; it is the default and is discovered by Codex and other Agent Skills-compatible runtimes. Use `claude` for `~/.claude/skills` and `codex` only when the user specifically wants a Codex-only copy under `~/.codex/skills`. `all` installs to the shared Agents target plus Claude without creating a duplicate Codex-specific copy.
+
+Read the installer's `Skill targets` section instead of inferring runtime availability from a path. A target reported as externally managed is already discoverable through a symlink and must remain untouched. After `--apply`, verify that every requested runtime is represented by an available target and has an apply outcome of `applied` or `notNeeded` before claiming installation succeeded.
 
 When you ask for the OK to apply, restate in one or two plain sentences what the skill does and why the user would want it — a new user will not remember the list from earlier. For `toastty-capabilities`, say something like: "This skill teaches agents like me how to drive Toastty itself — creating workspaces and panels, launching agents, showing visual output, and notifying you — so agents can automate your Toastty workflows for you."
 

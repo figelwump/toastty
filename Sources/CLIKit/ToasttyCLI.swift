@@ -554,7 +554,7 @@ public enum ToasttyCLI {
       toastty [--json] setup print-skill <name>
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--apply]
       toastty [--json] setup install-hooks --agent <id> [--apply]
-      toastty [--json] setup install-skill <name> [--runtime claude|codex|all] [--apply]
+      toastty [--json] setup install-skill <name> [--runtime agents|claude|codex|all] [--apply]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
@@ -707,9 +707,9 @@ public enum ToasttyCLI {
             guard parsed.positionals.count == 1 else {
                 throw ToasttyCLIError.usage("setup install-skill requires <name>\n\n\(usage)")
             }
-            let runtimeValue = parsed.singleValue("--runtime") ?? SetupSkillRuntime.claude.rawValue
+            let runtimeValue = parsed.singleValue("--runtime") ?? SetupSkillRuntime.agents.rawValue
             guard let runtime = SetupSkillRuntime(rawValue: runtimeValue) else {
-                throw ToasttyCLIError.usage("--runtime must be one of: claude, codex, all")
+                throw ToasttyCLIError.usage("--runtime must be one of: agents, claude, codex, all")
             }
             return .setup(
                 .installSkill(

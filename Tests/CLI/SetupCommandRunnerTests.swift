@@ -127,6 +127,23 @@ struct SetupCommandRunnerTests {
     }
 
     @Test
+    func setupInstallSkillDefaultsToSharedAgentsRuntime() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: ["setup", "install-skill", "toastty-capabilities"],
+            environment: [:]
+        )
+
+        guard case .setup(.installSkill(let name, let runtime, let apply)) = invocation.command else {
+            Issue.record("expected setup install-skill command")
+            return
+        }
+
+        #expect(name == "toastty-capabilities")
+        #expect(runtime == .agents)
+        #expect(apply == false)
+    }
+
+    @Test
     func setupRejectsMissingSubcommand() {
         do {
             _ = try ToasttyCLI.parse(
@@ -151,7 +168,7 @@ struct SetupCommandRunnerTests {
         defer { try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent()) }
 
         let execution = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-capabilities", runtime: .claude, apply: false),
+            command: .installSkill(name: "toastty-capabilities", runtime: .agents, apply: false),
             jsonOutput: true,
             environment: [:],
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -288,6 +305,344 @@ struct SetupCommandRunnerTests {
     }
 
     @Test
+    func setupInstallerAllTargetsSharedAgentsAndClaudeWithoutCodexDuplicate() throws {
+        let setupURL = try makeTemporarySetupResources()
+        let homeURL = try makeTemporaryHome()
+        defer {
+            try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+
+        let execution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-scratchpad", runtime: .all, apply: true),
+            jsonOutput: true,
+            environment: paneEnvironment(homeURL: homeURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+        let result = try JSONDecoder().decode(SetupInstallerResult.self, from: Data(execution.output.utf8))
+        let agentsSkillURL = homeURL.appendingPathComponent(
+            ".agents/skills/toastty-scratchpad",
+            isDirectory: true
+        )
+        let claudeSkillURL = homeURL.appendingPathComponent(
+            ".claude/skills/toastty-scratchpad",
+            isDirectory: true
+        )
+        let codexSkillURL = homeURL.appendingPathComponent(
+            ".codex/skills/toastty-scratchpad",
+            isDirectory: true
+        )
+        let agentsMarkdown = try String(
+            contentsOf: agentsSkillURL.appendingPathComponent("SKILL.md", isDirectory: false),
+            encoding: .utf8
+        )
+        let claudeMarkdown = try String(
+            contentsOf: claudeSkillURL.appendingPathComponent("SKILL.md", isDirectory: false),
+            encoding: .utf8
+        )
+
+        #expect(execution.exitCode == 0)
+        #expect(result.applied)
+        #expect(result.outcome == .applied)
+        #expect(result.skillTargets.map(\.runtimes) == [[.agents], [.claude]])
+        #expect(result.skillTargets.allSatisfy { $0.plannedAction == .install })
+        #expect(result.skillTargets.allSatisfy { $0.availability == .available })
+        #expect(result.skillTargets.allSatisfy { $0.management == .toastty })
+        #expect(result.skillTargets.allSatisfy { $0.applyOutcome == .applied })
+        #expect(agentsMarkdown.contains("~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh"))
+        #expect(claudeMarkdown.contains("~/.claude/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh"))
+        #expect(FileManager.default.fileExists(atPath: codexSkillURL.path) == false)
+    }
+
+    @Test
+    func setupInstallerTextOutputNamesRuntimeTargets() throws {
+        let setupURL = try makeTemporarySetupResources()
+        let homeURL = try makeTemporaryHome()
+        defer {
+            try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+
+        let execution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-capabilities", runtime: .all, apply: false),
+            jsonOutput: false,
+            environment: paneEnvironment(homeURL: homeURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+
+        #expect(execution.output.contains("Skill targets:"))
+        #expect(execution.output.contains("agents: ~/.agents/skills/toastty-capabilities"))
+        #expect(execution.output.contains("claude: ~/.claude/skills/toastty-capabilities"))
+    }
+
+    @Test
+    func setupInstallerLeavesValidRootSkillSymlinkExternallyManaged() throws {
+        let setupURL = try makeTemporarySetupResources()
+        let homeURL = try makeTemporaryHome()
+        defer {
+            try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+        let externalSkillURL = homeURL.appendingPathComponent("external/toastty-scratchpad", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalSkillURL, withIntermediateDirectories: true)
+        try "---\nname: toastty-scratchpad\n---\n".write(
+            to: externalSkillURL.appendingPathComponent("SKILL.md", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        let claudeSkillsURL = homeURL.appendingPathComponent(".claude/skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeSkillsURL, withIntermediateDirectories: true)
+        let linkedSkillURL = claudeSkillsURL.appendingPathComponent("toastty-scratchpad", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: linkedSkillURL, withDestinationURL: externalSkillURL)
+
+        let execution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            jsonOutput: true,
+            environment: paneEnvironment(homeURL: homeURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+        let result = try JSONDecoder().decode(SetupInstallerResult.self, from: Data(execution.output.utf8))
+
+        #expect(execution.exitCode == 0)
+        #expect(result.applied)
+        #expect(result.outcome == .noChanges)
+        #expect(result.changedFiles.isEmpty)
+        #expect(result.skillTargets.count == 1)
+        #expect(result.skillTargets[0].availability == .available)
+        #expect(result.skillTargets[0].management == .external)
+        #expect(result.skillTargets[0].plannedAction == .none)
+        #expect(result.skillTargets[0].applyOutcome == .notNeeded)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: externalSkillURL.appendingPathComponent(".toastty-skill.json").path
+            ) == false
+        )
+    }
+
+    @Test
+    func setupInstallerAllDeduplicatesAliasedRuntimeRoots() throws {
+        let setupURL = try makeTemporarySetupResources()
+        let homeURL = try makeTemporaryHome()
+        defer {
+            try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+        let agentsSkillsURL = homeURL.appendingPathComponent(".agents/skills", isDirectory: true)
+        let claudeURL = homeURL.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: agentsSkillsURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: claudeURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: claudeURL.appendingPathComponent("skills", isDirectory: true),
+            withDestinationURL: agentsSkillsURL
+        )
+
+        let execution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-capabilities", runtime: .all, apply: false),
+            jsonOutput: true,
+            environment: paneEnvironment(homeURL: homeURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+        let result = try JSONDecoder().decode(SetupInstallerResult.self, from: Data(execution.output.utf8))
+
+        #expect(execution.exitCode == 0)
+        #expect(result.skillTargets.count == 1)
+        #expect(result.skillTargets[0].runtimes == [.agents, .claude])
+        #expect(result.skillTargets[0].applyOutcome == .notRequested)
+        #expect(
+            result.skillTargets[0].paths == [
+                "~/.agents/skills/toastty-capabilities",
+                "~/.claude/skills/toastty-capabilities",
+            ]
+        )
+        #expect(result.plannedChanges.filter { $0.hasSuffix("/SKILL.md") }.count == 1)
+    }
+
+    @Test
+    func setupInstallerRejectsBrokenRootSkillSymlink() throws {
+        let setupURL = try makeTemporarySetupResources()
+        let homeURL = try makeTemporaryHome()
+        defer {
+            try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+        let claudeSkillsURL = homeURL.appendingPathComponent(".claude/skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeSkillsURL, withIntermediateDirectories: true)
+        let linkedSkillURL = claudeSkillsURL.appendingPathComponent("toastty-capabilities", isDirectory: true)
+        try FileManager.default.createSymbolicLink(
+            at: linkedSkillURL,
+            withDestinationURL: homeURL.appendingPathComponent("missing-skill", isDirectory: true)
+        )
+
+        let execution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-capabilities", runtime: .claude, apply: true),
+            jsonOutput: true,
+            environment: paneEnvironment(homeURL: homeURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+        let result = try JSONDecoder().decode(SetupInstallerResult.self, from: Data(execution.output.utf8))
+
+        #expect(execution.exitCode == 1)
+        #expect(result.applied == false)
+        #expect(result.outcome == .refused)
+        #expect(result.changedFiles.isEmpty)
+        #expect(result.skillTargets[0].availability == .invalid)
+        #expect(result.skillTargets[0].plannedAction == .conflict)
+        #expect(result.skillTargets[0].applyOutcome == .blocked)
+
+        let textExecution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-capabilities", runtime: .claude, apply: true),
+            jsonOutput: false,
+            environment: paneEnvironment(homeURL: homeURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+        #expect(textExecution.exitCode == 1)
+        #expect(textExecution.output.hasPrefix("Setup apply was refused; no files were changed."))
+        #expect(textExecution.output.contains("Dry run. No files were changed.") == false)
+    }
+
+    @Test
+    func setupInstallerRejectsNestedSymlinkWithoutChangingExternalFile() throws {
+        let setupURL = try makeTemporarySetupResources()
+        let homeURL = try makeTemporaryHome()
+        defer {
+            try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+        let environment = paneEnvironment(homeURL: homeURL)
+        _ = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
+            jsonOutput: true,
+            environment: environment,
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+        let installedScriptURL = homeURL.appendingPathComponent(
+            ".agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh",
+            isDirectory: false
+        )
+        let externalScriptURL = homeURL.appendingPathComponent("external-script.sh", isDirectory: false)
+        try "external\n".write(to: externalScriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.removeItem(at: installedScriptURL)
+        try FileManager.default.createSymbolicLink(
+            at: installedScriptURL,
+            withDestinationURL: externalScriptURL
+        )
+
+        let execution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
+            jsonOutput: true,
+            environment: environment,
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+        let result = try JSONDecoder().decode(SetupInstallerResult.self, from: Data(execution.output.utf8))
+        let externalContents = try String(contentsOf: externalScriptURL, encoding: .utf8)
+
+        #expect(execution.exitCode == 1)
+        #expect(result.applied == false)
+        #expect(result.changedFiles.isEmpty)
+        #expect(result.warnings.contains { $0.contains("install tree contains a symlink") })
+        #expect(result.skillTargets[0].plannedAction == .conflict)
+        #expect(externalContents == "external\n")
+    }
+
+    @Test
+    func setupInstallerReportsPartialApplyWhenSecondRuntimeWriteFails() throws {
+        let setupURL = try makeTemporarySetupResources()
+        let homeURL = try makeTemporaryHome()
+        let textHomeURL = try makeTemporaryHome()
+        defer {
+            try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: textHomeURL)
+        }
+        let claudeURL = homeURL.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeURL, withIntermediateDirectories: true)
+        try "not a directory".write(
+            to: claudeURL.appendingPathComponent("skills", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let execution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-capabilities", runtime: .all, apply: true),
+            jsonOutput: true,
+            environment: paneEnvironment(homeURL: homeURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+        let result = try JSONDecoder().decode(SetupInstallerResult.self, from: Data(execution.output.utf8))
+        let agentsSkillURL = homeURL.appendingPathComponent(
+            ".agents/skills/toastty-capabilities/SKILL.md",
+            isDirectory: false
+        )
+
+        #expect(execution.exitCode == 1)
+        #expect(result.applied == false)
+        #expect(result.outcome == .partial)
+        #expect(result.changedFiles.contains(agentsSkillURL.path))
+        #expect(FileManager.default.fileExists(atPath: agentsSkillURL.path))
+        #expect(result.warnings.contains { $0.contains("Failed to apply") })
+        #expect(result.nextSteps.contains { $0.contains("Some skill files changed") })
+        #expect(result.skillTargets[0].availability == .available)
+        #expect(result.skillTargets[0].management == .toastty)
+        #expect(result.skillTargets[0].applyOutcome == .applied)
+        #expect(result.skillTargets[1].applyOutcome == .failed)
+
+        let textClaudeURL = textHomeURL.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: textClaudeURL, withIntermediateDirectories: true)
+        try "not a directory".write(
+            to: textClaudeURL.appendingPathComponent("skills", isDirectory: false),
+            atomically: true,
+            encoding: .utf8
+        )
+        let textExecution = try SetupInstallerCommandRunner.execute(
+            command: .installSkill(name: "toastty-capabilities", runtime: .all, apply: true),
+            jsonOutput: false,
+            environment: paneEnvironment(homeURL: textHomeURL),
+            store: SetupResourceStore(setupDirectoryURL: setupURL)
+        )
+
+        #expect(textExecution.exitCode == 1)
+        #expect(textExecution.output.hasPrefix("Setup apply did not complete; some files were changed."))
+        #expect(textExecution.output.contains("Dry run. No files were changed.") == false)
+    }
+
+    @Test
+    func setupInstallerRejectsMissingBundledSkillBeforePlanningTargets() throws {
+        let setupURL = try makeTemporarySetupResources()
+        let homeURL = try makeTemporaryHome()
+        defer {
+            try? FileManager.default.removeItem(at: setupURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: homeURL)
+        }
+        let sourceSkillMarkdownURL = setupURL
+            .appendingPathComponent("starter-skills", isDirectory: true)
+            .appendingPathComponent("toastty-capabilities", isDirectory: true)
+            .appendingPathComponent("SKILL.md", isDirectory: false)
+        try FileManager.default.removeItem(at: sourceSkillMarkdownURL)
+
+        do {
+            _ = try SetupInstallerCommandRunner.execute(
+                command: .installSkill(name: "toastty-capabilities", runtime: .agents, apply: true),
+                jsonOutput: true,
+                environment: paneEnvironment(homeURL: homeURL),
+                store: SetupResourceStore(setupDirectoryURL: setupURL)
+            )
+            Issue.record("expected missing bundled skill failure")
+        } catch let error as ToasttyCLIError {
+            guard case .runtime(let message) = error else {
+                Issue.record("expected runtime error")
+                return
+            }
+            #expect(message.contains("bundled starter skill toastty-capabilities"))
+        }
+
+        #expect(
+            FileManager.default.fileExists(
+                atPath: homeURL.appendingPathComponent(".agents/skills/toastty-capabilities").path
+            ) == false
+        )
+    }
+
+    @Test
     func setupInstallerCopiesDotfilesAndDoesNotRewriteAbsoluteAgentPaths() throws {
         let setupURL = try makeTemporarySetupResources()
         let homeURL = try makeTemporaryHome()
@@ -334,7 +689,7 @@ struct SetupCommandRunnerTests {
         }
         let environment = paneEnvironment(homeURL: homeURL)
         _ = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -343,7 +698,7 @@ struct SetupCommandRunnerTests {
         try "\nlocal edit\n".append(to: skillMarkdownURL)
 
         let execution = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -365,7 +720,7 @@ struct SetupCommandRunnerTests {
         }
         let environment = paneEnvironment(homeURL: homeURL)
         _ = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -377,7 +732,7 @@ struct SetupCommandRunnerTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: scriptURL.path)
 
         let execution = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -398,16 +753,16 @@ struct SetupCommandRunnerTests {
         }
         let environment = paneEnvironment(homeURL: homeURL)
         _ = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
         )
-        let claudeSkillMarkdownURL = homeURL.appendingPathComponent(
+        let agentsSkillMarkdownURL = homeURL.appendingPathComponent(
             ".agents/skills/toastty-scratchpad/SKILL.md",
             isDirectory: false
         )
-        try "\nlocal edit\n".append(to: claudeSkillMarkdownURL)
+        try "\nlocal edit\n".append(to: agentsSkillMarkdownURL)
 
         let execution = try SetupInstallerCommandRunner.execute(
             command: .installSkill(name: "toastty-scratchpad", runtime: .all, apply: true),
@@ -416,12 +771,12 @@ struct SetupCommandRunnerTests {
             store: SetupResourceStore(setupDirectoryURL: setupURL)
         )
         let result = try JSONDecoder().decode(SetupInstallerResult.self, from: Data(execution.output.utf8))
-        let codexSkillURL = homeURL.appendingPathComponent(".codex/skills/toastty-scratchpad", isDirectory: true)
+        let claudeSkillURL = homeURL.appendingPathComponent(".claude/skills/toastty-scratchpad", isDirectory: true)
 
         #expect(execution.exitCode == 1)
         #expect(result.applied == false)
         #expect(result.changedFiles.isEmpty)
-        #expect(FileManager.default.fileExists(atPath: codexSkillURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: claudeSkillURL.path) == false)
     }
 
     @Test
@@ -445,7 +800,7 @@ struct SetupCommandRunnerTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sourceLegacyURL.path)
 
         _ = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -458,7 +813,7 @@ struct SetupCommandRunnerTests {
 
         try FileManager.default.removeItem(at: sourceLegacyURL)
         let execution = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -481,7 +836,7 @@ struct SetupCommandRunnerTests {
         }
         let environment = paneEnvironment(homeURL: homeURL)
         _ = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -497,7 +852,7 @@ struct SetupCommandRunnerTests {
         )
 
         let execution = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: false),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: false),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -520,7 +875,7 @@ struct SetupCommandRunnerTests {
         }
         let environment = paneEnvironment(homeURL: homeURL)
         _ = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)
@@ -538,7 +893,7 @@ struct SetupCommandRunnerTests {
         """.write(to: manifestURL, atomically: true, encoding: .utf8)
 
         let execution = try SetupInstallerCommandRunner.execute(
-            command: .installSkill(name: "toastty-scratchpad", runtime: .claude, apply: true),
+            command: .installSkill(name: "toastty-scratchpad", runtime: .agents, apply: true),
             jsonOutput: true,
             environment: environment,
             store: SetupResourceStore(setupDirectoryURL: setupURL)

@@ -122,15 +122,27 @@ Codex may ask the user to trust updated hooks the next time it starts.
 Dry-run or install a bundled starter skill.
 
 ```
-toastty setup install-skill <name> [--runtime claude|codex|all] [--apply]
+toastty setup install-skill <name> [--runtime agents|claude|codex|all] [--apply]
 ```
 
-`--runtime claude` installs under `~/.agents/skills`, `--runtime codex`
-installs under `~/.codex/skills`, and `--runtime all` installs both. The command
-copies the full skill directory, preserves executable helper scripts, rewrites
-bundled helper paths for the target runtime, and writes `.toastty-skill.json`
-with a content hash. If an existing install has local edits or no Toastty
-manifest, `--apply` refuses to overwrite it and reports next steps.
+`--runtime agents` installs under the preferred shared user root
+`~/.agents/skills` and is the default. `--runtime claude` installs under
+`~/.claude/skills`, while `--runtime codex` installs under the Codex-specific
+`~/.codex/skills`. `--runtime all` covers shared Agent Skills plus Claude by
+installing to `~/.agents/skills` and `~/.claude/skills`; it does not create a
+duplicate Codex-specific copy because Codex discovers the shared root. Existing
+Codex-specific installs are left intact; choose `--runtime codex` to manage one
+explicitly.
+
+The command reports each physical target with its runtime coverage,
+availability, management state, planned action, and apply outcome. It stages and
+atomically replaces a managed skill directory, preserves executable helper
+scripts, rewrites bundled helper paths for the target runtime, and writes
+`.toastty-skill.json` with a content hash.
+Existing skill-directory symlinks are reported as discoverable but externally
+managed and are never modified. If an owned install has local edits, lacks
+Toastty metadata, contains nested symlinks, or otherwise conflicts, `--apply`
+refuses to overwrite it and reports next steps.
 
 ### `diagnostics collect`
 
