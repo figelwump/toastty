@@ -135,20 +135,27 @@ This pattern is used by:
 
 Only clean up the sandbox you launched. Do not delete other runtime homes blindly if another Toastty instance may still be using them.
 
-For stale per-run sandboxes under `artifacts/dev-runs/`, use:
+The repository-wide cleanup command evaluates `artifacts/dev-runs/` and other
+managed artifact categories against `scripts/automation/artifact-retention.json`.
+It defaults to a dry run:
 
 ```bash
-./scripts/automation/cleanup-dev-runs.sh
+./scripts/automation/cleanup-artifacts.sh
 ```
 
 Useful variants:
 
 ```bash
-./scripts/automation/cleanup-dev-runs.sh --dry-run
-OLDER_THAN_HOURS=12 ./scripts/automation/cleanup-dev-runs.sh
+./scripts/automation/cleanup-artifacts.sh --category dev-runs
+./scripts/automation/cleanup-artifacts.sh --apply
+./scripts/automation/cleanup-artifacts.sh --category dev-runs --include-unowned --apply
 ```
 
-The cleanup helper reads `runtime-home/instance.json` and skips sandboxes whose recorded PID is still alive.
+For dev runs, the cleanup helper reads `runtime-home/instance.json`, verifies
+directory ownership, and retains a sandbox when its PID is live or cannot be
+checked conclusively. Directories without ownership metadata require the
+explicit `--include-unowned` option. Add a `.keep` file at the root of any
+managed run directory to exempt it from cleanup.
 
 ## Related docs
 

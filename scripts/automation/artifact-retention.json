@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "categories": {
+    "dev-runs": {
+      "strategy": "owned-dev-run",
+      "maxAgeHours": 24
+    },
+    "remote-tests": {
+      "strategy": "result-status",
+      "statusMaxAgeHours": {
+        "pass": 168,
+        "fail": 720,
+        "setup_error": 720
+      }
+    },
+    "remote-gui": {
+      "strategy": "result-status",
+      "statusMaxAgeHours": {
+        "pass": 168,
+        "fail": 720,
+        "setup_error": 720,
+        "agent_error": 720,
+        "timeout": 720
+      }
+    },
+    "automation": { "strategy": "manual" },
+    "claude-review": { "strategy": "manual" },
+    "diagnostics": { "strategy": "manual" },
+    "ghostty-backups": { "strategy": "manual" },
+    "ghostty_backups": { "strategy": "manual" },
+    "icon-check-release": { "strategy": "manual" },
+    "local-derived": { "strategy": "manual" },
+    "local-tests": { "strategy": "manual" },
+    "manual": { "strategy": "manual" },
+    "plan-review-swarm": { "strategy": "manual" },
+    "release": { "strategy": "manual" },
+    "review": { "strategy": "manual" },
+    "reviews": { "strategy": "manual" },
+    "social-preview-fonts": { "strategy": "manual" },
+    "test-runs": { "strategy": "manual" },
+    "tmp": { "strategy": "manual" },
+    "ui": { "strategy": "manual" },
+    "validation": { "strategy": "manual" },
+    "validation-worktrees": { "strategy": "manual" }
+  }
+}

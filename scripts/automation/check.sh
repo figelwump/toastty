@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUNTIME_OWNERSHIP_SELF_TEST="$ROOT_DIR/scripts/automation/runtime-ownership-self-test.sh"
-CLEANUP_DEV_RUNS_SELF_TEST="$ROOT_DIR/scripts/automation/cleanup-dev-runs-self-test.sh"
+CLEANUP_ARTIFACTS_SELF_TEST="$ROOT_DIR/scripts/automation/cleanup-artifacts-self-test.sh"
 MANIFEST_VALIDATION_VERSION="9.9.9"
 MANIFEST_VALIDATION_BUILD_NUMBER="42"
 MANIFEST_VALIDATE_LOG=""
@@ -324,7 +324,7 @@ if ! "$RUNTIME_OWNERSHIP_SELF_TEST"; then
   exit 10
 fi
 
-if ! "$CLEANUP_DEV_RUNS_SELF_TEST"; then
+if ! "$CLEANUP_ARTIFACTS_SELF_TEST"; then
   exit 10
 fi
 

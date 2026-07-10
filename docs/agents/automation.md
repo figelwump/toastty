@@ -96,6 +96,37 @@ If visual validation is taking several minutes or several turns and keeps failin
 
 Artifacts are stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 
+### Retention And Cleanup
+
+`scripts/automation/artifact-retention.json` is the versioned retention policy.
+`./scripts/automation/cleanup-artifacts.sh` evaluates it in dry-run mode;
+pass `--apply` to delete eligible directories. The managed categories are:
+
+- `dev-runs`: inactive, safely owned runs older than 24 hours
+- `remote-tests` and `remote-gui`: passing runs older than 7 days, and failed,
+  setup-error, timeout, or agent-error runs older than 30 days
+- release, manual, diagnostics, review, local-test, and other named categories:
+  manual retention only
+
+The cleaner fails closed. It retains directories with `.keep`, missing or
+malformed metadata, unknown result statuses, recent activity, live PIDs, or
+ambiguous PID state. Categories absent from the policy are not scanned.
+`--include-unowned` is an explicit dev-run recovery option and should not be
+used by scheduled cleanup.
+
+The repository does not invoke cleanup from smoke, remote, Computer Use, or
+release scripts. Configure a once-daily Codex App scheduled task in this local
+project to run:
+
+```bash
+./scripts/automation/cleanup-artifacts.sh --apply
+```
+
+The scheduled task must use the main local checkout, not an isolated worktree,
+because artifact directories belong to that checkout. If the machine or Codex
+App is not running, cleanup waits until a later scheduled run; there is no cron
+or LaunchAgent fallback.
+
 Common smoke env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
 
 CLI live-control env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_RUNTIME_LABEL`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `ARCH`, `TOASTTY_CLI_LIVE_RESTORE_FRONT_APP`.
