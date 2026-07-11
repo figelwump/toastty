@@ -4,9 +4,9 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 ## Quick start
 
-1. If you want to type `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
-2. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…` or open `Get Started…` and choose `Set Up Agent Status Hooks`
-3. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
+1. If you want to type `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, or supported wrappers directly into Toastty terminals, open the Getting Started panel with the top-bar `Get Started…` button, then use `Toastty > Install Shell Integration…` for automatic setup or copy the panel's manual setup command
+2. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…`; it opens the Getting Started panel's Codex hooks section
+3. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or use the Getting Started panel's `Open agents.toml` link
 4. Uncomment or add a profile in `~/.toastty/agents.toml`
 5. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
 6. Click the agent name in the `Agent` menu, top bar, or command palette, or press its keyboard shortcut
@@ -329,8 +329,8 @@ entries, routine hook maintenance runs automatically in the background.
 names Toastty should intercept; it does not control status-hook setup.
 
 If you are setting this up from inside the app, the top-bar `Get Started…`
-button, when visible, routes to the same shell-integration flow as
-`Toastty > Install Shell Integration…`.
+button opens the Getting Started panel. Use `Toastty > Install Shell
+Integration…` for automatic setup, or copy the panel's manual setup command.
 
 If a built-in `[codex]`, `[claude]`, `[opencode]`, `[mimocode]`, or `[pi]` profile uses extra wrapper executables for
 typed launches, list those wrapper basenames in `manualCommandNames`. Entries

@@ -39,6 +39,46 @@ final class BrowserPanelRuntimeTests: XCTestCase {
             BrowserPanelRuntime.normalizedUserEnteredURLString("obsidian://open?vault=toastty"),
             "obsidian://open?vault=toastty"
         )
+        XCTAssertEqual(
+            BrowserPanelRuntime.normalizedUserEnteredURLString("toastty://getting-started/#onboarding"),
+            "toastty://getting-started/#onboarding"
+        )
+    }
+
+    func testGettingStartedActionNavigationPolicyWhitelistsNativeActions() throws {
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://action/open-agent-profiles"))
+            ),
+            .dispatch(.openAgentProfiles)
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://action/open-shortcut-reference"))
+            ),
+            .dispatch(.openShortcutReference)
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://action/delete-everything"))
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://getting-started/#shortcuts"))
+            ),
+            .allow
+        )
+        XCTAssertEqual(
+            BrowserLinkRoutingRules.navigationPolicyDecision(
+                url: try XCTUnwrap(URL(string: "toastty://getting-started/#shortcuts")),
+                navigationType: .linkActivated,
+                modifierFlags: [],
+                targetFrameIsNil: false
+            ),
+            .allow
+        )
     }
 
     func testDefaultStartPageUsesToasttyCopyWithoutExternalDemoLinks() {

@@ -4,8 +4,6 @@ import Foundation
 struct ToasttySettings: Equatable {
     /// One-way app-wide latch for sidebar defaults after the first successful agent launch.
     var hasEverLaunchedAgent = false
-    /// User opt-out latch suppressing automatic Getting Started surfaces.
-    var hasSuppressedGettingStarted = false
     /// When false, Cmd+Q quits immediately without checking terminal activity.
     var askBeforeQuitting = true
 }
@@ -13,13 +11,11 @@ struct ToasttySettings: Equatable {
 enum ToasttySettingsStore {
     private static let terminalFontSizeKey = "toastty.terminalFontSizePoints"
     private static let hasEverLaunchedAgentKey = "toastty.hasEverLaunchedAgent"
-    private static let hasSuppressedGettingStartedKey = "toastty.hasSuppressedGettingStarted"
     private static let askBeforeQuittingKey = "toastty.askBeforeQuitting"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         return ToasttySettings(
             hasEverLaunchedAgent: loadHasEverLaunchedAgent(userDefaults: userDefaults),
-            hasSuppressedGettingStarted: loadHasSuppressedGettingStarted(userDefaults: userDefaults),
             askBeforeQuitting: loadAskBeforeQuitting(userDefaults: userDefaults)
         )
     }
@@ -28,7 +24,6 @@ enum ToasttySettingsStore {
         for key in [
             terminalFontSizeKey,
             hasEverLaunchedAgentKey,
-            hasSuppressedGettingStartedKey,
             askBeforeQuittingKey,
         ] where userDefaults.object(forKey: key) != nil {
             return true
@@ -51,13 +46,6 @@ enum ToasttySettingsStore {
         userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) {
         userDefaults.set(hasEverLaunchedAgent, forKey: hasEverLaunchedAgentKey)
-    }
-
-    static func persistHasSuppressedGettingStarted(
-        _ hasSuppressedGettingStarted: Bool,
-        userDefaults: UserDefaults = ToasttyAppDefaults.current
-    ) {
-        userDefaults.set(hasSuppressedGettingStarted, forKey: hasSuppressedGettingStartedKey)
     }
 
     static func persistAskBeforeQuitting(
@@ -84,21 +72,6 @@ enum ToasttySettingsStore {
 
     private static func loadHasEverLaunchedAgent(userDefaults: UserDefaults) -> Bool {
         guard let storedValue = userDefaults.object(forKey: hasEverLaunchedAgentKey) else {
-            return false
-        }
-
-        switch storedValue {
-        case let value as Bool:
-            return value
-        case let value as NSNumber:
-            return value.boolValue
-        default:
-            return false
-        }
-    }
-
-    private static func loadHasSuppressedGettingStarted(userDefaults: UserDefaults) -> Bool {
-        guard let storedValue = userDefaults.object(forKey: hasSuppressedGettingStartedKey) else {
             return false
         }
 

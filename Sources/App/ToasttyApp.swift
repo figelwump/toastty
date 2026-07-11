@@ -3,6 +3,14 @@ import Carbon.HIToolbox
 import CoreState
 import SwiftUI
 
+struct ToasttyMenuActionError: LocalizedError, Equatable, Sendable {
+    let message: String
+
+    var errorDescription: String? {
+        message
+    }
+}
+
 enum KeyboardShortcutsReferenceLocator {
     private static let fileName = "keyboard-shortcuts"
     private static let fileExtension = "md"
@@ -33,14 +41,14 @@ enum KeyboardShortcutsReferenceLocator {
         fileManager: FileManager = .default,
         bundledReferenceURL: URL? = bundledReferenceURL(),
         openURL: (URL) -> Bool
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         guard let referenceURL = referenceURL(
             worktreeRootURL: runtimePaths.worktreeRootURL,
             bundledReferenceURL: bundledReferenceURL,
             fileManager: fileManager
         ) else {
             return .failure(
-                AgentGetStartedActionError(
+                ToasttyMenuActionError(
                     message: "Toastty couldn't find the keyboard shortcuts reference."
                 )
             )
@@ -48,7 +56,7 @@ enum KeyboardShortcutsReferenceLocator {
 
         guard openURL(referenceURL) else {
             return .failure(
-                AgentGetStartedActionError(
+                ToasttyMenuActionError(
                     message: "Toastty couldn't open the keyboard shortcuts reference."
                 )
             )
@@ -130,7 +138,7 @@ enum ToasttyMenuActions {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         openConfigurationFile(
             prepareFile: {
                 try TerminalProfilesFile.ensureTemplateExists(
@@ -154,7 +162,7 @@ enum ToasttyMenuActions {
         homeDirectoryPath: String = NSHomeDirectory(),
         openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         openConfigurationFile(
             prepareFile: {
                 try AgentProfilesFile.ensureTemplateExists(
@@ -175,7 +183,7 @@ enum ToasttyMenuActions {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         openConfigurationFile(
             prepareFile: {
                 try ToasttyConfigStore.ensureTemplateExists(
@@ -200,7 +208,7 @@ enum ToasttyMenuActions {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         openConfigurationFile(
             prepareFile: {
                 try ToasttyConfigStore.writeConfigReference(
@@ -224,7 +232,7 @@ enum ToasttyMenuActions {
         fileManager: FileManager = .default,
         bundledReferenceURL: URL? = KeyboardShortcutsReferenceLocator.bundledReferenceURL(),
         openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         KeyboardShortcutsReferenceLocator.openReferenceResult(
             runtimePaths: runtimePaths,
             fileManager: fileManager,
@@ -300,11 +308,11 @@ enum ToasttyMenuActions {
         fileFormat: LocalDocumentFormat,
         openManagedLocalDocument: ManagedLocalDocumentOpener,
         openExternally: (URL) -> Bool
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         do {
             try prepareFile()
         } catch {
-            return .failure(AgentGetStartedActionError(message: error.localizedDescription))
+            return .failure(ToasttyMenuActionError(message: error.localizedDescription))
         }
 
         if openManagedLocalDocument(fileURL, fileFormat) {
@@ -317,10 +325,10 @@ enum ToasttyMenuActions {
     private static func openExistingFile(
         _ fileURL: URL,
         openExternally: (URL) -> Bool
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         guard openExternally(fileURL) else {
             return .failure(
-                AgentGetStartedActionError(message: "Toastty couldn't open \(fileURL.path).")
+                ToasttyMenuActionError(message: "Toastty couldn't open \(fileURL.path).")
             )
         }
         return .success(())
@@ -1969,9 +1977,7 @@ struct ToasttyApp: App {
             state: bootstrap.state,
             persistTerminalFontPreference: persistUserSettings,
             initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
-            initialHasSuppressedGettingStarted: initialToasttySettings.hasSuppressedGettingStarted,
-            initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting,
-            gettingStartedSetupFootprint: initialGettingStartedSetupFootprint
+            initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting
         )
         let agentCatalogStore = AgentCatalogStore()
         let initialProfileShortcutRegistry = Self.makeProfileShortcutRegistry(
@@ -2796,7 +2802,7 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+    private func openAgentProfilesConfigurationResult() -> Result<Void, ToasttyMenuActionError> {
         ToasttyMenuActions.openAgentProfilesConfigurationResult(
             openManagedLocalDocument: { [store] fileURL, format in
                 openManagedLocalDocumentInToastty(
@@ -2810,7 +2816,7 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private func openKeyboardShortcutsReferenceResult() -> Result<Void, AgentGetStartedActionError> {
+    private func openKeyboardShortcutsReferenceResult() -> Result<Void, ToasttyMenuActionError> {
         ToasttyMenuActions.openKeyboardShortcutsReferenceResult(
             runtimePaths: runtimePaths,
             openURL: { [store] url in

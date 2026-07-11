@@ -222,23 +222,23 @@ Why this is the best v1 candidate:
 - It exercises a real multi-step modal sheet inside Toastty rather than a
   shortcut-injection path that deterministic smoke automation already targets.
 - It is grounded in an existing UI flow: the top-bar `Get Started…` path and
-  the Agent onboarding sheet.
-- It avoids real shell dotfile writes and avoids secrets if the flow stops on
-  the `Keyboard Shortcuts` step instead of performing shell integration.
+  the Getting Started browser panel.
+- It avoids real shell dotfile writes and avoids secrets if the flow stops at
+  the page's `#shortcuts` section instead of performing shell integration.
 
 Proposed user journey:
 
 1. Launch Toastty in an isolated runtime home on the Mini.
 2. Click the top-bar `Get Started…` entry point.
-3. Navigate to the `Keyboard Shortcuts` step in the onboarding sheet.
-4. End with the sheet still open on that step.
+3. Navigate to the `#shortcuts` section in the Getting Started browser panel.
+4. End with that right-panel browser tab still visible.
 
 Deterministic assertion for v1:
 
 - The run should not self-grade based only on the model's summary.
 - Add or reuse a narrow app-side probe that records whether the
-  `sheet.agent.get-started` sheet is visible and whether the active step is
-  `keyboardShortcuts`.
+  Getting Started browser tab is visible and whether its current URL has the
+  `#shortcuts` fragment.
 - Store that probe output in `remote/assertions.json` and use it to decide
   pass/fail.
 

@@ -63,8 +63,8 @@ struct AppWindowSceneHostView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
-    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
-    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let sceneCoordinator: AppWindowSceneCoordinator

@@ -205,7 +205,8 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         if trimmed.contains("://") ||
             lowercased.hasPrefix("about:") ||
             lowercased.hasPrefix("data:") ||
-            lowercased.hasPrefix("file:") {
+            lowercased.hasPrefix("file:") ||
+            lowercased.hasPrefix("toastty:") {
             return trimmed
         }
 
@@ -1297,6 +1298,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     ) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        configuration.setURLSchemeHandler(ToasttyPageSchemeHandler(), forURLScheme: "toastty")
         if capabilityProfile == .localOnly {
             configuration.websiteDataStore = .nonPersistent()
         }
@@ -1422,6 +1424,29 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
     ) {
         guard webView === self.webView else {
             decisionHandler(.allow)
+            return
+        }
+
+        switch GettingStartedActionNavigationPolicy.decision(for: navigationAction.request.url) {
+        case .allow:
+            break
+        case .dispatch(let action):
+            NotificationCenter.default.post(
+                name: .toasttyShowAgentGetStartedFlow,
+                object: GettingStartedPanelRequest.performNativeAction(
+                    panelID: panelID,
+                    action: action
+                )
+            )
+            decisionHandler(.cancel)
+            return
+        case .ignore:
+            ToasttyLog.warning(
+                "Ignored unsupported Toastty page action",
+                category: .state,
+                metadata: ["url": navigationAction.request.url?.absoluteString ?? "missing"]
+            )
+            decisionHandler(.cancel)
             return
         }
 

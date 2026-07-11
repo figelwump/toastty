@@ -3,7 +3,7 @@ import CoreState
 import XCTest
 
 final class GettingStartedEligibilityTests: XCTestCase {
-    func testFreshPersistentRunAllowsAutomaticPresentationAndTopBarButton() throws {
+    func testFreshPersistentRunAllowsAutomaticPresentation() throws {
         let fixture = try makeFixture()
 
         let footprint = GettingStartedEligibility.setupFootprint(
@@ -17,12 +17,6 @@ final class GettingStartedEligibilityTests: XCTestCase {
         XCTAssertTrue(
             GettingStartedEligibility.allowsAutoPresentation(
                 usesPersistentPreferences: true,
-                setupFootprint: footprint
-            )
-        )
-        XCTAssertTrue(
-            GettingStartedEligibility.shouldShowTopBarButton(
-                hasSuppressedGettingStarted: false,
                 setupFootprint: footprint
             )
         )
@@ -113,12 +107,6 @@ final class GettingStartedEligibilityTests: XCTestCase {
                 setupFootprint: footprint
             )
         )
-        XCTAssertFalse(
-            GettingStartedEligibility.shouldShowTopBarButton(
-                hasSuppressedGettingStarted: false,
-                setupFootprint: footprint
-            )
-        )
         XCTAssertTrue(
             GettingStartedEligibility.shouldCreateStartupSetupTemplates(
                 usesPersistentPreferences: true,
@@ -190,24 +178,6 @@ final class GettingStartedEligibilityTests: XCTestCase {
 
         XCTAssertTrue(footprint.hasPersistedSettings)
         XCTAssertTrue(footprint.exists)
-    }
-
-    func testSuppressionHidesTopBarButtonWithoutCreatingSetupFootprint() throws {
-        let fixture = try makeFixture()
-        let footprint = GettingStartedEligibility.setupFootprint(
-            runtimePaths: fixture.runtimePaths,
-            userDefaults: fixture.userDefaults,
-            homeDirectoryPath: fixture.homeURL.path,
-            environment: fixture.environment
-        )
-
-        XCTAssertFalse(footprint.exists)
-        XCTAssertFalse(
-            GettingStartedEligibility.shouldShowTopBarButton(
-                hasSuppressedGettingStarted: true,
-                setupFootprint: footprint
-            )
-        )
     }
 
     private func makeFixture(

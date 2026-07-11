@@ -48,13 +48,6 @@ enum GettingStartedEligibility {
         usesPersistentPreferences && setupFootprint.exists == false
     }
 
-    static func shouldShowTopBarButton(
-        hasSuppressedGettingStarted: Bool,
-        setupFootprint: GettingStartedSetupFootprint
-    ) -> Bool {
-        hasSuppressedGettingStarted == false && setupFootprint.exists == false
-    }
-
     static func shouldCreateStartupSetupTemplates(
         usesPersistentPreferences: Bool,
         setupFootprint: GettingStartedSetupFootprint

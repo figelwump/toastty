@@ -238,7 +238,7 @@ final class ToasttyCommandMenusTests: XCTestCase {
     }
 
     @MainActor
-    func testAgentGetStartedTargetWindowIDDisablesForStalePreferredWindow() {
+    func testGettingStartedTargetWindowIDDisablesForStalePreferredWindow() {
         let selectedWindowID = UUID()
         let fallbackWindowID = UUID()
         let state = AppState(
@@ -262,7 +262,7 @@ final class ToasttyCommandMenusTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
         XCTAssertNil(
-            ToasttyCommandMenus.agentGetStartedTargetWindowID(
+            ToasttyCommandMenus.gettingStartedTargetWindowID(
                 store: store,
                 preferredWindowID: UUID()
             )
@@ -270,7 +270,7 @@ final class ToasttyCommandMenusTests: XCTestCase {
     }
 
     @MainActor
-    func testAgentGetStartedTargetWindowIDFallsBackToSelectedWindowWithoutPreferredWindow() {
+    func testGettingStartedTargetWindowIDFallsBackToSelectedWindowWithoutPreferredWindow() {
         let selectedWindowID = UUID()
         let state = AppState(
             windows: [
@@ -287,7 +287,7 @@ final class ToasttyCommandMenusTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
         XCTAssertEqual(
-            ToasttyCommandMenus.agentGetStartedTargetWindowID(
+            ToasttyCommandMenus.gettingStartedTargetWindowID(
                 store: store,
                 preferredWindowID: nil
             ),

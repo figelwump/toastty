@@ -13,8 +13,8 @@ struct AppWindowSceneView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
-    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
-    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let onWindowCloseInitiated: @MainActor () -> Void
@@ -176,20 +176,26 @@ struct AppWindowSceneView: View {
         guard windowState != nil else { return }
         _ = store.send(.selectWindow(windowID: windowID))
         scheduleWindowFocusRestore()
-        presentGettingStartedFlowIfNeeded()
+        openGettingStartedPanelIfNeeded()
     }
 
-    private func presentGettingStartedFlowIfNeeded() {
-        guard let request = AppWindowView.agentGetStartedAutoPresentationRequest(
-            windowID: windowID,
+    private func openGettingStartedPanelIfNeeded() {
+        guard Self.shouldAutoOpenGettingStartedPanel(
             allowsAutoPresentation: allowsGettingStartedAutoPresentation,
-            hasSuppressedGettingStarted: store.hasSuppressedGettingStarted,
-            hasAutoPresentedThisSession: store.hasAutoPresentedGettingStartedThisSession
-        ) else { return }
-        NotificationCenter.default.post(
-            name: .toasttyShowAgentGetStartedFlow,
-            object: request
-        )
+            hasAutoOpenedThisLaunch: store.hasAutoOpenedGettingStartedPanelThisLaunch
+        ),
+        let workspaceID = store.selectedWorkspace(in: windowID)?.id,
+        store.recordGettingStartedPanelAutoOpenIfNeeded() else {
+            return
+        }
+        _ = store.openGettingStartedPanel(workspaceID: workspaceID)
+    }
+
+    static func shouldAutoOpenGettingStartedPanel(
+        allowsAutoPresentation: Bool,
+        hasAutoOpenedThisLaunch: Bool
+    ) -> Bool {
+        allowsAutoPresentation && hasAutoOpenedThisLaunch == false
     }
 
     private func handleWindowFrameChange(_ frame: CGRectCodable) {

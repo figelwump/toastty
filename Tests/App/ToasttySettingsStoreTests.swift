@@ -10,7 +10,6 @@ final class ToasttySettingsStoreTests: XCTestCase {
         let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
 
         XCTAssertFalse(settings.hasEverLaunchedAgent)
-        XCTAssertFalse(settings.hasSuppressedGettingStarted)
         XCTAssertTrue(settings.askBeforeQuitting)
         XCTAssertFalse(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
@@ -22,19 +21,6 @@ final class ToasttySettingsStoreTests: XCTestCase {
         let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
 
         XCTAssertTrue(settings.hasEverLaunchedAgent)
-        XCTAssertFalse(settings.hasSuppressedGettingStarted)
-        XCTAssertTrue(settings.askBeforeQuitting)
-        XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
-    }
-
-    func testPersistHasSuppressedGettingStartedStoresAndLoadsFlag() {
-        let userDefaults = makeUserDefaults()
-
-        ToasttySettingsStore.persistHasSuppressedGettingStarted(true, userDefaults: userDefaults)
-        let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
-
-        XCTAssertTrue(settings.hasSuppressedGettingStarted)
-        XCTAssertFalse(settings.hasEverLaunchedAgent)
         XCTAssertTrue(settings.askBeforeQuitting)
         XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
@@ -47,7 +33,6 @@ final class ToasttySettingsStoreTests: XCTestCase {
 
         XCTAssertFalse(settings.askBeforeQuitting)
         XCTAssertFalse(settings.hasEverLaunchedAgent)
-        XCTAssertFalse(settings.hasSuppressedGettingStarted)
         XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 

@@ -13,14 +13,12 @@ struct AppWindowView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
-    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
-    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
-    @State private var showsAgentGetStartedSheet = false
-    @State private var agentGetStartedInitialStep: AgentGetStartedStep = .chooser
     @State private var appIsActive = true
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -67,7 +65,10 @@ struct AppWindowView: View {
                     profileShortcutRegistry: profileShortcutRegistry,
                     focusedPanelCommandController: focusedPanelCommandController,
                     agentLaunchService: agentLaunchService,
-                    showAgentGetStartedFlow: { presentAgentGetStartedFlow() },
+                    openGettingStartedPanel: {
+                        guard let workspaceID = store.selectedWorkspace(in: windowID)?.id else { return }
+                        _ = store.openGettingStartedPanel(workspaceID: workspaceID)
+                    },
                     toggleCommandPalette: toggleCommandPalette,
                     presentCommandPalette: presentCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext,
@@ -121,9 +122,6 @@ struct AppWindowView: View {
         } message: { closeTarget in
             Text(closeTarget.confirmationMessage)
         }
-        .sheet(isPresented: $showsAgentGetStartedSheet) {
-            agentGetStartedSheet
-        }
         .onAppear {
             appIsActive = NSApplication.shared.isActive
             scheduleWindowFocusRestore()
@@ -161,14 +159,22 @@ struct AppWindowView: View {
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
-            guard let request = Self.agentGetStartedPresentationRequest(
-                windowID: windowID,
-                notificationObject: notification.object
-            ) else { return }
-            if request.isAutomatic {
-                guard store.recordGettingStartedAutoPresentationIfNeeded() else { return }
+            guard let request = notification.object as? GettingStartedPanelRequest else { return }
+
+            switch request {
+            case .open(let targetWindowID, let anchor):
+                guard targetWindowID == windowID,
+                      let workspaceID = store.selectedWorkspace(in: windowID)?.id else {
+                    return
+                }
+                _ = store.openGettingStartedPanel(workspaceID: workspaceID, anchor: anchor)
+
+            case .performNativeAction(let panelID, let action):
+                guard store.state.workspaceSelection(containingPanelID: panelID)?.windowID == windowID else {
+                    return
+                }
+                performGettingStartedPanelNativeAction(action)
             }
-            presentAgentGetStartedFlow(initialStep: request.initialStep)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
@@ -231,50 +237,6 @@ struct AppWindowView: View {
         hasUnreadBadge ? "Unread notifications" : ""
     }
 
-    static func shouldPresentAgentGetStartedFlow(windowID: UUID, notificationObject: Any?) -> Bool {
-        agentGetStartedPresentationRequest(
-            windowID: windowID,
-            notificationObject: notificationObject
-        ) != nil
-    }
-
-    static func shouldAutoPresentAgentGetStartedFlow(
-        allowsAutoPresentation: Bool,
-        hasSuppressedGettingStarted: Bool,
-        hasAutoPresentedThisSession: Bool
-    ) -> Bool {
-        allowsAutoPresentation
-            && hasSuppressedGettingStarted == false
-            && hasAutoPresentedThisSession == false
-    }
-
-    static func agentGetStartedAutoPresentationRequest(
-        windowID: UUID,
-        allowsAutoPresentation: Bool,
-        hasSuppressedGettingStarted: Bool,
-        hasAutoPresentedThisSession: Bool
-    ) -> AgentGetStartedPresentationRequest? {
-        guard shouldAutoPresentAgentGetStartedFlow(
-            allowsAutoPresentation: allowsAutoPresentation,
-            hasSuppressedGettingStarted: hasSuppressedGettingStarted,
-            hasAutoPresentedThisSession: hasAutoPresentedThisSession
-        ) else { return nil }
-        return AgentGetStartedPresentationRequest(windowID: windowID, isAutomatic: true)
-    }
-
-    static func agentGetStartedPresentationRequest(
-        windowID: UUID,
-        notificationObject: Any?
-    ) -> AgentGetStartedPresentationRequest? {
-        if let request = notificationObject as? AgentGetStartedPresentationRequest {
-            return request.windowID == windowID ? request : nil
-        }
-        if let targetWindowID = notificationObject as? UUID, targetWindowID == windowID {
-            return AgentGetStartedPresentationRequest(windowID: windowID)
-        }
-        return nil
-    }
-
     private var sidebarToggleButton: some View {
         Button {
             store.send(.toggleSidebar(windowID: windowID))
@@ -303,18 +265,6 @@ struct AppWindowView: View {
         .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 
-    private var agentGetStartedSheet: some View {
-        AgentGetStartedSheet(
-            initialStep: agentGetStartedInitialStep,
-            openAgentProfilesConfiguration: openAgentProfilesConfigurationResult,
-            openKeyboardShortcutsReference: openKeyboardShortcutsReferenceResult,
-            suppressGettingStarted: {
-                store.suppressGettingStarted()
-            },
-            resolveShellIntegrationPreferredShellPath: resolveShellIntegrationPreferredShellPath
-        )
-    }
-
     private var slotFocusSignature: WindowSlotFocusSignature? {
         guard store.window(id: windowID) != nil else { return nil }
         return WindowSlotFocusSignature(
@@ -336,16 +286,22 @@ struct AppWindowView: View {
     }
 
     @MainActor
-    private func resolveShellIntegrationPreferredShellPath() -> String? {
-        terminalRuntimeRegistry.resolveShellIntegrationShellPath(
-            preferredWindowID: windowID
-        )
-    }
+    private func performGettingStartedPanelNativeAction(_ action: GettingStartedPanelNativeAction) {
+        let result: Result<Void, ToasttyMenuActionError>
+        switch action {
+        case .openAgentProfiles:
+            result = openAgentProfilesConfigurationResult()
+        case .openShortcutReference:
+            result = openKeyboardShortcutsReferenceResult()
+        }
 
-    @MainActor
-    private func presentAgentGetStartedFlow(initialStep: AgentGetStartedStep = .chooser) {
-        agentGetStartedInitialStep = initialStep
-        showsAgentGetStartedSheet = true
+        if case .failure(let error) = result {
+            ToasttyLog.warning(
+                "Getting Started page action failed",
+                category: .state,
+                metadata: ["action": action.rawValue, "error": error.localizedDescription]
+            )
+        }
     }
 
     private func scheduleWindowFocusRestore(avoidStealingKeyboardFocus: Bool = true) {

@@ -88,7 +88,7 @@ struct WorkspaceView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
-    let showAgentGetStartedFlow: () -> Void
+    let openGettingStartedPanel: () -> Void
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
@@ -529,8 +529,7 @@ struct WorkspaceView: View {
     private var agentTopBarModel: WorkspaceAgentTopBarModel {
         WorkspaceAgentTopBarModel(
             catalog: agentCatalogStore.catalog,
-            profileShortcutRegistry: profileShortcutRegistry,
-            showsGettingStartedButton: store.shouldShowGettingStartedTopBarButton
+            profileShortcutRegistry: profileShortcutRegistry
         )
     }
 
@@ -725,7 +724,7 @@ struct WorkspaceView: View {
         HStack(spacing: 0) {
             if agentTopBarModel.showsAddAgentsButton {
                 topBarFlashTextButton(title: WorkspaceAgentTopBarModel.addAgentsTitle) {
-                    showAgentGetStartedFlow()
+                    openGettingStartedPanel()
                 }
                 .accessibilityIdentifier("topbar.agent.add")
             } else {
@@ -3566,19 +3565,16 @@ struct WorkspaceAgentTopBarModel: Equatable {
 
     let actions: [Action]
     let showsTopBarButtons: Bool
-    let showsGettingStartedButton: Bool
     private let hasConfiguredAgentProfiles: Bool
 
     var showsAddAgentsButton: Bool {
-        showsGettingStartedButton && hasConfiguredAgentProfiles == false
+        hasConfiguredAgentProfiles == false
     }
 
     init(
         catalog: AgentCatalog,
-        profileShortcutRegistry: ProfileShortcutRegistry,
-        showsGettingStartedButton: Bool = true
+        profileShortcutRegistry: ProfileShortcutRegistry
     ) {
-        self.showsGettingStartedButton = showsGettingStartedButton
         hasConfiguredAgentProfiles = catalog.profiles.isEmpty == false
         showsTopBarButtons = catalog.showsTopBarButtons
         guard catalog.showsTopBarButtons else {

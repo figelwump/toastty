@@ -12,6 +12,29 @@ enum BrowserPopupRoutingDecision: Equatable {
     case awaitCapturedURL
 }
 
+enum GettingStartedActionNavigationDecision: Equatable {
+    case allow
+    case dispatch(GettingStartedPanelNativeAction)
+    case ignore
+}
+
+enum GettingStartedActionNavigationPolicy {
+    static func decision(for url: URL?) -> GettingStartedActionNavigationDecision {
+        guard let url,
+              url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
+              url.host?.caseInsensitiveCompare("action") == .orderedSame else {
+            return .allow
+        }
+
+        let pathComponents = url.pathComponents.filter { $0 != "/" }
+        guard pathComponents.count == 1,
+              let action = GettingStartedPanelNativeAction(rawValue: pathComponents[0]) else {
+            return .ignore
+        }
+        return .dispatch(action)
+    }
+}
+
 enum BrowserLinkRoutingRules {
     static func navigationPolicyDecision(
         url: URL?,
@@ -65,6 +88,6 @@ enum BrowserLinkRoutingRules {
             return false
         }
 
-        return scheme == "http" || scheme == "https"
+        return scheme == "http" || scheme == "https" || scheme == "toastty"
     }
 }

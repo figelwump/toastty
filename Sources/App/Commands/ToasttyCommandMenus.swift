@@ -155,8 +155,8 @@ struct ToasttyCommandMenus: Commands {
         )
     }
 
-    private var agentGetStartedTargetWindowID: UUID? {
-        Self.agentGetStartedTargetWindowID(
+    private var gettingStartedTargetWindowID: UUID? {
+        Self.gettingStartedTargetWindowID(
             store: store,
             preferredWindowID: preferredCommandWindowID
         )
@@ -384,7 +384,7 @@ struct ToasttyCommandMenus: Commands {
             Button("Set Up Agent Status Hooks…") {
                 showAgentStatusHooksSetup()
             }
-            .disabled(agentGetStartedTargetWindowID == nil)
+            .disabled(gettingStartedTargetWindowID == nil)
 
             Button("Paste Toastty Doctor Command") {
                 pasteToasttyDoctorCommandIntoFocusedTerminal()
@@ -396,9 +396,9 @@ struct ToasttyCommandMenus: Commands {
             }
 
             Button("Get Started with Toastty…") {
-                showAgentGetStartedFlow()
+                showGettingStartedPanel()
             }
-            .disabled(agentGetStartedTargetWindowID == nil)
+            .disabled(gettingStartedTargetWindowID == nil)
         }
 
         CommandGroup(before: .appTermination) {
@@ -876,25 +876,21 @@ struct ToasttyCommandMenus: Commands {
         AgentLaunchUI.launch(
             profileID: profileID,
             workspaceID: commandWorkspace?.id,
-            originWindowID: agentGetStartedTargetWindowID,
+            originWindowID: gettingStartedTargetWindowID,
             agentLaunchService: agentLaunchService
         )
     }
 
-    private func showAgentGetStartedFlow() {
-        guard let windowID = agentGetStartedTargetWindowID else { return }
+    private func showGettingStartedPanel(anchor: String? = nil) {
+        guard let windowID = gettingStartedTargetWindowID else { return }
         NotificationCenter.default.post(
             name: .toasttyShowAgentGetStartedFlow,
-            object: AgentGetStartedPresentationRequest(windowID: windowID)
+            object: GettingStartedPanelRequest.open(windowID: windowID, anchor: anchor)
         )
     }
 
     private func showAgentStatusHooksSetup() {
-        guard let windowID = agentGetStartedTargetWindowID else { return }
-        NotificationCenter.default.post(
-            name: .toasttyShowAgentGetStartedFlow,
-            object: AgentGetStartedPresentationRequest(windowID: windowID, initialStep: .agentStatusHooks)
-        )
+        showGettingStartedPanel(anchor: "codex-hooks")
     }
 
     @ViewBuilder
@@ -1106,7 +1102,7 @@ struct ToasttyCommandMenus: Commands {
         focusedTerminalPanelID != nil && promptState.isIdleAtPrompt
     }
 
-    static func agentGetStartedTargetWindowID(store: AppStore, preferredWindowID: UUID?) -> UUID? {
+    static func gettingStartedTargetWindowID(store: AppStore, preferredWindowID: UUID?) -> UUID? {
         // Follow the same command-window resolution contract as other
         // window-targeted actions so stale focused-scene state disables the
         // command instead of rerouting it to another window.

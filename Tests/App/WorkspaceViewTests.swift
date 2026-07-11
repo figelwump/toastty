@@ -71,8 +71,7 @@ final class WorkspaceViewTests: XCTestCase {
 
         let model = WorkspaceAgentTopBarModel(
             catalog: catalog,
-            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: catalog),
-            showsGettingStartedButton: false
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: catalog)
         )
 
         XCTAssertFalse(model.showsTopBarButtons)
@@ -84,24 +83,12 @@ final class WorkspaceViewTests: XCTestCase {
         let emptyHiddenCatalog = AgentCatalog(profiles: [], showsTopBarButtons: false)
         let emptyHiddenModel = WorkspaceAgentTopBarModel(
             catalog: emptyHiddenCatalog,
-            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog),
-            showsGettingStartedButton: true
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog)
         )
 
         XCTAssertFalse(emptyHiddenModel.showsTopBarButtons)
         XCTAssertTrue(emptyHiddenModel.actions.isEmpty)
         XCTAssertTrue(emptyHiddenModel.showsAddAgentsButton)
-    }
-
-    func testWorkspaceAgentTopBarModelHidesGetStartedWhenSetupIsComplete() {
-        let emptyHiddenCatalog = AgentCatalog(profiles: [], showsTopBarButtons: false)
-        let emptyHiddenModel = WorkspaceAgentTopBarModel(
-            catalog: emptyHiddenCatalog,
-            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog),
-            showsGettingStartedButton: false
-        )
-
-        XCTAssertFalse(emptyHiddenModel.showsAddAgentsButton)
     }
 
     func testWorkspaceTabTrailingAccessoryUsesCloseButtonWhenHovered() {
@@ -2330,7 +2317,7 @@ final class WorkspaceViewTests: XCTestCase {
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: .empty),
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
-            showAgentGetStartedFlow: {},
+            openGettingStartedPanel: {},
             toggleCommandPalette: { _ in },
             presentCommandPalette: { _, _ in },
             terminalRuntimeContext: TerminalWindowRuntimeContext(

@@ -117,178 +117,33 @@ final class AppWindowViewTests: XCTestCase {
         )
     }
 
-    func testShouldPresentAgentGetStartedFlowMatchesWindowID() {
-        let windowID = UUID()
-
+    func testFirstRunAutoOpenGatingAllowsOneFreshPersistentLaunchPresentation() {
         XCTAssertTrue(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: windowID
-            )
-        )
-    }
-
-    func testManualAgentGetStartedPresentationBypassesAutoSuppressionState() {
-        let windowID = UUID()
-        let suppressedStore = AppStore(
-            persistTerminalFontPreference: false,
-            initialHasSuppressedGettingStarted: true,
-            gettingStartedSetupFootprint: GettingStartedSetupFootprint(hasAgentProfiles: true)
-        )
-
-        XCTAssertFalse(suppressedStore.shouldShowGettingStartedTopBarButton)
-        XCTAssertTrue(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: windowID
-            )
-        )
-    }
-
-    func testAgentGetStartedPresentationRequestPreservesInitialStep() throws {
-        let windowID = UUID()
-        let request = AgentGetStartedPresentationRequest(
-            windowID: windowID,
-            initialStep: .agentStatusHooks
-        )
-
-        let resolvedRequest = try XCTUnwrap(
-            AppWindowView.agentGetStartedPresentationRequest(
-                windowID: windowID,
-                notificationObject: request
-            )
-        )
-
-        XCTAssertEqual(resolvedRequest, request)
-        XCTAssertFalse(resolvedRequest.isAutomatic)
-    }
-
-    func testShouldPresentAgentGetStartedFlowIgnoresMismatchedOrMissingWindowIDs() {
-        let windowID = UUID()
-
-        XCTAssertFalse(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: UUID()
-            )
-        )
-        XCTAssertFalse(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: "not-a-window-id"
-            )
-        )
-        XCTAssertFalse(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: nil
-            )
-        )
-    }
-
-    func testShouldAutoPresentAgentGetStartedFlowOnlyForEligibleFirstSessionPresentation() {
-        XCTAssertTrue(
-            AppWindowView.shouldAutoPresentAgentGetStartedFlow(
+            AppWindowSceneView.shouldAutoOpenGettingStartedPanel(
                 allowsAutoPresentation: true,
-                hasSuppressedGettingStarted: false,
-                hasAutoPresentedThisSession: false
+                hasAutoOpenedThisLaunch: false
             )
         )
-
         XCTAssertFalse(
-            AppWindowView.shouldAutoPresentAgentGetStartedFlow(
+            AppWindowSceneView.shouldAutoOpenGettingStartedPanel(
                 allowsAutoPresentation: false,
-                hasSuppressedGettingStarted: false,
-                hasAutoPresentedThisSession: false
+                hasAutoOpenedThisLaunch: false
             )
         )
         XCTAssertFalse(
-            AppWindowView.shouldAutoPresentAgentGetStartedFlow(
+            AppWindowSceneView.shouldAutoOpenGettingStartedPanel(
                 allowsAutoPresentation: true,
-                hasSuppressedGettingStarted: true,
-                hasAutoPresentedThisSession: false
-            )
-        )
-        XCTAssertFalse(
-            AppWindowView.shouldAutoPresentAgentGetStartedFlow(
-                allowsAutoPresentation: true,
-                hasSuppressedGettingStarted: false,
-                hasAutoPresentedThisSession: true
+                hasAutoOpenedThisLaunch: true
             )
         )
     }
 
-    func testAgentGetStartedAutoPresentationRequestTargetsChooser() throws {
-        let windowID = UUID()
-
-        let request = try XCTUnwrap(
-            AppWindowView.agentGetStartedAutoPresentationRequest(
-                windowID: windowID,
-                allowsAutoPresentation: true,
-                hasSuppressedGettingStarted: false,
-                hasAutoPresentedThisSession: false
-            )
-        )
-
-        XCTAssertEqual(
-            request,
-            AgentGetStartedPresentationRequest(windowID: windowID, isAutomatic: true)
-        )
-    }
-
-    func testAgentGetStartedAutoPresentationRequestSuppressesIneligibleCases() {
-        XCTAssertNil(
-            AppWindowView.agentGetStartedAutoPresentationRequest(
-                windowID: UUID(),
-                allowsAutoPresentation: false,
-                hasSuppressedGettingStarted: false,
-                hasAutoPresentedThisSession: false
-            )
-        )
-        XCTAssertNil(
-            AppWindowView.agentGetStartedAutoPresentationRequest(
-                windowID: UUID(),
-                allowsAutoPresentation: true,
-                hasSuppressedGettingStarted: true,
-                hasAutoPresentedThisSession: false
-            )
-        )
-        XCTAssertNil(
-            AppWindowView.agentGetStartedAutoPresentationRequest(
-                windowID: UUID(),
-                allowsAutoPresentation: true,
-                hasSuppressedGettingStarted: false,
-                hasAutoPresentedThisSession: true
-            )
-        )
-    }
-
-    func testStoreRecordsGettingStartedAutoPresentationOnlyOncePerSession() {
+    func testStoreRecordsGettingStartedPanelAutoOpenOnlyOncePerLaunch() {
         let store = AppStore(persistTerminalFontPreference: false)
 
-        XCTAssertFalse(store.hasAutoPresentedGettingStartedThisSession)
-        XCTAssertTrue(store.recordGettingStartedAutoPresentationIfNeeded())
-        XCTAssertTrue(store.hasAutoPresentedGettingStartedThisSession)
-        XCTAssertFalse(store.recordGettingStartedAutoPresentationIfNeeded())
-    }
-
-    func testStoreSuppressesGettingStartedWithoutPersistenceWhenDisabled() {
-        let store = AppStore(persistTerminalFontPreference: false)
-
-        XCTAssertFalse(store.hasSuppressedGettingStarted)
-        XCTAssertTrue(store.shouldShowGettingStartedTopBarButton)
-        store.suppressGettingStarted()
-        XCTAssertTrue(store.hasSuppressedGettingStarted)
-        XCTAssertFalse(store.shouldShowGettingStartedTopBarButton)
-    }
-
-    func testStoreHidesGettingStartedTopBarButtonWhenSetupFootprintExists() {
-        let store = AppStore(
-            persistTerminalFontPreference: false,
-            gettingStartedSetupFootprint: GettingStartedSetupFootprint(hasAgentProfiles: true)
-        )
-
-        XCTAssertFalse(store.hasSuppressedGettingStarted)
-        XCTAssertFalse(store.shouldShowGettingStartedTopBarButton)
+        XCTAssertFalse(store.hasAutoOpenedGettingStartedPanelThisLaunch)
+        XCTAssertTrue(store.recordGettingStartedPanelAutoOpenIfNeeded())
+        XCTAssertTrue(store.hasAutoOpenedGettingStartedPanelThisLaunch)
+        XCTAssertFalse(store.recordGettingStartedPanelAutoOpenIfNeeded())
     }
 }

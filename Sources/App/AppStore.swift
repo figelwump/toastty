@@ -370,8 +370,7 @@ final class AppStore: ObservableObject {
     /// once. It originally tracked agent launches, but process-watch rows
     /// should opt into the same expanded session-status treatment.
     @Published private(set) var hasEverLaunchedAgent: Bool
-    @Published private(set) var hasSuppressedGettingStarted: Bool
-    @Published private(set) var hasAutoPresentedGettingStartedThisSession = false
+    @Published private(set) var hasAutoOpenedGettingStartedPanelThisLaunch = false
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
@@ -396,7 +395,6 @@ final class AppStore: ObservableObject {
 
     private let reducer = AppReducer()
     private let persistUserSettings: Bool
-    private let gettingStartedSetupFootprint: GettingStartedSetupFootprint
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private let windowActivationHandler: WindowActivationHandler
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
@@ -406,28 +404,17 @@ final class AppStore: ObservableObject {
         state: AppState = .bootstrap(),
         persistTerminalFontPreference: Bool = true,
         initialHasEverLaunchedAgent: Bool = false,
-        initialHasSuppressedGettingStarted: Bool = false,
         initialAskBeforeQuitting: Bool = true,
-        gettingStartedSetupFootprint: GettingStartedSetupFootprint = GettingStartedSetupFootprint(),
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit
     ) {
         self.state = state
         hasEverLaunchedAgent = initialHasEverLaunchedAgent
-        hasSuppressedGettingStarted = initialHasSuppressedGettingStarted
         askBeforeQuitting = initialAskBeforeQuitting
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
-        self.gettingStartedSetupFootprint = gettingStartedSetupFootprint
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
         self.windowActivationHandler = windowActivationHandler
-    }
-
-    var shouldShowGettingStartedTopBarButton: Bool {
-        GettingStartedEligibility.shouldShowTopBarButton(
-            hasSuppressedGettingStarted: hasSuppressedGettingStarted,
-            setupFootprint: gettingStartedSetupFootprint
-        )
     }
 
     @discardableResult
@@ -728,6 +715,32 @@ final class AppStore: ObservableObject {
             panelID: createdPanelID
         )
         return true
+    }
+
+    @discardableResult
+    func openGettingStartedPanel(workspaceID: UUID, anchor: String? = nil) -> Bool {
+        guard let workspace = state.workspacesByID[workspaceID] else {
+            return false
+        }
+
+        if let tab = workspace.rightAuxPanel.orderedTabs.first(where: Self.isGettingStartedPanel) {
+            send(
+                .selectRightAuxPanelTab(
+                    workspaceID: workspaceID,
+                    tabID: tab.id,
+                    focus: true
+                )
+            )
+            return true
+        }
+
+        return createBrowserPanel(
+            workspaceID: workspaceID,
+            request: BrowserPanelCreateRequest(
+                initialURL: Self.gettingStartedPanelURL(anchor: anchor),
+                placementOverride: .rightPanel
+            )
+        )
     }
 
     @discardableResult
@@ -1739,17 +1752,10 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func recordGettingStartedAutoPresentationIfNeeded() -> Bool {
-        guard hasAutoPresentedGettingStartedThisSession == false else { return false }
-        hasAutoPresentedGettingStartedThisSession = true
+    func recordGettingStartedPanelAutoOpenIfNeeded() -> Bool {
+        guard hasAutoOpenedGettingStartedPanelThisLaunch == false else { return false }
+        hasAutoOpenedGettingStartedPanelThisLaunch = true
         return true
-    }
-
-    func suppressGettingStarted() {
-        guard hasSuppressedGettingStarted == false else { return }
-        hasSuppressedGettingStarted = true
-        guard persistUserSettings else { return }
-        ToasttySettingsStore.persistHasSuppressedGettingStarted(true)
     }
 
     func setAskBeforeQuitting(_ askBeforeQuitting: Bool) {
@@ -2070,6 +2076,35 @@ final class AppStore: ObservableObject {
             tabID: tabID,
             panelID: panelID
         )
+    }
+
+    private static func isGettingStartedPanel(_ tab: RightAuxPanelTabState) -> Bool {
+        guard case .web(let webState) = tab.panelState,
+              webState.definition == .browser else {
+            return false
+        }
+
+        // `currentURL` takes precedence so a tab navigated away from the page
+        // is not repurposed when the user opens Getting Started again.
+        return isGettingStartedURL(webState.currentURL ?? webState.initialURL)
+    }
+
+    private static func isGettingStartedURL(_ value: String?) -> Bool {
+        guard let value,
+              let url = URL(string: value),
+              url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
+              url.host?.caseInsensitiveCompare("getting-started") == .orderedSame else {
+            return false
+        }
+        return true
+    }
+
+    private static func gettingStartedPanelURL(anchor: String?) -> String {
+        guard let anchor = anchor?.trimmingCharacters(in: .whitespacesAndNewlines),
+              anchor.isEmpty == false else {
+            return "toastty://getting-started/"
+        }
+        return "toastty://getting-started/#\(anchor)"
     }
 
     private func createdBrowserPanelID(
