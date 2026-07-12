@@ -415,6 +415,28 @@ Actionable lifecycle events — `needs_approval`, `ready`, and `error` — drive
 
 While a managed agent session is active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel so the session status path stays authoritative.
 
+### Nested sessions and background activity
+
+When a managed session launches another managed agent through Toastty automation,
+Toastty records the launching session as the parent. Child sessions in the same
+workspace appear beneath that parent as expandable sidebar rows instead of
+duplicating the same work at the top level. A child in another workspace keeps
+its canonical row there and receives a parent label for context.
+
+The same child-row surface includes provider-reported background activity, such
+as a Codex collaboration agent or a Claude in-process subagent. Child rows show
+their provider status when available, and parent rows expand automatically when
+a child needs approval or reports an error. A parent can also show a waiting
+projection while children or other background tasks are still outstanding, so a
+brief ready/idle event does not make an orchestration wave look complete. A
+short resuming grace period prevents stale ready state from flashing between
+waves.
+
+Toastty-owned provider integrations report this activity through the internal
+`session background-activity` CLI command and `session.background_activity`
+socket event. Custom agents should normally use the ordinary `session status`,
+`session update-files`, and `session stop` commands instead.
+
 ### Later flags
 
 Use `Cmd+Shift+L` to flag or clear the focused managed session for later follow-up.

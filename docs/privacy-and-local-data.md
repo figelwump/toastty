@@ -25,6 +25,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
     session file path or Toastty-owned marker path, working directory, capture
     timestamp, and any explicit workspace-scope identifiers needed to restore a
     scoped session after app restart.
+- `~/.toastty/recent-right-panel-items.json`
+  - The locally persisted Recently Opened list for right-panel browsers, local
+    document paths, and Scratchpad document IDs/titles. The list contains up to
+    20 items and may contain URLs or local paths that identify the supporting
+    material you opened.
 - `~/.toastty/managed-agent-resume/`
   - Toastty-owned marker files for OpenCode and MiMo Code native resume records.
     Marker filenames are derived from hashed resume metadata. Marker contents
@@ -53,6 +58,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
+  - `<runtime-home>/recent-right-panel-items.json`
   - `<runtime-home>/managed-agent-resume/`
   - `<runtime-home>/scratchpad-documents/`
   - `<runtime-home>/history/pane-journals/`

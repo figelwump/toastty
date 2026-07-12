@@ -289,6 +289,10 @@ Notable action-specific behavior:
     first-party command, or profiles that declare
     `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
     prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
+  - When an active managed session invokes `agent.launch`, Toastty records that
+    caller as the new session's parent. Same-workspace child sessions are
+    surfaced as nested sidebar rows; cross-workspace children retain their
+    canonical row and carry parent context.
 - `panel.scratchpad.set-content`
   - requires `args.sessionID`.
   - requires exactly one of `args.filePath` or `args.content`.
@@ -380,6 +384,7 @@ Common query IDs include:
 - `terminal.visible-text`
 - `panel.local-document.state`
 - `panel.browser.state`
+- `panel.scratchpad.lookup`
 - `panel.scratchpad.state`
 
 `panel.scratchpad.state` resolves a Scratchpad panel from `panelID`, or from
@@ -388,6 +393,13 @@ Scratchpad, active right-panel Scratchpad, any right-panel Scratchpad, then
 layout Scratchpad order. It returns Scratchpad document metadata, linked session
 ID when present, host lifecycle state, bootstrap content hashes, and recent
 Scratchpad diagnostics.
+
+`panel.scratchpad.lookup` requires `args.sessionID` and resolves only the
+Scratchpad linked to that active session. It returns `linked: false` with null
+panel/document metadata when the session has no linked Scratchpad, or
+`linked: true` with the panel ID, document ID, revision, title, and source
+session metadata when one exists. It never exports document content or guesses
+from focused/active Scratchpad state.
 
 ## 6) implemented automation commands
 
@@ -1092,6 +1104,51 @@ Behavior:
 Result:
 
 - `eventType`
+- `stateVersion`
+
+### `session.background_activity`
+
+Internal event used by Toastty-owned provider instrumentation to report child
+agents and in-process subagents. Third-party integrations should generally use
+`session.status` instead.
+
+Required:
+
+- top-level `sessionID`
+- payload `phase`
+- payload `kind`
+
+Optional top-level fields:
+
+- `panelID?: UUID string`
+
+Accepted payload keys:
+
+- `phase: "start" | "finish" | "sync"`
+- `kind: "child_agent" | "subagent"`
+- `activityID?: String`
+- `displayName?: String`
+- `command?: String`
+- `processID?: Int` (positive 32-bit integer)
+- `pendingCount?: Int` (required and non-negative for `sync`)
+- `entries?: [{ id, displayName?, command? }]` (required for `sync`)
+
+Behavior:
+
+- `sessionID` must identify an active session
+- `panelID` is optional; when present it must match the active session
+- `start` requires `activityID` and creates or refreshes one child activity
+- `finish` requires `activityID` and removes that activity
+- `sync` is valid only for `kind: "subagent"`; it replaces the current
+  subagent activity set and records the pending background-task count
+- outstanding activities contribute child rows and can keep the parent in its
+  waiting status projection instead of treating an intermediate ready/idle
+  event as completion
+
+Result:
+
+- `eventType`
+- `status: "accepted" | "noop"`
 - `stateVersion`
 
 ### `session.codex_hook_event`

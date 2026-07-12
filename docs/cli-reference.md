@@ -247,7 +247,9 @@ Scratchpad actions are intended for agent and automation integrations:
   even when the user has not created `~/.toastty/agents.toml`. CLI/app-control
   `agent.launch` preserves the current AppKit first responder; focus the target
   workspace or panel separately when it should become the interactive keyboard
-  target.
+  target. When an active managed session invokes `agent.launch`, Toastty records
+  that caller as the new session's parent so the child can appear nested in the
+  sidebar and contribute to the parent's orchestration status.
 
 ```bash
 "$TOASTTY_CLI_PATH" action run agent.launch \
@@ -315,9 +317,18 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `terminal.visible-text`
 - `panel.local-document.state`
 - `panel.browser.state`
+- `panel.scratchpad.lookup`
 - `panel.scratchpad.state`
 
 `panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
+
+`panel.scratchpad.lookup` requires `sessionID` and returns metadata for the
+Scratchpad linked to that active session without exporting its content. A
+successful lookup with no linked Scratchpad returns `linked: false` with null
+panel, document, revision, and title fields; a linked result returns
+`linked: true`, the panel and document identifiers, revision, title, and the
+source session metadata. The query does not scan other Scratchpad panels or
+infer a link from focus state.
 
 ### Internal managed-agent commands
 
@@ -410,6 +421,34 @@ toastty session status --session <id> --kind <kind> --summary <text> [--panel <i
   --kind working \
   --summary "Analyzing code"
 ```
+
+### `session background-activity`
+
+Report child-agent or provider-subagent activity for an active managed session.
+This is an internal command used by Toastty-owned provider instrumentation; it
+is not a general-purpose third-party integration API.
+
+```
+toastty session background-activity start|finish \
+  --session <id> --activity <id> --kind child_agent|subagent \
+  [--panel <id>] [--display-name <text>] [--command <text>] [--pid <pid>]
+```
+
+| Option | Required | Env var fallback | Description |
+|---|---|---|---|
+| `start` / `finish` | yes | — | Add/update or finish the activity |
+| `--session <id>` | yes | `TOASTTY_SESSION_ID` | Parent managed session |
+| `--activity <id>` | yes | — | Stable activity identifier |
+| `--kind <kind>` | yes | — | `child_agent` or `subagent` |
+| `--panel <id>` | no | `TOASTTY_PANEL_ID` | Parent terminal panel UUID |
+| `--display-name <text>` | no | — | Activity label shown in the sidebar |
+| `--command <text>` | no | — | Optional provider command/context text |
+| `--pid <pid>` | no | — | Positive process ID for stale-activity checks |
+
+`start` creates or refreshes a child row; `finish` removes it. The corresponding
+socket event also supports provider-owned `sync` payloads for replacing the
+current subagent set and reporting pending background-task counts. Outstanding
+activity contributes to the parent session's waiting projection.
 
 ### `session update-files`
 

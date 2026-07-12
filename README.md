@@ -28,6 +28,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 - **Run agents your usual way** — run CLIs from the command line and Toastty picks up live status automatically for supported agents; or launch from the `Agent` menu, top bar, command palette, or keyboard shortcut
 - **Live sidebar status** — working, needs-approval, ready, or error state for Codex, Claude, OpenCode, MiMo Code, and Pi sessions
+- **Nested agent visibility** — orchestrating sessions show child agents and background work as expandable sidebar rows, including waiting and attention states
 - **Unread badges and notifications** — sidebar badges and macOS notifications when an agent needs you
 - **Jump to the next session that needs you** — `Cmd+Shift+A` rotates through unreads, approval/error sessions, then active work
 - **Mark a session for later** — `Cmd+Shift+L` flags a managed session; the flag clears automatically when the session meaningfully advances
@@ -118,6 +119,11 @@ For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md
 The right panel is a workspace-side tab strip for supporting material that should stay next to the active terminal instead of taking over the main pane layout. Use it for Scratchpad notes, browser panels, and local documents while the main workspace remains focused on terminals and splits.
 
 Each horizontal workspace tab keeps its own right-panel tabs, active tab, width, and visibility in the persisted layout. `Cmd+Shift+B` shows or hides the right panel; when showing it, Toastty focuses the active right-panel tab if one exists. `Cmd+Ctrl+[` and `Cmd+Ctrl+]` cycle through right-panel tabs, `Cmd+Ctrl+B` opens a new browser there, and `Cmd+Ctrl+S` creates a new Scratchpad.
+
+Toastty keeps up to 20 local Recently Opened items for browsers, local
+documents, and Scratchpads. Open the list from the empty right-panel view or
+the right-panel Add menu to reopen supporting material without navigating back
+to its original workspace tab.
 
 `Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. After the `toastty-scratchpad` skill is installed for an agent, you can usually skip manual creation and ask the agent for a visual; the agent can create and bind its own Scratchpad on demand.
 
