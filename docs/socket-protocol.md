@@ -1192,11 +1192,12 @@ Accepted payload keys:
 
 The socket payload key is `permissionMode`; Toastty's CLI maps Codex hook JSON
 `permission_mode` into that camelCase payload field. For recognized
-`spawn_agent` `PreToolUse` events, the CLI also maps `tool_use_id` and the
-plaintext task fields into the internal `spawn*` keys. `spawnToolUseID` is
-required whenever either other spawn field is present. Newer Codex builds
-encrypt the delegated `message` (an opaque ciphertext token); Toastty discards
-such payloads app-side so they never become row labels or descriptions.
+`spawn_agent` `PreToolUse` events, the CLI also maps `tool_use_id` and the task
+fields as provided into the internal `spawn*` keys. `spawnToolUseID` is required
+whenever either other spawn field is present. Newer Codex builds leave the task
+name readable but encrypt the delegated `message` as an opaque ciphertext token;
+Toastty discards such message payloads app-side so they never become row
+descriptions.
 
 Behavior:
 
@@ -1211,8 +1212,10 @@ Behavior:
   live row keeps a correlated task-name label instead of resetting it. A
   meaningful `subagentType` always becomes the label. For managed Codex sessions, Toastty correlates the
   `PreToolUse` spawn metadata with the session recording's tool-use-to-agent-ID
-  mapping. The task name and description may arrive before or after
-  `SubagentStart` and enrich the row without changing its hook-owned lifecycle.
+  mapping. The task name and any available plaintext description may arrive
+  before or after `SubagentStart` and enrich the row without changing its
+  hook-owned lifecycle. An encrypted message leaves the named row without a
+  description.
   Correlation state is bounded and cleared with the session; metadata alone
   cannot create, reopen, finish, or resurrect a row.
 - Hook-tracked collaboration agents are lifecycle-driven: they are not removed

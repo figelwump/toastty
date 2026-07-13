@@ -542,11 +542,14 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexSubagentMetadataIgnoresEncryptedSpawnPayloads() throws {
+    func codexEncryptedSpawnPayloadProjectsTaskNameWithoutDescription() throws {
         let store = SessionRuntimeStore()
         defer { store.reset() }
         let now = Date(timeIntervalSince1970: 1_700_001_274)
         let sessionID = "sess-codex-encrypted-metadata"
+        let workspaceID = UUID()
+        // Current Codex builds expose task_name while providing message as an
+        // opaque token with this shape in both hook and rollout metadata.
         let encryptedPayload = "gAAAAABqVUYlTXM2t_RUiRJdyhJC7EScV_pvZf4oTf1czpLtlOnI53DmSgBobosvD5"
             + "Be9dNM6WH5zQ6yMDpeYZ2vCxX3NxFWC6mgu-Y0O8lYQO-AQStZWi7216SJYD53GT4jg_KMQxU1ILOdm0eHXkSjWTy"
 
@@ -555,7 +558,7 @@ struct SessionRuntimeStoreTests {
             agent: .codex,
             panelID: UUID(),
             windowID: UUID(),
-            workspaceID: UUID(),
+            workspaceID: workspaceID,
             usesSessionStatusNotifications: true,
             codexStatusTrackingSource: .hooks,
             cwd: "/repo",
@@ -609,6 +612,21 @@ struct SessionRuntimeStoreTests {
             .backgroundActivitiesByID["agent-child"])
         #expect(activity.displayName == "native_nav_sort")
         #expect(activity.command == nil)
+
+        let child = try #require(store.workspaceStatuses(
+            for: workspaceID,
+            at: now.addingTimeInterval(3)
+        ).first?.children.first)
+        #expect(child.displayName == "native_nav_sort")
+        #expect(child.context == nil)
+        let hoverTip = SidebarView.sessionChildHoverTipModel(
+            child: child,
+            workspaceName: nil,
+            elapsedText: "2s",
+            now: now.addingTimeInterval(3)
+        )
+        #expect(hoverTip.name == "native_nav_sort")
+        #expect(hoverTip.bodyText == nil)
 
         #expect(store.handleCodexHookEvent(
             sessionID: sessionID,
