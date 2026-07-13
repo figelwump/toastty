@@ -542,6 +542,100 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexDuplicateSubagentStartPreservesEnrichedDisplayName() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_272)
+        let sessionID = "sess-codex-duplicate-start"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        func subagentStartEvent(subagentType: String) -> CodexHookEvent {
+            CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: "agent-child",
+                subagentType: subagentType
+            )
+        }
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: subagentStartEvent(subagentType: "default"),
+            at: now.addingTimeInterval(1)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID["agent-child"]?.displayName == "Sub-agent")
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PreToolUse",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                spawnMetadata: CodexSpawnHookMetadata(
+                    toolUseID: "call-spawn",
+                    taskName: "scroll_implementation",
+                    message: "Inspect the scroll implementation"
+                )
+            ),
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.recordCodexSubagentRolloutMetadata(
+            sessionID: sessionID,
+            toolUseID: "call-spawn",
+            agentID: "agent-child",
+            displayName: "scroll_implementation",
+            at: now.addingTimeInterval(3)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID["agent-child"]?.displayName == "scroll_implementation")
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: subagentStartEvent(subagentType: "default"),
+            at: now.addingTimeInterval(4)
+        ))
+        let duplicateStartActivity = try #require(store.sessionRegistry
+            .activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID["agent-child"])
+        #expect(duplicateStartActivity.displayName == "scroll_implementation")
+        #expect(duplicateStartActivity.command == "Inspect the scroll implementation")
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: subagentStartEvent(subagentType: "reviewer"),
+            at: now.addingTimeInterval(5)
+        ))
+        let meaningfulTypeActivity = try #require(store.sessionRegistry
+            .activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID["agent-child"])
+        #expect(meaningfulTypeActivity.displayName == "reviewer")
+        #expect(meaningfulTypeActivity.command == "Inspect the scroll implementation")
+    }
+
+    @Test
     func codexSubagentMetadataCorrelatesConcurrentSpawnsByToolUseID() throws {
         let store = SessionRuntimeStore()
         defer { store.reset() }

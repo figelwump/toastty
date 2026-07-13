@@ -1236,12 +1236,19 @@ final class SessionRuntimeStore: ObservableObject {
 
         if event.isSubagentStart,
            let subagentID = event.subagentID {
+            // The generic placeholder is creation-only: a repeated Start for a
+            // still-live row must not replace a correlated task name, because
+            // spawn metadata is consumed one-shot and cannot re-enrich the row.
+            let existingDisplayName = sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID[subagentID]?
+                .displayName
             let didMutate = reopenBackgroundActivity(
                 sessionID: sessionID,
                 activity: SessionBackgroundActivity(
                     id: subagentID,
                     kind: .subagent,
-                    displayName: event.subagentDisplayName,
+                    displayName: event.meaningfulSubagentType ?? existingDisplayName ?? "Sub-agent",
                     startedAt: now,
                     lastUpdatedAt: now
                 ),
@@ -3759,10 +3766,10 @@ private extension CodexHookEvent {
         hookEventName == "SubagentStop"
     }
 
-    var subagentDisplayName: String {
+    var meaningfulSubagentType: String? {
         guard let normalizedType = normalizedNonEmpty(subagentType),
               normalizedType.caseInsensitiveCompare("default") != .orderedSame else {
-            return "Sub-agent"
+            return nil
         }
         return normalizedType
     }

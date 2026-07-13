@@ -1205,7 +1205,9 @@ Behavior:
 - `SubagentStart` with a `subagentID` creates or reopens a collaboration-agent
   child row. `SubagentStop` with the same ID removes it. The optional
   `subagentType` becomes the initial row label; the generic `default` type is
-  shown as `Sub-agent`. For managed Codex sessions, Toastty correlates the
+  shown as `Sub-agent` only when the row is created, so a repeated Start for a
+  live row keeps a correlated task-name label instead of resetting it. A
+  meaningful `subagentType` always becomes the label. For managed Codex sessions, Toastty correlates the
   `PreToolUse` spawn metadata with the session recording's tool-use-to-agent-ID
   mapping. The task name and description may arrive before or after
   `SubagentStart` and enrich the row without changing its hook-owned lifecycle.
