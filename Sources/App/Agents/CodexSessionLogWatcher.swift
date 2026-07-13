@@ -800,16 +800,19 @@ private extension CodexSessionLogWatcher {
     }
 
     static func multiAgentToolName(rawName: String, namespace: String?) -> String? {
-        if namespace == "multi_agent_v1" {
+        switch namespace {
+        case "multi_agent_v1":
             return strippedMultiAgentToolName(rawName) ?? rawName
-        }
-        guard namespace == nil else {
+        case "collaboration":
+            return rawName == "spawn_agent" ? rawName : nil
+        case nil:
+            if rawName == "spawn_agent" {
+                return rawName
+            }
+            return strippedMultiAgentToolName(rawName)
+        default:
             return nil
         }
-        if rawName == "spawn_agent" {
-            return rawName
-        }
-        return strippedMultiAgentToolName(rawName)
     }
 
     static func strippedMultiAgentToolName(_ rawName: String) -> String? {

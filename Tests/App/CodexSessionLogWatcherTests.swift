@@ -1002,7 +1002,7 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         let events = try await recordEvents(
             from:
                 #"""
-                {"timestamp":"2026-07-12T18:44:10.355Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"Inspect the scroll implementation and report risks\",\"task_name\":\"scroll_implementation\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-12T18:44:10.355Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"message\":\"Inspect the scroll implementation and report risks\",\"task_name\":\"scroll_implementation\"}","call_id":"call_spawn"}}
                 {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783881851355,"agent_thread_id":"thread-1","agent_path":"/root/scroll_implementation","kind":"started"}}
                 {"timestamp":"2026-07-12T18:44:11.356Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/scroll_implementation\"}"}}
                 {"timestamp":"2026-07-12T18:46:28.517Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_message","occurred_at_ms":1783881988517,"agent_thread_id":"thread-1","agent_path":"/root/scroll_implementation","kind":"interacted"}}
@@ -1229,6 +1229,32 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 )
             ),
         ])
+    }
+
+    func testWatcherParsesRawSpawnAgentWhenNamespaceIsAbsent() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:47.374Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"agent_type\":\"reviewer\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\"}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events.first?.backgroundActivity?.activityID, "agent-1")
+    }
+
+    func testWatcherRejectsRawSpawnAgentFromUnknownNamespace() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:47.374Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"other","arguments":"{\"agent_type\":\"reviewer\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\"}"}}
+                """#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
     }
 
     func testWatcherTreatsCloseAgentOutputAsFinish() async throws {

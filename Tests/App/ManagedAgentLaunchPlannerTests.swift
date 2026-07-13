@@ -1534,7 +1534,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         let freshEntryTimestamp = freshEventDate
             .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
         try appendCodexSessionLogLine(
-            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"gAAAAABqVShH-encrypted-payload\",\"task_name\":\"hook_owned\"}","call_id":"call_spawn"}}"#,
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"message\":\"gAAAAABqVShH-encrypted-payload\",\"task_name\":\"hook_owned\"}","call_id":"call_spawn"}}"#,
             to: secondRolloutURL
         )
         try appendCodexSessionLogLine(
