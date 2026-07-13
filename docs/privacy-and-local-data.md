@@ -66,6 +66,18 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/instance.json`
   - a dedicated `UserDefaults` suite derived from that runtime-home path
 
+## What Toastty reads locally for agent status
+
+- For managed Codex sessions, Toastty reads the temporary TUI session record it
+  requested through `CODEX_TUI_SESSION_LOG_PATH` for root-turn and approval
+  context. After Codex identifies its native session file, Toastty also watches
+  that rollout JSONL for collaboration-agent lifecycle and identity mapping.
+  Toastty derives bounded child-agent IDs, task/display names, and available
+  plaintext descriptions for the live sidebar; opaque encrypted descriptions
+  are discarded. Derived collaboration state is kept in memory for the active
+  session, while child-agent display names can appear in Toastty's structured
+  local logs. Toastty does not modify the Codex rollout file.
+
 ## What Toastty creates temporarily
 
 - Automation mode creates a Unix domain socket at a short temp path derived from the active runtime home when runtime isolation is enabled, otherwise under `$TMPDIR/toastty-$UID/events-v1.sock`, unless `TOASTTY_SOCKET_PATH` overrides it.
