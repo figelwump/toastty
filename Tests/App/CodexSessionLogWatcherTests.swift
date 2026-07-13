@@ -997,6 +997,128 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesCurrentCollaborationLifecycle() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783881851355,"agent_thread_id":"thread-1","agent_path":"/root/scroll_implementation","kind":"started"}}
+                {"timestamp":"2026-07-12T18:46:28.517Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_message","occurred_at_ms":1783881988517,"agent_thread_id":"thread-1","agent_path":"/root/scroll_implementation","kind":"interacted"}}
+                {"timestamp":"2026-07-12T18:46:54.952Z","type":"response_item","payload":{"type":"agent_message","author":"/root/scroll_implementation","recipient":"/root","content":[{"type":"input_text","text":"Message Type: MESSAGE\nTask name: /root"}]}}
+                {"timestamp":"2026-07-12T18:49:54.952Z","type":"response_item","payload":{"type":"agent_message","author":"/root/scroll_implementation","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
+                """#,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started scroll_implementation",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/scroll_implementation",
+                    kind: .subagent,
+                    displayName: "scroll_implementation"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/scroll_implementation",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
+    func testWatcherTreatsCurrentCollaborationInterruptAsFinish() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783881851355,"agent_path":"/root/reviewer","kind":"started"}}
+                {"timestamp":"2026-07-12T18:45:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_interrupt","occurred_at_ms":1783881911355,"agent_path":"/root/reviewer","kind":"interrupted"}}
+                """#,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events.map(\.kind), [
+            .backgroundActivityStarted,
+            .backgroundActivityFinished,
+        ])
+        XCTAssertEqual(
+            events.compactMap(\.backgroundActivity?.activityID),
+            ["/root/reviewer", "/root/reviewer"]
+        )
+    }
+
+    func testWatcherUsesCollaborationOccurrenceTimeForReplayCutoff() async throws {
+        let cutoff = Date(timeIntervalSince1970: 1_783_881_800)
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_stale","occurred_at_ms":1783875653886,"agent_path":"/root/stale","kind":"started"}}
+                {"timestamp":"2026-07-12T18:44:12.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_fresh","occurred_at_ms":1783881851355,"agent_path":"/root/fresh","kind":"started"}}
+                """#,
+            expectedCount: 1,
+            multiAgentEventCutoff: cutoff
+        )
+
+        XCTAssertEqual(
+            events.compactMap(\.backgroundActivity?.activityID),
+            ["/root/fresh"]
+        )
+    }
+
+    func testWatcherRestartsCompletedCollaborationAgentForFollowUpTask() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T17:06:52.466Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783876012466,"agent_path":"/root/plan_review","kind":"started"}}
+                {"timestamp":"2026-07-12T17:09:47.604Z","type":"response_item","payload":{"type":"agent_message","author":"/root/plan_review","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
+                {"timestamp":"2026-07-12T17:15:38.831Z","type":"response_item","payload":{"type":"agent_message","author":"/root","recipient":"/root/plan_review","content":[{"type":"input_text","text":"Message Type: NEW_TASK\nTask name: /root/plan_review"}]}}
+                {"timestamp":"2026-07-12T17:16:14.745Z","type":"response_item","payload":{"type":"agent_message","author":"/root/plan_review","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
+                """#,
+            expectedCount: 4
+        )
+
+        XCTAssertEqual(events.map(\.kind), [
+            .backgroundActivityStarted,
+            .backgroundActivityFinished,
+            .backgroundActivityStarted,
+            .backgroundActivityFinished,
+        ])
+        XCTAssertEqual(
+            events.compactMap(\.backgroundActivity?.activityID),
+            Array(repeating: "/root/plan_review", count: 4)
+        )
+    }
+
+    func testWatcherRejectsUndatedCollaborationEventsWhenCutoffIsActive() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_stale","agent_path":"/root/stale","kind":"started"}}
+                {"type":"response_item","payload":{"type":"agent_message","author":"/root/current","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
+                """#,
+            expectedCount: 0,
+            multiAgentEventCutoff: Date()
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherRejectsCollaborationMessagesOutsideDirectParentRoute() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T17:15:38.831Z","type":"response_item","payload":{"type":"agent_message","author":"/root","recipient":"/root/reviewer/nested","content":[{"type":"input_text","text":"Message Type: NEW_TASK\nTask name: /root/reviewer/nested"}]}}
+                {"timestamp":"2026-07-12T17:16:14.745Z","type":"response_item","payload":{"type":"agent_message","author":"/root/reviewer","recipient":"/other","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /other"}]}}
+                """#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
     func testWatcherParsesMultiAgentFixtureAsSubagentActivities() async throws {
         let events = try await recordEvents(
             from:

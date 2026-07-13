@@ -1368,6 +1368,104 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.command, "Run focused checks")
     }
 
+    func testCodexRolloutWatcherProjectsCurrentCollaborationLifecycle() async throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(sessionFilePath: rolloutURL.path)
+                )
+            )
+        )
+
+        let freshEventDate = Date().addingTimeInterval(60)
+        let occurredAtMilliseconds = Int(freshEventDate.timeIntervalSince1970 * 1_000)
+        let freshEntryTimestamp = freshEventDate
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":\#(occurredAtMilliseconds),"agent_path":"/root/scroll_implementation","kind":"started"}}"#,
+            to: rolloutURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/scroll_implementation"] != nil
+        }
+
+        let activeSession = try XCTUnwrap(
+            fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)
+        )
+        XCTAssertEqual(
+            activeSession.status,
+            SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+        )
+        XCTAssertEqual(
+            activeSession.backgroundActivitiesByID["/root/scroll_implementation"]?.displayName,
+            "scroll_implementation"
+        )
+
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"agent_message","author":"/root/scroll_implementation","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\\nTask name: /root"}]}}"#,
+            to: rolloutURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/scroll_implementation"] == nil
+        }
+
+        let followUpEventDate = freshEventDate.addingTimeInterval(1)
+        let followUpTimestamp = followUpEventDate
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(followUpTimestamp)","type":"response_item","payload":{"type":"agent_message","author":"/root","recipient":"/root/scroll_implementation","content":[{"type":"input_text","text":"Message Type: NEW_TASK\\nTask name: /root/scroll_implementation"}]}}"#,
+            to: rolloutURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/scroll_implementation"] != nil
+        }
+
+        let secondFinalTimestamp = followUpEventDate.addingTimeInterval(1)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(secondFinalTimestamp)","type":"response_item","payload":{"type":"agent_message","author":"/root/scroll_implementation","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\\nTask name: /root"}]}}"#,
+            to: rolloutURL
+        )
+
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/scroll_implementation"] == nil
+        }
+    }
+
     func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let plan = try fixture.planner.prepareManagedLaunch(

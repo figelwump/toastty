@@ -432,6 +432,15 @@ private extension CodexSessionLogWatcher {
             return [event]
         }
 
+        let collaborationEvents = parseCollaborationLifecycleEvent(
+            object: object,
+            seenKeys: &seenKeys,
+            multiAgentEventCutoff: multiAgentEventCutoff
+        )
+        if collaborationEvents.isEmpty == false {
+            return collaborationEvents
+        }
+
         let backgroundActivityEvents = parseMultiAgentResponseItem(
             object: object,
             fallbackLine: fallbackLine,
@@ -475,6 +484,157 @@ private extension CodexSessionLogWatcher {
             return [event]
         }
         return []
+    }
+
+    static func parseCollaborationLifecycleEvent(
+        object: [String: Any],
+        seenKeys: inout Set<String>,
+        multiAgentEventCutoff: Date? = nil
+    ) -> [CodexSessionLogEvent] {
+        guard let payload = object["payload"] as? [String: Any],
+              let payloadType = normalizedString(payload["type"]) else {
+            return []
+        }
+
+        switch (normalizedString(object["type"]), payloadType) {
+        case ("event_msg", "sub_agent_activity"):
+            guard let agentPath = nonEmptyString(payload["agent_path"]),
+                  isCurrentMultiAgentEvent(
+                    object: object,
+                    payload: payload,
+                    cutoff: multiAgentEventCutoff
+                  ) else {
+                return []
+            }
+            let eventID = nonEmptyString(payload["event_id"])
+                ?? "\(agentPath):\(normalizedString(payload["kind"]) ?? "unknown"):"
+                    + "\(collaborationEventDate(object: object, payload: payload)?.timeIntervalSince1970 ?? 0)"
+            guard seenKeys.insert("collaboration_activity:\(eventID)").inserted else {
+                return []
+            }
+
+            switch normalizedString(payload["kind"]) {
+            case "started":
+                return [collaborationStartedEvent(activityID: agentPath)]
+
+            case "interrupted":
+                return [collaborationFinishedEvent(activityID: agentPath)]
+
+            default:
+                // "interacted" records message delivery, not a lifecycle transition.
+                return []
+            }
+
+        case ("response_item", "agent_message"):
+            guard isCurrentMultiAgentEvent(
+                object: object,
+                payload: payload,
+                cutoff: multiAgentEventCutoff
+            ), let messageType = collaborationMessageType(from: payload) else {
+                return []
+            }
+            let timestamp = normalizedString(object["timestamp"]) ?? "unknown"
+            switch messageType {
+            case "NEW_TASK":
+                guard let author = nonEmptyString(payload["author"]),
+                      let recipient = nonEmptyString(payload["recipient"]),
+                      collaborationParentPath(of: recipient) == author,
+                      seenKeys.insert("collaboration_new_task:\(recipient):\(timestamp)").inserted else {
+                    return []
+                }
+                return [collaborationStartedEvent(activityID: recipient)]
+
+            case "FINAL_ANSWER":
+                guard let author = nonEmptyString(payload["author"]),
+                      let recipient = nonEmptyString(payload["recipient"]),
+                      collaborationParentPath(of: author) == recipient,
+                      seenKeys.insert("collaboration_final_answer:\(author):\(timestamp)").inserted else {
+                    return []
+                }
+                return [collaborationFinishedEvent(activityID: author)]
+
+            default:
+                return []
+            }
+
+        default:
+            return []
+        }
+    }
+
+    static func isCurrentMultiAgentEvent(
+        object: [String: Any],
+        payload: [String: Any],
+        cutoff: Date?
+    ) -> Bool {
+        guard let cutoff else {
+            return true
+        }
+        guard let eventDate = collaborationEventDate(object: object, payload: payload) else {
+            return false
+        }
+        return eventDate >= cutoff
+    }
+
+    static func collaborationEventDate(
+        object: [String: Any],
+        payload: [String: Any]
+    ) -> Date? {
+        if let occurredAtMilliseconds = payload["occurred_at_ms"] as? NSNumber {
+            return Date(timeIntervalSince1970: occurredAtMilliseconds.doubleValue / 1_000)
+        }
+        return rolloutEntryDate(from: object)
+    }
+
+    static func collaborationAgentDisplayName(from agentPath: String) -> String {
+        agentPath.split(separator: "/").last.map(String.init) ?? agentPath
+    }
+
+    static func collaborationParentPath(of agentPath: String) -> String? {
+        let components = agentPath.split(separator: "/")
+        guard components.count > 1 else { return nil }
+        return "/" + components.dropLast().joined(separator: "/")
+    }
+
+    static func collaborationStartedEvent(activityID: String) -> CodexSessionLogEvent {
+        let displayName = collaborationAgentDisplayName(from: activityID)
+        return CodexSessionLogEvent(
+            kind: .backgroundActivityStarted,
+            detail: "Started \(displayName)",
+            backgroundActivity: CodexSessionBackgroundActivity(
+                activityID: activityID,
+                kind: .subagent,
+                displayName: displayName
+            )
+        )
+    }
+
+    static func collaborationMessageType(from payload: [String: Any]) -> String? {
+        guard let content = payload["content"] as? [[String: Any]] else {
+            return nil
+        }
+        for item in content where normalizedString(item["type"]) == "input_text" {
+            guard let text = item["text"] as? String,
+                  let firstLine = text.split(separator: "\n", maxSplits: 1).first else {
+                continue
+            }
+            let prefix = "Message Type:"
+            guard firstLine.hasPrefix(prefix) else { continue }
+            return firstLine.dropFirst(prefix.count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    static func collaborationFinishedEvent(activityID: String) -> CodexSessionLogEvent {
+        CodexSessionLogEvent(
+            kind: .backgroundActivityFinished,
+            detail: "Finished sub-agent",
+            backgroundActivity: CodexSessionBackgroundActivity(
+                activityID: activityID,
+                kind: .subagent
+            )
+        )
     }
 
     static func parseMultiAgentResponseItem(
