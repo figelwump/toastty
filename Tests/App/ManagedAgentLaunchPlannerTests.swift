@@ -1365,7 +1365,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
         )
         XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.displayName, "Focused check")
-        XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.command, "Run focused checks")
+        XCTAssertNil(activeSession.backgroundActivitiesByID["agent-1"]?.command)
     }
 
     func testCodexRolloutWatcherProjectsCurrentCollaborationLifecycle() async throws {
@@ -1496,7 +1496,63 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             )
         )
 
-        let hookEvent = CodexHookEvent(
+        let metadataHookEvent = CodexHookEvent(
+            hookEventName: "PreToolUse",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            promptFingerprint: nil,
+            status: nil,
+            nativeSessionID: "thread-root",
+            sessionFilePath: nil,
+            cwd: nil,
+            spawnMetadata: CodexSpawnHookMetadata(
+                toolUseID: "call_spawn",
+                taskName: "hook_owned",
+                message: "Review the hook metadata path"
+            )
+        )
+        XCTAssertTrue(fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: metadataHookEvent,
+            at: Date()
+        ))
+        XCTAssertTrue(fixture.sessionRuntimeStore
+            .sessionRegistry
+            .activeSession(sessionID: plan.sessionID)?
+            .backgroundActivitiesByID.isEmpty == true)
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(sessionFilePath: secondRolloutURL.path)
+                )
+            )
+        )
+        let freshEventDate = Date().addingTimeInterval(60)
+        let occurredAtMilliseconds = Int(freshEventDate.timeIntervalSince1970 * 1_000)
+        let freshEntryTimestamp = freshEventDate
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"gAAAAABqVShH-encrypted-payload\",\"task_name\":\"hook_owned\"}","call_id":"call_spawn"}}"#,
+            to: secondRolloutURL
+        )
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":\#(occurredAtMilliseconds),"agent_thread_id":"hook-owned","agent_path":"/root/hook_owned","kind":"started"}}"#,
+            to: secondRolloutURL
+        )
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/hook_owned\"}"}}"#,
+            to: secondRolloutURL
+        )
+
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(fixture.sessionRuntimeStore
+            .sessionRegistry
+            .activeSession(sessionID: plan.sessionID)?
+            .backgroundActivitiesByID.isEmpty == true)
+
+        let lifecycleHookEvent = CodexHookEvent(
             hookEventName: "SubagentStart",
             threadID: "thread-root",
             turnID: "turn-root",
@@ -1510,49 +1566,9 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
         XCTAssertTrue(fixture.sessionRuntimeStore.handleCodexHookEvent(
             sessionID: plan.sessionID,
-            event: hookEvent,
+            event: lifecycleHookEvent,
             at: Date()
         ))
-        XCTAssertEqual(
-            fixture.sessionRuntimeStore
-                .sessionRegistry
-                .activeSession(sessionID: plan.sessionID)?
-                .backgroundActivitiesByID["hook-owned"]?
-                .displayName,
-            "Sub-agent"
-        )
-
-        XCTAssertTrue(
-            fixture.store.send(
-                .updateTerminalPanelResumeRecord(
-                    panelID: fixture.panelID,
-                    resumeRecord: codexResumeRecord(sessionFilePath: secondRolloutURL.path)
-                )
-            )
-        )
-        XCTAssertNotNil(
-            fixture.sessionRuntimeStore
-                .sessionRegistry
-                .activeSession(sessionID: plan.sessionID)?
-                .backgroundActivitiesByID["hook-owned"]
-        )
-
-        let freshEventDate = Date().addingTimeInterval(60)
-        let occurredAtMilliseconds = Int(freshEventDate.timeIntervalSince1970 * 1_000)
-        let freshEntryTimestamp = freshEventDate
-            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
-        try appendCodexSessionLogLine(
-            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"Review the hook metadata path\",\"task_name\":\"hook_owned\"}","call_id":"call_spawn"}}"#,
-            to: secondRolloutURL
-        )
-        try appendCodexSessionLogLine(
-            #"{"timestamp":"\#(freshEntryTimestamp)","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":\#(occurredAtMilliseconds),"agent_thread_id":"hook-owned","agent_path":"/root/hook_owned","kind":"started"}}"#,
-            to: secondRolloutURL
-        )
-        try appendCodexSessionLogLine(
-            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/hook_owned\"}"}}"#,
-            to: secondRolloutURL
-        )
 
         await waitUntil {
             fixture.sessionRuntimeStore

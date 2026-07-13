@@ -282,11 +282,41 @@ struct AutomationSocketServerTests {
                         "threadID": .string("thread-root"),
                         "turnID": .string("turn-root"),
                         "subagentID": .string("agent-child"),
-                        "subagentType": .string("reviewer"),
+                        "subagentType": .string("default"),
                     ]
                 ),
                 socketPath: socketPath
             )
+        }
+
+
+        let metadataResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.codex_hook_event",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [
+                    "hookEventName": .string("PreToolUse"),
+                    "threadID": .string("thread-root"),
+                    "spawnToolUseID": .string("call-spawn"),
+                    "spawnTaskName": .string("security_privacy"),
+                    "spawnMessage": .string("Review the security and privacy implications"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(metadataResponse.result?.string("status") == "accepted")
+        await MainActor.run {
+            #expect(server.sessionRuntimeStore.recordCodexSubagentRolloutMetadata(
+                sessionID: sessionID,
+                toolUseID: "call-spawn",
+                agentID: "agent-child",
+                displayName: "security_privacy",
+                at: Date(timeIntervalSince1970: 1_700_000_001)
+            ))
+            #expect(server.sessionRuntimeStore.sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID.isEmpty == true)
         }
 
         #expect(try sendSubagentEvent("SubagentStart").result?.string("status") == "accepted")
@@ -295,7 +325,8 @@ struct AutomationSocketServerTests {
                 .activeSession(sessionID: sessionID)?
                 .backgroundActivitiesByID["agent-child"]
         }
-        #expect(activity?.displayName == "reviewer")
+        #expect(activity?.displayName == "security_privacy")
+        #expect(activity?.command == "Review the security and privacy implications")
 
         #expect(try sendSubagentEvent("SubagentStop").result?.string("status") == "accepted")
         activity = await MainActor.run {

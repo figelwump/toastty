@@ -764,6 +764,33 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func codexSpawnPreToolUseHookCarriesCorrelationMetadata() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PreToolUse","session_id":"thread-root","tool_name":"collaborationspawn_agent","tool_use_id":"call-spawn","tool_input":{"task_name":"security_privacy","message":"Review the security and privacy implications"}}"#.utf8
+            )
+        )
+
+        guard case .sessionCodexHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Codex hook event")
+            return
+        }
+        #expect(event.spawnMetadata == CodexSpawnHookMetadata(
+            toolUseID: "call-spawn",
+            taskName: "security_privacy",
+            message: "Review the security and privacy implications"
+        ))
+
+        let envelope = try #require(commands.first?.makeEventEnvelope())
+        #expect(envelope.payload.string("spawnToolUseID") == "call-spawn")
+        #expect(envelope.payload.string("spawnTaskName") == "security_privacy")
+        #expect(envelope.payload.string("spawnMessage") == "Review the security and privacy implications")
+    }
+
+    @Test
     func codexSubagentStartHookMapsLifecycleIdentity() throws {
         let commands = try AgentEventIngestor.commands(
             for: .codexHooks,

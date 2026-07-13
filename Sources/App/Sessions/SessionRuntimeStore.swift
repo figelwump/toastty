@@ -33,7 +33,9 @@ final class SessionRuntimeStore: ObservableObject {
     private var resumeGraceRepublishTask: Task<Void, Never>?
     private var resumeGraceRepublishExpiry: Date?
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
+    private var codexSubagentMetadataStateBySessionID: [String: CodexSubagentMetadataState] = [:]
     private static let maximumAutoReviewedCodexPermissionTurnIDs = 16
+    private static let maximumPendingCodexSubagentMetadataEntries = 64
     private static let backgroundActivityFinishTombstoneTTL: TimeInterval = 120
     private static let pendingPanelParentSessionIDTTL: TimeInterval = 120
     private static let maximumPidlessSubagentBackgroundActivityAge: TimeInterval = 30 * 60
@@ -41,6 +43,48 @@ final class SessionRuntimeStore: ObservableObject {
     private struct PendingPanelParentSessionID: Equatable {
         let sessionID: String
         let recordedAt: Date
+    }
+
+    private struct CodexSubagentMetadata: Equatable {
+        var displayName: String? = nil
+        var command: String? = nil
+
+        var isEmpty: Bool {
+            displayName == nil && command == nil
+        }
+
+        func mergingFallback(_ fallback: CodexSubagentMetadata) -> CodexSubagentMetadata {
+            CodexSubagentMetadata(
+                displayName: displayName ?? fallback.displayName,
+                command: command ?? fallback.command
+            )
+        }
+    }
+
+    private struct PendingCodexSpawnCorrelation: Equatable {
+        var hookMetadata: CodexSubagentMetadata? = nil
+        var rolloutDisplayName: String? = nil
+        var childAgentID: String? = nil
+
+        var resolvedMetadata: CodexSubagentMetadata {
+            (hookMetadata ?? CodexSubagentMetadata())
+                .mergingFallback(CodexSubagentMetadata(displayName: rolloutDisplayName))
+        }
+
+        var isComplete: Bool {
+            hookMetadata != nil && childAgentID != nil
+        }
+    }
+
+    private struct CodexSubagentMetadataState: Equatable {
+        var correlationsByToolUseID: [String: PendingCodexSpawnCorrelation] = [:]
+        var orderedToolUseIDs: [String] = []
+        var resolvedMetadataByAgentID: [String: CodexSubagentMetadata] = [:]
+        var orderedAgentIDs: [String] = []
+
+        var isEmpty: Bool {
+            correlationsByToolUseID.isEmpty && resolvedMetadataByAgentID.isEmpty
+        }
     }
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
@@ -123,6 +167,7 @@ final class SessionRuntimeStore: ObservableObject {
         codexNotifyStateBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
         backgroundActivityFinishTombstonesBySessionID = [:]
+        codexSubagentMetadataStateBySessionID = [:]
         pendingPanelParentSessionIDs = [:]
         removeAllPendingCodexHookApprovals()
         backgroundActivityReaperTask?.cancel()
@@ -150,6 +195,7 @@ final class SessionRuntimeStore: ObservableObject {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
+        codexSubagentMetadataStateBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
         if agent == .codex, let codexStatusTrackingSource {
             codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
@@ -1180,6 +1226,14 @@ final class SessionRuntimeStore: ObservableObject {
 
         codexNotifyStateBySessionID[sessionID] = state
 
+        if let spawnMetadata = event.spawnMetadata {
+            stateChanged = recordCodexSubagentHookMetadata(
+                sessionID: sessionID,
+                spawnMetadata: spawnMetadata,
+                at: now
+            ) || stateChanged
+        }
+
         if event.isSubagentStart,
            let subagentID = event.subagentID {
             let didMutate = reopenBackgroundActivity(
@@ -1193,11 +1247,17 @@ final class SessionRuntimeStore: ObservableObject {
                 ),
                 at: now
             )
-            return stateChanged || didMutate
+            let didEnrich = consumeResolvedCodexSubagentMetadata(
+                sessionID: sessionID,
+                agentID: subagentID,
+                at: now
+            )
+            return stateChanged || didMutate || didEnrich
         }
 
         if event.isSubagentStop,
            let subagentID = event.subagentID {
+            clearCodexSubagentMetadata(sessionID: sessionID, agentID: subagentID)
             let didMutate = finishBackgroundActivity(
                 sessionID: sessionID,
                 activityID: subagentID,
@@ -1284,6 +1344,58 @@ final class SessionRuntimeStore: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func recordCodexSubagentRolloutMetadata(
+        sessionID: String,
+        toolUseID: String,
+        agentID: String,
+        displayName: String?,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              record.usesSessionStatusNotifications,
+              codexStatusTrackingSourceAllowsHookEvents(sessionID: sessionID),
+              let normalizedToolUseID = normalizedNonEmpty(toolUseID),
+              let normalizedAgentID = normalizedNonEmpty(agentID) else {
+            return false
+        }
+
+        if isBackgroundActivityFinishTombstoned(
+            sessionID: sessionID,
+            activityID: normalizedAgentID,
+            at: now
+        ) {
+            removeCodexSpawnCorrelation(
+                sessionID: sessionID,
+                toolUseID: normalizedToolUseID
+            )
+            return false
+        }
+
+        var state = codexSubagentMetadataStateBySessionID[sessionID]
+            ?? CodexSubagentMetadataState()
+        let previousState = state
+        var correlation = state.correlationsByToolUseID[normalizedToolUseID]
+            ?? PendingCodexSpawnCorrelation()
+        correlation.childAgentID = normalizedAgentID
+        correlation.rolloutDisplayName = meaningfulCodexSubagentMetadataText(displayName)
+        upsertCodexSpawnCorrelation(
+            correlation,
+            toolUseID: normalizedToolUseID,
+            state: &state
+        )
+        let didMutateActivity = resolveCodexSpawnCorrelation(
+            sessionID: sessionID,
+            toolUseID: normalizedToolUseID,
+            state: &state,
+            at: now
+        )
+        let didMutateState = state != previousState
+        storeCodexSubagentMetadataState(state, sessionID: sessionID)
+        return didMutateActivity || didMutateState
+    }
+
     func codexSessionLogFallbackEventsAreEnabled(sessionID: String) -> Bool {
         codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID)
     }
@@ -1301,6 +1413,7 @@ final class SessionRuntimeStore: ObservableObject {
         codexNotifyStateBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
+        codexSubagentMetadataStateBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
         removePendingPanelParentSessionIDs(parentSessionID: sessionID)
         var nextRegistry = sessionRegistry
@@ -1327,6 +1440,7 @@ final class SessionRuntimeStore: ObservableObject {
             codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
             codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
             backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
+            codexSubagentMetadataStateBySessionID.removeValue(forKey: record.sessionID)
             removePendingCodexHookApproval(sessionID: record.sessionID)
             removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
         }
@@ -1511,6 +1625,7 @@ final class SessionRuntimeStore: ObservableObject {
                 codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
                 codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
                 backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
+                codexSubagentMetadataStateBySessionID.removeValue(forKey: record.sessionID)
                 removePendingCodexHookApproval(sessionID: record.sessionID)
                 if record.agent == .processWatch {
                     nextRegistry.removeSession(sessionID: record.sessionID)
@@ -1585,6 +1700,248 @@ final class SessionRuntimeStore: ObservableObject {
             category: .terminal,
             metadata: metadata
         )
+    }
+
+    private func recordCodexSubagentHookMetadata(
+        sessionID: String,
+        spawnMetadata: CodexSpawnHookMetadata,
+        at now: Date
+    ) -> Bool {
+        guard let toolUseID = normalizedNonEmpty(spawnMetadata.toolUseID) else {
+            return false
+        }
+        let metadata = CodexSubagentMetadata(
+            displayName: meaningfulCodexSubagentMetadataText(spawnMetadata.taskName, limit: 80),
+            command: normalizedCodexSubagentMetadataText(spawnMetadata.message, limit: 512)
+        )
+        guard metadata.isEmpty == false else {
+            return false
+        }
+
+        var state = codexSubagentMetadataStateBySessionID[sessionID]
+            ?? CodexSubagentMetadataState()
+        let previousState = state
+        var correlation = state.correlationsByToolUseID[toolUseID]
+            ?? PendingCodexSpawnCorrelation()
+        correlation.hookMetadata = metadata
+        upsertCodexSpawnCorrelation(
+            correlation,
+            toolUseID: toolUseID,
+            state: &state
+        )
+        let didMutateActivity = resolveCodexSpawnCorrelation(
+            sessionID: sessionID,
+            toolUseID: toolUseID,
+            state: &state,
+            at: now
+        )
+        let didMutateState = state != previousState
+        storeCodexSubagentMetadataState(state, sessionID: sessionID)
+        return didMutateActivity || didMutateState
+    }
+
+    private func resolveCodexSpawnCorrelation(
+        sessionID: String,
+        toolUseID: String,
+        state: inout CodexSubagentMetadataState,
+        at now: Date
+    ) -> Bool {
+        guard let correlation = state.correlationsByToolUseID[toolUseID],
+              let agentID = correlation.childAgentID else {
+            return false
+        }
+
+        if isBackgroundActivityFinishTombstoned(
+            sessionID: sessionID,
+            activityID: agentID,
+            at: now
+        ) {
+            removeCodexSpawnCorrelation(toolUseID: toolUseID, state: &state)
+            removeResolvedCodexSubagentMetadata(agentID: agentID, state: &state)
+            return false
+        }
+
+        let metadata = correlation.resolvedMetadata
+        var didMutateActivity = false
+        if metadata.isEmpty == false {
+            if sessionRegistry.activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID[agentID] != nil {
+                didMutateActivity = applyCodexSubagentMetadata(
+                    metadata,
+                    sessionID: sessionID,
+                    agentID: agentID,
+                    at: now
+                )
+            } else {
+                upsertResolvedCodexSubagentMetadata(
+                    metadata,
+                    agentID: agentID,
+                    state: &state
+                )
+            }
+        }
+
+        if correlation.isComplete {
+            removeCodexSpawnCorrelation(toolUseID: toolUseID, state: &state)
+        }
+        return didMutateActivity
+    }
+
+    private func consumeResolvedCodexSubagentMetadata(
+        sessionID: String,
+        agentID: String,
+        at now: Date
+    ) -> Bool {
+        guard var state = codexSubagentMetadataStateBySessionID[sessionID],
+              let metadata = state.resolvedMetadataByAgentID[agentID] else {
+            return false
+        }
+        removeResolvedCodexSubagentMetadata(agentID: agentID, state: &state)
+        storeCodexSubagentMetadataState(state, sessionID: sessionID)
+        return applyCodexSubagentMetadata(
+            metadata,
+            sessionID: sessionID,
+            agentID: agentID,
+            at: now
+        )
+    }
+
+    private func applyCodexSubagentMetadata(
+        _ metadata: CodexSubagentMetadata,
+        sessionID: String,
+        agentID: String,
+        at now: Date
+    ) -> Bool {
+        guard isBackgroundActivityFinishTombstoned(
+            sessionID: sessionID,
+            activityID: agentID,
+            at: now
+        ) == false,
+              let existingActivity = sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID[agentID],
+              existingActivity.kind == .subagent else {
+            return false
+        }
+        return updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: existingActivity.id,
+                kind: existingActivity.kind,
+                displayName: metadata.displayName,
+                command: metadata.command,
+                processID: existingActivity.processID,
+                preserveWhenUnlisted: existingActivity.preserveWhenUnlisted,
+                startedAt: existingActivity.startedAt,
+                lastUpdatedAt: now
+            ),
+            at: now
+        )
+    }
+
+    private func upsertCodexSpawnCorrelation(
+        _ correlation: PendingCodexSpawnCorrelation,
+        toolUseID: String,
+        state: inout CodexSubagentMetadataState
+    ) {
+        if state.correlationsByToolUseID[toolUseID] == nil {
+            state.orderedToolUseIDs.append(toolUseID)
+        }
+        state.correlationsByToolUseID[toolUseID] = correlation
+        while state.orderedToolUseIDs.count > Self.maximumPendingCodexSubagentMetadataEntries {
+            let evictedToolUseID = state.orderedToolUseIDs.removeFirst()
+            state.correlationsByToolUseID.removeValue(forKey: evictedToolUseID)
+        }
+    }
+
+    private func upsertResolvedCodexSubagentMetadata(
+        _ metadata: CodexSubagentMetadata,
+        agentID: String,
+        state: inout CodexSubagentMetadataState
+    ) {
+        if let existingMetadata = state.resolvedMetadataByAgentID[agentID] {
+            state.resolvedMetadataByAgentID[agentID] = metadata.mergingFallback(existingMetadata)
+            return
+        }
+        state.resolvedMetadataByAgentID[agentID] = metadata
+        state.orderedAgentIDs.append(agentID)
+        while state.orderedAgentIDs.count > Self.maximumPendingCodexSubagentMetadataEntries {
+            let evictedAgentID = state.orderedAgentIDs.removeFirst()
+            state.resolvedMetadataByAgentID.removeValue(forKey: evictedAgentID)
+        }
+    }
+
+    private func removeCodexSpawnCorrelation(
+        sessionID: String,
+        toolUseID: String
+    ) {
+        guard var state = codexSubagentMetadataStateBySessionID[sessionID] else {
+            return
+        }
+        removeCodexSpawnCorrelation(toolUseID: toolUseID, state: &state)
+        storeCodexSubagentMetadataState(state, sessionID: sessionID)
+    }
+
+    private func removeCodexSpawnCorrelation(
+        toolUseID: String,
+        state: inout CodexSubagentMetadataState
+    ) {
+        state.correlationsByToolUseID.removeValue(forKey: toolUseID)
+        state.orderedToolUseIDs.removeAll { $0 == toolUseID }
+    }
+
+    private func removeResolvedCodexSubagentMetadata(
+        agentID: String,
+        state: inout CodexSubagentMetadataState
+    ) {
+        state.resolvedMetadataByAgentID.removeValue(forKey: agentID)
+        state.orderedAgentIDs.removeAll { $0 == agentID }
+    }
+
+    private func clearCodexSubagentMetadata(
+        sessionID: String,
+        agentID: String
+    ) {
+        guard var state = codexSubagentMetadataStateBySessionID[sessionID] else {
+            return
+        }
+        removeResolvedCodexSubagentMetadata(agentID: agentID, state: &state)
+        let matchingToolUseIDs = state.correlationsByToolUseID.compactMap { toolUseID, correlation in
+            correlation.childAgentID == agentID ? toolUseID : nil
+        }
+        for toolUseID in matchingToolUseIDs {
+            removeCodexSpawnCorrelation(toolUseID: toolUseID, state: &state)
+        }
+        storeCodexSubagentMetadataState(state, sessionID: sessionID)
+    }
+
+    private func storeCodexSubagentMetadataState(
+        _ state: CodexSubagentMetadataState,
+        sessionID: String
+    ) {
+        if state.isEmpty {
+            codexSubagentMetadataStateBySessionID.removeValue(forKey: sessionID)
+        } else {
+            codexSubagentMetadataStateBySessionID[sessionID] = state
+        }
+    }
+
+    private func normalizedCodexSubagentMetadataText(
+        _ value: String?,
+        limit: Int
+    ) -> String? {
+        normalizedNonEmpty(value).map { String($0.prefix(limit)) }
+    }
+
+    private func meaningfulCodexSubagentMetadataText(
+        _ value: String?,
+        limit: Int = 80
+    ) -> String? {
+        guard let normalized = normalizedCodexSubagentMetadataText(value, limit: limit),
+              normalized.caseInsensitiveCompare("default") != .orderedSame else {
+            return nil
+        }
+        return normalized
     }
 
     private func recordBackgroundActivityFinishTombstone(

@@ -989,9 +989,10 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 detail: "Started Fresh",
                 backgroundActivity: CodexSessionBackgroundActivity(
                     activityID: "fresh-agent-id",
+                    hookActivityID: "fresh-agent-id",
+                    spawnToolUseID: "call_fresh",
                     kind: .subagent,
-                    displayName: "Fresh",
-                    command: "fresh spawn"
+                    displayName: "Fresh"
                 )
             ),
         ])
@@ -1018,9 +1019,9 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 backgroundActivity: CodexSessionBackgroundActivity(
                     activityID: "/root/scroll_implementation",
                     hookActivityID: "thread-1",
+                    spawnToolUseID: "call_spawn",
                     kind: .subagent,
-                    displayName: "scroll_implementation",
-                    command: "Inspect the scroll implementation and report risks"
+                    displayName: "scroll_implementation"
                 )
             ),
             CodexSessionLogEvent(
@@ -1145,9 +1146,10 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 detail: "Started Herschel",
                 backgroundActivity: CodexSessionBackgroundActivity(
                     activityID: "019f4565-7efd-7393-aefc-a600f5e0724e",
+                    hookActivityID: "019f4565-7efd-7393-aefc-a600f5e0724e",
+                    spawnToolUseID: "call_xKGDxu7LPYxEiAiAWXwGYJVl",
                     kind: .subagent,
-                    displayName: "Herschel",
-                    command: "Reply with exactly the single word: done"
+                    displayName: "Herschel"
                 )
             ),
             CodexSessionLogEvent(
@@ -1155,9 +1157,10 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 detail: "Started Halley",
                 backgroundActivity: CodexSessionBackgroundActivity(
                     activityID: "019f4565-80fa-7c03-915a-9e48e5b869a9",
+                    hookActivityID: "019f4565-80fa-7c03-915a-9e48e5b869a9",
+                    spawnToolUseID: "call_JkGuvNP9Ih7rl4tZEqtd1yxu",
                     kind: .subagent,
-                    displayName: "Halley",
-                    command: "Reply with exactly the single word: done"
+                    displayName: "Halley"
                 )
             ),
             CodexSessionLogEvent(
@@ -1219,9 +1222,10 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 detail: "Started reviewer",
                 backgroundActivity: CodexSessionBackgroundActivity(
                     activityID: "agent-1",
+                    hookActivityID: "agent-1",
+                    spawnToolUseID: "call_spawn",
                     kind: .subagent,
-                    displayName: "reviewer",
-                    command: "Inspect the diff"
+                    displayName: "reviewer"
                 )
             ),
         ])

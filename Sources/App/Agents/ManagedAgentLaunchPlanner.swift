@@ -703,53 +703,18 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         sessionRuntimeStore: SessionRuntimeStore
     ) {
         guard event.kind == .backgroundActivityStarted,
-              let activity = event.backgroundActivity else {
+              let activity = event.backgroundActivity,
+              let toolUseID = normalizedNonEmpty(activity.spawnToolUseID),
+              let agentID = normalizedNonEmpty(activity.hookActivityID) else {
             return
         }
 
-        let activityID = activity.hookActivityID ?? activity.activityID
-        // Codex waits for the synchronous hook delivery before emitting this
-        // root-rollout record. Metadata must never create or resurrect a row;
-        // an absent row means hook lifecycle did not establish an active agent.
-        guard let existingActivity = sessionRuntimeStore
-            .sessionRegistry
-            .activeSession(sessionID: sessionID)?
-            .backgroundActivitiesByID[activityID],
-              existingActivity.kind == .subagent else {
-            if activity.hookActivityID != nil || activity.command != nil {
-                ToasttyLog.debug(
-                    "Ignored Codex subagent metadata without a matching hook activity",
-                    category: .terminal,
-                    metadata: [
-                        "session_id": sessionID,
-                        "activity_id": activityID,
-                        "fallback_activity_id": activity.activityID,
-                        "hook_activity_id_present": String(activity.hookActivityID != nil),
-                    ]
-                )
-            }
-            return
-        }
-
-        let displayName = meaningfulCodexSubagentDisplayName(activity.displayName)
-        let command = normalizedNonEmpty(activity.command)
-        guard displayName != nil || command != nil else {
-            return
-        }
-
-        let now = nowProvider()
-        _ = sessionRuntimeStore.updateBackgroundActivity(
+        _ = sessionRuntimeStore.recordCodexSubagentRolloutMetadata(
             sessionID: sessionID,
-            activity: SessionBackgroundActivity(
-                id: existingActivity.id,
-                kind: existingActivity.kind,
-                displayName: displayName,
-                command: command,
-                processID: existingActivity.processID,
-                startedAt: existingActivity.startedAt,
-                lastUpdatedAt: now
-            ),
-            at: now
+            toolUseID: toolUseID,
+            agentID: agentID,
+            displayName: meaningfulCodexSubagentDisplayName(activity.displayName),
+            at: nowProvider()
         )
     }
 

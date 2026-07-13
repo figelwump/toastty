@@ -301,6 +301,15 @@ enum CLICommand: Equatable {
             if let subagentType = event.subagentType {
                 payload["subagentType"] = .string(subagentType)
             }
+            if let spawnMetadata = event.spawnMetadata {
+                payload["spawnToolUseID"] = .string(spawnMetadata.toolUseID)
+                if let taskName = spawnMetadata.taskName {
+                    payload["spawnTaskName"] = .string(taskName)
+                }
+                if let message = spawnMetadata.message {
+                    payload["spawnMessage"] = .string(message)
+                }
+            }
             return AutomationEventEnvelope(
                 eventType: "session.codex_hook_event",
                 sessionID: sessionID,

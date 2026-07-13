@@ -115,6 +115,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
 struct CodexSessionBackgroundActivity: Equatable, Sendable {
     let activityID: String
     let hookActivityID: String?
+    let spawnToolUseID: String?
     let kind: SessionBackgroundActivityKind
     let displayName: String?
     let command: String?
@@ -122,12 +123,14 @@ struct CodexSessionBackgroundActivity: Equatable, Sendable {
     init(
         activityID: String,
         hookActivityID: String? = nil,
+        spawnToolUseID: String? = nil,
         kind: SessionBackgroundActivityKind,
         displayName: String? = nil,
         command: String? = nil
     ) {
         self.activityID = activityID
         self.hookActivityID = hookActivityID
+        self.spawnToolUseID = spawnToolUseID
         self.kind = kind
         self.displayName = displayName
         self.command = command
@@ -531,8 +534,8 @@ private extension CodexSessionLogWatcher {
                 return [collaborationStartedEvent(
                     activityID: agentPath,
                     hookActivityID: nonEmptyString(payload["agent_thread_id"]),
-                    displayName: normalizedSummaryText(spawnArguments?["task_name"], limit: 80),
-                    command: normalizedSummaryText(spawnArguments?["message"], limit: 512)
+                    spawnToolUseID: eventID,
+                    displayName: normalizedSummaryText(spawnArguments?["task_name"], limit: 80)
                 )]
 
             case "interrupted":
@@ -617,8 +620,8 @@ private extension CodexSessionLogWatcher {
     static func collaborationStartedEvent(
         activityID: String,
         hookActivityID: String? = nil,
-        displayName: String? = nil,
-        command: String? = nil
+        spawnToolUseID: String? = nil,
+        displayName: String? = nil
     ) -> CodexSessionLogEvent {
         let resolvedDisplayName = displayName ?? collaborationAgentDisplayName(from: activityID)
         return CodexSessionLogEvent(
@@ -627,9 +630,9 @@ private extension CodexSessionLogWatcher {
             backgroundActivity: CodexSessionBackgroundActivity(
                 activityID: activityID,
                 hookActivityID: hookActivityID,
+                spawnToolUseID: spawnToolUseID,
                 kind: .subagent,
-                displayName: resolvedDisplayName,
-                command: command
+                displayName: resolvedDisplayName
             )
         )
     }
@@ -717,6 +720,7 @@ private extension CodexSessionLogWatcher {
             }
             return resolvedMultiAgentEvents(
                 for: pendingCall,
+                callID: callID,
                 outputJSONString: nonEmptyString(payload["output"]),
                 fallbackLine: fallbackLine
             )
@@ -728,6 +732,7 @@ private extension CodexSessionLogWatcher {
 
     static func resolvedMultiAgentEvents(
         for call: CodexMultiAgentPendingCall,
+        callID: String,
         outputJSONString: String?,
         fallbackLine _: String
     ) -> [CodexSessionLogEvent] {
@@ -743,16 +748,16 @@ private extension CodexSessionLogWatcher {
             let displayName = normalizedSummaryText(output["nickname"], limit: 80)
                 ?? normalizedSummaryText(arguments?["agent_type"], limit: 80)
                 ?? "Sub-agent"
-            let command = normalizedSummaryText(arguments?["message"], limit: 512)
             return [
                 CodexSessionLogEvent(
                     kind: .backgroundActivityStarted,
                     detail: "Started \(displayName)",
                     backgroundActivity: CodexSessionBackgroundActivity(
                         activityID: agentID,
+                        hookActivityID: agentID,
+                        spawnToolUseID: callID,
                         kind: .subagent,
-                        displayName: displayName,
-                        command: command
+                        displayName: displayName
                     )
                 ),
             ]

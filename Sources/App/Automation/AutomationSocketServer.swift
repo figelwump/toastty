@@ -2928,6 +2928,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private func normalizedOptionalText(_ value: String?, limit: Int) -> String? {
+        normalizedOptionalText(value).map { String($0.prefix(limit)) }
+    }
+
     private func codexNotifyCompletion(
         from payload: [String: AutomationJSONValue]
     ) throws -> CodexNotifyCompletion {
@@ -3074,6 +3078,23 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             status = nil
         }
 
+        let spawnToolUseID = normalizedOptionalText(payload.string("spawnToolUseID"))
+        let spawnTaskName = normalizedOptionalText(payload.string("spawnTaskName"), limit: 80)
+        let spawnMessage = normalizedOptionalText(payload.string("spawnMessage"), limit: 512)
+        if spawnToolUseID == nil,
+           spawnTaskName != nil || spawnMessage != nil {
+            throw AutomationSocketError.invalidPayload(
+                "spawnToolUseID is required when spawn metadata is present"
+            )
+        }
+        let spawnMetadata = spawnToolUseID.map {
+            CodexSpawnHookMetadata(
+                toolUseID: $0,
+                taskName: spawnTaskName,
+                message: spawnMessage
+            )
+        }
+
         return CodexHookEvent(
             hookEventName: hookEventName,
             source: normalizedOptionalText(payload.string("source")),
@@ -3086,7 +3107,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             sessionFilePath: normalizedOptionalText(payload.string("sessionFilePath")),
             cwd: normalizedOptionalText(payload.string("cwd")),
             subagentID: normalizedOptionalText(payload.string("subagentID")),
-            subagentType: normalizedOptionalText(payload.string("subagentType"))
+            subagentType: normalizedOptionalText(payload.string("subagentType")),
+            spawnMetadata: spawnMetadata
         )
     }
 

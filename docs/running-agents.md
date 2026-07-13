@@ -223,11 +223,11 @@ typing shell functions directly.
 When the profile ID is `codex`, Toastty:
 
 1. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default.
-2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, `SubagentStart`, `SubagentStop`, and `Stop`. These events drive **Working**, actionable **Needs approval**, **Ready**, native resume metadata, and Codex collaboration-agent rows for managed Codex sessions. When session recording context shows Codex is using an auto-reviewer through `approvals_reviewer`, Toastty suppresses the matching auto-reviewed approval prompt instead of surfacing it as a user approval. When the reviewer field is omitted in a resumed session, Toastty treats the permission request as ambiguous instead of immediately showing **Needs approval**.
+2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, `SubagentStart`, `SubagentStop`, and `Stop`. These events drive **Working**, actionable **Needs approval**, **Ready**, native resume metadata, and Codex collaboration-agent rows for managed Codex sessions. A `PreToolUse` spawn event also captures the delegated task name and description before Codex encrypts the message in its session recording. When session recording context shows Codex is using an auto-reviewer through `approvals_reviewer`, Toastty suppresses the matching auto-reviewed approval prompt instead of surfacing it as a user approval. When the reviewer field is omitted in a resumed session, Toastty treats the permission request as ambiguous instead of immediately showing **Needs approval**.
 3. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
 4. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 5. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit.
-6. **Starts a session recording watcher** that polls the session log file (every 250 ms) for Codex root-turn context, including auto-review approval context, and collaboration-agent metadata. When hooks are installed, hooks remain authoritative for sidebar status and collaboration lifecycle while correlated recording events enrich subagent labels and descriptions. When hooks are unavailable, the watcher also acts as the compatibility status and collaboration-lifecycle fallback.
+6. **Starts a session recording watcher** that polls the session log file (every 250 ms) for Codex root-turn context, including auto-review approval context, and collaboration-agent identity mappings. When hooks are installed, hooks remain authoritative for sidebar status and collaboration lifecycle; the recording only maps the spawn tool-use ID to the child agent ID and supplies a task-label fallback. Toastty joins that mapping with the plaintext `PreToolUse` metadata regardless of arrival order. When hooks are unavailable, the watcher also acts as the compatibility status and collaboration-lifecycle fallback.
 7. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
 8. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
@@ -437,10 +437,13 @@ waves.
 
 For Codex, `SubagentStart` and `SubagentStop` hooks are the authoritative source
 for collaboration-agent rows when status hooks are installed. Session-recording
-events may enrich those hook-owned rows with the delegated task name and
-description, but cannot create, reopen, or finish them. When hooks are
-unavailable, session-recording events provide the compatibility lifecycle
-fallback. This avoids duplicate rows and lets hook-tracked agents remain
+events correlate the spawn tool-use ID with the child agent ID; the matching
+`PreToolUse` hook supplies the delegated task name and description. Toastty
+keeps a small bounded pending join so either event may arrive first, but metadata
+cannot create, reopen, or finish a row. When hooks are unavailable,
+session-recording events provide the compatibility lifecycle fallback and may
+still supply a label, but encrypted recording messages are never used as tooltip
+descriptions. This avoids duplicate rows and lets hook-tracked agents remain
 visible until Codex reports their completion.
 
 For Claude, asynchronous `Agent` and `Task` results create labeled subagent
