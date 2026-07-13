@@ -336,6 +336,25 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     @discardableResult
+    func reopenBackgroundActivity(
+        sessionID: String,
+        activity: SessionBackgroundActivity,
+        at now: Date
+    ) -> Bool {
+        // Codex SubagentStart is source-authoritative and can represent a new
+        // turn for an agent ID that completed moments earlier.
+        clearBackgroundActivityFinishTombstone(
+            sessionID: sessionID,
+            activityID: activity.id
+        )
+        return updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: activity,
+            at: now
+        )
+    }
+
+    @discardableResult
     func syncBackgroundActivities(
         sessionID: String,
         kind: SessionBackgroundActivityKind,
@@ -409,8 +428,8 @@ final class SessionRuntimeStore: ObservableObject {
     @discardableResult
     func pruneStaleBackgroundActivities(at now: Date = Date()) -> Bool {
         var nextRegistry = sessionRegistry
-        let didMutate = nextRegistry.pruneBackgroundActivities(at: now) { activity in
-            shouldPruneBackgroundActivity(activity, at: now)
+        let didMutate = nextRegistry.pruneBackgroundActivities(at: now) { sessionID, activity in
+            shouldPruneBackgroundActivity(sessionID: sessionID, activity, at: now)
         }
         guard didMutate else {
             updateBackgroundActivityReaperState()
@@ -1159,6 +1178,32 @@ final class SessionRuntimeStore: ObservableObject {
 
         codexNotifyStateBySessionID[sessionID] = state
 
+        if event.isSubagentStart,
+           let subagentID = event.subagentID {
+            let didMutate = reopenBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: subagentID,
+                    kind: .subagent,
+                    displayName: event.subagentType,
+                    startedAt: now,
+                    lastUpdatedAt: now
+                ),
+                at: now
+            )
+            return stateChanged || didMutate
+        }
+
+        if event.isSubagentStop,
+           let subagentID = event.subagentID {
+            let didMutate = finishBackgroundActivity(
+                sessionID: sessionID,
+                activityID: subagentID,
+                at: now
+            )
+            return stateChanged || didMutate
+        }
+
         guard let status = event.status else {
             return stateChanged
         }
@@ -1235,6 +1280,10 @@ final class SessionRuntimeStore: ObservableObject {
         }
         updateStatus(sessionID: sessionID, status: status, at: now)
         return true
+    }
+
+    func codexSessionLogFallbackEventsAreEnabled(sessionID: String) -> Bool {
+        codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID)
     }
 
     func stopSession(
@@ -1545,6 +1594,16 @@ final class SessionRuntimeStore: ObservableObject {
         backgroundActivityFinishTombstonesBySessionID[sessionID, default: [:]][activityID] = now
     }
 
+    private func clearBackgroundActivityFinishTombstone(
+        sessionID: String,
+        activityID: String
+    ) {
+        backgroundActivityFinishTombstonesBySessionID[sessionID]?.removeValue(forKey: activityID)
+        if backgroundActivityFinishTombstonesBySessionID[sessionID]?.isEmpty == true {
+            backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
+        }
+    }
+
     private func isBackgroundActivityFinishTombstoned(
         sessionID: String,
         activityID: String,
@@ -1679,9 +1738,18 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     private func shouldPruneBackgroundActivity(
+        sessionID: String,
         _ activity: SessionBackgroundActivity,
         at now: Date
     ) -> Bool {
+        if activity.kind == .subagent,
+           activity.processID == nil,
+           codexStatusTrackingSourceBySessionID[sessionID] == .hooks {
+            // Hook lifecycle is source-authoritative. A long-running subagent
+            // may be quiet for hours, so only SubagentStop or session teardown
+            // should remove it.
+            return false
+        }
         let maximumAge = activity.kind == .subagent && activity.processID == nil
             ? Self.maximumPidlessSubagentBackgroundActivityAge
             : maximumBackgroundActivityAge
@@ -3322,6 +3390,14 @@ private extension CodexHookEvent {
 
     var isPermissionRequest: Bool {
         hookEventName == "PermissionRequest"
+    }
+
+    var isSubagentStart: Bool {
+        hookEventName == "SubagentStart"
+    }
+
+    var isSubagentStop: Bool {
+        hookEventName == "SubagentStop"
     }
 
     var canLatchRootHookThread: Bool {

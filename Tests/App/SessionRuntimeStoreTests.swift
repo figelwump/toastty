@@ -121,6 +121,49 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexHookSubagentIsNotAgePrunedWhileSessionIsActive() throws {
+        let store = SessionRuntimeStore(maximumBackgroundActivityAge: 8 * 60 * 60)
+        defer { store.reset() }
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_150)
+        let sessionID = "sess-codex-hook-long-running-subagent"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: "agent-child",
+                subagentType: "reviewer"
+            ),
+            at: now
+        ))
+
+        #expect(store.pruneStaleBackgroundActivities(at: now.addingTimeInterval(9 * 60 * 60)) == false)
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?
+            .backgroundActivitiesByID["agent-child"] != nil)
+    }
+
+    @Test
     func duplicateCodexSubagentStartsUpsertSingleBackgroundActivity() throws {
         let store = SessionRuntimeStore()
         defer { store.reset() }
@@ -282,6 +325,80 @@ struct SessionRuntimeStoreTests {
             at: now.addingTimeInterval(1)
         ) == false)
         #expect(store.sessionRegistry.sessionsByID["sess-tombstone-start"]?.backgroundActivitiesByID.isEmpty == true)
+    }
+
+    @Test
+    func codexSubagentHooksFinishAndAuthoritativelyReopenActivity() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_700_001_250)
+        let sessionID = "sess-codex-hook-subagent"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        let startEvent = CodexHookEvent(
+            hookEventName: "SubagentStart",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            promptFingerprint: nil,
+            status: nil,
+            nativeSessionID: "thread-root",
+            sessionFilePath: nil,
+            cwd: nil,
+            subagentID: "agent-child",
+            subagentType: "reviewer"
+        )
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: startEvent,
+            at: now.addingTimeInterval(1)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?
+            .backgroundActivitiesByID["agent-child"]?.displayName == "reviewer")
+
+        let stopEvent = CodexHookEvent(
+            hookEventName: "SubagentStop",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            promptFingerprint: nil,
+            status: nil,
+            nativeSessionID: "thread-root",
+            sessionFilePath: nil,
+            cwd: nil,
+            subagentID: "agent-child",
+            subagentType: "reviewer"
+        )
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: stopEvent,
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?
+            .backgroundActivitiesByID["agent-child"] == nil)
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: startEvent,
+            at: now.addingTimeInterval(3)
+        ))
+        #expect(store.sessionRegistry.sessionsByID[sessionID]?
+            .backgroundActivitiesByID["agent-child"] != nil)
+        #expect(store.workspaceStatuses(for: workspaceID).first?.projection == .waitingOnChildren(
+            childCount: 1,
+            pendingBackgroundTaskCount: 0
+        ))
     }
 
     @Test

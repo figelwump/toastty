@@ -25,6 +25,8 @@ enum CodexHookEventParser {
         let status = status(for: eventName, object: object)
         let transcriptPath = normalizedPathString(object["transcript_path"])
         let cwd = normalizedPathString(object["cwd"])
+        let subagentID = normalizedString(object["agent_id"])
+        let subagentType = normalizedString(object["agent_type"])
 
         let event = CodexHookEvent(
             hookEventName: eventName,
@@ -36,7 +38,9 @@ enum CodexHookEventParser {
             status: status,
             nativeSessionID: threadID,
             sessionFilePath: transcriptPath,
-            cwd: cwd
+            cwd: cwd,
+            subagentID: subagentID,
+            subagentType: subagentType
         )
         commands.append(.sessionCodexHookEvent(sessionID: sessionID, panelID: panelID, event: event))
 

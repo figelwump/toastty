@@ -3072,7 +3072,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             status: status,
             nativeSessionID: normalizedOptionalText(payload.string("nativeSessionID")),
             sessionFilePath: normalizedOptionalText(payload.string("sessionFilePath")),
-            cwd: normalizedOptionalText(payload.string("cwd"))
+            cwd: normalizedOptionalText(payload.string("cwd")),
+            subagentID: normalizedOptionalText(payload.string("subagentID")),
+            subagentType: normalizedOptionalText(payload.string("subagentType"))
         )
     }
 

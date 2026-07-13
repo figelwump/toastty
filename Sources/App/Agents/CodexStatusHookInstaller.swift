@@ -92,6 +92,8 @@ final class CodexStatusHookInstaller {
         "UserPromptSubmit",
         "PermissionRequest",
         "PreToolUse",
+        "SubagentStart",
+        "SubagentStop",
         "Stop",
     ]
     private static let legacyHookEventNames = [

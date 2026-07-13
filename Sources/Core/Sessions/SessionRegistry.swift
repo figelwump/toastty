@@ -201,12 +201,22 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         at now: Date,
         shouldRemove: (SessionBackgroundActivity) -> Bool
     ) -> Bool {
+        pruneBackgroundActivities(at: now) { _, activity in
+            shouldRemove(activity)
+        }
+    }
+
+    @discardableResult
+    public mutating func pruneBackgroundActivities(
+        at now: Date,
+        shouldRemove: (String, SessionBackgroundActivity) -> Bool
+    ) -> Bool {
         var didMutate = false
         for sessionID in Array(sessionsByID.keys) {
             guard var record = activeSession(sessionID: sessionID) else { continue }
             let previousCount = record.backgroundActivitiesByID.count
             record.backgroundActivitiesByID = record.backgroundActivitiesByID.filter { _, activity in
-                shouldRemove(activity) == false
+                shouldRemove(sessionID, activity) == false
             }
             guard record.backgroundActivitiesByID.count != previousCount else { continue }
             record.lastActivityFinishedAt = now

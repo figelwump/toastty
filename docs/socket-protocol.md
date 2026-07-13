@@ -1172,6 +1172,8 @@ Accepted payload keys:
 - `permissionMode?: String`
 - `threadID?: String`
 - `turnID?: String`
+- `subagentID?: String`
+- `subagentType?: String`
 - `promptFingerprint?: String`
 - `kind?: "idle" | "working" | "needs_approval" | "ready" | "error"`
 - `summary?: String`
@@ -1189,6 +1191,12 @@ Behavior:
 - `panelID` is optional; when present it must match the active session
 - When `kind` is present, `summary` is required and Toastty updates the session
   status
+- `SubagentStart` with a `subagentID` creates or reopens a collaboration-agent
+  child row. `SubagentStop` with the same ID removes it. The optional
+  `subagentType` becomes the row label.
+- Hook-tracked collaboration agents are lifecycle-driven: they are not removed
+  by the session-recording fallback's stale-activity limit or by a corrected
+  Codex rollout path while the owning session remains active.
 - For first-party Codex sessions that use Toastty status notifications, Toastty
   latches root identity from root-starting hooks (`SessionStart` and
   `UserPromptSubmit`) and ignores later hook events from different threads.

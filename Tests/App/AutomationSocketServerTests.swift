@@ -244,6 +244,77 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func codexSubagentHookEventsProjectAndReopenBackgroundActivity() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-codex-subagent-hook"
+        try await MainActor.run {
+            server.sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: server.panelID,
+                windowID: try #require(server.store.state.windows.first?.id),
+                workspaceID: server.workspaceID,
+                usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: .hooks,
+                cwd: "/tmp/repo",
+                repoRoot: "/tmp/repo",
+                at: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+
+        func sendSubagentEvent(_ eventName: String) throws -> AutomationResponseEnvelope {
+            try sendEvent(
+                AutomationEventEnvelope(
+                    eventType: "session.codex_hook_event",
+                    sessionID: sessionID,
+                    requestID: UUID().uuidString,
+                    payload: [
+                        "hookEventName": .string(eventName),
+                        "threadID": .string("thread-root"),
+                        "turnID": .string("turn-root"),
+                        "subagentID": .string("agent-child"),
+                        "subagentType": .string("reviewer"),
+                    ]
+                ),
+                socketPath: socketPath
+            )
+        }
+
+        #expect(try sendSubagentEvent("SubagentStart").result?.string("status") == "accepted")
+        var activity = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID["agent-child"]
+        }
+        #expect(activity?.displayName == "reviewer")
+
+        #expect(try sendSubagentEvent("SubagentStop").result?.string("status") == "accepted")
+        activity = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID["agent-child"]
+        }
+        #expect(activity == nil)
+
+        #expect(try sendSubagentEvent("SubagentStart").result?.string("status") == "accepted")
+        activity = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID["agent-child"]
+        }
+        #expect(activity != nil)
+    }
+
+    @Test
     func codexHookSessionStartUpdatesResumeRecordOnlyWhenAccepted() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {

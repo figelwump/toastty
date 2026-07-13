@@ -650,7 +650,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         _ event: CodexSessionLogEvent,
         sessionID: String
     ) {
-        guard let sessionRuntimeStore else {
+        guard let sessionRuntimeStore,
+              sessionRuntimeStore.codexSessionLogFallbackEventsAreEnabled(sessionID: sessionID) else {
             return
         }
 
@@ -746,7 +747,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         }
 
         let previousWatcher = codexRolloutWatchersBySessionID[sessionID]?.watcher
-        if previousWatcher != nil {
+        if previousWatcher != nil,
+           sessionRuntimeStore?.codexSessionLogFallbackEventsAreEnabled(sessionID: sessionID) == true {
             // A replaced rollout claim means every subagent row sourced from the
             // old file is stale (e.g. a restored pane briefly claimed the prior
             // launch's rollout). The new file's replay rebuilds current state.

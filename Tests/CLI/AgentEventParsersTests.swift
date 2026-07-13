@@ -669,6 +669,63 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func codexSubagentStartHookMapsLifecycleIdentity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStart","session_id":"thread-root","turn_id":"turn-root","agent_id":"agent-child","agent_type":"reviewer"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCodexHookEvent(
+                sessionID: "sess-123",
+                panelID: nil,
+                event: CodexHookEvent(
+                    hookEventName: "SubagentStart",
+                    threadID: "thread-root",
+                    turnID: "turn-root",
+                    promptFingerprint: nil,
+                    status: nil,
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil,
+                    subagentID: "agent-child",
+                    subagentType: "reviewer"
+                )
+            ),
+        ])
+        let envelope = try #require(commands.first?.makeEventEnvelope())
+        #expect(envelope.eventType == "session.codex_hook_event")
+        #expect(envelope.payload.string("subagentID") == "agent-child")
+        #expect(envelope.payload.string("subagentType") == "reviewer")
+    }
+
+    @Test
+    func codexSubagentStopHookMapsLifecycleIdentity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStop","session_id":"thread-root","turn_id":"turn-root","agent_id":"agent-child","agent_type":"reviewer","agent_transcript_path":"/tmp/child.jsonl"}"#.utf8
+            )
+        )
+
+        guard case .sessionCodexHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Codex hook event")
+            return
+        }
+        #expect(commands.count == 1)
+        #expect(event.hookEventName == "SubagentStop")
+        #expect(event.threadID == "thread-root")
+        #expect(event.subagentID == "agent-child")
+        #expect(event.subagentType == "reviewer")
+    }
+
+    @Test
     func codexPostToolUseHookIsIgnored() throws {
         let postCommands = try AgentEventIngestor.commands(
             for: .codexHooks,

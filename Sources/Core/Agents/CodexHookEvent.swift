@@ -11,6 +11,8 @@ public struct CodexHookEvent: Equatable, Sendable {
     public var nativeSessionID: String?
     public var sessionFilePath: String?
     public var cwd: String?
+    public var subagentID: String?
+    public var subagentType: String?
 
     public init(
         hookEventName: String,
@@ -22,7 +24,9 @@ public struct CodexHookEvent: Equatable, Sendable {
         status: SessionStatus?,
         nativeSessionID: String?,
         sessionFilePath: String?,
-        cwd: String?
+        cwd: String?,
+        subagentID: String? = nil,
+        subagentType: String? = nil
     ) {
         self.hookEventName = hookEventName
         self.source = source
@@ -34,5 +38,7 @@ public struct CodexHookEvent: Equatable, Sendable {
         self.nativeSessionID = nativeSessionID
         self.sessionFilePath = sessionFilePath
         self.cwd = cwd
+        self.subagentID = subagentID
+        self.subagentType = subagentType
     }
 }

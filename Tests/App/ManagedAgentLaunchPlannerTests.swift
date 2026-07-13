@@ -1466,6 +1466,84 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         }
     }
 
+    func testCodexRolloutWatcherLeavesBackgroundLifecycleToHooksWhenEnabled() async throws {
+        let fixture = try makePlannerFixture(codexStatusTrackingSourceProvider: { .hooks })
+        let firstRolloutURL = temporaryJSONLURL()
+        let secondRolloutURL = temporaryJSONLURL()
+        defer {
+            try? fixture.fileManager.removeItem(at: firstRolloutURL)
+            try? fixture.fileManager.removeItem(at: secondRolloutURL)
+        }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        }
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(sessionFilePath: firstRolloutURL.path)
+                )
+            )
+        )
+
+        let hookEvent = CodexHookEvent(
+            hookEventName: "SubagentStart",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            promptFingerprint: nil,
+            status: nil,
+            nativeSessionID: "thread-root",
+            sessionFilePath: nil,
+            cwd: nil,
+            subagentID: "hook-owned",
+            subagentType: "reviewer"
+        )
+        XCTAssertTrue(fixture.sessionRuntimeStore.handleCodexHookEvent(
+            sessionID: plan.sessionID,
+            event: hookEvent,
+            at: Date()
+        ))
+
+        XCTAssertTrue(
+            fixture.store.send(
+                .updateTerminalPanelResumeRecord(
+                    panelID: fixture.panelID,
+                    resumeRecord: codexResumeRecord(sessionFilePath: secondRolloutURL.path)
+                )
+            )
+        )
+        XCTAssertNotNil(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["hook-owned"]
+        )
+
+        let occurredAtMilliseconds = Int(Date().addingTimeInterval(60).timeIntervalSince1970 * 1_000)
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":\#(occurredAtMilliseconds),"agent_path":"/root/hook_owned","kind":"started"}}"#,
+            to: secondRolloutURL
+        )
+
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/hook_owned"]
+        )
+    }
+
     func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let plan = try fixture.planner.prepareManagedLaunch(

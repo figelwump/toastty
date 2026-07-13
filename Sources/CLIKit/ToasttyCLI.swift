@@ -287,6 +287,12 @@ enum CLICommand: Equatable {
             if let cwd = event.cwd {
                 payload["cwd"] = .string(cwd)
             }
+            if let subagentID = event.subagentID {
+                payload["subagentID"] = .string(subagentID)
+            }
+            if let subagentType = event.subagentType {
+                payload["subagentType"] = .string(subagentType)
+            }
             return AutomationEventEnvelope(
                 eventType: "session.codex_hook_event",
                 sessionID: sessionID,

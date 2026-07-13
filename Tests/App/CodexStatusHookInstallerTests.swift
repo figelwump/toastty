@@ -7,6 +7,8 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         "UserPromptSubmit",
         "PermissionRequest",
         "PreToolUse",
+        "SubagentStart",
+        "SubagentStop",
         "Stop",
     ]
 
@@ -164,6 +166,30 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         XCTAssertEqual(status.setupRequirement, .automaticMaintenance)
         XCTAssertTrue(status.needsAutomaticMaintenance)
         XCTAssertFalse(status.requiresLaunchPreflightWarning)
+    }
+
+    func testHooksMissingSubagentLifecycleEventsReceiveAutomaticMaintenance() throws {
+        let homeURL = try makeTemporaryHome()
+        let installer = CodexStatusHookInstaller(homeDirectoryPath: homeURL.path)
+        _ = try installer.install()
+
+        let hooksFileURL = homeURL.appendingPathComponent(".codex/hooks.json", isDirectory: false)
+        var object = try hooksJSONObject(homeURL: homeURL)
+        var hooks = try XCTUnwrap(object["hooks"] as? [String: Any])
+        hooks.removeValue(forKey: "SubagentStart")
+        hooks.removeValue(forKey: "SubagentStop")
+        object["hooks"] = hooks
+        try writeHooksObject(object, to: hooksFileURL)
+
+        let status = try installer.installationStatus()
+        XCTAssertEqual(status.state, .needsUpdate)
+        XCTAssertEqual(status.setupRequirement, .automaticMaintenance)
+
+        let result = try XCTUnwrap(installer.performAutomaticMaintenanceIfNeeded())
+        XCTAssertEqual(result.status.state, .installed)
+        let updatedObject = try hooksJSONObject(homeURL: homeURL)
+        XCTAssertEqual(try toasttyHookEntries(for: "SubagentStart", in: updatedObject, homeURL: homeURL).count, 1)
+        XCTAssertEqual(try toasttyHookEntries(for: "SubagentStop", in: updatedObject, homeURL: homeURL).count, 1)
     }
 
     func testAutomaticMaintenanceRemovesLegacyToasttyHookAndPreservesExistingHooks() throws {
