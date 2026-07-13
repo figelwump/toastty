@@ -1194,7 +1194,9 @@ The socket payload key is `permissionMode`; Toastty's CLI maps Codex hook JSON
 `permission_mode` into that camelCase payload field. For recognized
 `spawn_agent` `PreToolUse` events, the CLI also maps `tool_use_id` and the
 plaintext task fields into the internal `spawn*` keys. `spawnToolUseID` is
-required whenever either other spawn field is present.
+required whenever either other spawn field is present. Newer Codex builds
+encrypt the delegated `message` (an opaque ciphertext token); Toastty discards
+such payloads app-side so they never become row labels or descriptions.
 
 Behavior:
 

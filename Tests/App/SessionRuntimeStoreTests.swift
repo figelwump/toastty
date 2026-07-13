@@ -542,6 +542,96 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexSubagentMetadataIgnoresEncryptedSpawnPayloads() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_274)
+        let sessionID = "sess-codex-encrypted-metadata"
+        let encryptedPayload = "gAAAAABqVUYlTXM2t_RUiRJdyhJC7EScV_pvZf4oTf1czpLtlOnI53DmSgBobosvD5"
+            + "Be9dNM6WH5zQ6yMDpeYZ2vCxX3NxFWC6mgu-Y0O8lYQO-AQStZWi7216SJYD53GT4jg_KMQxU1ILOdm0eHXkSjWTy"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: "agent-child",
+                subagentType: "default"
+            ),
+            at: now.addingTimeInterval(1)
+        ))
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PreToolUse",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                spawnMetadata: CodexSpawnHookMetadata(
+                    toolUseID: "call-spawn",
+                    taskName: "native_nav_sort",
+                    message: encryptedPayload
+                )
+            ),
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.recordCodexSubagentRolloutMetadata(
+            sessionID: sessionID,
+            toolUseID: "call-spawn",
+            agentID: "agent-child",
+            displayName: "native_nav_sort",
+            at: now.addingTimeInterval(3)
+        ))
+        let activity = try #require(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID["agent-child"])
+        #expect(activity.displayName == "native_nav_sort")
+        #expect(activity.command == nil)
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PreToolUse",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                spawnMetadata: CodexSpawnHookMetadata(
+                    toolUseID: "call-spawn-2",
+                    taskName: encryptedPayload,
+                    message: encryptedPayload
+                )
+            ),
+            at: now.addingTimeInterval(4)
+        ) == false)
+    }
+
+    @Test
     func codexDuplicateSubagentStartPreservesEnrichedDisplayName() throws {
         let store = SessionRuntimeStore()
         defer { store.reset() }

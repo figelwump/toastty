@@ -36,6 +36,30 @@ enum CodexSessionLogContextField: Equatable, Sendable {
     }
 }
 
+/// Newer Codex builds encrypt inter-agent message content, so rollout
+/// `spawn_agent` arguments and hook `tool_input` payloads can carry an opaque
+/// Fernet-style token instead of task text. Detect those tokens so ciphertext
+/// is never shown as a subagent label or description.
+func isLikelyEncryptedCodexAgentPayload(_ value: String) -> Bool {
+    var candidate = Substring(value)
+    if candidate.hasSuffix("...") {
+        candidate = candidate.dropLast(3)
+    }
+    if candidate.hasPrefix("gAAAAA") {
+        return true
+    }
+    guard candidate.count >= 64 else {
+        return false
+    }
+    return candidate.allSatisfy { character in
+        character.isASCII && (
+            character.isLetter || character.isNumber ||
+            character == "-" || character == "_" ||
+            character == "+" || character == "/" || character == "="
+        )
+    }
+}
+
 struct CodexSessionLogEvent: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case sessionConfigured
@@ -535,7 +559,8 @@ private extension CodexSessionLogWatcher {
                     activityID: agentPath,
                     hookActivityID: nonEmptyString(payload["agent_thread_id"]),
                     spawnToolUseID: eventID,
-                    displayName: normalizedSummaryText(spawnArguments?["task_name"], limit: 80)
+                    displayName: spawnMetadataSummaryText(spawnArguments?["task_name"], limit: 80),
+                    command: spawnMetadataSummaryText(spawnArguments?["message"], limit: 512)
                 )]
 
             case "interrupted":
@@ -621,7 +646,8 @@ private extension CodexSessionLogWatcher {
         activityID: String,
         hookActivityID: String? = nil,
         spawnToolUseID: String? = nil,
-        displayName: String? = nil
+        displayName: String? = nil,
+        command: String? = nil
     ) -> CodexSessionLogEvent {
         let resolvedDisplayName = displayName ?? collaborationAgentDisplayName(from: activityID)
         return CodexSessionLogEvent(
@@ -632,7 +658,8 @@ private extension CodexSessionLogWatcher {
                 hookActivityID: hookActivityID,
                 spawnToolUseID: spawnToolUseID,
                 kind: .subagent,
-                displayName: resolvedDisplayName
+                displayName: resolvedDisplayName,
+                command: command
             )
         )
     }
@@ -757,7 +784,8 @@ private extension CodexSessionLogWatcher {
                         hookActivityID: agentID,
                         spawnToolUseID: callID,
                         kind: .subagent,
-                        displayName: displayName
+                        displayName: displayName,
+                        command: spawnMetadataSummaryText(arguments?["message"], limit: 512)
                     )
                 ),
             ]
@@ -1553,6 +1581,14 @@ private extension CodexSessionLogWatcher {
         guard string.count > limit else { return string }
         let endIndex = string.index(string.startIndex, offsetBy: limit - 3)
         return String(string[..<endIndex]) + "..."
+    }
+
+    static func spawnMetadataSummaryText(_ value: Any?, limit: Int) -> String? {
+        guard let normalized = normalizedString(value),
+              isLikelyEncryptedCodexAgentPayload(normalized) == false else {
+            return nil
+        }
+        return normalizedSummaryText(normalized, limit: limit)
     }
 
     static func lastPathComponent(_ path: String) -> String {

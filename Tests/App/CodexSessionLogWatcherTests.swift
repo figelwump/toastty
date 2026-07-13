@@ -992,7 +992,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                     hookActivityID: "fresh-agent-id",
                     spawnToolUseID: "call_fresh",
                     kind: .subagent,
-                    displayName: "Fresh"
+                    displayName: "Fresh",
+                    command: "fresh spawn"
                 )
             ),
         ])
@@ -1021,7 +1022,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                     hookActivityID: "thread-1",
                     spawnToolUseID: "call_spawn",
                     kind: .subagent,
-                    displayName: "scroll_implementation"
+                    displayName: "scroll_implementation",
+                    command: "Inspect the scroll implementation and report risks"
                 )
             ),
             CodexSessionLogEvent(
@@ -1030,6 +1032,31 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 backgroundActivity: CodexSessionBackgroundActivity(
                     activityID: "/root/scroll_implementation",
                     kind: .subagent
+                )
+            ),
+        ])
+    }
+
+    func testWatcherDropsEncryptedCollaborationSpawnMessage() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-13T20:10:14.011Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"task_name\":\"native_nav_sort\",\"fork_turns\":\"all\",\"message\":\"gAAAAABqVUYlTXM2t_RUiRJdyhJC7EScV_pvZf4oTf1czpLtlOnI53DmSgBobosvD5Be9dNM6WH5zQ6yMDpeYZ2vCxX3NxFWC6mgu-Y0O8lYQO-AQStZWi7216SJYD53GT4jg_KMQxU1ILOdm0eHXkSjWTy\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-13T20:10:14.636Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783973414635,"agent_thread_id":"thread-1","agent_path":"/root/native_nav_sort","kind":"started"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started native_nav_sort",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/native_nav_sort",
+                    hookActivityID: "thread-1",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "native_nav_sort"
                 )
             ),
         ])
@@ -1149,7 +1176,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                     hookActivityID: "019f4565-7efd-7393-aefc-a600f5e0724e",
                     spawnToolUseID: "call_xKGDxu7LPYxEiAiAWXwGYJVl",
                     kind: .subagent,
-                    displayName: "Herschel"
+                    displayName: "Herschel",
+                    command: "Reply with exactly the single word: done"
                 )
             ),
             CodexSessionLogEvent(
@@ -1160,7 +1188,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                     hookActivityID: "019f4565-80fa-7c03-915a-9e48e5b869a9",
                     spawnToolUseID: "call_JkGuvNP9Ih7rl4tZEqtd1yxu",
                     kind: .subagent,
-                    displayName: "Halley"
+                    displayName: "Halley",
+                    command: "Reply with exactly the single word: done"
                 )
             ),
             CodexSessionLogEvent(
@@ -1225,7 +1254,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                     hookActivityID: "agent-1",
                     spawnToolUseID: "call_spawn",
                     kind: .subagent,
-                    displayName: "reviewer"
+                    displayName: "reviewer",
+                    command: "Inspect the diff"
                 )
             ),
         ])

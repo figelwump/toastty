@@ -1937,7 +1937,11 @@ final class SessionRuntimeStore: ObservableObject {
         _ value: String?,
         limit: Int
     ) -> String? {
-        normalizedNonEmpty(value).map { String($0.prefix(limit)) }
+        guard let normalized = normalizedNonEmpty(value),
+              isLikelyEncryptedCodexAgentPayload(normalized) == false else {
+            return nil
+        }
+        return String(normalized.prefix(limit))
     }
 
     private func meaningfulCodexSubagentMetadataText(

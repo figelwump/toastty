@@ -1365,7 +1365,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
         )
         XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.displayName, "Focused check")
-        XCTAssertNil(activeSession.backgroundActivitiesByID["agent-1"]?.command)
+        XCTAssertEqual(activeSession.backgroundActivitiesByID["agent-1"]?.command, "Run focused checks")
     }
 
     func testCodexRolloutWatcherProjectsCurrentCollaborationLifecycle() async throws {

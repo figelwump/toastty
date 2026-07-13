@@ -442,9 +442,11 @@ events correlate the spawn tool-use ID with the child agent ID; the matching
 keeps a small bounded pending join so either event may arrive first, but metadata
 cannot create, reopen, or finish a row. When hooks are unavailable,
 session-recording events provide the compatibility lifecycle fallback and may
-still supply a label, but encrypted recording messages are never used as tooltip
-descriptions. This avoids duplicate rows and lets hook-tracked agents remain
-visible until Codex reports their completion.
+still supply the label and description. Newer Codex builds encrypt delegated
+task messages; opaque ciphertext payloads are dropped whether they arrive via
+hook `tool_input` or the session recording, so a row shows no description
+rather than ciphertext. This avoids duplicate rows and lets hook-tracked agents
+remain visible until Codex reports their completion.
 
 For Claude, asynchronous `Agent` and `Task` results create labeled subagent
 rows, and `SubagentStop` removes them. Dynamic Workflow results do not expose
