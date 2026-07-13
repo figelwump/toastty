@@ -1466,7 +1466,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         }
     }
 
-    func testCodexRolloutWatcherLeavesBackgroundLifecycleToHooksWhenEnabled() async throws {
+    func testCodexRolloutWatcherEnrichesHookActivityWithoutTakingLifecycleOwnership() async throws {
         let fixture = try makePlannerFixture(codexStatusTrackingSourceProvider: { .hooks })
         let firstRolloutURL = temporaryJSONLURL()
         let secondRolloutURL = temporaryJSONLURL()
@@ -1506,13 +1506,21 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             sessionFilePath: nil,
             cwd: nil,
             subagentID: "hook-owned",
-            subagentType: "reviewer"
+            subagentType: "default"
         )
         XCTAssertTrue(fixture.sessionRuntimeStore.handleCodexHookEvent(
             sessionID: plan.sessionID,
             event: hookEvent,
             at: Date()
         ))
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["hook-owned"]?
+                .displayName,
+            "Sub-agent"
+        )
 
         XCTAssertTrue(
             fixture.store.send(
@@ -1529,19 +1537,82 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 .backgroundActivitiesByID["hook-owned"]
         )
 
-        let occurredAtMilliseconds = Int(Date().addingTimeInterval(60).timeIntervalSince1970 * 1_000)
+        let freshEventDate = Date().addingTimeInterval(60)
+        let occurredAtMilliseconds = Int(freshEventDate.timeIntervalSince1970 * 1_000)
+        let freshEntryTimestamp = freshEventDate
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
         try appendCodexSessionLogLine(
-            #"{"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":\#(occurredAtMilliseconds),"agent_path":"/root/hook_owned","kind":"started"}}"#,
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"Review the hook metadata path\",\"task_name\":\"hook_owned\"}","call_id":"call_spawn"}}"#,
+            to: secondRolloutURL
+        )
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":\#(occurredAtMilliseconds),"agent_thread_id":"hook-owned","agent_path":"/root/hook_owned","kind":"started"}}"#,
+            to: secondRolloutURL
+        )
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(freshEntryTimestamp)","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/hook_owned\"}"}}"#,
             to: secondRolloutURL
         )
 
-        try await Task.sleep(for: .milliseconds(200))
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["hook-owned"]?
+                .command == "Review the hook metadata path"
+        }
+        let enrichedActivity = try XCTUnwrap(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["hook-owned"]
+        )
+        XCTAssertEqual(enrichedActivity.displayName, "hook_owned")
+        XCTAssertEqual(enrichedActivity.command, "Review the hook metadata path")
         XCTAssertNil(
             fixture.sessionRuntimeStore
                 .sessionRegistry
                 .activeSession(sessionID: plan.sessionID)?
                 .backgroundActivitiesByID["/root/hook_owned"]
         )
+
+        let finalTimestamp = freshEventDate.addingTimeInterval(1)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(finalTimestamp)","type":"response_item","payload":{"type":"agent_message","author":"/root/hook_owned","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}"#,
+            to: secondRolloutURL
+        )
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNotNil(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["hook-owned"]
+        )
+
+        let unmatchedTimestamp = freshEventDate.addingTimeInterval(2)
+            .ISO8601Format(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(unmatchedTimestamp)","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"This row must not be created\",\"task_name\":\"missing_hook\"}","call_id":"call_missing_hook"}}"#,
+            to: secondRolloutURL
+        )
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(unmatchedTimestamp)","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_missing_hook","agent_thread_id":"missing-hook","agent_path":"/root/missing_hook","kind":"started"}}"#,
+            to: secondRolloutURL
+        )
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"\#(unmatchedTimestamp)","type":"response_item","payload":{"type":"function_call_output","call_id":"call_missing_hook","output":"{\"task_name\":\"/root/missing_hook\"}"}}"#,
+            to: secondRolloutURL
+        )
+        try await Task.sleep(for: .milliseconds(200))
+        let activeActivities = try XCTUnwrap(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID
+        )
+        XCTAssertNil(activeActivities["missing-hook"])
+        XCTAssertNil(activeActivities["/root/missing_hook"])
     }
 
     func testCodexLaunchPlanDisablesEnhancedKeyboardReportingWhenInstrumentationFails() throws {

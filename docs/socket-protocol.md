@@ -1193,7 +1193,10 @@ Behavior:
   status
 - `SubagentStart` with a `subagentID` creates or reopens a collaboration-agent
   child row. `SubagentStop` with the same ID removes it. The optional
-  `subagentType` becomes the row label.
+  `subagentType` becomes the initial row label; the generic `default` type is
+  shown as `Sub-agent`. For managed Codex sessions, correlated session-recording
+  metadata may later enrich that row with the delegated task name and
+  description without changing its hook-owned lifecycle.
 - Hook-tracked collaboration agents are lifecycle-driven: they are not removed
   by the session-recording fallback's stale-activity limit or by a corrected
   Codex rollout path while the owning session remains active.

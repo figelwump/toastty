@@ -227,7 +227,7 @@ When the profile ID is `codex`, Toastty:
 3. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
 4. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 5. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit.
-6. **Starts a session recording watcher** that polls the session log file (every 250 ms) for Codex root-turn context, including auto-review approval context. When hooks are installed, hooks remain authoritative for sidebar status and the watcher is context-only; when hooks are unavailable, the watcher also acts as the compatibility status fallback.
+6. **Starts a session recording watcher** that polls the session log file (every 250 ms) for Codex root-turn context, including auto-review approval context, and collaboration-agent metadata. When hooks are installed, hooks remain authoritative for sidebar status and collaboration lifecycle while correlated recording events enrich subagent labels and descriptions. When hooks are unavailable, the watcher also acts as the compatibility status and collaboration-lifecycle fallback.
 7. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
 8. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
@@ -434,9 +434,11 @@ waves.
 
 For Codex, `SubagentStart` and `SubagentStop` hooks are the authoritative source
 for collaboration-agent rows when status hooks are installed. Session-recording
-events provide a compatibility fallback only when hooks are unavailable, which
-avoids duplicate rows and lets hook-tracked agents remain visible until Codex
-reports their completion.
+events may enrich those hook-owned rows with the delegated task name and
+description, but cannot create, reopen, or finish them. When hooks are
+unavailable, session-recording events provide the compatibility lifecycle
+fallback. This avoids duplicate rows and lets hook-tracked agents remain
+visible until Codex reports their completion.
 
 Toastty-owned provider integrations report this activity through the internal
 `session background-activity` CLI command and `session.background_activity`

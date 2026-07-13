@@ -1185,7 +1185,7 @@ final class SessionRuntimeStore: ObservableObject {
                 activity: SessionBackgroundActivity(
                     id: subagentID,
                     kind: .subagent,
-                    displayName: event.subagentType,
+                    displayName: event.subagentDisplayName,
                     startedAt: now,
                     lastUpdatedAt: now
                 ),
@@ -3398,6 +3398,14 @@ private extension CodexHookEvent {
 
     var isSubagentStop: Bool {
         hookEventName == "SubagentStop"
+    }
+
+    var subagentDisplayName: String {
+        guard let normalizedType = normalizedNonEmpty(subagentType),
+              normalizedType.caseInsensitiveCompare("default") != .orderedSame else {
+            return "Sub-agent"
+        }
+        return normalizedType
     }
 
     var canLatchRootHookThread: Bool {

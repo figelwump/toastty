@@ -650,8 +650,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         _ event: CodexSessionLogEvent,
         sessionID: String
     ) {
-        guard let sessionRuntimeStore,
-              sessionRuntimeStore.codexSessionLogFallbackEventsAreEnabled(sessionID: sessionID) else {
+        guard let sessionRuntimeStore else {
+            return
+        }
+
+        if sessionRuntimeStore.codexSessionLogFallbackEventsAreEnabled(sessionID: sessionID) == false {
+            enrichCodexHookBackgroundActivity(
+                from: event,
+                sessionID: sessionID,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
             return
         }
 
@@ -687,6 +695,62 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         default:
             return
         }
+    }
+
+    private func enrichCodexHookBackgroundActivity(
+        from event: CodexSessionLogEvent,
+        sessionID: String,
+        sessionRuntimeStore: SessionRuntimeStore
+    ) {
+        guard event.kind == .backgroundActivityStarted,
+              let activity = event.backgroundActivity else {
+            return
+        }
+
+        let activityID = activity.hookActivityID ?? activity.activityID
+        // Codex waits for the synchronous hook delivery before emitting this
+        // root-rollout record. Metadata must never create or resurrect a row;
+        // an absent row means hook lifecycle did not establish an active agent.
+        guard let existingActivity = sessionRuntimeStore
+            .sessionRegistry
+            .activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID[activityID],
+              existingActivity.kind == .subagent else {
+            if activity.hookActivityID != nil || activity.command != nil {
+                ToasttyLog.debug(
+                    "Ignored Codex subagent metadata without a matching hook activity",
+                    category: .terminal,
+                    metadata: [
+                        "session_id": sessionID,
+                        "activity_id": activityID,
+                        "fallback_activity_id": activity.activityID,
+                        "hook_activity_id_present": String(activity.hookActivityID != nil),
+                    ]
+                )
+            }
+            return
+        }
+
+        let displayName = meaningfulCodexSubagentDisplayName(activity.displayName)
+        let command = normalizedNonEmpty(activity.command)
+        guard displayName != nil || command != nil else {
+            return
+        }
+
+        let now = nowProvider()
+        _ = sessionRuntimeStore.updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: existingActivity.id,
+                kind: existingActivity.kind,
+                displayName: displayName,
+                command: command,
+                processID: existingActivity.processID,
+                startedAt: existingActivity.startedAt,
+                lastUpdatedAt: now
+            ),
+            at: now
+        )
     }
 
     private func synchronizeCodexRolloutWatchers(with state: AppState) {
@@ -919,4 +983,12 @@ private func normalizedNonEmpty(_ value: String?) -> String? {
         return nil
     }
     return trimmed
+}
+
+private func meaningfulCodexSubagentDisplayName(_ value: String?) -> String? {
+    guard let normalized = normalizedNonEmpty(value),
+          normalized.caseInsensitiveCompare("default") != .orderedSame else {
+        return nil
+    }
+    return normalized
 }

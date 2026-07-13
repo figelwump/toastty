@@ -114,17 +114,20 @@ struct CodexSessionLogEvent: Equatable, Sendable {
 
 struct CodexSessionBackgroundActivity: Equatable, Sendable {
     let activityID: String
+    let hookActivityID: String?
     let kind: SessionBackgroundActivityKind
     let displayName: String?
     let command: String?
 
     init(
         activityID: String,
+        hookActivityID: String? = nil,
         kind: SessionBackgroundActivityKind,
         displayName: String? = nil,
         command: String? = nil
     ) {
         self.activityID = activityID
+        self.hookActivityID = hookActivityID
         self.kind = kind
         self.displayName = displayName
         self.command = command
@@ -155,6 +158,10 @@ private struct CodexMultiAgentPendingCalls: Sendable {
         }
         orderedCallIDs.removeAll { $0 == callID }
         return call
+    }
+
+    func peek(callID: String) -> CodexMultiAgentPendingCall? {
+        callsByID[callID]
     }
 
     private mutating func trimToLimit() {
@@ -435,6 +442,7 @@ private extension CodexSessionLogWatcher {
         let collaborationEvents = parseCollaborationLifecycleEvent(
             object: object,
             seenKeys: &seenKeys,
+            pendingCalls: pendingMultiAgentCalls,
             multiAgentEventCutoff: multiAgentEventCutoff
         )
         if collaborationEvents.isEmpty == false {
@@ -489,6 +497,7 @@ private extension CodexSessionLogWatcher {
     static func parseCollaborationLifecycleEvent(
         object: [String: Any],
         seenKeys: inout Set<String>,
+        pendingCalls: CodexMultiAgentPendingCalls,
         multiAgentEventCutoff: Date? = nil
     ) -> [CodexSessionLogEvent] {
         guard let payload = object["payload"] as? [String: Any],
@@ -515,7 +524,16 @@ private extension CodexSessionLogWatcher {
 
             switch normalizedString(payload["kind"]) {
             case "started":
-                return [collaborationStartedEvent(activityID: agentPath)]
+                let pendingCall = pendingCalls.peek(callID: eventID)
+                let spawnArguments = pendingCall?.toolName == "spawn_agent"
+                    ? jsonObject(fromJSONString: pendingCall?.argumentsJSONString)
+                    : nil
+                return [collaborationStartedEvent(
+                    activityID: agentPath,
+                    hookActivityID: nonEmptyString(payload["agent_thread_id"]),
+                    displayName: normalizedSummaryText(spawnArguments?["task_name"], limit: 80),
+                    command: normalizedSummaryText(spawnArguments?["message"], limit: 512)
+                )]
 
             case "interrupted":
                 return [collaborationFinishedEvent(activityID: agentPath)]
@@ -596,15 +614,22 @@ private extension CodexSessionLogWatcher {
         return "/" + components.dropLast().joined(separator: "/")
     }
 
-    static func collaborationStartedEvent(activityID: String) -> CodexSessionLogEvent {
-        let displayName = collaborationAgentDisplayName(from: activityID)
+    static func collaborationStartedEvent(
+        activityID: String,
+        hookActivityID: String? = nil,
+        displayName: String? = nil,
+        command: String? = nil
+    ) -> CodexSessionLogEvent {
+        let resolvedDisplayName = displayName ?? collaborationAgentDisplayName(from: activityID)
         return CodexSessionLogEvent(
             kind: .backgroundActivityStarted,
-            detail: "Started \(displayName)",
+            detail: "Started \(resolvedDisplayName)",
             backgroundActivity: CodexSessionBackgroundActivity(
                 activityID: activityID,
+                hookActivityID: hookActivityID,
                 kind: .subagent,
-                displayName: displayName
+                displayName: resolvedDisplayName,
+                command: command
             )
         )
     }
@@ -775,6 +800,9 @@ private extension CodexSessionLogWatcher {
         }
         guard namespace == nil else {
             return nil
+        }
+        if rawName == "spawn_agent" {
+            return rawName
         }
         return strippedMultiAgentToolName(rawName)
     }

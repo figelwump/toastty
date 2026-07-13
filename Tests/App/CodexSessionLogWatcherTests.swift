@@ -1001,7 +1001,9 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         let events = try await recordEvents(
             from:
                 #"""
+                {"timestamp":"2026-07-12T18:44:10.355Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"Inspect the scroll implementation and report risks\",\"task_name\":\"scroll_implementation\"}","call_id":"call_spawn"}}
                 {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783881851355,"agent_thread_id":"thread-1","agent_path":"/root/scroll_implementation","kind":"started"}}
+                {"timestamp":"2026-07-12T18:44:11.356Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/scroll_implementation\"}"}}
                 {"timestamp":"2026-07-12T18:46:28.517Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_message","occurred_at_ms":1783881988517,"agent_thread_id":"thread-1","agent_path":"/root/scroll_implementation","kind":"interacted"}}
                 {"timestamp":"2026-07-12T18:46:54.952Z","type":"response_item","payload":{"type":"agent_message","author":"/root/scroll_implementation","recipient":"/root","content":[{"type":"input_text","text":"Message Type: MESSAGE\nTask name: /root"}]}}
                 {"timestamp":"2026-07-12T18:49:54.952Z","type":"response_item","payload":{"type":"agent_message","author":"/root/scroll_implementation","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
@@ -1015,8 +1017,10 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 detail: "Started scroll_implementation",
                 backgroundActivity: CodexSessionBackgroundActivity(
                     activityID: "/root/scroll_implementation",
+                    hookActivityID: "thread-1",
                     kind: .subagent,
-                    displayName: "scroll_implementation"
+                    displayName: "scroll_implementation",
+                    command: "Inspect the scroll implementation and report risks"
                 )
             ),
             CodexSessionLogEvent(
