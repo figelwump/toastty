@@ -154,17 +154,21 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         kind: SessionBackgroundActivityKind,
         entries: [SessionBackgroundActivity],
         pendingBackgroundTaskCount: Int,
+        preserveUnlistedActivities: Bool = false,
         at now: Date
     ) -> Bool {
         guard var record = activeSession(sessionID: sessionID) else { return false }
         var nextActivities = record.backgroundActivitiesByID.filter { _, activity in
-            activity.kind != kind
+            activity.kind != kind ||
+                (preserveUnlistedActivities && activity.preserveWhenUnlisted)
         }
 
         for entry in entries where entry.kind == kind {
             // Do not allow a sync for one source kind to displace another
             // source's row when activity IDs collide.
-            guard nextActivities[entry.id] == nil else { continue }
+            if let retainedActivity = nextActivities[entry.id], retainedActivity.kind != kind {
+                continue
+            }
             if let existingActivity = record.backgroundActivitiesByID[entry.id],
                existingActivity.kind == kind {
                 nextActivities[entry.id] = Self.mergedBackgroundActivity(
@@ -676,6 +680,7 @@ private extension SessionRegistry {
             displayName: incoming.displayName ?? existing.displayName,
             command: incoming.command ?? existing.command,
             processID: incoming.processID ?? existing.processID,
+            preserveWhenUnlisted: existing.preserveWhenUnlisted || incoming.preserveWhenUnlisted,
             startedAt: existing.startedAt,
             lastUpdatedAt: incoming.lastUpdatedAt
         )

@@ -630,7 +630,8 @@ struct ToasttyCLITests {
             let kind,
             let displayName,
             let command,
-            let processID
+            let processID,
+            let preserveWhenUnlisted
         ) = invocation.command else {
             Issue.record("expected session background activity command")
             return
@@ -644,6 +645,7 @@ struct ToasttyCLITests {
         #expect(displayName == "Codex")
         #expect(command == "codex review")
         #expect(processID == 12_345)
+        #expect(preserveWhenUnlisted == false)
 
         let envelope = invocation.command.makeEventEnvelope(requestID: "activity-request")
         #expect(envelope.eventType == "session.background_activity")
@@ -680,7 +682,8 @@ struct ToasttyCLITests {
             let kind,
             let displayName,
             let command,
-            let processID
+            let processID,
+            let preserveWhenUnlisted
         ) = invocation.command else {
             Issue.record("expected session background activity command")
             return
@@ -694,6 +697,7 @@ struct ToasttyCLITests {
         #expect(displayName == nil)
         #expect(command == nil)
         #expect(processID == nil)
+        #expect(preserveWhenUnlisted == false)
     }
 
     @Test
@@ -710,7 +714,8 @@ struct ToasttyCLITests {
                     command: "Review the diff"
                 ),
             ],
-            pendingBackgroundTaskCount: 2
+            pendingBackgroundTaskCount: 2,
+            preserveUnlistedActivities: true
         )
 
         let envelope = command.makeEventEnvelope(requestID: "sync-request")
@@ -720,6 +725,7 @@ struct ToasttyCLITests {
         #expect(envelope.payload.string("phase") == "sync")
         #expect(envelope.payload.string("kind") == "subagent")
         #expect(envelope.payload.int("pendingCount") == 2)
+        #expect(envelope.payload.bool("preserveUnlistedActivities") == true)
         guard case .array(let entries)? = envelope.payload["entries"] else {
             Issue.record("expected entries array")
             return

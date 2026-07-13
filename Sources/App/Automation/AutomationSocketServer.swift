@@ -1809,6 +1809,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 } else {
                     processID = nil
                 }
+                let preserveWhenUnlisted = event.payload.bool("preserveWhenUnlisted")
+                if event.payload["preserveWhenUnlisted"] != nil,
+                   preserveWhenUnlisted == nil {
+                    throw AutomationSocketError.invalidPayload("preserveWhenUnlisted must be a boolean")
+                }
                 didMutate = sessionRuntimeStore.updateBackgroundActivity(
                     sessionID: sessionID,
                     activity: SessionBackgroundActivity(
@@ -1817,6 +1822,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                         displayName: event.payload.string("displayName"),
                         command: event.payload.string("command"),
                         processID: processID,
+                        preserveWhenUnlisted: preserveWhenUnlisted ?? false,
                         startedAt: now,
                         lastUpdatedAt: now
                     ),
@@ -1838,6 +1844,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 guard let pendingCount = event.payload.int("pendingCount"),
                       pendingCount >= 0 else {
                     throw AutomationSocketError.invalidPayload("pendingCount must be a non-negative integer")
+                }
+                let preserveUnlistedActivities = event.payload.bool("preserveUnlistedActivities")
+                if event.payload["preserveUnlistedActivities"] != nil,
+                   preserveUnlistedActivities == nil {
+                    throw AutomationSocketError.invalidPayload("preserveUnlistedActivities must be a boolean")
                 }
                 guard case .array(let entryValues)? = event.payload["entries"] else {
                     throw AutomationSocketError.invalidPayload("entries must be an array")
@@ -1873,6 +1884,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                     kind: kind,
                     entries: entries,
                     pendingBackgroundTaskCount: pendingCount,
+                    preserveUnlistedActivities: preserveUnlistedActivities ?? false,
                     at: now
                 )
             }

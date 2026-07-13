@@ -89,7 +89,8 @@ struct AgentEventParsersTests {
                         command: "Test background agent sleep command"
                     ),
                 ],
-                pendingBackgroundTaskCount: 0
+                pendingBackgroundTaskCount: 0,
+                preserveUnlistedActivities: false
             ),
             .sessionStatus(
                 sessionID: "sess-123",
@@ -97,6 +98,36 @@ struct AgentEventParsersTests {
                 kind: .ready,
                 summary: "Ready",
                 detail: "Agent launched successfully. Waiting for completion..."
+            ),
+        ])
+    }
+
+    @Test
+    func claudeStopWithRunningWorkflowPreservesLifecycleSubagents() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","last_assistant_message":"Workflow still running","background_tasks":[{"id":"workflow-1","type":"workflow","status":"running","description":"Review the diff"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 1,
+                preserveUnlistedActivities: true
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Workflow still running"
             ),
         ])
     }
@@ -118,7 +149,8 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 kind: .subagent,
                 entries: [],
-                pendingBackgroundTaskCount: 1
+                pendingBackgroundTaskCount: 1,
+                preserveUnlistedActivities: false
             ),
             .sessionStatus(
                 sessionID: "sess-123",
@@ -147,7 +179,8 @@ struct AgentEventParsersTests {
                 panelID: nil,
                 kind: .subagent,
                 entries: [],
-                pendingBackgroundTaskCount: 0
+                pendingBackgroundTaskCount: 0,
+                preserveUnlistedActivities: false
             ),
             .sessionStatus(
                 sessionID: "sess-123",
@@ -256,7 +289,8 @@ struct AgentEventParsersTests {
                 kind: .subagent,
                 displayName: "general-purpose",
                 command: "Test background agent sleep command",
-                processID: nil
+                processID: nil,
+                preserveWhenUnlisted: false
             ),
         ])
     }
@@ -281,7 +315,34 @@ struct AgentEventParsersTests {
                 kind: .subagent,
                 displayName: "reviewer",
                 command: "Ask a task",
-                processID: nil
+                processID: nil,
+                preserveWhenUnlisted: false
+            ),
+        ])
+    }
+
+    @Test
+    func claudeSubagentStartCreatesGenericActivityFromLifecycleIdentity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStart","agent_id":"workflow-agent-1","agent_type":"workflow-subagent"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "workflow-agent-1",
+                kind: .subagent,
+                displayName: nil,
+                command: nil,
+                processID: nil,
+                preserveWhenUnlisted: true
             ),
         ])
     }
@@ -306,9 +367,43 @@ struct AgentEventParsersTests {
                 kind: .subagent,
                 displayName: nil,
                 command: nil,
-                processID: nil
+                processID: nil,
+                preserveWhenUnlisted: false
             ),
         ])
+    }
+
+    @Test
+    func claudeSubagentLifecycleWithoutAgentIDIsIgnored() throws {
+        let startCommands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"SubagentStart","agent_type":"workflow-subagent"}"#.utf8)
+        )
+        let stopCommands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"SubagentStop","agent_type":"workflow-subagent"}"#.utf8)
+        )
+
+        #expect(startCommands.isEmpty)
+        #expect(stopCommands.isEmpty)
+    }
+
+    @Test
+    func claudeSubagentStartIgnoresNonWorkflowSubagents() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStart","agent_id":"regular-agent-1","agent_type":"general-purpose"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
     }
 
     @Test

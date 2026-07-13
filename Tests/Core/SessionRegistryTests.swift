@@ -927,12 +927,42 @@ struct SessionRegistryTests {
         #expect(mergedSubagent.lastUpdatedAt == now.addingTimeInterval(4))
         #expect(record.pendingBackgroundTaskCount == 0)
 
+        let didAddLifecycleSubagent = registry.updateBackgroundActivity(
+            sessionID: "parent",
+            activity: SessionBackgroundActivity(
+                id: "workflow-subagent-1",
+                kind: .subagent,
+                preserveWhenUnlisted: true,
+                startedAt: now.addingTimeInterval(5),
+                lastUpdatedAt: now.addingTimeInterval(5)
+            ),
+            at: now.addingTimeInterval(5)
+        )
+        #expect(didAddLifecycleSubagent)
+
+        let didPreserveUnlistedSubagents = registry.syncBackgroundActivities(
+            sessionID: "parent",
+            kind: .subagent,
+            entries: [],
+            pendingBackgroundTaskCount: 1,
+            preserveUnlistedActivities: true,
+            at: now.addingTimeInterval(6)
+        )
+        #expect(didPreserveUnlistedSubagents)
+
+        record = try #require(registry.sessionsByID["parent"])
+        #expect(Set(record.backgroundActivitiesByID.keys) == Set([
+            "child-1",
+            "workflow-subagent-1",
+        ]))
+        #expect(record.pendingBackgroundTaskCount == 1)
+
         let didClearSubagents = registry.syncBackgroundActivities(
             sessionID: "parent",
             kind: .subagent,
             entries: [],
             pendingBackgroundTaskCount: 0,
-            at: now.addingTimeInterval(5)
+            at: now.addingTimeInterval(7)
         )
         #expect(didClearSubagents)
 

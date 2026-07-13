@@ -244,6 +244,9 @@ When the profile ID is `claude`, Toastty:
    - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
+   - `PostToolUse` for `Agent` and `Task` — tracks asynchronously launched Claude subagents with available launch metadata
+   - `SubagentStart` — tracks children launched by Claude dynamic workflows
+   - `SubagentStop` — removes completed Claude subagent rows
    - `PreToolUse` (wildcard matcher) — fires before any tool use
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
    - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
@@ -439,6 +442,12 @@ description, but cannot create, reopen, or finish them. When hooks are
 unavailable, session-recording events provide the compatibility lifecycle
 fallback. This avoids duplicate rows and lets hook-tracked agents remain
 visible until Codex reports their completion.
+
+For Claude, asynchronous `Agent` and `Task` results create labeled subagent
+rows, and `SubagentStop` removes them. Dynamic Workflow results do not expose
+their child IDs, so `SubagentStart` creates one generic row per Workflow child;
+those lifecycle-owned rows remain visible through Claude's aggregate Workflow
+snapshot until their matching `SubagentStop` events arrive.
 
 Toastty-owned provider integrations report this activity through the internal
 `session background-activity` CLI command and `session.background_activity`

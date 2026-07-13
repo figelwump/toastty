@@ -360,6 +360,7 @@ final class SessionRuntimeStore: ObservableObject {
         kind: SessionBackgroundActivityKind,
         entries: [SessionBackgroundActivity],
         pendingBackgroundTaskCount: Int,
+        preserveUnlistedActivities: Bool = false,
         at now: Date
     ) -> Bool {
         pruneBackgroundActivityFinishTombstones(at: now)
@@ -376,6 +377,7 @@ final class SessionRuntimeStore: ObservableObject {
             kind: kind,
             entries: filteredEntries,
             pendingBackgroundTaskCount: pendingBackgroundTaskCount,
+            preserveUnlistedActivities: preserveUnlistedActivities,
             at: now
         ) else {
             return false

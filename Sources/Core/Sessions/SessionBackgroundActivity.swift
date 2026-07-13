@@ -17,6 +17,7 @@ public struct SessionBackgroundActivity: Codable, Equatable, Sendable {
     public var displayName: String?
     public var command: String?
     public var processID: Int32?
+    public var preserveWhenUnlisted: Bool
     public var startedAt: Date
     public var lastUpdatedAt: Date
 
@@ -26,6 +27,7 @@ public struct SessionBackgroundActivity: Codable, Equatable, Sendable {
         displayName: String? = nil,
         command: String? = nil,
         processID: Int32? = nil,
+        preserveWhenUnlisted: Bool = false,
         startedAt: Date,
         lastUpdatedAt: Date
     ) {
@@ -34,6 +36,7 @@ public struct SessionBackgroundActivity: Codable, Equatable, Sendable {
         self.displayName = Self.normalizedOptionalText(displayName)
         self.command = Self.normalizedOptionalText(command)
         self.processID = processID
+        self.preserveWhenUnlisted = preserveWhenUnlisted
         self.startedAt = startedAt
         self.lastUpdatedAt = lastUpdatedAt
     }

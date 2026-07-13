@@ -42,6 +42,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertNotNil(hooks["SessionStart"])
         XCTAssertNotNil(hooks["UserPromptSubmit"])
         XCTAssertNotNil(hooks["Stop"])
+        XCTAssertNotNil(hooks["SubagentStart"])
         XCTAssertNotNil(hooks["SubagentStop"])
         XCTAssertNotNil(hooks["PreToolUse"])
         XCTAssertNotNil(hooks["PostToolUse"])

@@ -1130,8 +1130,10 @@ Accepted payload keys:
 - `displayName?: String`
 - `command?: String`
 - `processID?: Int` (positive 32-bit integer)
+- `preserveWhenUnlisted?: Bool` (optional for `start`; defaults to `false`)
 - `pendingCount?: Int` (required and non-negative for `sync`)
 - `entries?: [{ id, displayName?, command? }]` (required for `sync`)
+- `preserveUnlistedActivities?: Bool` (optional for `sync`; defaults to `false`)
 
 Behavior:
 
@@ -1141,6 +1143,9 @@ Behavior:
 - `finish` requires `activityID` and removes that activity
 - `sync` is valid only for `kind: "subagent"`; it replaces the current
   subagent activity set and records the pending background-task count
+- `sync` with `preserveUnlistedActivities: true` also retains unlisted rows
+  previously started with `preserveWhenUnlisted: true`; other unlisted rows
+  still follow replacement semantics
 - outstanding activities contribute child rows and can keep the parent in its
   waiting status projection instead of treating an intermediate ready/idle
   event as completion

@@ -541,6 +541,7 @@ private extension AgentLaunchInstrumentation {
         appendClaudeHookEntry(commandHook, to: "SessionStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "UserPromptSubmit", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "Stop", in: &hooks)
+        appendClaudeHookEntry(commandHook, to: "SubagentStart", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "SubagentStop", in: &hooks)
         appendClaudeHookEntry(agentPostToolUseCommandHook, to: "PostToolUse", in: &hooks)
         appendClaudeHookEntry(taskPostToolUseCommandHook, to: "PostToolUse", in: &hooks)

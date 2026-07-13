@@ -73,6 +73,25 @@ enum ClaudeHookEventParser {
             )
             return commands
 
+        case "SubagentStart":
+            guard let agentID = normalizedString(object["agent_id"]),
+                  normalizedString(object["agent_type"])?.lowercased() == "workflow-subagent" else {
+                return []
+            }
+            return [
+                .sessionBackgroundActivity(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    phase: .start,
+                    activityID: agentID,
+                    kind: .subagent,
+                    displayName: nil,
+                    command: nil,
+                    processID: nil,
+                    preserveWhenUnlisted: true
+                ),
+            ]
+
         case "SubagentStop":
             guard let agentID = normalizedString(object["agent_id"]) else {
                 return []
@@ -86,7 +105,8 @@ enum ClaudeHookEventParser {
                     kind: .subagent,
                     displayName: nil,
                     command: nil,
-                    processID: nil
+                    processID: nil,
+                    preserveWhenUnlisted: false
                 ),
             ]
 
@@ -154,7 +174,8 @@ enum ClaudeHookEventParser {
                 kind: .subagent,
                 displayName: displayName,
                 command: command,
-                processID: nil
+                processID: nil,
+                preserveWhenUnlisted: false
             ),
         ]
     }
@@ -167,9 +188,11 @@ enum ClaudeHookEventParser {
         let backgroundTasks = object["background_tasks"] as? [[String: Any]] ?? []
         var entries: [SessionBackgroundActivitySyncEntry] = []
         var pendingBackgroundTaskCount = 0
+        var preserveUnlistedActivities = false
 
         for task in backgroundTasks {
-            if normalizedString(task["type"]) == "subagent" {
+            let taskType = normalizedString(task["type"])
+            if taskType == "subagent" {
                 guard let id = normalizedString(task["id"]) else { continue }
                 entries.append(
                     SessionBackgroundActivitySyncEntry(
@@ -180,6 +203,11 @@ enum ClaudeHookEventParser {
                 )
             } else {
                 pendingBackgroundTaskCount += 1
+                if taskType == "workflow" {
+                    // Workflow children are reported through SubagentStart/Stop rather
+                    // than as individual entries in Claude's root Stop snapshot.
+                    preserveUnlistedActivities = true
+                }
             }
         }
 
@@ -188,7 +216,8 @@ enum ClaudeHookEventParser {
             panelID: panelID,
             kind: .subagent,
             entries: entries,
-            pendingBackgroundTaskCount: pendingBackgroundTaskCount
+            pendingBackgroundTaskCount: pendingBackgroundTaskCount,
+            preserveUnlistedActivities: preserveUnlistedActivities
         )
     }
 

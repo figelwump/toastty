@@ -38,14 +38,16 @@ enum CLICommand: Equatable {
         kind: SessionBackgroundActivityKind,
         displayName: String?,
         command: String?,
-        processID: Int32?
+        processID: Int32?,
+        preserveWhenUnlisted: Bool
     )
     case sessionBackgroundActivitySync(
         sessionID: String,
         panelID: UUID?,
         kind: SessionBackgroundActivityKind,
         entries: [SessionBackgroundActivitySyncEntry],
-        pendingBackgroundTaskCount: Int
+        pendingBackgroundTaskCount: Int,
+        preserveUnlistedActivities: Bool
     )
     case sessionCodexHookEvent(sessionID: String, panelID: UUID?, event: CodexHookEvent)
     case sessionCodexNotifyCompletion(sessionID: String, panelID: UUID?, completion: CodexNotifyCompletion)
@@ -196,7 +198,8 @@ enum CLICommand: Equatable {
             let kind,
             let displayName,
             let command,
-            let processID
+            let processID,
+            let preserveWhenUnlisted
         ):
             var payload: [String: AutomationJSONValue] = [
                 "phase": .string(phase.rawValue),
@@ -212,6 +215,9 @@ enum CLICommand: Equatable {
             if let processID {
                 payload["processID"] = .int(Int(processID))
             }
+            if preserveWhenUnlisted {
+                payload["preserveWhenUnlisted"] = .bool(true)
+            }
             return AutomationEventEnvelope(
                 eventType: "session.background_activity",
                 sessionID: sessionID,
@@ -225,7 +231,8 @@ enum CLICommand: Equatable {
             let panelID,
             let kind,
             let entries,
-            let pendingBackgroundTaskCount
+            let pendingBackgroundTaskCount,
+            let preserveUnlistedActivities
         ):
             let entryValues = entries.map { entry -> AutomationJSONValue in
                 var object: [String: AutomationJSONValue] = [
@@ -249,6 +256,7 @@ enum CLICommand: Equatable {
                     "kind": .string(kind.rawValue),
                     "entries": .array(entryValues),
                     "pendingCount": .int(max(0, pendingBackgroundTaskCount)),
+                    "preserveUnlistedActivities": .bool(preserveUnlistedActivities),
                 ]
             )
 
@@ -404,9 +412,9 @@ enum CLICommand: Equatable {
             return resolvedSessionID
         case .sessionStatus(let sessionID, _, let kind, let summary, _):
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
-        case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _):
+        case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _, _):
             return "\(phase.rawValue)ed background activity \(activityID) for \(sessionID)"
-        case .sessionBackgroundActivitySync(let sessionID, _, _, let entries, let pendingBackgroundTaskCount):
+        case .sessionBackgroundActivitySync(let sessionID, _, _, let entries, let pendingBackgroundTaskCount, _):
             return "synced \(entries.count) background activities and \(pendingBackgroundTaskCount) pending tasks for \(sessionID)"
         case .sessionCodexHookEvent(let sessionID, _, let event):
             return "processed Codex hook \(event.hookEventName) for \(sessionID)"
@@ -1234,7 +1242,8 @@ public enum ToasttyCLI {
             kind: kind,
             displayName: parsed.singleValue("--display-name"),
             command: parsed.singleValue("--command"),
-            processID: processID
+            processID: processID,
+            preserveWhenUnlisted: false
         )
     }
 

@@ -1059,7 +1059,7 @@ struct AutomationSocketServerTests {
     }
 
     @Test
-    func sessionBackgroundActivitySyncAcceptedAndClearsSubagents() async throws {
+    func sessionBackgroundActivitySyncAcceptedPreservesAndClearsSubagents() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
             try makeServer(socketPath: socketPath)
@@ -1135,6 +1135,49 @@ struct AutomationSocketServerTests {
             server.sessionRuntimeStore.workspaceStatuses(for: server.workspaceID).first?.status
         }
         #expect(waitingStatus?.kind == .working)
+
+        let workflowStartResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.start.rawValue),
+                    "activityID": .string("workflow-subagent-1"),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "preserveWhenUnlisted": .bool(true),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(workflowStartResponse.ok)
+
+        let preserveResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "entries": .array([]),
+                    "pendingCount": .int(2),
+                    "preserveUnlistedActivities": .bool(true),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(preserveResponse.ok)
+        #expect(preserveResponse.result?.string("status") == "accepted")
+
+        let preservedRecord = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.sessionsByID[sessionID]
+        }
+        #expect(preservedRecord?.backgroundActivitiesByID["agent-1"] == nil)
+        #expect(preservedRecord?.backgroundActivitiesByID["workflow-subagent-1"]?.preserveWhenUnlisted == true)
+        #expect(preservedRecord?.pendingBackgroundTaskCount == 2)
 
         let clearResponse = try sendEvent(
             AutomationEventEnvelope(
@@ -1233,6 +1276,45 @@ struct AutomationSocketServerTests {
         #expect(negativePendingResponse.ok == false)
         #expect(negativePendingResponse.error?.code == "INVALID_PAYLOAD")
         #expect(negativePendingResponse.error?.message == "pendingCount must be a non-negative integer")
+
+        let invalidPreserveResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "entries": .array([]),
+                    "pendingCount": .int(0),
+                    "preserveUnlistedActivities": .string("true"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(invalidPreserveResponse.ok == false)
+        #expect(invalidPreserveResponse.error?.code == "INVALID_PAYLOAD")
+        #expect(invalidPreserveResponse.error?.message == "preserveUnlistedActivities must be a boolean")
+
+        let invalidActivityRetentionResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.start.rawValue),
+                    "activityID": .string("workflow-subagent-1"),
+                    "kind": .string(SessionBackgroundActivityKind.subagent.rawValue),
+                    "preserveWhenUnlisted": .string("true"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(invalidActivityRetentionResponse.ok == false)
+        #expect(invalidActivityRetentionResponse.error?.code == "INVALID_PAYLOAD")
+        #expect(invalidActivityRetentionResponse.error?.message == "preserveWhenUnlisted must be a boolean")
 
         let invalidEntryResponse = try sendEvent(
             AutomationEventEnvelope(
