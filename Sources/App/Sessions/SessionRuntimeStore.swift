@@ -1037,8 +1037,7 @@ final class SessionRuntimeStore: ObservableObject {
                 threadID: event.threadID,
                 turnID: event.turnID,
                 promptFingerprint: event.promptFingerprint
-            ),
-            clearLegacyAutoReviewedTurnsBeforeReduction: event.isClearSessionStart
+            )
         )
         var state = codexLegacyPolicySnapshot(
             root: reduction.snapshot,
@@ -2622,14 +2621,13 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func reduceCodexRootTurnObservation(
         sessionID: String,
-        observation: CodexRootTurnObservation,
-        clearLegacyAutoReviewedTurnsBeforeReduction: Bool = false
+        observation: CodexRootTurnObservation
     ) -> CodexRootTurnReduction {
         var runtime = codexSessionReconciliationRuntime(sessionID: sessionID)
-        if clearLegacyAutoReviewedTurnsBeforeReduction {
-            runtime.legacyAutoReviewedPermissionTurnIDs.removeAll()
-        }
         let reduction = runtime.rootTurn.reduce(observation)
+        guard reduction.qualification == .proceed else {
+            return reduction
+        }
         if reduction.shouldClearLegacyAutoReviewedTurns {
             runtime.legacyAutoReviewedPermissionTurnIDs.removeAll()
         }

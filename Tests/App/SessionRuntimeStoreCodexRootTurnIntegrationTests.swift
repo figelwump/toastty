@@ -149,6 +149,65 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexFallbackAuthorityRejectsClearHookWithoutMutatingReconciliationRuntime() {
+        let sessionID = "sess-codex-fallback-rejects-clear"
+        let pristineSessionID = "sess-codex-fallback-rejects-clear-pristine"
+        let startedAt = Date(timeIntervalSince1970: 1_700_002_250)
+        let store = SessionRuntimeStore()
+        startCodexReconciliationSession(
+            store,
+            sessionID: sessionID,
+            source: .sessionLogFallback(reason: "test"),
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: sessionID,
+            fingerprint: CodexInputFingerprint.fingerprint(for: "Fallback root turn"),
+            threadID: "thread-root",
+            turnID: "turn-root",
+            approvalPolicyField: .string("on-request"),
+            approvalsReviewerField: .string("guardian_subagent")
+        )
+        #expect(store.handleCodexSessionLogApproval(
+            sessionID: sessionID,
+            detail: "Auto-reviewed command",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            callID: nil,
+            approvalID: nil,
+            at: startedAt.addingTimeInterval(1)
+        ) == false)
+        let snapshotBefore = store.codexRootTurnSnapshotForTesting(sessionID: sessionID)
+        let reviewedBefore = store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: sessionID)
+        let runtimeSessionIDsBefore = store.codexReconciliationRuntimeSessionIDsForTesting
+        #expect(reviewedBefore == ["turn-root"])
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: codexReconciliationClearEvent(threadID: "thread-replacement"),
+            at: startedAt.addingTimeInterval(2)
+        ) == false)
+
+        #expect(store.codexRootTurnSnapshotForTesting(sessionID: sessionID) == snapshotBefore)
+        #expect(store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: sessionID) == reviewedBefore)
+        #expect(store.codexReconciliationRuntimeSessionIDsForTesting == runtimeSessionIDsBefore)
+
+        startCodexReconciliationSession(
+            store,
+            sessionID: pristineSessionID,
+            source: .sessionLogFallback(reason: "test"),
+            at: startedAt.addingTimeInterval(3)
+        )
+        #expect(store.codexReconciliationRuntimeSessionIDsForTesting.contains(pristineSessionID) == false)
+        #expect(store.handleCodexHookEvent(
+            sessionID: pristineSessionID,
+            event: codexReconciliationClearEvent(threadID: "thread-pristine"),
+            at: startedAt.addingTimeInterval(4)
+        ) == false)
+        #expect(store.codexReconciliationRuntimeSessionIDsForTesting.contains(pristineSessionID) == false)
+    }
+
+    @Test
     func codexProceedingNoOpHooksStillProjectSubagentAndApprovalEvents() throws {
         let sessionID = "sess-codex-proceeding-no-op"
         let startedAt = Date(timeIntervalSince1970: 1_700_002_300)
