@@ -253,6 +253,91 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
         #expect(stoppedRecord.statusUpdatedAt == stoppedUpdatedAt)
     }
 
+    @Test
+    func localInterruptUsesExplicitAuthorityAndPreservesNilSourceBehavior() {
+        let store = SessionRuntimeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_700_500_500)
+        let hookPanelID = UUID()
+        let fallbackPanelID = UUID()
+        let nilSourcePanelID = UUID()
+        startCodexSession(
+            in: store,
+            sessionID: "hook-local-interrupt",
+            panelID: hookPanelID,
+            source: .hooks,
+            at: startedAt
+        )
+        startCodexSession(
+            in: store,
+            sessionID: "fallback-local-interrupt",
+            panelID: fallbackPanelID,
+            source: .sessionLogFallback(reason: "test"),
+            at: startedAt
+        )
+        startCodexSession(
+            in: store,
+            sessionID: "nil-source-local-interrupt",
+            panelID: nilSourcePanelID,
+            source: nil,
+            at: startedAt
+        )
+        let working = SessionStatus(kind: .working, summary: "Working", detail: "Before interrupt")
+        store.updateStatus(sessionID: "hook-local-interrupt", status: working, at: startedAt)
+        store.updateStatus(sessionID: "fallback-local-interrupt", status: working, at: startedAt)
+        store.updateStatus(sessionID: "nil-source-local-interrupt", status: working, at: startedAt)
+
+        #expect(store.handleLocalInterruptForPanelIfActive(
+            panelID: hookPanelID,
+            kind: .escape,
+            at: startedAt.addingTimeInterval(1)
+        ))
+        #expect(store.handleLocalInterruptForPanelIfActive(
+            panelID: fallbackPanelID,
+            kind: .escape,
+            at: startedAt.addingTimeInterval(1)
+        ) == false)
+        #expect(store.handleLocalInterruptForPanelIfActive(
+            panelID: nilSourcePanelID,
+            kind: .escape,
+            at: startedAt.addingTimeInterval(1)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(for: hookPanelID)?.status == SessionStatus(
+            kind: .idle,
+            summary: "Waiting",
+            detail: "Ready for prompt"
+        ))
+        #expect(store.sessionRegistry.activeSession(for: fallbackPanelID)?.status == working)
+        #expect(store.sessionRegistry.activeSession(for: nilSourcePanelID)?.status == working)
+
+        store.updateStatus(
+            sessionID: "hook-local-interrupt",
+            status: working,
+            at: startedAt.addingTimeInterval(2)
+        )
+        #expect(store.handleLocalInterruptForPanelIfActive(
+            panelID: hookPanelID,
+            kind: .controlC,
+            at: startedAt.addingTimeInterval(3)
+        ))
+        #expect(store.handleLocalInterruptForPanelIfActive(
+            panelID: fallbackPanelID,
+            kind: .controlC,
+            at: startedAt.addingTimeInterval(3)
+        ))
+        #expect(store.handleLocalInterruptForPanelIfActive(
+            panelID: nilSourcePanelID,
+            kind: .controlC,
+            at: startedAt.addingTimeInterval(3)
+        ))
+        for panelID in [hookPanelID, fallbackPanelID, nilSourcePanelID] {
+            #expect(store.sessionRegistry.activeSession(for: panelID)?.status == SessionStatus(
+                kind: .idle,
+                summary: "Waiting",
+                detail: "Ready for prompt"
+            ))
+        }
+    }
+
     private func startCodexSession(
         in store: SessionRuntimeStore,
         sessionID: String,

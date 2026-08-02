@@ -3785,6 +3785,21 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
+        if record.agent == .codex,
+           codexStatusTrackingSourceBySessionID[record.sessionID] != nil {
+            let interrupt: CodexRootProgressInterrupt = switch kind {
+            case .escape:
+                .escape
+            case .controlC:
+                .controlC
+            }
+            return applyCodexRootProgressObservation(
+                sessionID: record.sessionID,
+                observation: .localInterrupt(interrupt),
+                at: now
+            )
+        }
+
         if kind == .escape,
            record.agent == .codex,
            codexStatusTrackingSourceAllowsFallbackEvents(sessionID: record.sessionID) {
