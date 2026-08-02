@@ -122,25 +122,25 @@ public struct CodexApprovalReconciler: Equatable, Sendable {
         _ request: CodexApprovalRequest,
         root: CodexRootTurnSnapshot
     ) -> CodexApprovalReduction {
-        let previousSnapshot = snapshot
         let decision = decision(for: request, root: root)
+        var didMutateHistory = false
 
         if decision.isSuppression,
            request.turnProvenance == .sourceObserved,
            let normalizedTurnID = normalizedNonEmpty(request.turnID),
            !autoReviewedTurnIDs.contains(normalizedTurnID) {
             autoReviewedTurnIDs.append(normalizedTurnID)
+            didMutateHistory = true
             let overflow = autoReviewedTurnIDs.count - Self.maximumAutoReviewedTurnCount
             if overflow > 0 {
                 autoReviewedTurnIDs.removeFirst(overflow)
             }
         }
 
-        let nextSnapshot = snapshot
         return CodexApprovalReduction(
             decision: decision,
-            didMutateHistory: previousSnapshot != nextSnapshot,
-            snapshot: nextSnapshot
+            didMutateHistory: didMutateHistory,
+            snapshot: snapshot
         )
     }
 

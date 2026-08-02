@@ -529,4 +529,70 @@ extension SessionRuntimeStoreTests {
         #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID) == false)
     }
 
+    @Test
+    func codexIncompatibleLogApprovalDoesNotRemovePendingHookApproval() {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 10_000_000_000)
+        let sessionID = "sess-codex-incompatible-log-keeps-pending"
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_200)
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(
+                    kind: .needsApproval,
+                    summary: "Needs approval",
+                    detail: "Hook approval"
+                ),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        ) == false)
+        #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID))
+
+        #expect(store.handleCodexSessionLogApproval(
+            sessionID: sessionID,
+            detail: "Incompatible log approval",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            callID: nil,
+            approvalID: nil,
+            at: startedAt.addingTimeInterval(3)
+        ) == false)
+
+        #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .working)
+    }
+
 }

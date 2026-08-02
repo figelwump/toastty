@@ -371,6 +371,7 @@ struct CodexApprovalReconciliationTests {
                 request(source: compatibleSource, thread: nil, turn: "existing"),
                 root: .empty
             )
+            let reconcilerBefore = reconciler
             let before = reconciler.snapshot
 
             let reduction = reconciler.reduce(
@@ -382,6 +383,7 @@ struct CodexApprovalReconciliationTests {
             #expect(reduction.didMutateHistory == false)
             #expect(reduction.snapshot == before)
             #expect(reconciler.snapshot == before)
+            #expect(reconciler == reconcilerBefore)
         }
     }
 
