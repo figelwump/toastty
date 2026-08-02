@@ -560,7 +560,7 @@ final class SessionRuntimeStore: ObservableObject {
             metadata: codexNotifyMetadata(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 additional: [
                     "input_fingerprint": truncatedFingerprint(fingerprint),
                     "thread_id": threadID ?? "none",
@@ -573,7 +573,7 @@ final class SessionRuntimeStore: ObservableObject {
         resolvePendingCodexHookApprovalIfPossible(
             sessionID: sessionID,
             record: record,
-            state: state,
+            state: state.legacyPolicySnapshot,
             reasonPrefix: "context_update"
         )
     }
@@ -633,7 +633,7 @@ final class SessionRuntimeStore: ObservableObject {
             metadata: codexNotifyMetadata(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 additional: [
                     "approval_policy": approvalPolicy.metadataValue,
                     "approvals_reviewer": approvalsReviewer.metadataValue,
@@ -643,7 +643,7 @@ final class SessionRuntimeStore: ObservableObject {
         resolvePendingCodexHookApprovalIfPossible(
             sessionID: sessionID,
             record: record,
-            state: state,
+            state: state.legacyPolicySnapshot,
             reasonPrefix: "context_update"
         )
     }
@@ -670,7 +670,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
                 record: nil,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 completion: completion,
                 decision: "accepted",
                 reason: "missing_session_record"
@@ -686,7 +686,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
                 record: record,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 completion: completion,
                 decision: "accepted",
                 reason: "non_codex_session"
@@ -702,7 +702,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
                 record: record,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 completion: completion,
                 decision: "accepted",
                 reason: "status_notifications_disabled"
@@ -720,7 +720,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 completion: completion,
                 decision: "ignored",
                 reason: "status_source_hooks"
@@ -736,7 +736,7 @@ final class SessionRuntimeStore: ObservableObject {
                     logCodexNotifyCompletionDecision(
                         sessionID: sessionID,
                         record: record,
-                        state: state,
+                        state: state.legacyPolicySnapshot,
                         completion: completion,
                         decision: "ignored",
                         reason: "thread_mismatch"
@@ -756,7 +756,7 @@ final class SessionRuntimeStore: ObservableObject {
                     metadata: codexNotifyMetadata(
                         sessionID: sessionID,
                         record: record,
-                        state: state,
+                        state: state.legacyPolicySnapshot,
                         completion: completion
                     )
                 )
@@ -765,7 +765,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexNotifyCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     completion: completion,
                     decision: "ignored",
                     reason: "missing_root_input_fingerprint"
@@ -779,7 +779,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexNotifyCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     completion: completion,
                     decision: "ignored",
                     reason: reason
@@ -794,7 +794,7 @@ final class SessionRuntimeStore: ObservableObject {
         logCodexNotifyCompletionDecision(
             sessionID: sessionID,
             record: record,
-            state: state,
+            state: state.legacyPolicySnapshot,
             completion: completion,
             decision: "accepted",
             reason: acceptedReason
@@ -821,7 +821,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogCompletionDecision(
                 sessionID: sessionID,
                 record: sessionRegistry.sessionsByID[sessionID],
-                state: codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState(),
+                state: (codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()).legacyPolicySnapshot,
                 threadID: threadID,
                 turnID: turnID,
                 decision: "ignored",
@@ -835,7 +835,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogCompletionDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 threadID: threadID,
                 turnID: turnID,
                 decision: "ignored",
@@ -850,7 +850,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexSessionLogCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     threadID: threadID,
                     turnID: turnID,
                     decision: "ignored",
@@ -862,7 +862,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexSessionLogCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     threadID: threadID,
                     turnID: turnID,
                     decision: "ignored",
@@ -878,7 +878,7 @@ final class SessionRuntimeStore: ObservableObject {
                     logCodexSessionLogCompletionDecision(
                         sessionID: sessionID,
                         record: record,
-                        state: state,
+                        state: state.legacyPolicySnapshot,
                         threadID: threadID,
                         turnID: turnID,
                         decision: "ignored",
@@ -895,7 +895,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexSessionLogCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     threadID: threadID,
                     turnID: turnID,
                     decision: "ignored",
@@ -909,7 +909,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexSessionLogCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     threadID: threadID,
                     turnID: turnID,
                     decision: "ignored",
@@ -925,7 +925,7 @@ final class SessionRuntimeStore: ObservableObject {
         logCodexSessionLogCompletionDecision(
             sessionID: sessionID,
             record: record,
-            state: state,
+            state: state.legacyPolicySnapshot,
             threadID: threadID,
             turnID: turnID,
             decision: "accepted",
@@ -955,7 +955,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: sessionRegistry.sessionsByID[sessionID],
-                state: codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState(),
+                state: (codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()).legacyPolicySnapshot,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -971,7 +971,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -996,12 +996,12 @@ final class SessionRuntimeStore: ObservableObject {
             cwd: nil
         )
 
-        switch codexHookApprovalDecision(event: event, state: state) {
+        switch codexHookApprovalDecision(event: event, state: state.legacyPolicySnapshot) {
         case .accept(let reason):
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -1020,7 +1020,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -1034,7 +1034,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -1056,7 +1056,7 @@ final class SessionRuntimeStore: ObservableObject {
             logIgnoredCodexHookCompletionIfNeeded(
                 sessionID: sessionID,
                 record: nil,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 event: event,
                 reason: "missing_session_record"
             )
@@ -1066,7 +1066,7 @@ final class SessionRuntimeStore: ObservableObject {
             logIgnoredCodexHookCompletionIfNeeded(
                 sessionID: sessionID,
                 record: record,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 event: event,
                 reason: "non_codex_session"
             )
@@ -1076,7 +1076,7 @@ final class SessionRuntimeStore: ObservableObject {
             logIgnoredCodexHookCompletionIfNeeded(
                 sessionID: sessionID,
                 record: record,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 event: event,
                 reason: "status_notifications_disabled"
             )
@@ -1088,7 +1088,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 event: event,
                 decision: "ignored",
                 reason: "status_source_session_log_fallback"
@@ -1111,7 +1111,7 @@ final class SessionRuntimeStore: ObservableObject {
                         logCodexHookEventDecision(
                             sessionID: sessionID,
                             record: record,
-                            state: state,
+                            state: state.legacyPolicySnapshot,
                             event: event,
                             decision: "ignored",
                             reason: "thread_mismatch"
@@ -1134,7 +1134,7 @@ final class SessionRuntimeStore: ObservableObject {
                         metadata: codexHookMetadata(
                             sessionID: sessionID,
                             record: record,
-                            state: state,
+                            state: state.legacyPolicySnapshot,
                             event: event
                         )
                     )
@@ -1148,7 +1148,7 @@ final class SessionRuntimeStore: ObservableObject {
                     metadata: codexHookMetadata(
                         sessionID: sessionID,
                         record: record,
-                        state: state,
+                        state: state.legacyPolicySnapshot,
                         event: event
                     )
                 )
@@ -1158,7 +1158,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexHookEventDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     event: event,
                     decision: "ignored",
                     reason: "missing_root_thread"
@@ -1176,7 +1176,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 event: event,
                 decision: "ignored",
                 reason: "turn_mismatch"
@@ -1255,7 +1255,7 @@ final class SessionRuntimeStore: ObservableObject {
 
         if event.isPermissionRequest,
            status.kind == .needsApproval {
-            switch codexHookApprovalDecision(event: event, state: state) {
+            switch codexHookApprovalDecision(event: event, state: state.legacyPolicySnapshot) {
             case .suppress(let reason):
                 markAutoReviewedCodexPermissionTurnIfNeeded(event: event, state: &state)
                 codexNotifyStateBySessionID[sessionID] = state
@@ -1263,7 +1263,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexHookEventDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     event: event,
                     decision: "suppressed",
                     reason: reason
@@ -1274,7 +1274,7 @@ final class SessionRuntimeStore: ObservableObject {
                 deferCodexHookApproval(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     event: event,
                     reason: reason
                 )
@@ -1285,7 +1285,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexHookEventDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     event: event,
                     decision: "ignored",
                     reason: reason
@@ -1297,7 +1297,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexHookEventDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state,
+                    state: state.legacyPolicySnapshot,
                     event: event,
                     decision: "accepted",
                     reason: reason
@@ -1307,7 +1307,7 @@ final class SessionRuntimeStore: ObservableObject {
             removePendingCodexHookApprovalIfSuperseded(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 event: event,
                 status: status
             )
@@ -1317,10 +1317,13 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 event: event,
                 decision: "accepted",
-                reason: codexHookCompletionAcceptedReason(event: event, state: state)
+                reason: codexHookCompletionAcceptedReason(
+                    event: event,
+                    state: state.legacyPolicySnapshot
+                )
             )
         }
 
@@ -2456,7 +2459,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logCodexNotifyCompletionDecision(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         completion: CodexNotifyCompletion,
         decision: String,
         reason: String
@@ -2484,7 +2487,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logIgnoredCodexHookCompletionIfNeeded(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         reason: String
     ) {
@@ -2504,7 +2507,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logCodexHookEventDecision(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         decision: String,
         reason: String
@@ -2532,7 +2535,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logCodexSessionLogCompletionDecision(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         threadID: String?,
         turnID: String?,
         decision: String,
@@ -2562,7 +2565,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logCodexSessionLogApprovalDecision(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         threadID: String?,
         turnID: String?,
         callID: String?,
@@ -2782,7 +2785,7 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func codexHookApprovalDecision(
         event: CodexHookEvent,
-        state: CodexNotifySessionState
+        state: CodexLegacyPolicySnapshot
     ) -> CodexHookApprovalDecision {
         guard event.isPermissionRequest,
               event.status?.kind == .needsApproval else {
@@ -2848,7 +2851,7 @@ final class SessionRuntimeStore: ObservableObject {
         return approvalPolicy != "never"
     }
 
-    private func codexApprovalContextHasReviewer(_ state: CodexNotifySessionState) -> Bool {
+    private func codexApprovalContextHasReviewer(_ state: CodexLegacyPolicySnapshot) -> Bool {
         if normalizedNonEmpty(state.approvalsReviewer.stringValue) != nil {
             return true
         }
@@ -2861,7 +2864,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func deferCodexHookApproval(
         sessionID: String,
         record: SessionRecord,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         reason: String
     ) {
@@ -2901,7 +2904,10 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-        switch codexHookApprovalDecision(event: pending.event, state: state) {
+        switch codexHookApprovalDecision(
+            event: pending.event,
+            state: state.legacyPolicySnapshot
+        ) {
         case .suppress(let reason):
             markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &state)
             codexNotifyStateBySessionID[sessionID] = state
@@ -2909,7 +2915,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 event: pending.event,
                 decision: "suppressed",
                 reason: reason
@@ -2920,7 +2926,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 event: pending.event,
                 decision: "ignored",
                 reason: reason
@@ -2931,7 +2937,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 event: pending.event,
                 decision: "accepted",
                 reason: reason
@@ -2943,7 +2949,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state,
+                state: state.legacyPolicySnapshot,
                 event: pending.event,
                 decision: "ignored",
                 reason: "context_timeout_\(reason)"
@@ -2954,7 +2960,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func resolvePendingCodexHookApprovalIfPossible(
         sessionID: String,
         record: SessionRecord,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         reasonPrefix: String
     ) {
         guard let pending = pendingCodexHookApprovalBySessionID[sessionID],
@@ -2968,8 +2974,10 @@ final class SessionRuntimeStore: ObservableObject {
             return
 
         case .suppress(let reason):
-            markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &state)
-            codexNotifyStateBySessionID[sessionID] = state
+            var legacyState = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+            markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &legacyState)
+            codexNotifyStateBySessionID[sessionID] = legacyState
+            state = legacyState.legacyPolicySnapshot
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -3008,7 +3016,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func removePendingCodexHookApprovalIfSuperseded(
         sessionID: String,
         record: SessionRecord,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         status: SessionStatus
     ) {
@@ -3062,7 +3070,7 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func codexHookCompletionAcceptedReason(
         event: CodexHookEvent,
-        state: CodexNotifySessionState
+        state: CodexLegacyPolicySnapshot
     ) -> String {
         if let threadID = event.threadID,
            let rootThreadID = state.rootThreadID,
@@ -3109,7 +3117,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func codexHookMetadata(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         additional: [String: String] = [:]
     ) -> [String: String] {
@@ -3170,7 +3178,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func codexSessionLogCompletionMetadata(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         threadID: String?,
         turnID: String?,
         additional: [String: String] = [:]
@@ -3217,7 +3225,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func codexNotifyMetadata(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         completion: CodexNotifyCompletion? = nil,
         additional: [String: String] = [:]
     ) -> [String: String] {
@@ -3685,11 +3693,103 @@ private struct CodexNotifySessionState {
     var approvalContextKnown = false
     var approvalPolicy: CodexSessionLogContextField = .unspecified
     var approvalsReviewer: CodexSessionLogContextField = .unspecified
+
+    var legacyPolicySnapshot: CodexLegacyPolicySnapshot {
+        CodexLegacyPolicySnapshot(
+            root: CodexRootTurnSnapshot(
+                rootThreadID: rootThreadID,
+                rootTurnID: rootTurnID,
+                rootTurnInputFingerprint: rootTurnInputFingerprint,
+                isAwaitingSessionLogContext: rootTurnAwaitingSessionLogContext,
+                pendingRootInputFingerprint: pendingRootInputFingerprint,
+                pendingApprovalContext: pendingRootApprovalContext?.rootTurnContext,
+                activeApprovalContext: activeTurnApprovalContext?.rootTurnContext,
+                currentApprovalContext: approvalContextKnown
+                    ? CodexRootTurnApprovalContext(
+                        approvalPolicy: approvalPolicy.rootTurnContextField,
+                        approvalsReviewer: approvalsReviewer.rootTurnContextField
+                    )
+                    : nil
+            ),
+            autoReviewedPermissionTurnIDs: autoReviewedPermissionTurnIDs
+        )
+    }
 }
 
 private struct CodexApprovalContext {
     var approvalPolicy: CodexSessionLogContextField = .unspecified
     var approvalsReviewer: CodexSessionLogContextField = .unspecified
+
+    var rootTurnContext: CodexRootTurnApprovalContext {
+        CodexRootTurnApprovalContext(
+            approvalPolicy: approvalPolicy.rootTurnContextField,
+            approvalsReviewer: approvalsReviewer.rootTurnContextField
+        )
+    }
+}
+
+private struct CodexLegacyPolicySnapshot {
+    let root: CodexRootTurnSnapshot
+    let autoReviewedPermissionTurnIDs: [String]
+
+    static let empty = CodexLegacyPolicySnapshot(
+        root: .empty,
+        autoReviewedPermissionTurnIDs: []
+    )
+
+    var legacyPolicySnapshot: CodexLegacyPolicySnapshot { self }
+
+    var rootThreadID: String? { root.rootThreadID }
+    var rootTurnID: String? { root.rootTurnID }
+    var rootTurnInputFingerprint: String? { root.rootTurnInputFingerprint }
+    var rootTurnAwaitingSessionLogContext: Bool { root.isAwaitingSessionLogContext }
+    var pendingRootInputFingerprint: String? { root.pendingRootInputFingerprint }
+    var pendingRootApprovalContext: CodexRootTurnApprovalContext? { root.pendingApprovalContext }
+    var activeTurnApprovalContext: CodexRootTurnApprovalContext? { root.activeApprovalContext }
+    var approvalContextKnown: Bool { root.currentApprovalContext != nil }
+    var approvalPolicy: CodexSessionLogContextField {
+        root.currentApprovalContext?.approvalPolicy.sessionLogContextField ?? .unspecified
+    }
+    var approvalsReviewer: CodexSessionLogContextField {
+        root.currentApprovalContext?.approvalsReviewer.sessionLogContextField ?? .unspecified
+    }
+}
+
+private extension CodexSessionLogContextField {
+    var rootTurnContextField: CodexRootTurnContextField {
+        switch self {
+        case .unspecified:
+            return .unspecified
+        case .null:
+            return .null
+        case .string(let value):
+            return .string(value)
+        }
+    }
+}
+
+private extension CodexRootTurnContextField {
+    var sessionLogContextField: CodexSessionLogContextField {
+        switch self {
+        case .unspecified:
+            return .unspecified
+        case .null:
+            return .null
+        case .string(let value):
+            return .string(value)
+        }
+    }
+
+    var metadataValue: String {
+        switch self {
+        case .unspecified:
+            return "unknown"
+        case .null:
+            return "none"
+        case .string(let value):
+            return value
+        }
+    }
 }
 
 private struct PendingCodexHookApproval {
