@@ -1323,6 +1323,22 @@ final class SessionRuntimeStore: ObservableObject {
                 reason: codexHookCompletionAcceptedReason(event: event, state: state)
             )
         }
+
+        if event.isRootProgressWorking,
+           status.kind == .working {
+            guard record.isActive else {
+                return stateChanged
+            }
+            if codexStatusTrackingSourceBySessionID[sessionID] != nil {
+                let didProject = applyCodexRootProgressObservation(
+                    sessionID: sessionID,
+                    observation: .hookWorking(summary: status.summary, detail: status.detail),
+                    at: now
+                )
+                return stateChanged || didProject
+            }
+        }
+
         updateStatus(sessionID: sessionID, status: status, at: now)
         return true
     }
@@ -2601,6 +2617,76 @@ final class SessionRuntimeStore: ObservableObject {
         codexStatusTrackingSourceBySessionID[sessionID]?.code ?? "unspecified"
     }
 
+    @discardableResult
+    private func applyCodexRootProgressObservation(
+        sessionID: String,
+        observation: CodexRootProgressObservation,
+        at now: Date
+    ) -> Bool {
+        guard let source = codexStatusTrackingSourceBySessionID[sessionID],
+              let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
+            return false
+        }
+
+        let decision = CodexRootProgressEvaluator.evaluate(
+            authority: codexRootProgressAuthority(for: source),
+            currentRegistryKind: codexRootProgressRegistryKind(for: record.status?.kind),
+            observation: observation
+        )
+        switch decision {
+        case .projectWorking(let summary, let detail):
+            updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .working, summary: summary, detail: detail),
+                at: now
+            )
+            return true
+
+        case .projectIdle(let detail):
+            updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .idle, summary: "Waiting", detail: detail),
+                at: now
+            )
+            return true
+
+        case .ignored:
+            return false
+        }
+    }
+
+    private func codexRootProgressAuthority(
+        for source: CodexStatusTrackingSource
+    ) -> CodexRootProgressAuthority {
+        switch source {
+        case .hooks:
+            return .hooks
+        case .sessionLogFallback:
+            return .sessionLogFallback
+        }
+    }
+
+    private func codexRootProgressRegistryKind(
+        for kind: SessionStatusKind?
+    ) -> CodexRootProgressRegistryKind {
+        switch kind {
+        case nil:
+            return .none
+        case .idle:
+            return .idle
+        case .working:
+            return .working
+        case .needsApproval:
+            return .needsApproval
+        case .ready:
+            return .ready
+        case .error:
+            return .error
+        }
+    }
+
     private func codexApprovalContext(
         approvalPolicy: CodexSessionLogContextField,
         approvalsReviewer: CodexSessionLogContextField,
@@ -3786,6 +3872,10 @@ private extension CodexHookEvent {
 
     var isUserPromptSubmit: Bool {
         hookEventName == "UserPromptSubmit"
+    }
+
+    var isRootProgressWorking: Bool {
+        hookEventName == "UserPromptSubmit" || hookEventName == "PreToolUse"
     }
 
     var isPermissionRequest: Bool {
