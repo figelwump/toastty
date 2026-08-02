@@ -121,6 +121,138 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
         #expect(store.sessionRegistry.activeSession(for: panelID)?.status == expectedStatus)
     }
 
+    @Test
+    func sessionLogProgressUsesStoreAuthorityAndCurrentRawKind() {
+        let store = SessionRuntimeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_700_500_300)
+        let hookPanelID = UUID()
+        let fallbackPanelID = UUID()
+        startCodexSession(
+            in: store,
+            sessionID: "hook-log-interleaving",
+            panelID: hookPanelID,
+            source: .hooks,
+            at: startedAt
+        )
+        startCodexSession(
+            in: store,
+            sessionID: "fallback-log-interleaving",
+            panelID: fallbackPanelID,
+            source: .sessionLogFallback(reason: "test"),
+            at: startedAt
+        )
+        let idle = SessionStatus(kind: .idle, summary: "Waiting", detail: "Initial idle")
+        store.updateStatus(sessionID: "hook-log-interleaving", status: idle, at: startedAt)
+        store.updateStatus(sessionID: "fallback-log-interleaving", status: idle, at: startedAt)
+
+        #expect(store.handleCodexSessionLogRootProgressObservation(
+            sessionID: "hook-log-interleaving",
+            observation: .sessionLogWorking(detail: "Rejected log work"),
+            at: startedAt.addingTimeInterval(1)
+        ) == false)
+        #expect(store.handleCodexHookEvent(
+            sessionID: "fallback-log-interleaving",
+            event: rootWorkingHookEvent(status: SessionStatus(
+                kind: .working,
+                summary: "Working",
+                detail: "Rejected hook work"
+            )),
+            at: startedAt.addingTimeInterval(1)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(for: hookPanelID)?.status == idle)
+        #expect(store.sessionRegistry.activeSession(for: fallbackPanelID)?.status == idle)
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: "hook-log-interleaving",
+            event: rootWorkingHookEvent(status: SessionStatus(
+                kind: .working,
+                summary: "Hook working",
+                detail: "Exact hook work"
+            )),
+            at: startedAt.addingTimeInterval(2)
+        ))
+        #expect(store.handleCodexSessionLogRootProgressObservation(
+            sessionID: "fallback-log-interleaving",
+            observation: .sessionLogWorking(detail: "Exact log work"),
+            at: startedAt.addingTimeInterval(2)
+        ))
+        #expect(store.sessionRegistry.activeSession(for: hookPanelID)?.status == SessionStatus(
+            kind: .working,
+            summary: "Hook working",
+            detail: "Exact hook work"
+        ))
+        #expect(store.sessionRegistry.activeSession(for: fallbackPanelID)?.status == SessionStatus(
+            kind: .working,
+            summary: "Working",
+            detail: "Exact log work"
+        ))
+
+        #expect(store.handleCodexSessionLogRootProgressObservation(
+            sessionID: "hook-log-interleaving",
+            observation: .sessionLogTurnAborted(detail: "Rejected log abort"),
+            at: startedAt.addingTimeInterval(3)
+        ) == false)
+        #expect(store.handleCodexSessionLogRootProgressObservation(
+            sessionID: "fallback-log-interleaving",
+            observation: .sessionLogTurnAborted(detail: "Exact abort detail"),
+            at: startedAt.addingTimeInterval(3)
+        ))
+        #expect(store.sessionRegistry.activeSession(for: hookPanelID)?.status?.kind == .working)
+        #expect(store.sessionRegistry.activeSession(for: fallbackPanelID)?.status == SessionStatus(
+            kind: .idle,
+            summary: "Waiting",
+            detail: "Exact abort detail"
+        ))
+    }
+
+    @Test
+    func sessionLogProgressDoesNotWriteNilSourceOrStoppedSession() throws {
+        let store = SessionRuntimeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_700_500_400)
+        let nilSourcePanelID = UUID()
+        let stoppedPanelID = UUID()
+        startCodexSession(
+            in: store,
+            sessionID: "nil-source-log-progress",
+            panelID: nilSourcePanelID,
+            source: nil,
+            at: startedAt
+        )
+        startCodexSession(
+            in: store,
+            sessionID: "stopped-log-progress",
+            panelID: stoppedPanelID,
+            source: .sessionLogFallback(reason: "test"),
+            at: startedAt
+        )
+        let initialStatus = SessionStatus(kind: .idle, summary: "Waiting", detail: "Initial")
+        store.updateStatus(sessionID: "nil-source-log-progress", status: initialStatus, at: startedAt)
+        store.updateStatus(sessionID: "stopped-log-progress", status: initialStatus, at: startedAt)
+        store.stopSession(
+            sessionID: "stopped-log-progress",
+            at: startedAt.addingTimeInterval(1)
+        )
+        let stoppedUpdatedAt = try #require(
+            store.sessionRegistry.sessionsByID["stopped-log-progress"]?.statusUpdatedAt
+        )
+
+        #expect(store.handleCodexSessionLogRootProgressObservation(
+            sessionID: "nil-source-log-progress",
+            observation: .sessionLogWorking(detail: "No explicit source"),
+            at: startedAt.addingTimeInterval(2)
+        ) == false)
+        #expect(store.handleCodexSessionLogRootProgressObservation(
+            sessionID: "stopped-log-progress",
+            observation: .sessionLogWorking(detail: "After stop"),
+            at: startedAt.addingTimeInterval(2)
+        ) == false)
+
+        #expect(store.sessionRegistry.activeSession(for: nilSourcePanelID)?.status == initialStatus)
+        let stoppedRecord = try #require(store.sessionRegistry.sessionsByID["stopped-log-progress"])
+        #expect(stoppedRecord.status == initialStatus)
+        #expect(stoppedRecord.statusUpdatedAt == stoppedUpdatedAt)
+    }
+
     private func startCodexSession(
         in store: SessionRuntimeStore,
         sessionID: String,

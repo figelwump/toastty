@@ -561,7 +561,6 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
 
-        let status: SessionStatus
         switch event.kind {
         case .sessionConfigured:
             return
@@ -589,10 +588,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     approvalsReviewerField: event.approvalsReviewerField
                 )
             }
-            guard codexStatusTrackingSource != .hooks else {
-                return
-            }
-            status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
+            _ = sessionRuntimeStore.handleCodexSessionLogRootProgressObservation(
+                sessionID: sessionID,
+                observation: .sessionLogWorking(detail: event.detail),
+                at: nowProvider()
+            )
+            return
         case .historyUpdated:
             guard codexStatusTrackingSource != .hooks else {
                 return
@@ -638,25 +639,13 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return
         case .turnAborted:
-            guard codexStatusTrackingSource != .hooks else {
-                return
-            }
-            guard let currentKind = sessionRuntimeStore
-                .sessionRegistry
-                .activeSession(sessionID: sessionID)?
-                .status?
-                .kind,
-                  currentKind == .working || currentKind == .needsApproval else {
-                return
-            }
-            status = SessionStatus(kind: .idle, summary: "Waiting", detail: event.detail)
+            _ = sessionRuntimeStore.handleCodexSessionLogRootProgressObservation(
+                sessionID: sessionID,
+                observation: .sessionLogTurnAborted(detail: event.detail),
+                at: nowProvider()
+            )
+            return
         }
-
-        sessionRuntimeStore.updateStatus(
-            sessionID: sessionID,
-            status: status,
-            at: nowProvider()
-        )
     }
 
     private func forwardCodexBackgroundActivityObservation(

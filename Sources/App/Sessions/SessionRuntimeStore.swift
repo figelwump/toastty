@@ -1397,6 +1397,19 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
+    @discardableResult
+    func handleCodexSessionLogRootProgressObservation(
+        sessionID: String,
+        observation: CodexRootProgressObservation,
+        at now: Date
+    ) -> Bool {
+        applyCodexRootProgressObservation(
+            sessionID: sessionID,
+            observation: observation,
+            at: now
+        )
+    }
+
     /// Temporary compatibility for callers that predate fixed Codex status
     /// authority. Historically nil source admitted hooks in the Store while the
     /// planner also projected rollout activity through its fallback path.
