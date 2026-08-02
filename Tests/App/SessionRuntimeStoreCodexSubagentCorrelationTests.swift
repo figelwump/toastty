@@ -43,7 +43,7 @@ extension SessionRuntimeStoreTests {
             ),
             at: now.addingTimeInterval(1)
         ))
-        #expect(store.recordCodexSubagentRolloutMetadata(
+        #expect(store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-spawn",
             agentID: "agent-child",
@@ -110,7 +110,7 @@ extension SessionRuntimeStoreTests {
             ),
             at: now.addingTimeInterval(1)
         ))
-        #expect(store.recordCodexSubagentRolloutMetadata(
+        #expect(store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-spawn",
             agentID: "agent-child",
@@ -205,7 +205,7 @@ extension SessionRuntimeStoreTests {
             ),
             at: now.addingTimeInterval(2)
         ))
-        #expect(store.recordCodexSubagentRolloutMetadata(
+        #expect(store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-spawn",
             agentID: "agent-child",
@@ -314,7 +314,7 @@ extension SessionRuntimeStoreTests {
             ),
             at: now.addingTimeInterval(2)
         ))
-        #expect(store.recordCodexSubagentRolloutMetadata(
+        #expect(store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-spawn",
             agentID: "agent-child",
@@ -410,14 +410,14 @@ extension SessionRuntimeStoreTests {
 
         recordHook(toolUseID: "call-a", taskName: "agent_a", message: "Review A")
         recordHook(toolUseID: "call-b", taskName: "agent_b", message: "Review B")
-        _ = store.recordCodexSubagentRolloutMetadata(
+        _ = store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-b",
             agentID: "agent-b",
             displayName: nil,
             at: now
         )
-        _ = store.recordCodexSubagentRolloutMetadata(
+        _ = store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-a",
             agentID: "agent-a",
@@ -476,14 +476,14 @@ extension SessionRuntimeStoreTests {
             )
         }
 
-        _ = store.recordCodexSubagentRolloutMetadata(
+        _ = store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-0",
             agentID: "agent-oldest",
             displayName: "rollout_oldest",
             at: now
         )
-        _ = store.recordCodexSubagentRolloutMetadata(
+        _ = store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-64",
             agentID: "agent-newest",
@@ -555,7 +555,7 @@ extension SessionRuntimeStoreTests {
             ),
             at: now.addingTimeInterval(1)
         )
-        _ = store.recordCodexSubagentRolloutMetadata(
+        _ = store.recordCodexSubagentRolloutStartForTesting(
             sessionID: sessionID,
             toolUseID: "call-stale",
             agentID: "agent-child",
@@ -601,4 +601,105 @@ extension SessionRuntimeStoreTests {
         #expect(activity.command == nil)
     }
 
+    @Test
+    func stoppingSessionClearsReducerStateBeforeSessionIDReuse() throws {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_285)
+        let sessionID = "sess-codex-reducer-teardown"
+        let panelID = UUID()
+        let windowID = UUID()
+        let workspaceID = UUID()
+
+        func startSession(at date: Date) {
+            store.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: panelID,
+                windowID: windowID,
+                workspaceID: workspaceID,
+                usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: .hooks,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: date
+            )
+        }
+
+        startSession(at: now)
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PreToolUse",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                spawnMetadata: CodexSpawnHookMetadata(
+                    toolUseID: "reused-call",
+                    taskName: "stale task",
+                    message: "stale command"
+                )
+            ),
+            at: now.addingTimeInterval(1)
+        ))
+        store.stopSession(sessionID: sessionID, at: now.addingTimeInterval(2))
+
+        startSession(at: now.addingTimeInterval(3))
+        #expect(store.recordCodexSubagentRolloutStartForTesting(
+            sessionID: sessionID,
+            toolUseID: "reused-call",
+            agentID: "agent-child",
+            displayName: "fresh rollout",
+            at: now.addingTimeInterval(4)
+        ))
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: "agent-child",
+                subagentType: "default"
+            ),
+            at: now.addingTimeInterval(5)
+        ))
+
+        let activity = try #require(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID["agent-child"])
+        #expect(activity.displayName == "fresh rollout")
+        #expect(activity.command == nil)
+    }
+
+}
+
+private extension SessionRuntimeStore {
+    @discardableResult
+    func recordCodexSubagentRolloutStartForTesting(
+        sessionID: String,
+        toolUseID: String,
+        agentID: String,
+        displayName: String?,
+        at now: Date
+    ) -> Bool {
+        handleCodexSubagentRolloutObservation(
+            sessionID: sessionID,
+            observation: .started(CodexSessionBackgroundActivity(
+                activityID: agentID,
+                hookActivityID: agentID,
+                spawnToolUseID: toolUseID,
+                kind: .subagent,
+                displayName: displayName
+            )),
+            at: now
+        )
+    }
 }

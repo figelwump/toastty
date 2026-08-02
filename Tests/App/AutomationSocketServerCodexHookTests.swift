@@ -165,11 +165,15 @@ struct AutomationSocketServerCodexHookTests: AutomationSocketServerTestSupport {
         )
         #expect(metadataResponse.result?.string("status") == "accepted")
         await MainActor.run {
-            #expect(server.sessionRuntimeStore.recordCodexSubagentRolloutMetadata(
+            #expect(server.sessionRuntimeStore.handleCodexSubagentRolloutObservation(
                 sessionID: sessionID,
-                toolUseID: "call-spawn",
-                agentID: "agent-child",
-                displayName: "security_privacy",
+                observation: .started(CodexSessionBackgroundActivity(
+                    activityID: "agent-child",
+                    hookActivityID: "agent-child",
+                    spawnToolUseID: "call-spawn",
+                    kind: .subagent,
+                    displayName: "security_privacy"
+                )),
                 at: Date(timeIntervalSince1970: 1_700_000_001)
             ))
             #expect(server.sessionRuntimeStore.sessionRegistry

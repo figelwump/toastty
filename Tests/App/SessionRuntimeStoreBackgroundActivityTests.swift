@@ -389,36 +389,202 @@ extension SessionRuntimeStoreTests {
             at: now
         )
 
-        #expect(store.updateBackgroundActivity(
+        let activity = CodexSessionBackgroundActivity(
+            activityID: activityID,
+            kind: .subagent,
+            displayName: "plan_review"
+        )
+        #expect(store.handleCodexSubagentRolloutObservation(
             sessionID: sessionID,
-            activity: SessionBackgroundActivity(
-                id: activityID,
-                kind: .subagent,
-                displayName: "plan_review",
-                startedAt: now,
-                lastUpdatedAt: now
-            ),
+            observation: .started(activity),
             at: now
         ))
-        #expect(store.finishBackgroundActivity(
+        #expect(store.handleCodexSubagentRolloutObservation(
             sessionID: sessionID,
-            activityID: activityID,
+            observation: .finished(activity),
             at: now.addingTimeInterval(1)
         ))
 
-        #expect(store.updateBackgroundActivity(
+        #expect(store.handleCodexSubagentRolloutObservation(
             sessionID: sessionID,
-            activity: SessionBackgroundActivity(
-                id: activityID,
-                kind: .subagent,
-                displayName: "plan_review",
-                startedAt: now.addingTimeInterval(2),
-                lastUpdatedAt: now.addingTimeInterval(2)
-            ),
+            observation: .started(activity),
             at: now.addingTimeInterval(2)
         ) == false)
         #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
             .backgroundActivitiesByID[activityID] == nil)
+    }
+
+    @Test
+    func codexSubagentRolloutObservationUsesSessionFixedAuthority() {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_290)
+        let hookSessionID = "sess-codex-fixed-hooks"
+        let fallbackSessionID = "sess-codex-fixed-fallback"
+
+        for (sessionID, source) in [
+            (hookSessionID, CodexStatusTrackingSource.hooks),
+            (fallbackSessionID, .sessionLogFallback(reason: "test")),
+        ] {
+            store.startSession(
+                sessionID: sessionID,
+                agent: .codex,
+                panelID: UUID(),
+                windowID: UUID(),
+                workspaceID: UUID(),
+                usesSessionStatusNotifications: true,
+                codexStatusTrackingSource: source,
+                cwd: "/repo",
+                repoRoot: "/repo",
+                at: now
+            )
+        }
+
+        let rolloutActivity = CodexSessionBackgroundActivity(
+            activityID: "rollout-row",
+            hookActivityID: "provider-agent",
+            kind: .subagent,
+            displayName: "rollout display"
+        )
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: hookSessionID,
+            observation: .started(rolloutActivity),
+            at: now.addingTimeInterval(1)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: hookSessionID)?
+            .backgroundActivitiesByID.isEmpty == true)
+
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: fallbackSessionID,
+            observation: .started(rolloutActivity),
+            at: now.addingTimeInterval(1)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?
+            .backgroundActivitiesByID["rollout-row"]?.displayName == "rollout display")
+        #expect(store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?
+            .backgroundActivitiesByID["provider-agent"] == nil)
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: fallbackSessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStart",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: "provider-agent",
+                subagentType: "reviewer"
+            ),
+            at: now.addingTimeInterval(2)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: fallbackSessionID)?
+            .backgroundActivitiesByID["provider-agent"] == nil)
+    }
+
+    @Test
+    func codexSubagentNilSourcePreservesLegacyHookAndRolloutResetBehavior() {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_295)
+        let sessionID = "sess-codex-legacy-nil-source"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: nil,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PreToolUse",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                spawnMetadata: CodexSpawnHookMetadata(
+                    toolUseID: "legacy-call",
+                    taskName: "legacy task"
+                )
+            ),
+            at: now.addingTimeInterval(1)
+        ))
+
+        let hookStart = CodexHookEvent(
+            hookEventName: "SubagentStart",
+            threadID: nil,
+            turnID: nil,
+            promptFingerprint: nil,
+            status: nil,
+            nativeSessionID: nil,
+            sessionFilePath: nil,
+            cwd: nil,
+            subagentID: "hook-agent",
+            subagentType: "reviewer"
+        )
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: hookStart,
+            at: now.addingTimeInterval(2)
+        ))
+
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: sessionID,
+            observation: .started(CodexSessionBackgroundActivity(
+                activityID: "rollout-agent",
+                kind: .subagent,
+                displayName: "rollout fallback"
+            )),
+            at: now.addingTimeInterval(3)
+        ))
+        let activities = store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID
+        #expect(activities?["hook-agent"]?.displayName == "reviewer")
+        #expect(activities?["rollout-agent"]?.displayName == "rollout fallback")
+
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: sessionID,
+            observation: .streamReset,
+            at: now.addingTimeInterval(4)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID.isEmpty == true)
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: hookStart,
+            at: now.addingTimeInterval(5)
+        ))
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "SubagentStop",
+                threadID: nil,
+                turnID: nil,
+                promptFingerprint: nil,
+                status: nil,
+                nativeSessionID: nil,
+                sessionFilePath: nil,
+                cwd: nil,
+                subagentID: "hook-agent"
+            ),
+            at: now.addingTimeInterval(6)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID["hook-agent"] == nil)
     }
 
     @Test

@@ -566,10 +566,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         case .sessionConfigured:
             return
         case .backgroundActivityStarted:
-            handleCodexBackgroundActivityEvent(event, sessionID: sessionID)
+            forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
             return
         case .backgroundActivityFinished:
-            handleCodexBackgroundActivityEvent(event, sessionID: sessionID)
+            forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
             return
         case .turnContextUpdated:
             sessionRuntimeStore.recordCodexOverrideTurnContext(
@@ -659,74 +659,27 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         )
     }
 
-    private func handleCodexBackgroundActivityEvent(
+    private func forwardCodexBackgroundActivityObservation(
         _ event: CodexSessionLogEvent,
         sessionID: String
     ) {
-        guard let sessionRuntimeStore else {
+        guard let sessionRuntimeStore,
+              let activity = event.backgroundActivity else {
             return
         }
 
-        if sessionRuntimeStore.codexSessionLogFallbackEventsAreEnabled(sessionID: sessionID) == false {
-            enrichCodexHookBackgroundActivity(
-                from: event,
-                sessionID: sessionID,
-                sessionRuntimeStore: sessionRuntimeStore
-            )
-            return
-        }
-
+        let observation: CodexSubagentRolloutObservation
         switch event.kind {
         case .backgroundActivityStarted:
-            guard let activity = event.backgroundActivity else {
-                return
-            }
-            let now = nowProvider()
-            _ = sessionRuntimeStore.updateBackgroundActivity(
-                sessionID: sessionID,
-                activity: SessionBackgroundActivity(
-                    id: activity.activityID,
-                    kind: activity.kind,
-                    displayName: activity.displayName,
-                    command: activity.command,
-                    startedAt: now,
-                    lastUpdatedAt: now
-                ),
-                at: now
-            )
-
+            observation = .started(activity)
         case .backgroundActivityFinished:
-            guard let activity = event.backgroundActivity else {
-                return
-            }
-            _ = sessionRuntimeStore.finishBackgroundActivity(
-                sessionID: sessionID,
-                activityID: activity.activityID,
-                at: nowProvider()
-            )
-
+            observation = .finished(activity)
         default:
             return
         }
-    }
-
-    private func enrichCodexHookBackgroundActivity(
-        from event: CodexSessionLogEvent,
-        sessionID: String,
-        sessionRuntimeStore: SessionRuntimeStore
-    ) {
-        guard event.kind == .backgroundActivityStarted,
-              let activity = event.backgroundActivity,
-              let toolUseID = normalizedNonEmpty(activity.spawnToolUseID),
-              let agentID = normalizedNonEmpty(activity.hookActivityID) else {
-            return
-        }
-
-        _ = sessionRuntimeStore.recordCodexSubagentRolloutMetadata(
+        _ = sessionRuntimeStore.handleCodexSubagentRolloutObservation(
             sessionID: sessionID,
-            toolUseID: toolUseID,
-            agentID: agentID,
-            displayName: meaningfulCodexSubagentDisplayName(activity.displayName),
+            observation: observation,
             at: nowProvider()
         )
     }
@@ -787,16 +740,13 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let previousLogURL = codexRolloutWatchersBySessionID[sessionID]?.logURL
         desiredCodexRolloutLogURLsBySessionID[sessionID] = logURL
         if previousLogURL != nil,
-           previousLogURL != logURL,
-           sessionRuntimeStore?.codexSessionLogFallbackEventsAreEnabled(sessionID: sessionID) == true {
+           previousLogURL != logURL {
             // A replaced rollout claim means every subagent row sourced from the
-            // old file is stale (e.g. a restored pane briefly claimed the prior
-            // launch's rollout). The new file's replay rebuilds current state.
-            _ = sessionRuntimeStore?.syncBackgroundActivities(
+            // old file is stale in fallback mode. Hook authority retains its
+            // projected rows and correlation state across watcher replacement.
+            _ = sessionRuntimeStore?.handleCodexSubagentRolloutObservation(
                 sessionID: sessionID,
-                kind: .subagent,
-                entries: [],
-                pendingBackgroundTaskCount: 0,
+                observation: .streamReset,
                 at: nowProvider()
             )
         }
@@ -904,7 +854,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         }
         switch event.kind {
         case .backgroundActivityStarted, .backgroundActivityFinished:
-            handleCodexBackgroundActivityEvent(event, sessionID: sessionID)
+            forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
         default:
             return
         }
@@ -1073,12 +1023,4 @@ private func normalizedNonEmpty(_ value: String?) -> String? {
         return nil
     }
     return trimmed
-}
-
-private func meaningfulCodexSubagentDisplayName(_ value: String?) -> String? {
-    guard let normalized = normalizedNonEmpty(value),
-          normalized.caseInsensitiveCompare("default") != .orderedSame else {
-        return nil
-    }
-    return normalized
 }
