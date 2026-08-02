@@ -98,6 +98,14 @@ final class CodexLegacyScenarioDriver {
         )
     }
 
+    func setStatus(_ status: SessionStatus) {
+        sessionStore.updateStatus(
+            sessionID: sessionID,
+            status: status,
+            at: nextEventDate()
+        )
+    }
+
     @discardableResult
     func sendHookEvent(
         name: String,
