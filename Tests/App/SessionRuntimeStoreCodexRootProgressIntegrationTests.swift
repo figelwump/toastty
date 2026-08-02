@@ -338,6 +338,160 @@ struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
         }
     }
 
+    @Test
+    func visibleTextProgressProjectsExactDetailAndSkipsDuplicateWrite() throws {
+        let store = SessionRuntimeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_700_500_600)
+        let panelID = UUID()
+        startCodexSession(
+            in: store,
+            sessionID: "explicit-visible-progress",
+            panelID: panelID,
+            source: .hooks,
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "explicit-visible-progress",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Initial detail"),
+            at: startedAt
+        )
+        let expectedStatus = SessionStatus(
+            kind: .working,
+            summary: "Working",
+            detail: "Running exact visible-text tests"
+        )
+
+        #expect(store.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "• Running exact visible-text tests",
+            promptState: .busy,
+            at: startedAt.addingTimeInterval(1)
+        ))
+        let firstRecord = try #require(store.sessionRegistry.activeSession(for: panelID))
+        #expect(firstRecord.status == expectedStatus)
+        let firstUpdatedAt = try #require(firstRecord.statusUpdatedAt)
+
+        #expect(store.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "• Running exact visible-text tests",
+            promptState: .busy,
+            at: startedAt.addingTimeInterval(2)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(for: panelID)?.status == expectedStatus)
+        #expect(store.sessionRegistry.activeSession(for: panelID)?.statusUpdatedAt == firstUpdatedAt)
+    }
+
+    @Test
+    func visibleTextProgressCannotResurrectProtectedOrStoppedSession() throws {
+        let store = SessionRuntimeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_700_500_700)
+        let panelID = UUID()
+        startCodexSession(
+            in: store,
+            sessionID: "protected-visible-progress",
+            panelID: panelID,
+            source: .sessionLogFallback(reason: "test"),
+            at: startedAt
+        )
+        let protectedStatuses = [
+            SessionStatus(kind: .idle, summary: "Waiting", detail: "Preserve idle"),
+            SessionStatus(kind: .ready, summary: "Ready", detail: "Preserve ready"),
+            SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Preserve approval"),
+            SessionStatus(kind: .error, summary: "Error", detail: "Preserve error"),
+        ]
+        for (index, protectedStatus) in protectedStatuses.enumerated() {
+            let statusDate = startedAt.addingTimeInterval(TimeInterval(index + 1))
+            store.updateStatus(
+                sessionID: "protected-visible-progress",
+                status: protectedStatus,
+                at: statusDate
+            )
+
+            #expect(store.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+                panelID: panelID,
+                visibleText: "• Running stale visible-text work",
+                promptState: .busy,
+                at: statusDate.addingTimeInterval(0.5)
+            ) == false)
+            #expect(store.sessionRegistry.activeSession(for: panelID)?.status == protectedStatus)
+            #expect(store.sessionRegistry.activeSession(for: panelID)?.statusUpdatedAt == statusDate)
+        }
+
+        let working = SessionStatus(kind: .working, summary: "Working", detail: "Before stop")
+        let workingDate = startedAt.addingTimeInterval(10)
+        store.updateStatus(
+            sessionID: "protected-visible-progress",
+            status: working,
+            at: workingDate
+        )
+        store.stopSession(
+            sessionID: "protected-visible-progress",
+            at: workingDate.addingTimeInterval(1)
+        )
+
+        #expect(store.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "• Running stale visible-text work after stop",
+            promptState: .busy,
+            at: workingDate.addingTimeInterval(2)
+        ) == false)
+        let stoppedRecord = try #require(store.sessionRegistry.sessionsByID["protected-visible-progress"])
+        #expect(stoppedRecord.status == working)
+        #expect(stoppedRecord.statusUpdatedAt == workingDate)
+        #expect(stoppedRecord.isActive == false)
+    }
+
+    @Test
+    func explicitVisibleTextProgressClearsRecoveredFatalSuppressionInLegacyOrder() {
+        let store = SessionRuntimeStore()
+        let startedAt = Date(timeIntervalSince1970: 1_700_500_800)
+        let panelID = UUID()
+        let usageLimitBanner = """
+        You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later.
+        """
+        startCodexSession(
+            in: store,
+            sessionID: "explicit-visible-suppression",
+            panelID: panelID,
+            source: .hooks,
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "explicit-visible-suppression",
+            status: SessionStatus(kind: .error, summary: "Error", detail: usageLimitBanner),
+            at: startedAt
+        )
+        store.updateStatus(
+            sessionID: "explicit-visible-suppression",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Recovered"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(store.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: usageLimitBanner,
+            promptState: .busy,
+            at: startedAt.addingTimeInterval(2)
+        ) == false)
+        #expect(store.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "• Running after recovery",
+            promptState: .busy,
+            at: startedAt.addingTimeInterval(3)
+        ))
+        #expect(store.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: usageLimitBanner,
+            promptState: .busy,
+            at: startedAt.addingTimeInterval(4)
+        ))
+        #expect(store.sessionRegistry.activeSession(for: panelID)?.status == SessionStatus(
+            kind: .error,
+            summary: "Error",
+            detail: usageLimitBanner
+        ))
+    }
+
     private func startCodexSession(
         in store: SessionRuntimeStore,
         sessionID: String,

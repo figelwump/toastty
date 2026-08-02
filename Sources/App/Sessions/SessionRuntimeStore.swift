@@ -3752,6 +3752,17 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
+        if codexStatusTrackingSourceBySessionID[record.sessionID] != nil {
+            guard let detail = nextStatus.detail else {
+                return false
+            }
+            return applyCodexRootProgressObservation(
+                sessionID: record.sessionID,
+                observation: .visibleTextWorking(detail: detail),
+                at: now
+            )
+        }
+
         updateStatus(sessionID: record.sessionID, status: nextStatus, at: now)
         return true
     }
