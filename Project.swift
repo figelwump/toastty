@@ -189,6 +189,7 @@ func applyGhosttyVariantLinkSettings(
 }
 
 var appDependencies: [TargetDependency] = [
+    .target(name: "CodexReconciliation"),
     .target(name: "CoreState"),
     .target(name: "toastty"),
     .target(name: "toastty-agent-shim"),
@@ -306,6 +307,7 @@ if let developmentTeam {
 }
 var appTestDependencies: [TargetDependency] = [
     .target(name: "ToasttyApp"),
+    .target(name: "CodexReconciliation"),
     .target(name: "CoreState"),
 ]
 
@@ -416,6 +418,15 @@ let project = Project(
             settings: appTargetSettings
         ),
         .target(
+            name: "CodexReconciliation",
+            destinations: .macOS,
+            product: .staticFramework,
+            bundleId: "com.GiantThings.toastty.codex-reconciliation",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Sources/CodexReconciliation/**"]
+        ),
+        .target(
             name: "CoreState",
             destinations: .macOS,
             product: .staticFramework,
@@ -462,6 +473,18 @@ let project = Project(
             sources: ["Sources/AgentShim/**"],
             dependencies: [
                 .target(name: "CoreState"),
+            ]
+        ),
+        .target(
+            name: "CodexReconciliationTests",
+            destinations: .macOS,
+            product: .unitTests,
+            bundleId: "com.GiantThings.toastty.codex-reconciliation.tests",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Tests/CodexReconciliation/**"],
+            dependencies: [
+                .target(name: "CodexReconciliation"),
             ]
         ),
         .target(
@@ -512,6 +535,7 @@ let project = Project(
             ),
             testAction: .targets(
                 [
+                    .testableTarget(target: .target("CodexReconciliationTests")),
                     .testableTarget(target: .target("CoreStateTests")),
                     .testableTarget(target: .target("ToasttyCLITests")),
                     .testableTarget(target: .target("ToasttyAppTests")),

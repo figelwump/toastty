@@ -1,3 +1,4 @@
+import CodexReconciliation
 import CoreState
 import Foundation
 
@@ -64,6 +65,16 @@ struct ManagedAgentNativeSessionScanSummary: Equatable, Sendable {
     }
 }
 
+struct ManagedAgentNativeSessionOwnershipState: Equatable, Sendable {
+    var ownerByNativeSessionID: [NativeSessionID: NativeSessionOwnerSnapshot]
+    var conflictedNativeSessionIDs: Set<NativeSessionID>
+
+    static let empty = ManagedAgentNativeSessionOwnershipState(
+        ownerByNativeSessionID: [:],
+        conflictedNativeSessionIDs: []
+    )
+}
+
 struct ManagedAgentNativeSessionResumeRecordOwner: Equatable, Sendable {
     var panelID: UUID
     var hasActiveSameAgentSession: Bool
@@ -72,6 +83,13 @@ struct ManagedAgentNativeSessionResumeRecordOwner: Equatable, Sendable {
         self.panelID = panelID
         self.hasActiveSameAgentSession = hasActiveSameAgentSession
     }
+}
+
+private struct ManagedAgentNativeSessionPendingClaim {
+    var observation: ManagedAgentNativeSessionObservationContext
+    var candidate: ManagedAgentNativeSessionCandidate
+    var claim: NativeSessionClaim
+    var scanSummary: ManagedAgentNativeSessionScanSummary
 }
 
 protocol ManagedAgentNativeSessionScanning: Sendable {
@@ -117,6 +135,7 @@ struct ManagedAgentNativeSessionObserverTiming {
 final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSessionObserving {
     typealias ResumeRecordHandler = @MainActor (String, UUID, ManagedAgentResumeRecord) -> Void
 
+    typealias OwnershipStateProvider = @MainActor () -> ManagedAgentNativeSessionOwnershipState
     typealias ResumeRecordOwnerResolver = @MainActor (AgentKind, String) -> ManagedAgentNativeSessionResumeRecordOwner?
 
     private var observationsBySessionID: [String: ManagedAgentNativeSessionObservationContext] = [:]
@@ -128,6 +147,9 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
     private let scanner: any ManagedAgentNativeSessionScanning
     private let timing: ManagedAgentNativeSessionObserverTiming
     private let nowProvider: @Sendable () -> Date
+    private let ownershipStateProvider: OwnershipStateProvider
+    /// Temporary legacy policy input for Claude. Codex ownership decisions are
+    /// exclusively made by CodexReconciliation in this migration slice.
     private let resumeRecordOwnerResolver: ResumeRecordOwnerResolver?
     private let recordHandler: ResumeRecordHandler
 
@@ -135,12 +157,14 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         scanner: any ManagedAgentNativeSessionScanning,
         timing: ManagedAgentNativeSessionObserverTiming = ManagedAgentNativeSessionObserverTiming(),
         nowProvider: @escaping @Sendable () -> Date = Date.init,
+        ownershipStateProvider: @escaping OwnershipStateProvider = { .empty },
         resumeRecordOwnerResolver: ResumeRecordOwnerResolver? = nil,
         recordHandler: @escaping ResumeRecordHandler
     ) {
         self.scanner = scanner
         self.timing = timing
         self.nowProvider = nowProvider
+        self.ownershipStateProvider = ownershipStateProvider
         self.resumeRecordOwnerResolver = resumeRecordOwnerResolver
         self.recordHandler = recordHandler
     }
@@ -154,6 +178,13 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         self.init(
             scanner: ManagedAgentNativeSessionFileScanner(),
             nowProvider: nowProvider,
+            ownershipStateProvider: { [weak store, weak sessionRuntimeStore] in
+                guard let appState = store?.state else { return .empty }
+                return Self.codexOwnershipState(
+                    appState: appState,
+                    sessionRegistry: sessionRuntimeStore?.sessionRegistry
+                )
+            },
             resumeRecordOwnerResolver: { [weak store, weak sessionRuntimeStore] agent, nativeSessionID in
                 guard let panelID = store?.state.panelIDOwningManagedAgentResumeRecord(
                     agent: agent,
@@ -197,6 +228,74 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         var scopedRecord = record
         scopedRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
         return scopedRecord
+    }
+
+    /// Builds the complete provider-scoped ownership half of the evaluator
+    /// snapshot. Persisted records are authoritative for native IDs and paths;
+    /// the runtime registry classifies their managed owners as active, inactive,
+    /// or no longer retained. Duplicate panel owners fail closed explicitly.
+    static func codexOwnershipState(
+        appState: AppState,
+        sessionRegistry: SessionRegistry?
+    ) -> ManagedAgentNativeSessionOwnershipState {
+        var persistedRecordsByNativeSessionID: [
+            NativeSessionID: [UUID: ManagedAgentResumeRecord]
+        ] = [:]
+        for workspace in appState.workspacesByID.values {
+            for (panelID, panelState) in workspace.allPanelsByID {
+                guard case .terminal(let terminalState) = panelState,
+                      let record = terminalState.resumeRecord,
+                      record.agent == .codex,
+                      let nativeSessionID = NativeSessionID(record.nativeSessionID) else {
+                    continue
+                }
+                persistedRecordsByNativeSessionID[nativeSessionID, default: [:]][panelID] = record
+            }
+        }
+
+        var ownerByNativeSessionID: [NativeSessionID: NativeSessionOwnerSnapshot] = [:]
+        var conflictedNativeSessionIDs = Set<NativeSessionID>()
+        for (nativeSessionID, recordsByPanelID) in persistedRecordsByNativeSessionID {
+            guard recordsByPanelID.count == 1,
+                  let (panelID, record) = recordsByPanelID.first else {
+                conflictedNativeSessionIDs.insert(nativeSessionID)
+                continue
+            }
+            let rolloutPath = Self.normalizedPath(record.sessionFilePath).flatMap(RolloutPath.init)
+            if let activeSession = sessionRegistry?.activeSession(for: panelID),
+               activeSession.agent == .codex,
+               let managedSessionID = ManagedSessionID(activeSession.sessionID) {
+                ownerByNativeSessionID[nativeSessionID] = .activeManaged(
+                    managedSessionID: managedSessionID,
+                    rolloutPath: rolloutPath
+                )
+                continue
+            }
+            let previousSession = sessionRegistry?.sessionsByID.values
+                .filter { $0.panelID == panelID && $0.agent == .codex }
+                .max { lhs, rhs in
+                    if lhs.updatedAt == rhs.updatedAt {
+                        return lhs.sessionID < rhs.sessionID
+                    }
+                    return lhs.updatedAt < rhs.updatedAt
+                }
+            if let previousSession,
+               let managedSessionID = ManagedSessionID(previousSession.sessionID) {
+                ownerByNativeSessionID[nativeSessionID] = .inactivePreviousManaged(
+                    managedSessionID: managedSessionID,
+                    rolloutPath: rolloutPath
+                )
+            } else {
+                ownerByNativeSessionID[nativeSessionID] = .inactivePersistedClaim(
+                    rolloutPath: rolloutPath
+                )
+            }
+        }
+
+        return ManagedAgentNativeSessionOwnershipState(
+            ownerByNativeSessionID: ownerByNativeSessionID,
+            conflictedNativeSessionIDs: conflictedNativeSessionIDs
+        )
     }
 
     deinit {
@@ -311,7 +410,8 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
     private func evaluatePendingObservations() async {
         guard observationsBySessionID.isEmpty == false else { return }
 
-        var candidateBySessionID: [String: ManagedAgentNativeSessionCandidate] = [:]
+        var pendingCodexClaims: [ManagedAgentNativeSessionPendingClaim] = []
+        var legacyClaudeCandidateBySessionID: [String: ManagedAgentNativeSessionCandidate] = [:]
         for observation in observationsBySessionID.values {
             let result = await scanner.scan(for: observation)
             // The observation may have been cancelled (e.g. by a hook-driven
@@ -322,48 +422,144 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             }
             scanCountBySessionID[observation.managedSessionID, default: 0] += 1
             latestScanSummaryBySessionID[observation.managedSessionID] = result.summary
-            var candidates = result.candidates
-            if let expectedNativeSessionID = observation.expectedNativeSessionID {
-                candidates = candidates.filter { candidate in
-                    candidate.nativeSessionID.caseInsensitiveCompare(expectedNativeSessionID) == .orderedSame
-                }
-                if candidates.isEmpty,
-                   result.candidates.isEmpty == false,
-                   observation.didLogExpectedNativeSessionIDMismatch == false {
-                    observationsBySessionID[observation.managedSessionID]?.didLogExpectedNativeSessionIDMismatch = true
-                    ToasttyLog.info(
-                        "Discarded scanned native session candidates that do not match the expected resume session",
-                        category: .terminal,
-                        metadata: [
-                            "session_id": observation.managedSessionID,
-                            "agent": observation.agent.rawValue,
-                            "panel_id": observation.panelID.uuidString,
-                            "expected_native_session_id": expectedNativeSessionID,
-                            "discarded_candidate_count": String(result.candidates.count),
-                        ]
-                    )
-                }
+            if observation.agent == .claude {
+                collectLegacyClaudeCandidate(
+                    result,
+                    observation: observation,
+                    into: &legacyClaudeCandidateBySessionID
+                )
+                continue
             }
-            if candidates.count == 1 {
-                candidateBySessionID[observation.managedSessionID] = candidates[0]
-            } else if candidates.count > 1 {
-                var metadata = [
-                    "session_id": observation.managedSessionID,
-                    "agent": observation.agent.rawValue,
-                    "panel_id": observation.panelID.uuidString,
-                    "cwd": observation.cwd,
-                    "candidate_count": String(candidates.count),
-                    "scan_count": String(scanCountBySessionID[observation.managedSessionID] ?? 0),
-                ]
-                metadata.merge(result.summary.loggingMetadata) { _, new in new }
-                ToasttyLog.info(
-                    "Leaving managed agent resume record unchanged because native session observation is ambiguous",
-                    category: .terminal,
-                    metadata: metadata
+            guard observation.agent == .codex else { continue }
+            guard let managedSessionID = ManagedSessionID(observation.managedSessionID),
+                  let source = NativeSessionClaimSource("native-session-file-scan") else {
+                continue
+            }
+            for candidate in result.candidates where candidate.agent == observation.agent {
+                guard let nativeSessionID = NativeSessionID(candidate.nativeSessionID),
+                      let normalizedSessionFilePath = Self.normalizedPath(candidate.sessionFilePath),
+                      let rolloutPath = RolloutPath(normalizedSessionFilePath) else {
+                    continue
+                }
+                pendingCodexClaims.append(
+                    ManagedAgentNativeSessionPendingClaim(
+                        observation: observation,
+                        candidate: candidate,
+                        claim: NativeSessionClaim(
+                            managedSessionID: managedSessionID,
+                            nativeSessionID: nativeSessionID,
+                            rolloutPath: rolloutPath,
+                            source: source
+                        ),
+                        scanSummary: result.summary
+                    )
                 )
             }
         }
 
+        // Evaluate every claim against one complete point-in-time snapshot
+        // before applying any accepted result. Ambiguous groups therefore
+        // cannot partially update resume records based on iteration order.
+        let snapshot = codexReconciliationSnapshot()
+        let decisions = NativeSessionClaimEvaluator.evaluate(
+            claims: pendingCodexClaims.map(\.claim),
+            snapshot: snapshot
+        )
+        let evaluatedClaims = Array(zip(pendingCodexClaims, decisions))
+
+        logRejectedClaims(evaluatedClaims)
+
+        var appliedBindings = Set<AcceptedNativeSessionBinding>()
+        for (pending, decision) in evaluatedClaims {
+            guard case .accepted(let binding) = decision,
+                  appliedBindings.insert(binding).inserted else {
+                continue
+            }
+            let managedSessionID = pending.observation.managedSessionID
+            guard let observation = observationsBySessionID[managedSessionID] else { continue }
+            observationsBySessionID.removeValue(forKey: managedSessionID)
+            scanCountBySessionID.removeValue(forKey: managedSessionID)
+            latestScanSummaryBySessionID.removeValue(forKey: managedSessionID)
+            refusedOwnedClaimKeysBySessionID.removeValue(forKey: managedSessionID)
+            let record = ManagedAgentResumeRecord(
+                agent: pending.candidate.agent,
+                nativeSessionID: binding.nativeSessionID.rawValue,
+                sessionFilePath: binding.rolloutPath?.rawValue ?? pending.candidate.sessionFilePath,
+                cwd: pending.candidate.cwd,
+                capturedAt: nowProvider()
+            )
+            recordHandler(managedSessionID, observation.panelID, record)
+            ToasttyLog.info(
+                "Captured managed agent native resume record",
+                category: .terminal,
+                metadata: [
+                    "session_id": managedSessionID,
+                    "agent": pending.candidate.agent.rawValue,
+                    "panel_id": observation.panelID.uuidString,
+                    "native_session_id": binding.nativeSessionID.rawValue,
+                    "session_file": binding.rolloutPath?.rawValue ?? pending.candidate.sessionFilePath,
+                    "cwd": pending.candidate.cwd,
+                ]
+            )
+        }
+
+        applyLegacyClaudeCandidates(legacyClaudeCandidateBySessionID)
+    }
+
+    /// Claude remains on the pre-reconciliation claim policy during the
+    /// provider-by-provider migration. Keep this behavior byte-for-byte scoped
+    /// here; Codex never enters this path.
+    private func collectLegacyClaudeCandidate(
+        _ result: ManagedAgentNativeSessionScanResult,
+        observation: ManagedAgentNativeSessionObservationContext,
+        into candidateBySessionID: inout [String: ManagedAgentNativeSessionCandidate]
+    ) {
+        var candidates = result.candidates
+        if let expectedNativeSessionID = observation.expectedNativeSessionID {
+            candidates = candidates.filter { candidate in
+                candidate.nativeSessionID.caseInsensitiveCompare(expectedNativeSessionID) == .orderedSame
+            }
+            if candidates.isEmpty,
+               result.candidates.isEmpty == false,
+               observation.didLogExpectedNativeSessionIDMismatch == false {
+                observationsBySessionID[observation.managedSessionID]?.didLogExpectedNativeSessionIDMismatch = true
+                ToasttyLog.info(
+                    "Discarded scanned native session candidates that do not match the expected resume session",
+                    category: .terminal,
+                    metadata: [
+                        "session_id": observation.managedSessionID,
+                        "agent": observation.agent.rawValue,
+                        "panel_id": observation.panelID.uuidString,
+                        "expected_native_session_id": expectedNativeSessionID,
+                        "discarded_candidate_count": String(result.candidates.count),
+                    ]
+                )
+            }
+        }
+        if candidates.count == 1 {
+            candidateBySessionID[observation.managedSessionID] = candidates[0]
+        } else if candidates.count > 1 {
+            var metadata = [
+                "session_id": observation.managedSessionID,
+                "agent": observation.agent.rawValue,
+                "panel_id": observation.panelID.uuidString,
+                "cwd": observation.cwd,
+                "candidate_count": String(candidates.count),
+                "scan_count": String(scanCountBySessionID[observation.managedSessionID] ?? 0),
+            ]
+            metadata.merge(result.summary.loggingMetadata) { _, new in new }
+            ToasttyLog.info(
+                "Leaving managed agent resume record unchanged because native session observation is ambiguous",
+                category: .terminal,
+                metadata: metadata
+            )
+        }
+    }
+
+    private func applyLegacyClaudeCandidates(
+        _ scannedCandidatesBySessionID: [String: ManagedAgentNativeSessionCandidate]
+    ) {
+        var candidateBySessionID = scannedCandidatesBySessionID
         let groupedByClaim = Dictionary(grouping: candidateBySessionID) { entry in
             entry.value.claimKey
         }
@@ -384,22 +580,15 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
         }
 
         for (managedSessionID, candidate) in candidateBySessionID {
-            guard let observation = observationsBySessionID[managedSessionID] else {
+            guard let observation = observationsBySessionID[managedSessionID],
+                  observation.agent == .claude else {
                 continue
             }
-            // A resume-shaped launch already names this native session in its
-            // argv (the expected-ID filter guarantees the candidate matches),
-            // which lets this pane reclaim a stale record elsewhere. It still
-            // must not take a record from another live same-agent owner.
             if let owner = resumeRecordOwnerResolver?(candidate.agent, candidate.nativeSessionID),
                owner.panelID != observation.panelID,
                observation.expectedNativeSessionID == nil || owner.hasActiveSameAgentSession {
-                // Another panel's resume record already claims this native
-                // session; capturing it here would strip that panel's record
-                // through duplicate pruning. Expected-ID launches may reclaim
-                // stale records, but not records owned by a live same-agent
-                // session.
-                if refusedOwnedClaimKeysBySessionID[managedSessionID, default: []].insert(candidate.claimKey).inserted {
+                if refusedOwnedClaimKeysBySessionID[managedSessionID, default: []]
+                    .insert(candidate.claimKey).inserted {
                     ToasttyLog.info(
                         "Leaving managed agent resume record unchanged because the native session is owned by another panel",
                         category: .terminal,
@@ -416,6 +605,7 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
                 }
                 continue
             }
+
             observationsBySessionID.removeValue(forKey: managedSessionID)
             scanCountBySessionID.removeValue(forKey: managedSessionID)
             latestScanSummaryBySessionID.removeValue(forKey: managedSessionID)
@@ -440,6 +630,113 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
                     "cwd": candidate.cwd,
                 ]
             )
+        }
+    }
+
+    private func codexReconciliationSnapshot() -> NativeSessionOwnershipSnapshot {
+        let ownershipState = ownershipStateProvider()
+        var expectedByManagedSessionID: [ManagedSessionID: NativeSessionID] = [:]
+        for observation in observationsBySessionID.values where observation.agent == .codex {
+            guard let expectedRawValue = observation.expectedNativeSessionID,
+                  let managedSessionID = ManagedSessionID(observation.managedSessionID),
+                  let nativeSessionID = NativeSessionID(expectedRawValue) else {
+                continue
+            }
+            expectedByManagedSessionID[managedSessionID] = nativeSessionID
+        }
+        return NativeSessionOwnershipSnapshot(
+            ownerByNativeSessionID: ownershipState.ownerByNativeSessionID,
+            expectedNativeSessionIDByManagedSessionID: expectedByManagedSessionID,
+            conflictedNativeSessionIDs: ownershipState.conflictedNativeSessionIDs
+        )
+    }
+
+    private func logRejectedClaims(
+        _ evaluatedClaims: [(ManagedAgentNativeSessionPendingClaim, NativeSessionClaimDecision)]
+    ) {
+        let byManagedSession = Dictionary(grouping: evaluatedClaims) { entry in
+            entry.0.observation.managedSessionID
+        }
+        for (managedSessionID, entries) in byManagedSession {
+            guard let first = entries.first else { continue }
+            let decisions = entries.map(\.1)
+            if decisions.allSatisfy({ $0 == .rejected(.expectationMismatch) }),
+               first.0.observation.didLogExpectedNativeSessionIDMismatch == false {
+                observationsBySessionID[managedSessionID]?.didLogExpectedNativeSessionIDMismatch = true
+                ToasttyLog.info(
+                    "Discarded scanned native session candidates that do not match the expected resume session",
+                    category: .terminal,
+                    metadata: [
+                        "session_id": managedSessionID,
+                        "agent": first.0.observation.agent.rawValue,
+                        "panel_id": first.0.observation.panelID.uuidString,
+                        "expected_native_session_id": first.0.observation.expectedNativeSessionID ?? "none",
+                        "discarded_candidate_count": String(entries.count),
+                    ]
+                )
+            }
+
+            let hasLocalAmbiguity = decisions.contains(
+                .rejected(.managedSessionOfferedMultipleNativeSessions)
+            ) || decisions.contains(.rejected(.conflictingSimultaneousRolloutPaths))
+            if hasLocalAmbiguity {
+                var metadata = [
+                    "session_id": managedSessionID,
+                    "agent": first.0.observation.agent.rawValue,
+                    "panel_id": first.0.observation.panelID.uuidString,
+                    "cwd": first.0.observation.cwd,
+                    "candidate_count": String(entries.count),
+                    "scan_count": String(scanCountBySessionID[managedSessionID] ?? 0),
+                ]
+                metadata.merge(first.0.scanSummary.loggingMetadata) { _, new in new }
+                ToasttyLog.info(
+                    "Leaving managed agent resume record unchanged because native session observation is ambiguous",
+                    category: .terminal,
+                    metadata: metadata
+                )
+            }
+        }
+
+        let multiObserverClaims = evaluatedClaims.filter { entry in
+            entry.1 == .rejected(.nativeSessionOfferedToMultipleManagedSessions)
+        }
+        for entries in Dictionary(grouping: multiObserverClaims, by: { $0.0.claim.nativeSessionID }).values {
+            ToasttyLog.info(
+                "Leaving managed agent resume records unchanged because a native session matched multiple observers",
+                category: .terminal,
+                metadata: [
+                    "session_ids": entries.map { $0.0.observation.managedSessionID }.sorted().joined(separator: ","),
+                    "candidate_session_id": entries.first?.0.candidate.nativeSessionID ?? "unknown",
+                    "candidate_file": entries.first?.0.candidate.sessionFilePath ?? "unknown",
+                ]
+            )
+        }
+
+        for (pending, decision) in evaluatedClaims {
+            let reason: NativeSessionClaimRejectionReason
+            guard case .rejected(let rejectedReason) = decision else { continue }
+            reason = rejectedReason
+            guard reason == .ownedByDifferentActiveManagedSession ||
+                    reason == .inactiveOwnerRequiresMatchingResumeExpectation ||
+                    reason == .conflictingSnapshotOwners else {
+                continue
+            }
+            let managedSessionID = pending.observation.managedSessionID
+            if refusedOwnedClaimKeysBySessionID[managedSessionID, default: []]
+                .insert(pending.candidate.claimKey).inserted {
+                ToasttyLog.info(
+                    "Leaving managed agent resume record unchanged because the native session ownership claim was rejected",
+                    category: .terminal,
+                    metadata: [
+                        "session_id": managedSessionID,
+                        "agent": pending.candidate.agent.rawValue,
+                        "panel_id": pending.observation.panelID.uuidString,
+                        "native_session_id": pending.candidate.nativeSessionID,
+                        "expected_native_session_id": pending.observation.expectedNativeSessionID ?? "none",
+                        "rejection_reason": String(describing: reason),
+                    ]
+                )
+            }
         }
     }
 

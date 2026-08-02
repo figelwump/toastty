@@ -1,3 +1,4 @@
+import CodexReconciliation
 import CoreState
 import Foundation
 import Testing
@@ -58,6 +59,114 @@ struct ManagedAgentNativeSessionObserverTests {
         )
 
         #expect(scopedRecord == nil)
+    }
+
+    @Test
+    func ownershipSnapshotClassifiesPersistedActiveAndPreviousOwners() throws {
+        let fixture = makeResumeRecordAppState(
+            nativeSessionIDs: ["019e2823-f520-7690-91b6-cd84eb52dd8a"]
+        )
+        let nativeSessionID = try #require(NativeSessionID("019e2823-f520-7690-91b6-cd84eb52dd8a"))
+        let rolloutPath = try #require(RolloutPath("/tmp/codex-0.jsonl"))
+
+        let persistedOnly = ManagedAgentNativeSessionObserverRegistry.codexOwnershipState(
+            appState: fixture.appState,
+            sessionRegistry: nil
+        )
+        #expect(
+            persistedOnly.ownerByNativeSessionID[nativeSessionID]
+                == .inactivePersistedClaim(rolloutPath: rolloutPath)
+        )
+
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var sessionRegistry = SessionRegistry()
+        sessionRegistry.startSession(
+            sessionID: "managed-1",
+            agent: .codex,
+            panelID: fixture.panelIDs[0],
+            windowID: UUID(),
+            workspaceID: fixture.workspaceID,
+            cwd: "/tmp/repo",
+            repoRoot: "/tmp/repo",
+            at: now
+        )
+        let active = ManagedAgentNativeSessionObserverRegistry.codexOwnershipState(
+            appState: fixture.appState,
+            sessionRegistry: sessionRegistry
+        )
+        #expect(
+            active.ownerByNativeSessionID[nativeSessionID]
+                == .activeManaged(
+                    managedSessionID: ManagedSessionID("managed-1")!,
+                    rolloutPath: rolloutPath
+                )
+        )
+
+        sessionRegistry.stopSession(sessionID: "managed-1", at: now.addingTimeInterval(1))
+        let inactive = ManagedAgentNativeSessionObserverRegistry.codexOwnershipState(
+            appState: fixture.appState,
+            sessionRegistry: sessionRegistry
+        )
+        #expect(
+            inactive.ownerByNativeSessionID[nativeSessionID]
+                == .inactivePreviousManaged(
+                    managedSessionID: ManagedSessionID("managed-1")!,
+                    rolloutPath: rolloutPath
+                )
+        )
+    }
+
+    @Test
+    func ownershipSnapshotMarksDuplicatePersistedOwnersAsConflicted() throws {
+        let nativeSessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+        let fixture = makeResumeRecordAppState(nativeSessionIDs: [nativeSessionID, nativeSessionID])
+        let typedNativeSessionID = try #require(NativeSessionID(nativeSessionID))
+
+        let ownershipState = ManagedAgentNativeSessionObserverRegistry.codexOwnershipState(
+            appState: fixture.appState,
+            sessionRegistry: nil
+        )
+
+        #expect(ownershipState.ownerByNativeSessionID[typedNativeSessionID] == nil)
+        #expect(ownershipState.conflictedNativeSessionIDs == [typedNativeSessionID])
+    }
+
+    @Test
+    func ownershipSnapshotDoesNotMixProviderNamespaces() throws {
+        let nativeSessionID = "shared-provider-spelling"
+        var fixture = makeResumeRecordAppState(nativeSessionIDs: [nativeSessionID])
+        let workspaceID = fixture.workspaceID
+        var workspace = fixture.appState.workspacesByID[workspaceID]!
+        let tabID = workspace.resolvedSelectedTabID!
+        var tab = workspace.tabsByID[tabID]!
+        tab.panels[UUID()] = .terminal(
+            TerminalPanelState(
+                title: "Claude",
+                shell: "zsh",
+                cwd: "/tmp/repo",
+                resumeRecord: ManagedAgentResumeRecord(
+                    agent: .claude,
+                    nativeSessionID: nativeSessionID,
+                    sessionFilePath: "/tmp/claude.jsonl",
+                    cwd: "/tmp/repo",
+                    capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+                )
+            )
+        )
+        workspace.tabsByID[tabID] = tab
+        fixture.appState.workspacesByID[workspaceID] = workspace
+        let typedNativeSessionID = try #require(NativeSessionID(nativeSessionID))
+
+        let codexOwnership = ManagedAgentNativeSessionObserverRegistry.codexOwnershipState(
+            appState: fixture.appState,
+            sessionRegistry: nil
+        )
+
+        #expect(codexOwnership.conflictedNativeSessionIDs.isEmpty)
+        #expect(
+            codexOwnership.ownerByNativeSessionID[typedNativeSessionID]
+                == .inactivePersistedClaim(rolloutPath: RolloutPath("/tmp/codex-0.jsonl"))
+        )
     }
 
     @Test
@@ -592,6 +701,246 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
+    func acceptedSiblingIsNotAppliedAfterRecordHandlerCancelsIt() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let candidates = [
+            "managed-1": ManagedAgentNativeSessionCandidate(
+                agent: .codex,
+                nativeSessionID: "native-1",
+                sessionFilePath: "/tmp/codex-1.jsonl",
+                cwd: "/tmp/repo",
+                updatedAt: launchStart.addingTimeInterval(1)
+            ),
+            "managed-2": ManagedAgentNativeSessionCandidate(
+                agent: .codex,
+                nativeSessionID: "native-2",
+                sessionFilePath: "/tmp/codex-2.jsonl",
+                cwd: "/tmp/repo",
+                updatedAt: launchStart.addingTimeInterval(1)
+            ),
+        ]
+        let scanner = StubNativeSessionScanner(
+            candidatesByManagedSessionID: candidates.mapValues { [$0] }
+        )
+        var recordCount = 0
+        let registryBox = ManagedAgentNativeSessionObserverRegistryBox()
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { acceptedSessionID, _, _ in
+                recordCount += 1
+                let siblingSessionID = acceptedSessionID == "managed-1" ? "managed-2" : "managed-1"
+                registryBox.value?.cancelObservation(sessionID: siblingSessionID)
+            }
+        )
+        registryBox.value = registry
+        for managedSessionID in candidates.keys {
+            registry.startObservation(
+                ManagedAgentNativeSessionObservationContext(
+                    managedSessionID: managedSessionID,
+                    agent: .codex,
+                    panelID: UUID(),
+                    cwd: "/tmp/repo",
+                    launchStart: launchStart
+                )
+            )
+        }
+
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 1)
+        #expect(registry.activeObservationCountForTesting == 0)
+    }
+
+    @Test
+    func exactDuplicateCandidatesAreAppliedOnce() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = StubNativeSessionScanner(
+            candidatesByManagedSessionID: ["managed-1": [candidate, candidate]]
+        )
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { _, _, _ in recordCount += 1 }
+        )
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: UUID(),
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 1)
+        #expect(registry.activeObservationCountForTesting == 0)
+    }
+
+    @Test
+    func claudeExactDuplicateCandidatesRemainOnLegacyAmbiguityPolicy() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .claude,
+            nativeSessionID: "claude-session-1",
+            sessionFilePath: "/tmp/claude-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = StubNativeSessionScanner(
+            candidatesByManagedSessionID: ["managed-claude": [candidate, candidate]]
+        )
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { _, _, _ in recordCount += 1 }
+        )
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-claude",
+                agent: .claude,
+                panelID: UUID(),
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 0)
+        #expect(registry.activeObservationCountForTesting == 1)
+    }
+
+    @Test
+    func claudeExpectedResumeStillReclaimsLegacyStaleOwner() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let observedPanelID = UUID()
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .claude,
+            nativeSessionID: "claude-session-1",
+            sessionFilePath: "/tmp/claude-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = StubNativeSessionScanner(
+            candidatesByManagedSessionID: ["managed-claude": [candidate]]
+        )
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            resumeRecordOwnerResolver: { _, _ in
+                ManagedAgentNativeSessionResumeRecordOwner(panelID: UUID())
+            },
+            recordHandler: { _, _, _ in recordCount += 1 }
+        )
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-claude",
+                agent: .claude,
+                panelID: observedPanelID,
+                cwd: "/tmp/repo",
+                launchStart: launchStart,
+                expectedNativeSessionID: candidate.nativeSessionID
+            )
+        )
+
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 1)
+        #expect(registry.activeObservationCountForTesting == 0)
+    }
+
+    @Test
+    func conflictingCandidatePathsRejectWithoutPartialMutation() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let nativeSessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
+        let candidates = ["one", "two"].map { suffix in
+            ManagedAgentNativeSessionCandidate(
+                agent: .codex,
+                nativeSessionID: nativeSessionID,
+                sessionFilePath: "/tmp/codex-\(suffix).jsonl",
+                cwd: "/tmp/repo",
+                updatedAt: launchStart.addingTimeInterval(1)
+            )
+        }
+        let scanner = StubNativeSessionScanner(
+            candidatesByManagedSessionID: ["managed-1": candidates]
+        )
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { _, _, _ in recordCount += 1 }
+        )
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: UUID(),
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 0)
+        #expect(registry.activeObservationCountForTesting == 1)
+    }
+
+    @Test
+    func conflictingPersistedOwnersRejectWithoutMutation() async {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let nativeSessionID = NativeSessionID(candidate.nativeSessionID)!
+        let scanner = StubNativeSessionScanner(candidatesByManagedSessionID: ["managed-1": [candidate]])
+        var recordCount = 0
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            ownershipStateProvider: {
+                ManagedAgentNativeSessionOwnershipState(
+                    ownerByNativeSessionID: [:],
+                    conflictedNativeSessionIDs: [nativeSessionID]
+                )
+            },
+            recordHandler: { _, _, _ in recordCount += 1 }
+        )
+        registry.startObservation(
+            ManagedAgentNativeSessionObservationContext(
+                managedSessionID: "managed-1",
+                agent: .codex,
+                panelID: UUID(),
+                cwd: "/tmp/repo",
+                launchStart: launchStart
+            )
+        )
+
+        await registry.evaluatePendingObservationsForTesting()
+
+        #expect(recordCount == 0)
+        #expect(registry.activeObservationCountForTesting == 1)
+    }
+
+    @Test
     func observerIgnoresCandidateThatDoesNotMatchExpectedNativeSessionID() async {
         let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
         let candidate = ManagedAgentNativeSessionCandidate(
@@ -677,7 +1026,6 @@ struct ManagedAgentNativeSessionObserverTests {
     @Test
     func observerRefusesCandidateOwnedByAnotherPanel() async {
         let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
-        let ownerPanelID = UUID()
         let observedPanelID = UUID()
         let candidate = ManagedAgentNativeSessionCandidate(
             agent: .codex,
@@ -691,8 +1039,11 @@ struct ManagedAgentNativeSessionObserverTests {
         let registry = ManagedAgentNativeSessionObserverRegistry(
             scanner: scanner,
             nowProvider: { launchStart.addingTimeInterval(2) },
-            resumeRecordOwnerResolver: { _, _ in
-                ManagedAgentNativeSessionResumeRecordOwner(panelID: ownerPanelID)
+            ownershipStateProvider: {
+                ownershipState(
+                    nativeSessionID: candidate.nativeSessionID,
+                    owner: .inactivePersistedClaim(rolloutPath: nil)
+                )
             },
             recordHandler: { _, _, _ in
                 recordCount += 1
@@ -731,8 +1082,14 @@ struct ManagedAgentNativeSessionObserverTests {
         let registry = ManagedAgentNativeSessionObserverRegistry(
             scanner: scanner,
             nowProvider: { launchStart.addingTimeInterval(2) },
-            resumeRecordOwnerResolver: { _, _ in
-                ManagedAgentNativeSessionResumeRecordOwner(panelID: panelID)
+            ownershipStateProvider: {
+                ownershipState(
+                    nativeSessionID: candidate.nativeSessionID,
+                    owner: .activeManaged(
+                        managedSessionID: ManagedSessionID("managed-1")!,
+                        rolloutPath: nil
+                    )
+                )
             },
             recordHandler: { _, panelID, record in
                 recordsByPanelID[panelID] = record
@@ -758,7 +1115,6 @@ struct ManagedAgentNativeSessionObserverTests {
     func observerCapturesExpectedNativeSessionWhenOwnedByStalePanel() async {
         let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
         let panelID = UUID()
-        let ownerPanelID = UUID()
         let sessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
         let candidate = ManagedAgentNativeSessionCandidate(
             agent: .codex,
@@ -772,8 +1128,11 @@ struct ManagedAgentNativeSessionObserverTests {
         let registry = ManagedAgentNativeSessionObserverRegistry(
             scanner: scanner,
             nowProvider: { launchStart.addingTimeInterval(2) },
-            resumeRecordOwnerResolver: { _, _ in
-                ManagedAgentNativeSessionResumeRecordOwner(panelID: ownerPanelID)
+            ownershipStateProvider: {
+                ownershipState(
+                    nativeSessionID: candidate.nativeSessionID,
+                    owner: .inactivePersistedClaim(rolloutPath: nil)
+                )
             },
             recordHandler: { _, panelID, record in
                 recordsByPanelID[panelID] = record
@@ -800,7 +1159,6 @@ struct ManagedAgentNativeSessionObserverTests {
     func observerRefusesExpectedNativeSessionOwnedByActivePanel() async {
         let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
         let panelID = UUID()
-        let ownerPanelID = UUID()
         let sessionID = "019e2823-f520-7690-91b6-cd84eb52dd8a"
         let candidate = ManagedAgentNativeSessionCandidate(
             agent: .codex,
@@ -814,10 +1172,13 @@ struct ManagedAgentNativeSessionObserverTests {
         let registry = ManagedAgentNativeSessionObserverRegistry(
             scanner: scanner,
             nowProvider: { launchStart.addingTimeInterval(2) },
-            resumeRecordOwnerResolver: { _, _ in
-                ManagedAgentNativeSessionResumeRecordOwner(
-                    panelID: ownerPanelID,
-                    hasActiveSameAgentSession: true
+            ownershipStateProvider: {
+                ownershipState(
+                    nativeSessionID: candidate.nativeSessionID,
+                    owner: .activeManaged(
+                        managedSessionID: ManagedSessionID("managed-owner")!,
+                        rolloutPath: nil
+                    )
                 )
             },
             recordHandler: { _, _, _ in
@@ -944,6 +1305,59 @@ private actor StubNativeSessionScanner: ManagedAgentNativeSessionScanning {
     func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate] {
         candidatesByManagedSessionID[observation.managedSessionID] ?? []
     }
+}
+
+private func makeResumeRecordAppState(
+    nativeSessionIDs: [String]
+) -> (appState: AppState, workspaceID: UUID, panelIDs: [UUID]) {
+    var workspace = WorkspaceState.bootstrap()
+    let tabID = workspace.resolvedSelectedTabID!
+    var tab = workspace.tabsByID[tabID]!
+    let originalPanelID = tab.panels.keys.first!
+    var panelIDs: [UUID] = []
+
+    for (index, nativeSessionID) in nativeSessionIDs.enumerated() {
+        let panelID = index == 0 ? originalPanelID : UUID()
+        let terminalState = TerminalPanelState(
+            title: "Terminal \(index + 1)",
+            shell: "zsh",
+            cwd: "/tmp/repo",
+            resumeRecord: ManagedAgentResumeRecord(
+                agent: .codex,
+                nativeSessionID: nativeSessionID,
+                sessionFilePath: "/tmp/codex-\(index).jsonl",
+                cwd: "/tmp/repo",
+                capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        )
+        tab.panels[panelID] = .terminal(terminalState)
+        panelIDs.append(panelID)
+    }
+    workspace.tabsByID[tabID] = tab
+    let appState = AppState(
+        windows: [],
+        workspacesByID: [workspace.id: workspace],
+        selectedWindowID: nil
+    )
+    return (appState, workspace.id, panelIDs)
+}
+
+private func ownershipState(
+    nativeSessionID rawNativeSessionID: String,
+    owner: NativeSessionOwnerSnapshot
+) -> ManagedAgentNativeSessionOwnershipState {
+    guard let nativeSessionID = NativeSessionID(rawNativeSessionID) else {
+        fatalError("Test fixture native session ID must be non-empty")
+    }
+    return ManagedAgentNativeSessionOwnershipState(
+        ownerByNativeSessionID: [nativeSessionID: owner],
+        conflictedNativeSessionIDs: []
+    )
+}
+
+@MainActor
+private final class ManagedAgentNativeSessionObserverRegistryBox {
+    weak var value: ManagedAgentNativeSessionObserverRegistry?
 }
 
 /// Scanner that suspends every scan until the gate opens, so tests can
