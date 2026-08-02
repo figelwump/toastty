@@ -1852,6 +1852,8 @@ struct SessionRuntimeStoreTests {
             detail: "Needs approval",
             threadID: "thread-root",
             turnID: "turn-root",
+            callID: nil,
+            approvalID: nil,
             at: startedAt.addingTimeInterval(2)
         )
 

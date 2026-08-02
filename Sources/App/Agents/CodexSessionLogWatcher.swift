@@ -83,6 +83,8 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     let completionTurnID: String?
     let nativeSessionID: String?
     let nativeSessionFilePath: String?
+    let callID: String?
+    let approvalID: String?
     let approvalPolicyField: CodexSessionLogContextField
     let approvalsReviewerField: CodexSessionLogContextField
     let approvalPolicy: String?
@@ -99,6 +101,8 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         completionTurnID: String? = nil,
         nativeSessionID: String? = nil,
         nativeSessionFilePath: String? = nil,
+        callID: String? = nil,
+        approvalID: String? = nil,
         approvalPolicyField: CodexSessionLogContextField? = nil,
         approvalsReviewerField: CodexSessionLogContextField? = nil,
         approvalPolicy: String? = nil,
@@ -121,6 +125,8 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         self.completionTurnID = completionTurnID
         self.nativeSessionID = nativeSessionID
         self.nativeSessionFilePath = nativeSessionFilePath
+        self.callID = callID
+        self.approvalID = approvalID
         self.approvalPolicyField = resolvedApprovalPolicyField
         self.approvalsReviewerField = resolvedApprovalsReviewerField
         self.approvalPolicy = resolvedApprovalPolicyField.stringValue
@@ -1037,13 +1043,30 @@ private extension CodexSessionLogWatcher {
             guard type.hasSuffix("_approval_request") || type == "request_user_input" else {
                 return nil
             }
-            let dedupeKey = "approval:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
+            let callID = eventField("call_id", payload: payload, message: message)
+            let approvalID = eventField("approval_id", payload: payload, message: message)
+            let effectiveApprovalID: String
+            if let approvalID {
+                effectiveApprovalID = "approval_id:\(approvalID)"
+            } else if let callID {
+                effectiveApprovalID = "call_id:\(callID)"
+            } else {
+                let legacyIdentifier = eventIdentifier(
+                    from: payload,
+                    message: message,
+                    fallback: fallbackLine
+                )
+                effectiveApprovalID = "legacy:\(legacyIdentifier)"
+            }
+            let dedupeKey = "approval:\(effectiveApprovalID)"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .approvalNeeded,
                 detail: approvalDetail(type: type, message: message),
                 rootThreadID: eventThreadID(payload: payload, message: message),
-                rootTurnID: eventTurnID(from: object, payload: payload, message: message)
+                rootTurnID: eventTurnID(from: object, payload: payload, message: message),
+                callID: callID,
+                approvalID: approvalID
             )
         }
     }
@@ -1302,6 +1325,14 @@ private extension CodexSessionLogWatcher {
             }
         }
         return fallback
+    }
+
+    static func eventField(
+        _ key: String,
+        payload: [String: Any],
+        message: [String: Any]
+    ) -> String? {
+        normalizedString(message[key]) ?? normalizedString(payload[key])
     }
 
     static func contextField(

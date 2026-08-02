@@ -264,7 +264,101 @@ final class CodexSessionLogWatcherTests: XCTestCase {
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
-            CodexSessionLogEvent(kind: .approvalNeeded, detail: "Choose a path")
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "Choose a path",
+                approvalID: "approval-1"
+            )
+        ])
+    }
+
+    func testWatcherPreservesApprovalIdentifiersFromPayloadAndMessageShapes() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"call_id":"call-outer","approval_id":"approval-outer","msg":{"type":"request_user_input","question":"Outer identifiers"}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Message identifiers","call_id":"call-message","approval_id":"approval-message"}}}
+                """,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "Outer identifiers",
+                callID: "call-outer",
+                approvalID: "approval-outer"
+            ),
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "Message identifiers",
+                callID: "call-message",
+                approvalID: "approval-message"
+            ),
+        ])
+    }
+
+    func testWatcherEmitsDistinctApprovalIDsThatShareCallID() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"First","call_id":"call-shared","approval_id":"approval-1"}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Second","call_id":"call-shared","approval_id":"approval-2"}}}
+                """,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events.map(\.approvalID), ["approval-1", "approval-2"])
+        XCTAssertEqual(events.map(\.callID), ["call-shared", "call-shared"])
+    }
+
+    func testWatcherDeduplicatesExactEffectiveApprovalID() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"First","call_id":"call-1","approval_id":"approval-shared"}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Duplicate","call_id":"call-2","approval_id":"approval-shared"}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "First",
+                callID: "call-1",
+                approvalID: "approval-shared"
+            ),
+        ])
+    }
+
+    func testWatcherKeepsLegacyApprovalWithoutOperationIdentifiers() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Legacy"}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .approvalNeeded, detail: "Legacy")
+        ])
+    }
+
+    func testWatcherFallsBackFromEmptyApprovalIDToCallIDAcrossShapes() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"call_id":"call-shared","approval_id":"","msg":{"type":"request_user_input","question":"First"}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Duplicate","call_id":"call-shared"}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "First",
+                callID: "call-shared"
+            ),
         ])
     }
 

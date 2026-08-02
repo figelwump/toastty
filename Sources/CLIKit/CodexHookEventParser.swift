@@ -18,6 +18,9 @@ enum CodexHookEventParser {
         var commands: [CLICommand] = []
         let source = normalizedString(object["source"])
         let permissionMode = normalizedString(object["permission_mode"])
+        let toolUseID = normalizedString(object["tool_use_id"])
+        let callID = normalizedString(object["call_id"])
+        let approvalID = normalizedString(object["approval_id"])
         let threadID = normalizedString(object["session_id"])
         let turnID = normalizedString(object["turn_id"])
         let prompt = normalizedString(object["prompt"])
@@ -33,6 +36,9 @@ enum CodexHookEventParser {
             hookEventName: eventName,
             source: source,
             permissionMode: permissionMode,
+            toolUseID: toolUseID,
+            callID: callID,
+            approvalID: approvalID,
             threadID: threadID,
             turnID: turnID,
             promptFingerprint: promptFingerprint,

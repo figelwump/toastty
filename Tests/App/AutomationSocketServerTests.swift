@@ -6,6 +6,48 @@ import Testing
 
 struct AutomationSocketServerTests {
     @Test
+    func codexHookPayloadDecoderPreservesOptionalOperationIdentifiers() throws {
+        let event = try CodexHookEventPayloadDecoder.decode([
+            "hookEventName": .string("PermissionRequest"),
+            "toolUseID": .string(" tool-1 "),
+            "callID": .string(" call-1 "),
+            "approvalID": .string(" approval-1 "),
+            "spawnToolUseID": .string("spawn-1"),
+            "spawnTaskName": .string("review"),
+        ])
+
+        #expect(event.toolUseID == "tool-1")
+        #expect(event.callID == "call-1")
+        #expect(event.approvalID == "approval-1")
+        #expect(event.spawnMetadata == CodexSpawnHookMetadata(
+            toolUseID: "spawn-1",
+            taskName: "review"
+        ))
+    }
+
+    @Test
+    func codexHookPayloadDecoderIgnoresAbsentOrUnusableOptionalIdentifiers() throws {
+        let missing = try CodexHookEventPayloadDecoder.decode([
+            "hookEventName": .string("PermissionRequest"),
+            "toolUseID": .string("tool-only"),
+        ])
+        #expect(missing.toolUseID == "tool-only")
+        #expect(missing.callID == nil)
+        #expect(missing.approvalID == nil)
+        #expect(missing.spawnMetadata == nil)
+
+        let unusable = try CodexHookEventPayloadDecoder.decode([
+            "hookEventName": .string("PermissionRequest"),
+            "toolUseID": .null,
+            "callID": .string("  "),
+            "approvalID": .int(42),
+        ])
+        #expect(unusable.toolUseID == nil)
+        #expect(unusable.callID == nil)
+        #expect(unusable.approvalID == nil)
+    }
+
+    @Test
     func removedLegacySessionEventsAreRejected() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {

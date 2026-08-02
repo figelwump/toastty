@@ -609,6 +609,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 detail: event.detail,
                 threadID: event.rootThreadID,
                 turnID: event.rootTurnID,
+                callID: event.callID,
+                approvalID: event.approvalID,
                 at: nowProvider()
             )
             return

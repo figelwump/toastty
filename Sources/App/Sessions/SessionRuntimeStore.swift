@@ -970,6 +970,8 @@ final class SessionRuntimeStore: ObservableObject {
         detail: String,
         threadID: String?,
         turnID: String?,
+        callID: String?,
+        approvalID: String?,
         at now: Date
     ) -> Bool {
         guard let record = sessionRegistry.sessionsByID[sessionID],
@@ -981,6 +983,8 @@ final class SessionRuntimeStore: ObservableObject {
                 state: codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState(),
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "ignored",
                 reason: "session_not_tracking_codex_status"
             )
@@ -995,6 +999,8 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "ignored",
                 reason: "status_source_hooks"
             )
@@ -1004,6 +1010,8 @@ final class SessionRuntimeStore: ObservableObject {
         let status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: detail)
         let event = CodexHookEvent(
             hookEventName: "PermissionRequest",
+            callID: callID,
+            approvalID: approvalID,
             threadID: threadID ?? state.rootThreadID,
             turnID: turnID ?? state.rootTurnID,
             promptFingerprint: nil,
@@ -1021,6 +1029,8 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "accepted",
                 reason: reason
             )
@@ -1038,6 +1048,8 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "suppressed",
                 reason: reason
             )
@@ -1050,6 +1062,8 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "ignored",
                 reason: reason
             )
@@ -2513,11 +2527,15 @@ final class SessionRuntimeStore: ObservableObject {
         state: CodexNotifySessionState,
         threadID: String?,
         turnID: String?,
+        callID: String?,
+        approvalID: String?,
         decision: String,
         reason: String
     ) {
         let event = CodexHookEvent(
             hookEventName: "PermissionRequest",
+            callID: callID,
+            approvalID: approvalID,
             threadID: threadID,
             turnID: turnID,
             promptFingerprint: nil,
@@ -3013,6 +3031,9 @@ final class SessionRuntimeStore: ObservableObject {
             "hook_thread_id": event.threadID ?? "none",
             "hook_turn_id": event.turnID ?? "none",
             "hook_permission_mode": event.permissionMode ?? "none",
+            "hook_tool_use_id": event.toolUseID ?? "none",
+            "hook_call_id": event.callID ?? "none",
+            "hook_approval_id": event.approvalID ?? "none",
             "has_thread_id": boolMetadata(event.threadID != nil),
             "has_turn_id": boolMetadata(event.turnID != nil),
             "root_thread_known": boolMetadata(state.rootThreadID != nil),

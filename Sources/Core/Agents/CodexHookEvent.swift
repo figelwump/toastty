@@ -20,6 +20,9 @@ public struct CodexHookEvent: Equatable, Sendable {
     public var hookEventName: String
     public var source: String?
     public var permissionMode: String?
+    public var toolUseID: String?
+    public var callID: String?
+    public var approvalID: String?
     public var threadID: String?
     public var turnID: String?
     public var promptFingerprint: String?
@@ -35,6 +38,9 @@ public struct CodexHookEvent: Equatable, Sendable {
         hookEventName: String,
         source: String? = nil,
         permissionMode: String? = nil,
+        toolUseID: String? = nil,
+        callID: String? = nil,
+        approvalID: String? = nil,
         threadID: String?,
         turnID: String?,
         promptFingerprint: String?,
@@ -49,6 +55,9 @@ public struct CodexHookEvent: Equatable, Sendable {
         self.hookEventName = hookEventName
         self.source = source
         self.permissionMode = permissionMode
+        self.toolUseID = toolUseID
+        self.callID = callID
+        self.approvalID = approvalID
         self.threadID = threadID
         self.turnID = turnID
         self.promptFingerprint = promptFingerprint

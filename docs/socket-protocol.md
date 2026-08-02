@@ -1175,6 +1175,9 @@ Accepted payload keys:
 - `hookEventName: String`
 - `source?: String`
 - `permissionMode?: String`
+- `toolUseID?: String`
+- `callID?: String`
+- `approvalID?: String`
 - `threadID?: String`
 - `turnID?: String`
 - `subagentID?: String`
@@ -1190,8 +1193,15 @@ Accepted payload keys:
 - `sessionFilePath?: String`
 - `cwd?: String`
 
-The socket payload key is `permissionMode`; Toastty's CLI maps Codex hook JSON
-`permission_mode` into that camelCase payload field. For recognized
+The socket payload keys use camelCase; Toastty's CLI maps Codex hook JSON
+`permission_mode`, `tool_use_id`, `call_id`, and `approval_id` into
+`permissionMode`, `toolUseID`, `callID`, and `approvalID` respectively. These
+three operation identifiers are independent optional values. Missing, null,
+empty, or non-string identifier values are treated as absent. Codex's current
+`PermissionRequest` hook payload normally supplies none of them, so consumers
+must not assume approval hooks have an operation identifier or synthesize one.
+
+For recognized
 `spawn_agent` `PreToolUse` events, the CLI also maps `tool_use_id` and the task
 fields as provided into the internal `spawn*` keys. `spawnToolUseID` is required
 whenever either other spawn field is present. Newer Codex builds leave the task
