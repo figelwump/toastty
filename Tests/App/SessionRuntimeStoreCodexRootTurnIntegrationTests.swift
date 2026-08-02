@@ -294,8 +294,8 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
-    func codexClearSessionStartClearsLegacyReviewHistoryBeforeQualification() {
-        let sessionID = "sess-codex-clear-review-history"
+    func codexClearSessionStartClearsApprovalHistoryBeforeQualification() {
+        let sessionID = "sess-codex-clear-approval-history"
         let startedAt = Date(timeIntervalSince1970: 1_700_002_400)
         let store = SessionRuntimeStore()
         startCodexReconciliationSession(store, sessionID: sessionID, source: .hooks, at: startedAt)
