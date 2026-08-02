@@ -71,7 +71,13 @@ Every normalized field used for correlation must be classified. A bridge may nar
 - Reviewer inference from textual/substr matching is context evidence, not identity.
 - rollout `NEW_TASK`/`FINAL_ANSWER` text and parent/child path inference are fallback lifecycle evidence, not exact cross-source keys.
 
-`CodexSessionLogWatcher` currently reads `call_id`/`approval_id` while constructing a source-local dedupe identifier, but drops that identifier from `CodexSessionLogEvent` (`Sources/App/Agents/CodexSessionLogWatcher.swift:63-137`, `Sources/App/Agents/CodexSessionLogWatcher.swift:1036-1047`, `Sources/App/Agents/CodexSessionLogWatcher.swift:1294-1305`). `CodexHookEventParser` preserves `tool_use_id` only for spawn metadata (`Sources/CLIKit/CodexHookEventParser.swift:49-78`). **Approval/call IDs must be added to the normalized models and transported end-to-end before cross-source approval deduplication or dynamic approval failover is enabled.** Prompt fingerprints are not an acceptable substitute.
+`CodexSessionLogWatcher` currently reads `call_id`/`approval_id` while constructing a source-local dedupe identifier, but drops both from `CodexSessionLogEvent` (`Sources/App/Agents/CodexSessionLogWatcher.swift:63-137`, `Sources/App/Agents/CodexSessionLogWatcher.swift:1036-1047`, `Sources/App/Agents/CodexSessionLogWatcher.swift:1294-1305`). Its generic identifier preference checks `call_id` before `approval_id`, which can collapse two subcommand approvals that share one call ID. The bounded first slice preserves both fields and changes approval-event source-local dedupe only to `approvalID ?? callID`. These log identifiers are not cross-source keys.
+
+### Experiment result — 2026-08-01: approval identifier scope
+
+An audit of installed Codex 0.146.0 and current `openai/codex` main found that the `PermissionRequest` hook schema requires session, turn, and tool fields but serializes no `tool_use_id`, `call_id`, `approval_id`, or `request_id`. `PreToolUse` separately requires `tool_use_id`. Codex has an effective internal approval/call identifier, but the `PermissionRequest` serialization omits it.
+
+Launch logs do expose `call_id` and may expose a more-specific `approval_id`, yielding the source-local approval key `approvalID ?? callID`. Because the current hook shape exposes no corresponding ID, **exact hook↔log approval correlation and dynamic approval failover are unavailable and remain disabled**. Fixed launch-selected authority remains the contract. Source-local log IDs improve log replay/dedupe only; they are not permission for cross-source matching. Recheck this conclusion only after a supported Codex hook schema changes.
 
 ## Target boundary
 
@@ -87,7 +93,7 @@ The module contains:
 
 It is explicitly not a generic event bus and introduces no speculative provider protocol.
 
-Approval/call identifiers added to `CodexHookEvent`, `CodexNotifyCompletion`, or neighboring `CoreState` types are ephemeral, non-`Codable` transport contracts. They are not a persisted workspace schema or a promise to restore reconciliation state across app launches.
+Identifiers added to normalized event contracts are ephemeral and non-`Codable`. Each source preserves only identifiers it actually exposes; Toastty does not synthesize a hook approval ID. These fields are not a persisted workspace schema or a promise to restore reconciliation state across app launches.
 
 ### Identity and ownership
 
@@ -167,7 +173,7 @@ Authority is per fact, not a global “hooks always win” flag.
 | root turn identity/start | exact native thread + turn from hook or log; launch log supplies turn context | prompt fingerprint bridge only within the current managed session | Exact mismatches are diagnosed. A bridge cannot replace an exact active turn. Duplicate starts merge provenance. |
 | approval policy/reviewer | structured launch-log turn context | hook permission mode as partial evidence | Preserve `unspecified`, explicit `null`, and value. Heuristic reviewer parsing cannot override structured context. |
 | working/progress status | launch-selected source: hooks when installed, otherwise launch log | no dynamic fallback in the first migrations | Generic progress is latest-by-receipt only within the selected source. Receipt order does not imply provider causality and cannot switch authority. |
-| approval request | launch-selected source with resolved policy/reviewer context | no dynamic cross-source fallback in the first migrations | Within the selected source, exact IDs dedupe and different IDs are distinct. Without preserved shared IDs, do not cross-source dedupe. Auto-reviewed requests update a tombstone but do not show approval UI/notification. |
+| approval request | launch-selected source with resolved policy/reviewer context | no dynamic cross-source fallback for current hook schemas | Launch-log approval events dedupe source-locally by `approvalID ?? callID`; different approval IDs remain distinct even when they share a call ID. Hook and log approvals do not cross-source dedupe. Auto-reviewed requests update a tombstone but do not show approval UI/notification. |
 | completion/abort | launch-selected hook or log/notify source | thread-only completion only for one unambiguous open turn in the selected fallback mode | One terminal decision per turn. Later duplicates only add provenance. An unidentified or older terminal event cannot close a newer exact turn. |
 | subagent spawn metadata | hook `spawnToolUseID` metadata | rollout function-call arguments with the same call ID | Exact call ID merges metadata. Prompt/message text never joins agents. Ciphertext-like labels remain suppressed. |
 | subagent lifecycle | canonical rollout provider agent ID and lifecycle entries | hook subagent ID; text/path inference only as source-local fallback | Exact agent ID owns lifecycle. Finish-before-start creates a bounded tombstone so replay cannot resurrect the activity. |
@@ -176,9 +182,9 @@ Authority is per fact, not a global “hooks always win” flag.
 
 ### Gated future dynamic fallback
 
-The first migrations preserve today's fixed-at-launch authority. They do not add a session hook-liveness latch, a per-turn approval boolean, or a new fallback behavior.
+The first migrations preserve today's fixed-at-launch authority. They do not add a session hook-liveness latch, a per-turn approval boolean, or a new fallback behavior. The 2026-08-01 schema audit establishes that dynamic approval fallback cannot be implemented exactly with current supported hook shapes.
 
-After approval/call and completion ID experiments prove common exact keys and delivery behavior, a separately reviewed change may introduce event-specific fallback:
+If a future supported hook schema exposes an approval identifier that is proven equal to a launch-log identifier—and completion experiments separately prove common exact keys and delivery behavior—a separately reviewed change may introduce event-specific fallback:
 
 1. A fallback source produces an observation containing an exact key for an open fact.
 2. If the preferred-source observation with that key has not arrived, the App schedules a bounded grace token appropriate to that fact.
@@ -232,12 +238,12 @@ Persisting reducer state or the runtime cursor to disk is deferred. Add persiste
 
 Each step is independently revertible. Never let the legacy handler and the new reducer both mutate the same fact.
 
-1. **Preserve identifiers and characterize behavior.** Add ephemeral, non-`Codable` approval/call IDs to hook, notify/log observation models and CLI/socket transport. Split parsing from file polling enough to test normalized observations. Capture sanitized traces and characterize current behavior under receipt-order permutations.
+1. **Preserve source-exposed identifiers and characterize behavior.** Add ephemeral, non-`Codable` log `approvalID` and `callID` fields without inventing a hook equivalent. Use `approvalID ?? callID` for launch-log approval dedupe only. Split parsing from file polling enough to test normalized observations. Capture sanitized traces and characterize current behavior under receipt-order permutations.
 2. **Introduce the pure target with trace replay.** Add `CodexReconciliation` and reducer tests. Replay recorded/synthetic normalized traces against fact-specific expected decisions while legacy code remains the only runtime writer.
 3. **Migrate identity and rollout claims.** Route claims through pure evaluation against an App ownership snapshot; App code remains the sole owner and continues applying accepted resume-record mutations and watcher attachment.
 4. **Migrate subagent correlation.** Move call/tool-use/agent-ID joins, finish tombstones, and bounded state into the reducer. Keep watcher lifecycle in the App.
 5. **Migrate status and background projection.** Move root-turn identity and progress decisions while preserving current fixed-at-launch source behavior. Add the runtime cursor before relying on watcher restart replay.
-6. **Migrate approval, completion, and notification intent last.** Preserve current source authority, introduce stable effect IDs, and keep App-owned timers and notification suppression. Cross-source dedupe/fallback remains gated by identifier and delivery experiments plus a separate review.
+6. **Migrate approval, completion, and notification intent last.** Preserve fixed launch-selected authority, introduce stable effect IDs, and keep App-owned timers and notification suppression. Approval cross-source dedupe/fallback remains disabled until a future schema recheck finds a common exact ID; completion fallback remains gated by its identifier/delivery experiments and separate review.
 7. **Delete legacy reconciliation.** Remove old per-session notify state, approval deferral maps, auto-review arrays, duplicate source gates, subagent correlation maps, and temporary routing flags after every fact class has one owner.
 
 ### Trace replay, canary, and rollback
@@ -268,7 +274,7 @@ A debug-only capture harness may write normalized observation sequences under ig
 | `Project.swift` | Add the pure reconciliation target and tests; keep generated Xcode projects untouched. |
 | `Sources/CodexReconciliation/` | New Codex observation, state, reducer, pure claim evaluation, and decisions. |
 | `Tests/CodexReconciliation/` | Receipt-order, causal-position, conflict, replay, effect-idempotency, and bounds tests. |
-| `Sources/Core/Agents/CodexHookEvent.swift` | Preserve ephemeral, non-`Codable` operation/approval/call IDs at the transport boundary; no provider reconciliation policy or persisted schema. |
+| `Sources/Core/Agents/CodexHookEvent.swift` | Carry optional ephemeral `approvalID`/`callID` when the originating source exposes them; current `PermissionRequest` hook parsing leaves both nil. Do not synthesize IDs or add persisted schema. |
 | `Sources/Core/Agents/CodexNotifyCompletion.swift` | Preserve any stable ephemeral completion operation ID exposed by notify. |
 | `Sources/CLIKit/CodexHookEventParser.swift` and `Sources/CLIKit/CodexNotifyEventParser.swift` | Decode identifiers without choosing authority. |
 | `Sources/CLIKit/ToasttyCLI.swift` and `Sources/App/Automation/AutomationSocketServer.swift` | Transport and validate normalized fields; assign no provider policy. |
@@ -288,7 +294,7 @@ A debug-only capture harness may write normalized observation sequences under ig
 - two active managed sessions claiming one native session;
 - stale-owner reclaim versus live-owner refusal;
 - the same prompt submitted twice, proving fingerprints do not dedupe distinct turns/approvals;
-- two approvals in one turn with different approval IDs;
+- two launch-log approvals in one turn sharing a call ID but carrying different approval IDs;
 - approval followed by completion, abort, timeout, and cancelled timer token;
 - an old terminal observation arriving after a newer exact turn has started;
 - subagent spawn hook metadata joined to rollout call and provider agent ID;
@@ -301,7 +307,7 @@ Dynamic-fallback tests—fallback exact event, preferred event within grace, gra
 
 ### Parser and transport tests
 
-- hook and log approval/call IDs survive parser -> CLI envelope -> socket decoding;
+- launch-log `approvalID` and `callID` both survive parsing, while hook parsing explicitly remains nil for identifiers absent from its schema;
 - missing/malformed optional IDs do not make an otherwise valid event fail;
 - exact session/panel validation rejects stale or cross-panel callbacks;
 - `ReceiveSequence` reflects synchronous receipt, while source causal position wins causality decisions;
@@ -355,7 +361,7 @@ Use the repository `toastty-verify` workflow at each implementation phase bounda
 
 Stop the affected migration step, leave that fact on the legacy path, and gather evidence if any of these occur:
 
-- Supported Codex hook and rollout versions do not expose the same stable approval/call identifier. Cross-source approval dedupe and dynamic approval failover must remain disabled.
+- A future supported Codex hook schema still does not expose an approval identifier proven equal to a log identifier. This is the known current state, so cross-source approval dedupe and dynamic approval failover remain disabled; it does not block source-local log dedupe.
 - Notify and rollout completions cannot be joined by native thread + turn across supported versions. Keep completion fallback source-local rather than adding a heuristic.
 - A claimed exact identifier changes meaning or is reused within one native session.
 - Sanitized real traces show the canonical rollout path can change native identity without a new managed session.
@@ -365,9 +371,9 @@ Stop the affected migration step, leave that fact on the legacy path, and gather
 - A runtime cursor cannot distinguish same-file resume from truncation/rotation using file identity, offset, and last-complete-line evidence. Keep watcher restart on the legacy path.
 - An identity claim requires cwd-only, prompt-only, or time-only selection. Fail closed instead.
 
-The following code experiments remain required before approval/completion migration:
+The following code experiments remain for later fact migrations or future fallback work:
 
-1. Capture sanitized hook and launch/canonical-log shapes for two approvals in one turn across the minimum and current supported Codex versions; verify approval/call ID equality and stability.
+1. On a supported Codex hook-schema change, repeat the approval identifier audit before reconsidering cross-source approval correlation; do not infer compatibility from internal provider IDs.
 2. Capture completion shapes from hook, notify, and both log formats; verify which combinations consistently share native thread and turn IDs.
 3. Verify whether hook callbacks for one turn can arrive concurrently/out of order. Confirm synchronous `ReceiveSequence` assignment records receipt order without being used as provider causality.
 4. Verify watcher cursor resume and bootstrap/live interleaving at a partially written line and after truncation/rotation. Calibrate the complete-line EOF + quiescence heuristic and prove stable effect IDs absorb boundary error.
