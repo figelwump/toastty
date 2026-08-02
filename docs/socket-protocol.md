@@ -1213,8 +1213,13 @@ Behavior:
 
 - `sessionID` must identify an active session
 - `panelID` is optional; when present it must match the active session
-- When `kind` is present, `summary` is required and Toastty updates the session
-  status
+- When `kind` is present, `summary` is required for payload validation. Its
+  presence does not guarantee a session-status update: managed Codex sessions
+  keep the status authority selected at launch, and root-thread/turn
+  qualification can reject an otherwise valid hook before status projection.
+  Subagent lifecycle hooks are reconciled through their own path and can return
+  after updating collaboration state without applying the payload's generic
+  status.
 - `SubagentStart` with a `subagentID` creates or reopens a collaboration-agent
   child row. `SubagentStop` with the same ID removes it. The optional
   `subagentType` becomes the initial row label; the generic `default` type is
