@@ -110,6 +110,33 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexIncompatibleSessionLogApprovalDoesNotAllocateReconciliationRuntime() {
+        let sessionID = "sess-codex-hooks-reject-log-approval"
+        let startedAt = Date(timeIntervalSince1970: 1_700_002_150)
+        let store = SessionRuntimeStore()
+        startCodexReconciliationSession(
+            store,
+            sessionID: sessionID,
+            source: .hooks,
+            at: startedAt
+        )
+        #expect(store.codexReconciliationRuntimeSessionIDsForTesting.contains(sessionID) == false)
+
+        #expect(store.handleCodexSessionLogApproval(
+            sessionID: sessionID,
+            detail: "Fallback must not project",
+            threadID: "thread-log",
+            turnID: "turn-log",
+            callID: nil,
+            approvalID: nil,
+            at: startedAt.addingTimeInterval(1)
+        ) == false)
+
+        #expect(store.codexReconciliationRuntimeSessionIDsForTesting.contains(sessionID) == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status == nil)
+    }
+
+    @Test
     func codexFallbackAuthorityRejectsRootMutatingHookBeforeProjection() {
         let sessionID = "sess-codex-fallback-rejects-prompt"
         let startedAt = Date(timeIntervalSince1970: 1_700_002_200)
