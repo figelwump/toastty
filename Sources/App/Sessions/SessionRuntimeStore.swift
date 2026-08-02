@@ -26,7 +26,7 @@ final class SessionRuntimeStore: ObservableObject {
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
-    private var codexNotifyStateBySessionID: [String: CodexNotifySessionState] = [:]
+    private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
     private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
     private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
@@ -128,7 +128,7 @@ final class SessionRuntimeStore: ObservableObject {
     func reset() {
         sessionRegistry = SessionRegistry()
         suppressedCodexVisibleErrorDetailBySessionID = [:]
-        codexNotifyStateBySessionID = [:]
+        codexSessionReconciliationBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
         backgroundActivityFinishTombstonesBySessionID = [:]
         codexSubagentReconcilerBySessionID = [:]
@@ -139,6 +139,22 @@ final class SessionRuntimeStore: ObservableObject {
         resumeGraceRepublishTask?.cancel()
         resumeGraceRepublishTask = nil
         resumeGraceRepublishExpiry = nil
+    }
+
+    var codexReconciliationRuntimeSessionIDsForTesting: Set<String> {
+        Set(codexSessionReconciliationBySessionID.keys)
+    }
+
+    func codexRootTurnSnapshotForTesting(sessionID: String) -> CodexRootTurnSnapshot? {
+        codexSessionReconciliationBySessionID[sessionID]?.rootTurn.snapshot
+    }
+
+    func codexAutoReviewedPermissionTurnIDsForTesting(sessionID: String) -> [String] {
+        codexSessionReconciliationBySessionID[sessionID]?.legacyAutoReviewedPermissionTurnIDs ?? []
+    }
+
+    func hasPendingCodexHookApprovalForTesting(sessionID: String) -> Bool {
+        pendingCodexHookApprovalBySessionID[sessionID] != nil
     }
 
     func startSession(
@@ -157,7 +173,7 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
-        codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
@@ -495,64 +511,28 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
         let resolvedApprovalPolicyField = approvalPolicyField
             ?? approvalPolicy.map(CodexSessionLogContextField.string)
             ?? .unspecified
         let resolvedApprovalsReviewerField = approvalsReviewerField
             ?? approvalsReviewer.map(CodexSessionLogContextField.string)
             ?? .unspecified
-        let hasExplicitApprovalContext = resolvedApprovalPolicyField.isSpecified ||
-            resolvedApprovalsReviewerField.isSpecified
-        state.pendingRootInputFingerprint = fingerprint
-        if let threadID {
-            let previousRootThreadID = state.rootThreadID
-            state.rootThreadID = threadID
-            if let previousRootThreadID,
-               previousRootThreadID != threadID {
-                state.rootTurnID = nil
-                state.rootTurnInputFingerprint = nil
-                state.rootTurnAwaitingSessionLogContext = false
-                state.pendingRootApprovalContext = nil
-                state.activeTurnApprovalContext = nil
-                state.autoReviewedPermissionTurnIDs.removeAll()
-                applyCodexApprovalContext(nil, to: &state)
-            }
-        }
-
-        let nextApprovalContext = codexApprovalContext(
-            approvalPolicy: resolvedApprovalPolicyField,
-            approvalsReviewer: resolvedApprovalsReviewerField,
-            activeTurnContext: state.activeTurnApprovalContext
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .launchLogRootInput(
+                fingerprint: fingerprint,
+                threadID: threadID,
+                turnID: turnID,
+                context: CodexRootTurnApprovalContext(
+                    approvalPolicy: resolvedApprovalPolicyField.rootTurnContextField,
+                    approvalsReviewer: resolvedApprovalsReviewerField.rootTurnContextField
+                )
+            )
         )
-        if let turnID {
-            state.rootTurnID = turnID
-            state.rootTurnInputFingerprint = fingerprint
-            state.rootTurnAwaitingSessionLogContext = false
-            state.pendingRootApprovalContext = nil
-            applyCodexApprovalContext(nextApprovalContext, to: &state)
-        } else if fingerprint != nil {
-            if fingerprint == state.rootTurnInputFingerprint,
-               state.rootTurnID != nil,
-               state.rootTurnAwaitingSessionLogContext {
-                state.rootTurnAwaitingSessionLogContext = false
-                state.pendingRootApprovalContext = nil
-                applyCodexApprovalContext(nextApprovalContext, to: &state)
-            } else {
-                state.rootTurnID = nil
-                state.rootTurnInputFingerprint = nil
-                state.rootTurnAwaitingSessionLogContext = false
-                state.pendingRootApprovalContext = nextApprovalContext
-                applyCodexApprovalContext(nil, to: &state)
-            }
-        } else if hasExplicitApprovalContext {
-            state.rootTurnID = nil
-            state.rootTurnInputFingerprint = nil
-            state.rootTurnAwaitingSessionLogContext = false
-            state.pendingRootApprovalContext = nil
-            applyCodexApprovalContext(nil, to: &state)
-        }
-        codexNotifyStateBySessionID[sessionID] = state
+        let state = codexLegacyPolicySnapshot(
+            root: reduction.snapshot,
+            sessionID: sessionID
+        )
 
         ToasttyLog.debug(
             "Recorded Codex root turn input fingerprint",
@@ -560,7 +540,7 @@ final class SessionRuntimeStore: ObservableObject {
             metadata: codexNotifyMetadata(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 additional: [
                     "input_fingerprint": truncatedFingerprint(fingerprint),
                     "thread_id": threadID ?? "none",
@@ -573,7 +553,7 @@ final class SessionRuntimeStore: ObservableObject {
         resolvePendingCodexHookApprovalIfPossible(
             sessionID: sessionID,
             record: record,
-            state: state.legacyPolicySnapshot,
+            state: state,
             reasonPrefix: "context_update"
         )
     }
@@ -592,40 +572,19 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-        state.activeTurnApprovalContext = codexApprovalContext(
-            applyingApprovalPolicy: approvalPolicy,
-            approvalsReviewer: approvalsReviewer,
-            to: state.activeTurnApprovalContext
-        )
-        if let pendingRootApprovalContext = state.pendingRootApprovalContext {
-            state.pendingRootApprovalContext = codexApprovalContext(
-                currentContext: pendingRootApprovalContext,
-                applyingApprovalPolicy: approvalPolicy,
-                approvalsReviewer: approvalsReviewer,
-                activeTurnContext: state.activeTurnApprovalContext
-            )
-        }
-        if state.rootTurnID != nil {
-            let currentContext = state.approvalContextKnown
-                ? CodexApprovalContext(
-                    approvalPolicy: state.approvalPolicy,
-                    approvalsReviewer: state.approvalsReviewer
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .launchLogOverrideContext(
+                CodexRootTurnApprovalContext(
+                    approvalPolicy: approvalPolicy.rootTurnContextField,
+                    approvalsReviewer: approvalsReviewer.rootTurnContextField
                 )
-                : nil
-            let nextCurrentContext = codexApprovalContext(
-                currentContext: currentContext,
-                applyingApprovalPolicy: approvalPolicy,
-                approvalsReviewer: approvalsReviewer,
-                activeTurnContext: state.activeTurnApprovalContext
             )
-            if state.rootTurnAwaitingSessionLogContext {
-                state.rootTurnAwaitingSessionLogContext = false
-            }
-            state.pendingRootApprovalContext = nil
-            applyCodexApprovalContext(nextCurrentContext, to: &state)
-        }
-        codexNotifyStateBySessionID[sessionID] = state
+        )
+        let state = codexLegacyPolicySnapshot(
+            root: reduction.snapshot,
+            sessionID: sessionID
+        )
 
         ToasttyLog.debug(
             "Recorded Codex override turn context",
@@ -633,7 +592,7 @@ final class SessionRuntimeStore: ObservableObject {
             metadata: codexNotifyMetadata(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 additional: [
                     "approval_policy": approvalPolicy.metadataValue,
                     "approvals_reviewer": approvalsReviewer.metadataValue,
@@ -643,7 +602,7 @@ final class SessionRuntimeStore: ObservableObject {
         resolvePendingCodexHookApprovalIfPossible(
             sessionID: sessionID,
             record: record,
-            state: state.legacyPolicySnapshot,
+            state: state,
             reasonPrefix: "context_update"
         )
     }
@@ -715,12 +674,12 @@ final class SessionRuntimeStore: ObservableObject {
             return true
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        var state = codexLegacyPolicySnapshot(sessionID: sessionID)
         guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 completion: completion,
                 decision: "ignored",
                 reason: "status_source_hooks"
@@ -730,56 +689,41 @@ final class SessionRuntimeStore: ObservableObject {
 
         var acceptedReason = "unknown"
         if let threadID = completion.threadID {
-            if let rootThreadID = state.rootThreadID {
-                guard threadID == rootThreadID else {
-                    codexNotifyStateBySessionID[sessionID] = state
-                    logCodexNotifyCompletionDecision(
-                        sessionID: sessionID,
-                        record: record,
-                        state: state.legacyPolicySnapshot,
-                        completion: completion,
-                        decision: "ignored",
-                        reason: "thread_mismatch"
+            let reduction = reduceCodexRootTurnObservation(
+                sessionID: sessionID,
+                observation: .fallbackNotifyThreadCandidate(
+                    threadID: threadID,
+                    inputFingerprint: completion.lastInputMessageFingerprint
+                )
+            )
+            state = codexLegacyPolicySnapshot(
+                root: reduction.snapshot,
+                sessionID: sessionID
+            )
+            switch reduction.qualification {
+            case .proceed:
+                if reduction.reason == .fallbackNotifyThreadLatched {
+                    acceptedReason = "latched_root_thread_from_input_fingerprint"
+                    ToasttyLog.debug(
+                        "Latched Codex root notify thread",
+                        category: .terminal,
+                        metadata: codexNotifyMetadata(
+                            sessionID: sessionID,
+                            record: record,
+                            state: state,
+                            completion: completion
+                        )
                     )
-                    return false
+                } else {
+                    acceptedReason = "thread_match"
                 }
-                acceptedReason = "thread_match"
-            } else if let notifyFingerprint = completion.lastInputMessageFingerprint,
-                      let pendingFingerprint = state.pendingRootInputFingerprint,
-                      notifyFingerprint == pendingFingerprint {
-                state.rootThreadID = threadID
-                codexNotifyStateBySessionID[sessionID] = state
-                acceptedReason = "latched_root_thread_from_input_fingerprint"
-                ToasttyLog.debug(
-                    "Latched Codex root notify thread",
-                    category: .terminal,
-                    metadata: codexNotifyMetadata(
-                        sessionID: sessionID,
-                        record: record,
-                        state: state.legacyPolicySnapshot,
-                        completion: completion
-                    )
-                )
-            } else if state.pendingRootInputFingerprint == nil {
-                codexNotifyStateBySessionID[sessionID] = state
+
+            case .rejectEvent:
+                let reason = codexNotifyRejectionReason(reduction.reason)
                 logCodexNotifyCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
-                    completion: completion,
-                    decision: "ignored",
-                    reason: "missing_root_input_fingerprint"
-                )
-                return false
-            } else {
-                codexNotifyStateBySessionID[sessionID] = state
-                let reason = completion.lastInputMessageFingerprint == nil
-                    ? "missing_notify_input_fingerprint"
-                    : "input_fingerprint_mismatch"
-                logCodexNotifyCompletionDecision(
-                    sessionID: sessionID,
-                    record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     completion: completion,
                     decision: "ignored",
                     reason: reason
@@ -787,14 +731,13 @@ final class SessionRuntimeStore: ObservableObject {
                 return false
             }
         } else {
-            codexNotifyStateBySessionID[sessionID] = state
             acceptedReason = "unthreaded_completion"
         }
 
         logCodexNotifyCompletionDecision(
             sessionID: sessionID,
             record: record,
-            state: state.legacyPolicySnapshot,
+            state: state,
             completion: completion,
             decision: "accepted",
             reason: acceptedReason
@@ -821,7 +764,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogCompletionDecision(
                 sessionID: sessionID,
                 record: sessionRegistry.sessionsByID[sessionID],
-                state: (codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()).legacyPolicySnapshot,
+                state: codexLegacyPolicySnapshot(sessionID: sessionID),
                 threadID: threadID,
                 turnID: turnID,
                 decision: "ignored",
@@ -830,12 +773,12 @@ final class SessionRuntimeStore: ObservableObject {
             return false
         }
 
-        let state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        let state = codexLegacyPolicySnapshot(sessionID: sessionID)
         guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
             logCodexSessionLogCompletionDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 threadID: threadID,
                 turnID: turnID,
                 decision: "ignored",
@@ -850,7 +793,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexSessionLogCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     threadID: threadID,
                     turnID: turnID,
                     decision: "ignored",
@@ -862,7 +805,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexSessionLogCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     threadID: threadID,
                     turnID: turnID,
                     decision: "ignored",
@@ -878,7 +821,7 @@ final class SessionRuntimeStore: ObservableObject {
                     logCodexSessionLogCompletionDecision(
                         sessionID: sessionID,
                         record: record,
-                        state: state.legacyPolicySnapshot,
+                        state: state,
                         threadID: threadID,
                         turnID: turnID,
                         decision: "ignored",
@@ -895,7 +838,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexSessionLogCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     threadID: threadID,
                     turnID: turnID,
                     decision: "ignored",
@@ -909,7 +852,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexSessionLogCompletionDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     threadID: threadID,
                     turnID: turnID,
                     decision: "ignored",
@@ -925,7 +868,7 @@ final class SessionRuntimeStore: ObservableObject {
         logCodexSessionLogCompletionDecision(
             sessionID: sessionID,
             record: record,
-            state: state.legacyPolicySnapshot,
+            state: state,
             threadID: threadID,
             turnID: turnID,
             decision: "accepted",
@@ -955,7 +898,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: sessionRegistry.sessionsByID[sessionID],
-                state: (codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()).legacyPolicySnapshot,
+                state: codexLegacyPolicySnapshot(sessionID: sessionID),
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -966,12 +909,12 @@ final class SessionRuntimeStore: ObservableObject {
             return false
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        var state = codexLegacyPolicySnapshot(sessionID: sessionID)
         guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -996,12 +939,12 @@ final class SessionRuntimeStore: ObservableObject {
             cwd: nil
         )
 
-        switch codexHookApprovalDecision(event: event, state: state.legacyPolicySnapshot) {
+        switch codexHookApprovalDecision(event: event, state: state) {
         case .accept(let reason):
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -1014,13 +957,16 @@ final class SessionRuntimeStore: ObservableObject {
 
         case .suppress(let reason):
             if turnID != nil {
-                markAutoReviewedCodexPermissionTurnIfNeeded(event: event, state: &state)
+                markAutoReviewedCodexPermissionTurnIfNeeded(
+                    sessionID: sessionID,
+                    event: event
+                )
+                state = codexLegacyPolicySnapshot(sessionID: sessionID)
             }
-            codexNotifyStateBySessionID[sessionID] = state
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -1034,7 +980,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 threadID: threadID,
                 turnID: turnID,
                 callID: callID,
@@ -1083,137 +1029,62 @@ final class SessionRuntimeStore: ObservableObject {
             return false
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-        guard codexStatusTrackingSourceAllowsHookEvents(sessionID: sessionID) else {
+        let previousState = codexLegacyPolicySnapshot(sessionID: sessionID)
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .hook(
+                kind: codexRootTurnHookKind(event),
+                threadID: event.threadID,
+                turnID: event.turnID,
+                promptFingerprint: event.promptFingerprint
+            ),
+            clearLegacyAutoReviewedTurnsBeforeReduction: event.isClearSessionStart
+        )
+        var state = codexLegacyPolicySnapshot(
+            root: reduction.snapshot,
+            sessionID: sessionID
+        )
+        var stateChanged = previousState != state
+
+        guard reduction.qualification == .proceed else {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 event: event,
                 decision: "ignored",
-                reason: "status_source_session_log_fallback"
+                reason: codexHookRejectionReason(reduction.reason)
             )
             return false
         }
 
-        var stateChanged = false
-        if event.isClearSessionStart,
-           !state.autoReviewedPermissionTurnIDs.isEmpty {
-            state.autoReviewedPermissionTurnIDs.removeAll()
-            stateChanged = true
-        }
-
-        if let threadID = event.threadID {
-            if let rootThreadID = state.rootThreadID {
-                if threadID != rootThreadID {
-                    guard event.isClearSessionStart else {
-                        codexNotifyStateBySessionID[sessionID] = state
-                        logCodexHookEventDecision(
-                            sessionID: sessionID,
-                            record: record,
-                            state: state.legacyPolicySnapshot,
-                            event: event,
-                            decision: "ignored",
-                            reason: "thread_mismatch"
-                        )
-                        return false
-                    }
-                    state.rootThreadID = threadID
-                    state.rootTurnID = nil
-                    state.rootTurnInputFingerprint = nil
-                    state.rootTurnAwaitingSessionLogContext = false
-                    state.pendingRootInputFingerprint = nil
-                    state.pendingRootApprovalContext = nil
-                    state.activeTurnApprovalContext = nil
-                    state.autoReviewedPermissionTurnIDs.removeAll()
-                    applyCodexApprovalContext(nil, to: &state)
-                    stateChanged = true
-                    ToasttyLog.debug(
-                        "Reset Codex root hook thread after clear",
-                        category: .terminal,
-                        metadata: codexHookMetadata(
-                            sessionID: sessionID,
-                            record: record,
-                            state: state.legacyPolicySnapshot,
-                            event: event
-                        )
-                    )
-                }
-            } else if event.canLatchRootHookThread {
-                state.rootThreadID = threadID
-                stateChanged = true
-                ToasttyLog.debug(
-                    "Latched Codex root hook thread",
-                    category: .terminal,
-                    metadata: codexHookMetadata(
-                        sessionID: sessionID,
-                        record: record,
-                        state: state.legacyPolicySnapshot,
-                        event: event
-                    )
-                )
-            } else if event.isStop,
-                      state.rootTurnID == nil || event.turnID != state.rootTurnID {
-                codexNotifyStateBySessionID[sessionID] = state
-                logCodexHookEventDecision(
+        if previousState.rootThreadID == nil,
+           state.rootThreadID != nil,
+           event.canLatchRootHookThread {
+            ToasttyLog.debug(
+                "Latched Codex root hook thread",
+                category: .terminal,
+                metadata: codexHookMetadata(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
-                    event: event,
-                    decision: "ignored",
-                    reason: "missing_root_thread"
+                    state: state,
+                    event: event
                 )
-                return false
-            }
-        }
-
-        if event.isStop,
-           event.threadID == nil,
-           let turnID = event.turnID,
-           let rootTurnID = state.rootTurnID,
-           turnID != rootTurnID {
-            codexNotifyStateBySessionID[sessionID] = state
-            logCodexHookEventDecision(
-                sessionID: sessionID,
-                record: record,
-                state: state.legacyPolicySnapshot,
-                event: event,
-                decision: "ignored",
-                reason: "turn_mismatch"
             )
-            return false
+        } else if event.isClearSessionStart,
+                  previousState.rootThreadID != state.rootThreadID,
+                  previousState.rootThreadID != nil {
+            ToasttyLog.debug(
+                "Reset Codex root hook thread after clear",
+                category: .terminal,
+                metadata: codexHookMetadata(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    event: event
+                )
+            )
         }
-
-        if event.isUserPromptSubmit,
-           state.rootTurnID != event.turnID {
-            let pendingRootInputFingerprint = state.pendingRootInputFingerprint
-            let matchedPendingRootContext = event.promptFingerprint != nil &&
-                event.promptFingerprint == pendingRootInputFingerprint &&
-                state.pendingRootApprovalContext != nil
-            let shouldAwaitSessionLogContext = event.promptFingerprint != nil && !matchedPendingRootContext
-            state.rootTurnID = event.turnID
-            state.rootTurnInputFingerprint = event.promptFingerprint
-            if matchedPendingRootContext,
-               let pendingRootApprovalContext = state.pendingRootApprovalContext {
-                applyCodexApprovalContext(pendingRootApprovalContext, to: &state)
-            } else if !shouldAwaitSessionLogContext,
-                      let activeTurnApprovalContext = state.activeTurnApprovalContext {
-                applyCodexApprovalContext(activeTurnApprovalContext, to: &state)
-            } else {
-                applyCodexApprovalContext(nil, to: &state)
-            }
-            state.pendingRootApprovalContext = nil
-            state.rootTurnAwaitingSessionLogContext = shouldAwaitSessionLogContext
-            stateChanged = true
-        }
-
-        if let promptFingerprint = event.promptFingerprint,
-           state.pendingRootInputFingerprint != promptFingerprint {
-            state.pendingRootInputFingerprint = promptFingerprint
-            stateChanged = true
-        }
-
-        codexNotifyStateBySessionID[sessionID] = state
 
         if let spawnMetadata = event.spawnMetadata,
            let spawnObservation = codexSubagentHookSpawnObservation(spawnMetadata) {
@@ -1255,15 +1126,18 @@ final class SessionRuntimeStore: ObservableObject {
 
         if event.isPermissionRequest,
            status.kind == .needsApproval {
-            switch codexHookApprovalDecision(event: event, state: state.legacyPolicySnapshot) {
+            switch codexHookApprovalDecision(event: event, state: state) {
             case .suppress(let reason):
-                markAutoReviewedCodexPermissionTurnIfNeeded(event: event, state: &state)
-                codexNotifyStateBySessionID[sessionID] = state
+                markAutoReviewedCodexPermissionTurnIfNeeded(
+                    sessionID: sessionID,
+                    event: event
+                )
+                state = codexLegacyPolicySnapshot(sessionID: sessionID)
                 removePendingCodexHookApproval(sessionID: sessionID)
                 logCodexHookEventDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     event: event,
                     decision: "suppressed",
                     reason: reason
@@ -1274,7 +1148,7 @@ final class SessionRuntimeStore: ObservableObject {
                 deferCodexHookApproval(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     event: event,
                     reason: reason
                 )
@@ -1285,7 +1159,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexHookEventDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     event: event,
                     decision: "ignored",
                     reason: reason
@@ -1297,7 +1171,7 @@ final class SessionRuntimeStore: ObservableObject {
                 logCodexHookEventDecision(
                     sessionID: sessionID,
                     record: record,
-                    state: state.legacyPolicySnapshot,
+                    state: state,
                     event: event,
                     decision: "accepted",
                     reason: reason
@@ -1307,7 +1181,7 @@ final class SessionRuntimeStore: ObservableObject {
             removePendingCodexHookApprovalIfSuperseded(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 event: event,
                 status: status
             )
@@ -1317,12 +1191,12 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 event: event,
                 decision: "accepted",
                 reason: codexHookCompletionAcceptedReason(
                     event: event,
-                    state: state.legacyPolicySnapshot
+                    state: state
                 )
             )
         }
@@ -1470,7 +1344,7 @@ final class SessionRuntimeStore: ObservableObject {
             logSessionStop(record, reason: reason, at: now)
         }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
-        codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
@@ -1497,7 +1371,7 @@ final class SessionRuntimeStore: ObservableObject {
         if let record = activeRecord {
             logSessionStop(record, reason: reason, at: now)
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
-            codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
+            codexSessionReconciliationBySessionID.removeValue(forKey: record.sessionID)
             codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
             backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
             codexSubagentReconcilerBySessionID.removeValue(forKey: record.sessionID)
@@ -1682,7 +1556,7 @@ final class SessionRuntimeStore: ObservableObject {
             guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
                 logSessionStop(record, reason: .panelRemovedFromAppState, at: now)
                 suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
-                codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
+                codexSessionReconciliationBySessionID.removeValue(forKey: record.sessionID)
                 codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
                 backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
                 codexSubagentReconcilerBySessionID.removeValue(forKey: record.sessionID)
@@ -2617,18 +2491,6 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
-    private func codexStatusTrackingSourceAllowsHookEvents(sessionID: String) -> Bool {
-        guard let source = codexStatusTrackingSourceBySessionID[sessionID] else {
-            return true
-        }
-        switch source {
-        case .hooks:
-            return true
-        case .sessionLogFallback:
-            return false
-        }
-    }
-
     private func codexStatusTrackingSourceMetadata(sessionID: String) -> String {
         codexStatusTrackingSourceBySessionID[sessionID]?.code ?? "unspecified"
     }
@@ -2703,84 +2565,140 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
-    private func codexApprovalContext(
-        approvalPolicy: CodexSessionLogContextField,
-        approvalsReviewer: CodexSessionLogContextField,
-        activeTurnContext: CodexApprovalContext?
-    ) -> CodexApprovalContext? {
-        guard approvalPolicy.isSpecified ||
-            approvalsReviewer.isSpecified ||
-            activeTurnContext != nil else {
-            return nil
-        }
-
-        return codexApprovalContext(
-            applyingApprovalPolicy: approvalPolicy,
-            approvalsReviewer: approvalsReviewer,
-            to: activeTurnContext
-        )
-    }
-
-    private func codexApprovalContext(
-        applyingApprovalPolicy approvalPolicy: CodexSessionLogContextField,
-        approvalsReviewer: CodexSessionLogContextField,
-        to currentContext: CodexApprovalContext?
-    ) -> CodexApprovalContext {
-        var nextContext = currentContext ?? CodexApprovalContext()
-        if approvalPolicy.isSpecified {
-            nextContext.approvalPolicy = approvalPolicy
-        }
-        if approvalsReviewer.isSpecified {
-            nextContext.approvalsReviewer = approvalsReviewer
-        }
-        return nextContext
-    }
-
-    private func codexApprovalContext(
-        currentContext: CodexApprovalContext?,
-        applyingApprovalPolicy approvalPolicy: CodexSessionLogContextField,
-        approvalsReviewer: CodexSessionLogContextField,
-        activeTurnContext: CodexApprovalContext?
-    ) -> CodexApprovalContext {
-        let patchedContext = codexApprovalContext(
-            applyingApprovalPolicy: approvalPolicy,
-            approvalsReviewer: approvalsReviewer,
-            to: currentContext
-        )
-        return CodexApprovalContext(
-            approvalPolicy: patchedContext.approvalPolicy.isSpecified
-                ? patchedContext.approvalPolicy
-                : activeTurnContext?.approvalPolicy ?? .unspecified,
-            approvalsReviewer: patchedContext.approvalsReviewer.isSpecified
-                ? patchedContext.approvalsReviewer
-                : activeTurnContext?.approvalsReviewer ?? .unspecified
-        )
-    }
-
     private func markAutoReviewedCodexPermissionTurnIfNeeded(
-        event: CodexHookEvent,
-        state: inout CodexNotifySessionState
+        sessionID: String,
+        event: CodexHookEvent
     ) {
         guard event.isPermissionRequest,
-              let turnID = normalizedNonEmpty(event.turnID),
-              !state.autoReviewedPermissionTurnIDs.contains(turnID) else {
+              let turnID = normalizedNonEmpty(event.turnID) else {
             return
         }
 
-        state.autoReviewedPermissionTurnIDs.append(turnID)
-        let overflow = state.autoReviewedPermissionTurnIDs.count - Self.maximumAutoReviewedCodexPermissionTurnIDs
+        var runtime = codexSessionReconciliationRuntime(sessionID: sessionID)
+        guard !runtime.legacyAutoReviewedPermissionTurnIDs.contains(turnID) else {
+            return
+        }
+        runtime.legacyAutoReviewedPermissionTurnIDs.append(turnID)
+        let overflow = runtime.legacyAutoReviewedPermissionTurnIDs.count -
+            Self.maximumAutoReviewedCodexPermissionTurnIDs
         if overflow > 0 {
-            state.autoReviewedPermissionTurnIDs.removeFirst(overflow)
+            runtime.legacyAutoReviewedPermissionTurnIDs.removeFirst(overflow)
+        }
+        codexSessionReconciliationBySessionID[sessionID] = runtime
+    }
+
+    private func codexSessionReconciliationRuntime(
+        sessionID: String
+    ) -> CodexSessionReconciliationRuntime {
+        if let runtime = codexSessionReconciliationBySessionID[sessionID] {
+            return runtime
+        }
+        return CodexSessionReconciliationRuntime(
+            rootTurn: CodexRootTurnReconciler(
+                authority: codexRootTurnAuthority(sessionID: sessionID)
+            )
+        )
+    }
+
+    private func codexLegacyPolicySnapshot(
+        sessionID: String
+    ) -> CodexLegacyPolicySnapshot {
+        guard let runtime = codexSessionReconciliationBySessionID[sessionID] else {
+            return .empty
+        }
+        return runtime.legacyPolicySnapshot
+    }
+
+    private func codexLegacyPolicySnapshot(
+        root: CodexRootTurnSnapshot,
+        sessionID: String
+    ) -> CodexLegacyPolicySnapshot {
+        CodexLegacyPolicySnapshot(
+            root: root,
+            autoReviewedPermissionTurnIDs: codexSessionReconciliationBySessionID[sessionID]?
+                .legacyAutoReviewedPermissionTurnIDs ?? []
+        )
+    }
+
+    private func reduceCodexRootTurnObservation(
+        sessionID: String,
+        observation: CodexRootTurnObservation,
+        clearLegacyAutoReviewedTurnsBeforeReduction: Bool = false
+    ) -> CodexRootTurnReduction {
+        var runtime = codexSessionReconciliationRuntime(sessionID: sessionID)
+        if clearLegacyAutoReviewedTurnsBeforeReduction {
+            runtime.legacyAutoReviewedPermissionTurnIDs.removeAll()
+        }
+        let reduction = runtime.rootTurn.reduce(observation)
+        if reduction.shouldClearLegacyAutoReviewedTurns {
+            runtime.legacyAutoReviewedPermissionTurnIDs.removeAll()
+        }
+        codexSessionReconciliationBySessionID[sessionID] = runtime
+        return reduction
+    }
+
+    private func codexRootTurnAuthority(
+        sessionID: String
+    ) -> CodexRootTurnAuthority {
+        switch codexStatusTrackingSourceBySessionID[sessionID] {
+        case .hooks:
+            return .hooks
+        case .sessionLogFallback:
+            return .sessionLogFallback
+        case nil:
+            return .legacyPermissive
         }
     }
 
-    private func applyCodexApprovalContext(
-        _ approvalContext: CodexApprovalContext?,
-        to state: inout CodexNotifySessionState
-    ) {
-        state.approvalContextKnown = approvalContext != nil
-        state.approvalPolicy = approvalContext?.approvalPolicy ?? .unspecified
-        state.approvalsReviewer = approvalContext?.approvalsReviewer ?? .unspecified
+    private func codexRootTurnHookKind(
+        _ event: CodexHookEvent
+    ) -> CodexRootTurnHookKind {
+        if event.hookEventName == "SessionStart" {
+            return .sessionStart(isClear: event.isClearSessionStart)
+        }
+        if event.isUserPromptSubmit {
+            return .userPromptSubmit
+        }
+        if event.isStop {
+            return .stop
+        }
+        return .other
+    }
+
+    private func codexHookRejectionReason(
+        _ reason: CodexRootTurnReductionReason
+    ) -> String {
+        switch reason {
+        case .incompatibleWithAuthority:
+            return "status_source_session_log_fallback"
+        case .threadMismatch:
+            return "thread_mismatch"
+        case .missingRootThread:
+            return "missing_root_thread"
+        case .turnMismatch:
+            return "turn_mismatch"
+        default:
+            return "root_turn_\(String(describing: reason))"
+        }
+    }
+
+    private func codexNotifyRejectionReason(
+        _ reason: CodexRootTurnReductionReason
+    ) -> String {
+        switch reason {
+        case .threadMismatch:
+            return "thread_mismatch"
+        case .missingRootInputFingerprint:
+            return "missing_root_input_fingerprint"
+        case .missingNotifyInputFingerprint:
+            return "missing_notify_input_fingerprint"
+        case .inputFingerprintMismatch:
+            return "input_fingerprint_mismatch"
+        case .incompatibleWithAuthority:
+            return "status_source_hooks"
+        default:
+            return "root_turn_\(String(describing: reason))"
+        }
     }
 
     private func codexHookApprovalDecision(
@@ -2903,19 +2821,22 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        var state = codexLegacyPolicySnapshot(sessionID: sessionID)
         switch codexHookApprovalDecision(
             event: pending.event,
-            state: state.legacyPolicySnapshot
+            state: state
         ) {
         case .suppress(let reason):
-            markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &state)
-            codexNotifyStateBySessionID[sessionID] = state
+            markAutoReviewedCodexPermissionTurnIfNeeded(
+                sessionID: sessionID,
+                event: pending.event
+            )
+            state = codexLegacyPolicySnapshot(sessionID: sessionID)
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 event: pending.event,
                 decision: "suppressed",
                 reason: reason
@@ -2926,7 +2847,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 event: pending.event,
                 decision: "ignored",
                 reason: reason
@@ -2937,7 +2858,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 event: pending.event,
                 decision: "accepted",
                 reason: reason
@@ -2949,7 +2870,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
-                state: state.legacyPolicySnapshot,
+                state: state,
                 event: pending.event,
                 decision: "ignored",
                 reason: "context_timeout_\(reason)"
@@ -2974,10 +2895,11 @@ final class SessionRuntimeStore: ObservableObject {
             return
 
         case .suppress(let reason):
-            var legacyState = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-            markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &legacyState)
-            codexNotifyStateBySessionID[sessionID] = legacyState
-            state = legacyState.legacyPolicySnapshot
+            markAutoReviewedCodexPermissionTurnIfNeeded(
+                sessionID: sessionID,
+                event: pending.event
+            )
+            state = codexLegacyPolicySnapshot(sessionID: sessionID)
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -3681,54 +3603,19 @@ final class SessionRuntimeStore: ObservableObject {
     }
 }
 
-private struct CodexNotifySessionState {
-    var rootThreadID: String?
-    var rootTurnID: String?
-    var rootTurnInputFingerprint: String?
-    var rootTurnAwaitingSessionLogContext = false
-    var pendingRootInputFingerprint: String?
-    var pendingRootApprovalContext: CodexApprovalContext?
-    var activeTurnApprovalContext: CodexApprovalContext?
-    var autoReviewedPermissionTurnIDs: [String] = []
-    var approvalContextKnown = false
-    var approvalPolicy: CodexSessionLogContextField = .unspecified
-    var approvalsReviewer: CodexSessionLogContextField = .unspecified
+private struct CodexSessionReconciliationRuntime {
+    var rootTurn: CodexRootTurnReconciler
+    var legacyAutoReviewedPermissionTurnIDs: [String] = []
 
     var legacyPolicySnapshot: CodexLegacyPolicySnapshot {
         CodexLegacyPolicySnapshot(
-            root: CodexRootTurnSnapshot(
-                rootThreadID: rootThreadID,
-                rootTurnID: rootTurnID,
-                rootTurnInputFingerprint: rootTurnInputFingerprint,
-                isAwaitingSessionLogContext: rootTurnAwaitingSessionLogContext,
-                pendingRootInputFingerprint: pendingRootInputFingerprint,
-                pendingApprovalContext: pendingRootApprovalContext?.rootTurnContext,
-                activeApprovalContext: activeTurnApprovalContext?.rootTurnContext,
-                currentApprovalContext: approvalContextKnown
-                    ? CodexRootTurnApprovalContext(
-                        approvalPolicy: approvalPolicy.rootTurnContextField,
-                        approvalsReviewer: approvalsReviewer.rootTurnContextField
-                    )
-                    : nil
-            ),
-            autoReviewedPermissionTurnIDs: autoReviewedPermissionTurnIDs
+            root: rootTurn.snapshot,
+            autoReviewedPermissionTurnIDs: legacyAutoReviewedPermissionTurnIDs
         )
     }
 }
 
-private struct CodexApprovalContext {
-    var approvalPolicy: CodexSessionLogContextField = .unspecified
-    var approvalsReviewer: CodexSessionLogContextField = .unspecified
-
-    var rootTurnContext: CodexRootTurnApprovalContext {
-        CodexRootTurnApprovalContext(
-            approvalPolicy: approvalPolicy.rootTurnContextField,
-            approvalsReviewer: approvalsReviewer.rootTurnContextField
-        )
-    }
-}
-
-private struct CodexLegacyPolicySnapshot {
+private struct CodexLegacyPolicySnapshot: Equatable {
     let root: CodexRootTurnSnapshot
     let autoReviewedPermissionTurnIDs: [String]
 
@@ -3736,8 +3623,6 @@ private struct CodexLegacyPolicySnapshot {
         root: .empty,
         autoReviewedPermissionTurnIDs: []
     )
-
-    var legacyPolicySnapshot: CodexLegacyPolicySnapshot { self }
 
     var rootThreadID: String? { root.rootThreadID }
     var rootTurnID: String? { root.rootTurnID }
