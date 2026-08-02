@@ -315,6 +315,26 @@ struct CodexRootTurnReconciliationTests {
     }
 
     @Test
+    func fallbackAuthorityRejectsRootMutatingPromptBeforeStateMutation() {
+        var reconciler = CodexRootTurnReconciler(authority: .sessionLogFallback)
+
+        let result = reconciler.reduce(hook(
+            .userPromptSubmit,
+            thread: "must-not-latch",
+            turn: "must-not-become-root",
+            fingerprint: "must-not-become-pending"
+        ))
+
+        #expect(result.qualification == .rejectEvent)
+        #expect(result.reason == .incompatibleWithAuthority)
+        #expect(result.didMutateRootState == false)
+        #expect(result.shouldClearLegacyAutoReviewedTurns == false)
+        #expect(result.snapshot == .empty)
+        #expect(reconciler.snapshot == .empty)
+        assertValid(result)
+    }
+
+    @Test
     func nilCompatibilityAuthorityAcceptsBothHookAndFallbackNotify() {
         var hookRoute = CodexRootTurnReconciler(authority: .legacyPermissive)
         #expect(hookRoute.reduce(hook(
