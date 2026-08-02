@@ -234,7 +234,7 @@ struct CodexRootTurnReconciliationTests {
         #expect(result.qualification == .proceed)
         #expect(result.reason == .launchLogRootInput)
         #expect(result.didMutateRootState)
-        #expect(result.shouldClearLegacyAutoReviewedTurns)
+        #expect(result.shouldResetApprovalHistory)
         #expect(result.snapshot.rootThreadID == "new-thread")
         #expect(result.snapshot.rootTurnID == nil)
         #expect(result.snapshot.rootTurnInputFingerprint == nil)
@@ -254,7 +254,7 @@ struct CodexRootTurnReconciliationTests {
         ))
         #expect(sameResult.qualification == .proceed)
         #expect(sameResult.didMutateRootState == false)
-        #expect(sameResult.shouldClearLegacyAutoReviewedTurns)
+        #expect(sameResult.shouldResetApprovalHistory)
         #expect(sameResult.snapshot.rootTurnID == "turn")
 
         var replacement = populatedReconciler(authority: .hooks)
@@ -269,7 +269,7 @@ struct CodexRootTurnReconciliationTests {
         #expect(replacementResult.snapshot.pendingApprovalContext == nil)
         #expect(replacementResult.snapshot.activeApprovalContext == nil)
         #expect(replacementResult.snapshot.currentApprovalContext == nil)
-        #expect(replacementResult.shouldClearLegacyAutoReviewedTurns)
+        #expect(replacementResult.shouldResetApprovalHistory)
         assertValid(sameResult)
         assertValid(replacementResult)
     }
@@ -328,7 +328,7 @@ struct CodexRootTurnReconciliationTests {
         #expect(result.qualification == .rejectEvent)
         #expect(result.reason == .incompatibleWithAuthority)
         #expect(result.didMutateRootState == false)
-        #expect(result.shouldClearLegacyAutoReviewedTurns == false)
+        #expect(result.shouldResetApprovalHistory == false)
         #expect(result.snapshot == .empty)
         #expect(reconciler.snapshot == .empty)
         assertValid(result)
@@ -647,9 +647,9 @@ private func assertValid(
 ) {
     if result.qualification == .rejectEvent {
         #expect(result.didMutateRootState == false, sourceLocation: sourceLocation)
-        #expect(result.shouldClearLegacyAutoReviewedTurns == false, sourceLocation: sourceLocation)
+        #expect(result.shouldResetApprovalHistory == false, sourceLocation: sourceLocation)
     }
-    if result.shouldClearLegacyAutoReviewedTurns {
+    if result.shouldResetApprovalHistory {
         #expect(result.qualification == .proceed, sourceLocation: sourceLocation)
     }
     if result.snapshot.isAwaitingSessionLogContext {

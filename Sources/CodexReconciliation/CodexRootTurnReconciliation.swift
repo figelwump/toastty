@@ -150,20 +150,20 @@ public enum CodexRootTurnReductionReason: Equatable, Sendable {
 public struct CodexRootTurnReduction: Equatable, Sendable {
     public let qualification: CodexRootTurnQualification
     public let didMutateRootState: Bool
-    public let shouldClearLegacyAutoReviewedTurns: Bool
+    public let shouldResetApprovalHistory: Bool
     public let reason: CodexRootTurnReductionReason
     public let snapshot: CodexRootTurnSnapshot
 
     public init(
         qualification: CodexRootTurnQualification,
         didMutateRootState: Bool,
-        shouldClearLegacyAutoReviewedTurns: Bool,
+        shouldResetApprovalHistory: Bool,
         reason: CodexRootTurnReductionReason,
         snapshot: CodexRootTurnSnapshot
     ) {
         self.qualification = qualification
         self.didMutateRootState = didMutateRootState
-        self.shouldClearLegacyAutoReviewedTurns = shouldClearLegacyAutoReviewedTurns
+        self.shouldResetApprovalHistory = shouldResetApprovalHistory
         self.reason = reason
         self.snapshot = snapshot
     }
@@ -245,7 +245,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
         let reduction = CodexRootTurnReduction(
             qualification: outcome.qualification,
             didMutateRootState: previousSnapshot != nextSnapshot,
-            shouldClearLegacyAutoReviewedTurns: outcome.shouldClearLegacyAutoReviewedTurns,
+            shouldResetApprovalHistory: outcome.shouldResetApprovalHistory,
             reason: outcome.reason,
             snapshot: nextSnapshot
         )
@@ -259,7 +259,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
         turnID: String?,
         context: CodexRootTurnApprovalContext
     ) -> Outcome {
-        var shouldClearLegacyAutoReviewedTurns = false
+        var shouldResetApprovalHistory = false
 
         // This write intentionally precedes replacement cleanup. A new launch
         // thread must preserve its just-observed input correlation fingerprint.
@@ -275,7 +275,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
                 pendingApprovalContext = nil
                 activeApprovalContext = nil
                 currentApprovalContext = nil
-                shouldClearLegacyAutoReviewedTurns = true
+                shouldResetApprovalHistory = true
             }
         }
 
@@ -314,7 +314,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
 
         return .proceed(
             .launchLogRootInput,
-            shouldClearLegacyAutoReviewedTurns: shouldClearLegacyAutoReviewedTurns
+            shouldResetApprovalHistory: shouldResetApprovalHistory
         )
     }
 
@@ -357,7 +357,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
         }
 
         let isClearSessionStart = kind.isClearSessionStart
-        var shouldClearLegacyAutoReviewedTurns = isClearSessionStart
+        var shouldResetApprovalHistory = isClearSessionStart
 
         if let threadID {
             if let rootThreadID {
@@ -373,7 +373,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
                     pendingApprovalContext = nil
                     activeApprovalContext = nil
                     currentApprovalContext = nil
-                    shouldClearLegacyAutoReviewedTurns = true
+                    shouldResetApprovalHistory = true
                 }
             } else if kind.canLatchRootThread {
                 rootThreadID = threadID
@@ -419,7 +419,7 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
 
         return .proceed(
             kind == .other ? .hookOther : .hookAccepted,
-            shouldClearLegacyAutoReviewedTurns: shouldClearLegacyAutoReviewedTurns
+            shouldResetApprovalHistory: shouldResetApprovalHistory
         )
     }
 
@@ -503,9 +503,9 @@ public struct CodexRootTurnReconciler: Equatable, Sendable {
     private func assertReductionInvariants(_ reduction: CodexRootTurnReduction) {
         if reduction.qualification == .rejectEvent {
             assert(reduction.didMutateRootState == false)
-            assert(reduction.shouldClearLegacyAutoReviewedTurns == false)
+            assert(reduction.shouldResetApprovalHistory == false)
         }
-        if reduction.shouldClearLegacyAutoReviewedTurns {
+        if reduction.shouldResetApprovalHistory {
             assert(reduction.qualification == .proceed)
         }
     }
@@ -515,16 +515,16 @@ private extension CodexRootTurnReconciler {
     struct Outcome {
         let qualification: CodexRootTurnQualification
         let reason: CodexRootTurnReductionReason
-        let shouldClearLegacyAutoReviewedTurns: Bool
+        let shouldResetApprovalHistory: Bool
 
         static func proceed(
             _ reason: CodexRootTurnReductionReason,
-            shouldClearLegacyAutoReviewedTurns: Bool = false
+            shouldResetApprovalHistory: Bool = false
         ) -> Outcome {
             Outcome(
                 qualification: .proceed,
                 reason: reason,
-                shouldClearLegacyAutoReviewedTurns: shouldClearLegacyAutoReviewedTurns
+                shouldResetApprovalHistory: shouldResetApprovalHistory
             )
         }
 
@@ -532,7 +532,7 @@ private extension CodexRootTurnReconciler {
             Outcome(
                 qualification: .rejectEvent,
                 reason: reason,
-                shouldClearLegacyAutoReviewedTurns: false
+                shouldResetApprovalHistory: false
             )
         }
     }

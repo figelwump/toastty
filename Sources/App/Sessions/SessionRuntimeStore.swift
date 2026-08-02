@@ -2607,7 +2607,7 @@ final class SessionRuntimeStore: ObservableObject {
         guard reduction.qualification == .proceed else {
             return reduction
         }
-        if reduction.shouldClearLegacyAutoReviewedTurns {
+        if reduction.shouldResetApprovalHistory {
             runtime.approval.resetTurnHistory()
         }
         codexSessionReconciliationBySessionID[sessionID] = runtime
