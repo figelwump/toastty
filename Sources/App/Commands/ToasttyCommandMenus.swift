@@ -381,7 +381,7 @@ struct ToasttyCommandMenus: Commands {
             }
             Divider()
 
-            Button("Set Up Agent Status Hooks…") {
+            Button("Set Up Codex Integration…") {
                 showAgentStatusHooksSetup()
             }
             .disabled(agentGetStartedTargetWindowID == nil)

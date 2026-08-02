@@ -66,16 +66,17 @@ enum AgentLaunchUI {
             }
         }
 
-        do {
-            _ = try agentLaunchService.launch(
-                profileID: profileID,
-                workspaceID: workspaceID
-            )
-            return true
-        } catch {
-            presentLaunchError(error)
-            return false
+        Task { @MainActor in
+            do {
+                _ = try await agentLaunchService.launchAsync(
+                    profileID: profileID,
+                    workspaceID: workspaceID
+                )
+            } catch {
+                presentLaunchError(error)
+            }
         }
+        return true
     }
 
     private static func presentLaunchError(_ error: Error) {
@@ -90,18 +91,10 @@ enum AgentLaunchUI {
     static func codexStatusHooksPreflightState(
         profileID: String
     ) -> CodexStatusHookLaunchPreflightState {
-        guard profileID == AgentKind.codex.rawValue else {
-            return .ready
-        }
-
-        do {
-            return CodexStatusHookLaunchPreflightResolver.state(
-                profileID: profileID,
-                installationStatus: try CodexStatusHookInstaller().installationStatus()
-            )
-        } catch {
-            return .unavailable(error.localizedDescription)
-        }
+        // Integration capability and trust are assessed during managed-launch
+        // planning. Missing setup never blocks Codex; the planner safely keeps
+        // notify/session-log fallback telemetry for that launch.
+        .ready
     }
 
     static func presentCodexStatusHooksWarning(
@@ -111,7 +104,7 @@ enum AgentLaunchUI {
         let alert = codexStatusHooksWarningAlert(for: state)
 
         if canOpenSetup {
-            alert.addButton(withTitle: "Set Up Hooks")
+            alert.addButton(withTitle: "Set Up Codex Integration")
             alert.addButton(withTitle: "Run Anyway")
             alert.addButton(withTitle: "Cancel")
             return codexStatusHooksWarningChoice(response: alert.runModal(), canOpenSetup: true)
@@ -134,7 +127,7 @@ enum AgentLaunchUI {
         }
 
         let alert = codexStatusHooksWarningAlert(for: state)
-        alert.addButton(withTitle: "Set Up Hooks")
+        alert.addButton(withTitle: "Set Up Codex Integration")
         alert.addButton(withTitle: "Run Anyway")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
@@ -153,11 +146,11 @@ enum AgentLaunchUI {
     ) -> String {
         switch state {
         case .ready:
-            return "Codex Status Hooks Are Ready"
+            return "Codex Integration Is Ready"
         case .needsSetup:
-            return "Set Up Codex Status Hooks?"
+            return "Set Up Codex Integration?"
         case .unavailable:
-            return "Codex Status Hooks Could Not Be Verified"
+            return "Codex Integration Could Not Be Verified"
         }
     }
 
@@ -167,16 +160,15 @@ enum AgentLaunchUI {
         switch state {
         case .ready:
             return ""
-        case .needsSetup(let status):
-            let stateDescription = status.state == .notInstalled ? "missing" : "out of date"
+        case .needsSetup:
             return """
-            Toastty can run Codex now, but progress, approvals, and turn completion may be incomplete because Codex status hooks are \(stateDescription).
+            Toastty can run Codex now with fallback telemetry, but its managed-session skills and process-scoped hooks are not ready.
 
-            Set them up once to use Toastty's stable hook forwarder instead of the degraded log watcher fallback.
+            Set up the Codex integration to keep Toastty skills disabled globally and enable them only for managed sessions.
             """
         case .unavailable(let message):
             return """
-            Toastty can run Codex now, but progress, approvals, and turn completion may be incomplete because Codex status hooks could not be checked.
+            Toastty can run Codex now with fallback telemetry, but its managed-session integration could not be checked.
 
             \(message)
             """

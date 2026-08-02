@@ -5,9 +5,66 @@ struct PreparedAgentLaunchCommand {
     let argv: [String]
     let environment: [String: String]
     let artifacts: PreparedAgentLaunchArtifacts?
+    let codexSessionIntegrationResult: CodexSessionIntegrationInjectionResult
+    let effectiveCodexStatusTrackingSource: CodexStatusTrackingSource?
+
+    init(
+        argv: [String],
+        environment: [String: String],
+        artifacts: PreparedAgentLaunchArtifacts?,
+        codexSessionIntegrationResult: CodexSessionIntegrationInjectionResult = .notRequested,
+        effectiveCodexStatusTrackingSource: CodexStatusTrackingSource? = nil
+    ) {
+        self.argv = argv
+        self.environment = environment
+        self.artifacts = artifacts
+        self.codexSessionIntegrationResult = codexSessionIntegrationResult
+        self.effectiveCodexStatusTrackingSource = effectiveCodexStatusTrackingSource
+    }
 }
 
-enum CodexStatusTrackingSource: Equatable {
+struct CodexSessionLaunchConfiguration: Equatable, Sendable {
+    let qualifiedSkillNames: [String]
+    let skillsRootPath: String
+    let forwarderCommand: String
+    let legacyGlobalHooksPresent: Bool
+
+    init(
+        manifest: CodexPluginSkillManifest,
+        forwarderCommand: String,
+        legacyGlobalHooksPresent: Bool
+    ) {
+        self.qualifiedSkillNames = manifest.qualifiedSkillNames
+        self.skillsRootPath = manifest.skillsRootURL.path
+        self.forwarderCommand = forwarderCommand
+        self.legacyGlobalHooksPresent = legacyGlobalHooksPresent
+    }
+
+    init(
+        qualifiedSkillNames: [String],
+        skillsRootPath: String,
+        forwarderCommand: String,
+        legacyGlobalHooksPresent: Bool
+    ) {
+        self.qualifiedSkillNames = qualifiedSkillNames
+        self.skillsRootPath = skillsRootPath
+        self.forwarderCommand = forwarderCommand
+        self.legacyGlobalHooksPresent = legacyGlobalHooksPresent
+    }
+}
+
+enum CodexSessionIntegrationInjectionResult: Equatable, Sendable {
+    case notRequested
+    case injected(skills: Bool, hooks: Bool)
+    case refused(reason: String)
+
+    var wasRefused: Bool {
+        if case .refused = self { return true }
+        return false
+    }
+}
+
+enum CodexStatusTrackingSource: Equatable, Sendable {
     case hooks
     case sessionLogFallback(reason: String)
 
@@ -72,7 +129,8 @@ enum AgentLaunchInstrumentation {
         workingDirectory: String?,
         fileManager: FileManager,
         launchEnvironment: [String: String] = [:],
-        codexStatusTrackingSource: CodexStatusTrackingSource = .sessionLogFallback(reason: "default")
+        codexStatusTrackingSource: CodexStatusTrackingSource = .sessionLogFallback(reason: "default"),
+        codexSessionIntegration: CodexSessionLaunchConfiguration? = nil
     ) throws -> PreparedAgentLaunchCommand {
         if agent == .claude {
             return try prepareClaudeLaunch(
@@ -90,7 +148,8 @@ enum AgentLaunchInstrumentation {
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
                 fileManager: fileManager,
-                statusTrackingSource: codexStatusTrackingSource
+                statusTrackingSource: codexStatusTrackingSource,
+                sessionIntegration: codexSessionIntegration
             )
         }
 
@@ -196,7 +255,8 @@ enum AgentLaunchInstrumentation {
         cliExecutablePath: String,
         sessionID: String,
         fileManager: FileManager,
-        statusTrackingSource: CodexStatusTrackingSource
+        statusTrackingSource: CodexStatusTrackingSource,
+        sessionIntegration: CodexSessionLaunchConfiguration?
     ) throws -> PreparedAgentLaunchCommand {
         let artifactsDirectoryURL = try makeArtifactsDirectory(
             prefix: "toastty-codex-launch",
@@ -209,10 +269,35 @@ enum AgentLaunchInstrumentation {
             var environment = baselineEnvironment(for: .codex)
             environment["CODEX_TUI_RECORD_SESSION"] = "1"
             environment["CODEX_TUI_SESSION_LOG_PATH"] = logURL.path
-            let preparedArgv: [String]
-            if statusTrackingSource == .hooks {
-                preparedArgv = argv
+            let safeExecutableIndex = safeCodexSessionIntegrationExecutableIndex(in: argv)
+            let integrationPreparation = prepareCodexSessionIntegration(
+                argv: argv,
+                configuration: sessionIntegration,
+                executableIndex: safeExecutableIndex
+            )
+            if case .injected = integrationPreparation.result,
+               let sessionIntegration {
+                environment["TOASTTY_SKILLS_ROOT"] = sessionIntegration.skillsRootPath
+            }
+
+            let effectiveStatusTrackingSource: CodexStatusTrackingSource = if sessionIntegration == nil {
+                statusTrackingSource
+            } else if sessionIntegration?.legacyGlobalHooksPresent == true,
+                      statusTrackingSource == .hooks {
+                // A trusted legacy global hook can remain the locked telemetry
+                // owner while setup is waiting to migrate it.
+                .hooks
+            } else if statusTrackingSource == .hooks,
+                                                                             integrationPreparation.sessionHooksInjected {
+                .hooks
+            } else if statusTrackingSource == .hooks {
+                .sessionLogFallback(reason: "session_integration_not_injected")
             } else {
+                statusTrackingSource
+            }
+
+            var preparedArgv = integrationPreparation.argv
+            if effectiveStatusTrackingSource != .hooks {
                 let notifyScriptURL = artifactsDirectoryURL.appendingPathComponent("codex-notify.sh", isDirectory: false)
                 let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
                 try writeExecutableScript(
@@ -226,13 +311,17 @@ enum AgentLaunchInstrumentation {
                     to: notifyScriptURL,
                     fileManager: fileManager
                 )
-                let notifyArray = tomlStringArrayLiteral(["/bin/sh", notifyScriptURL.path])
-                let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .codex, argv: argv)
-                preparedArgv = insertingArguments(
-                    ["-c", "notify=\(notifyArray)"],
-                    into: argv,
-                    afterIndex: insertionIndex
-                )
+                let notifyArray = CodexSessionConfigSerializer.tomlStringArrayLiteral([
+                    "/bin/sh",
+                    notifyScriptURL.path,
+                ])
+                if let insertionIndex = safeExecutableIndex {
+                    preparedArgv = insertingArguments(
+                        ["-c", "notify=\(notifyArray)"],
+                        into: preparedArgv,
+                        afterIndex: insertionIndex
+                    )
+                }
             }
 
             return PreparedAgentLaunchCommand(
@@ -242,7 +331,9 @@ enum AgentLaunchInstrumentation {
                     directoryURL: artifactsDirectoryURL,
                     codexSessionLogURL: logURL,
                     cleanupPolicy: .deleteImmediately
-                )
+                ),
+                codexSessionIntegrationResult: integrationPreparation.result,
+                effectiveCodexStatusTrackingSource: effectiveStatusTrackingSource
             )
         } catch {
             try? fileManager.removeItem(at: artifactsDirectoryURL)
@@ -1442,38 +1533,6 @@ private extension AgentLaunchInstrumentation {
         return string
     }
 
-    static func tomlStringArrayLiteral(_ values: [String]) -> String {
-        "[\(values.map(tomlBasicStringLiteral(_:)).joined(separator: ","))]"
-    }
-
-    static func tomlBasicStringLiteral(_ value: String) -> String {
-        var escaped = ""
-        escaped.reserveCapacity(value.count)
-
-        for scalar in value.unicodeScalars {
-            switch scalar {
-            case "\\":
-                escaped.append("\\\\")
-            case "\"":
-                escaped.append("\\\"")
-            case "\n":
-                escaped.append("\\n")
-            case "\r":
-                escaped.append("\\r")
-            case "\t":
-                escaped.append("\\t")
-            default:
-                if scalar.value < 0x20 || scalar.value == 0x7F {
-                    escaped.append(String(format: "\\u%04x", Int(scalar.value)))
-                } else {
-                    escaped.append(String(scalar))
-                }
-            }
-        }
-
-        return "\"\(escaped)\""
-    }
-
     static func shellQuote(_ value: String) -> String {
         guard value.isEmpty == false else { return "''" }
         let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
@@ -1492,6 +1551,60 @@ private extension AgentLaunchInstrumentation {
         return Array(argv.prefix(boundedIndex + 1))
             + arguments
             + Array(argv.dropFirst(boundedIndex + 1))
+    }
+
+    private struct CodexSessionIntegrationPreparation {
+        let argv: [String]
+        let result: CodexSessionIntegrationInjectionResult
+        let sessionHooksInjected: Bool
+    }
+
+    private static func prepareCodexSessionIntegration(
+        argv: [String],
+        configuration: CodexSessionLaunchConfiguration?,
+        executableIndex: Int?
+    ) -> CodexSessionIntegrationPreparation {
+        guard let configuration else {
+            return CodexSessionIntegrationPreparation(
+                argv: argv,
+                result: .notRequested,
+                sessionHooksInjected: false
+            )
+        }
+        guard let insertionIndex = executableIndex else {
+            return CodexSessionIntegrationPreparation(
+                argv: argv,
+                result: .refused(reason: "opaque_or_unsafe_codex_argv"),
+                sessionHooksInjected: false
+            )
+        }
+        guard containsConflictingCodexConfigOverride(in: argv, after: insertionIndex) == false else {
+            return CodexSessionIntegrationPreparation(
+                argv: argv,
+                result: .refused(reason: "conflicting_codex_config_override"),
+                sessionHooksInjected: false
+            )
+        }
+
+        let injectSessionHooks = configuration.legacyGlobalHooksPresent == false
+        let overrides = if injectSessionHooks {
+            CodexSessionIntegrationContract.launchOverrides(
+                enabling: configuration.qualifiedSkillNames,
+                forwarderCommand: configuration.forwarderCommand
+            )
+        } else {
+            [
+                CodexSessionConfigSerializer.skillsConfigOverride(
+                    enabling: configuration.qualifiedSkillNames
+                ),
+            ]
+        }
+        let arguments = overrides.flatMap { ["-c", $0] }
+        return CodexSessionIntegrationPreparation(
+            argv: insertingArguments(arguments, into: argv, afterIndex: insertionIndex),
+            result: .injected(skills: true, hooks: injectSessionHooks),
+            sessionHooksInjected: injectSessionHooks
+        )
     }
 
     static func piLaunchAllowsExtensionInjection(argv: [String], commandIndex: Int) -> Bool {
@@ -1555,6 +1668,72 @@ private extension AgentLaunchInstrumentation {
 private final class AgentLaunchInstrumentationBundleMarker {}
 
 extension AgentLaunchInstrumentation {
+    static func safeCodexExecutableIndex(in argv: [String]) -> Int? {
+        guard argv.isEmpty == false else { return nil }
+        let boundaryIndex = argv.firstIndex(of: "--") ?? argv.endIndex
+        let candidates = argv.indices.filter { index in
+            guard index < boundaryIndex else { return false }
+            let basename = URL(fileURLWithPath: argv[index]).lastPathComponent.lowercased()
+            return basename == "codex" || basename == "cdx"
+        }
+        guard candidates.count == 1 else { return nil }
+        return candidates[0]
+    }
+
+    private static func safeCodexSessionIntegrationExecutableIndex(in argv: [String]) -> Int? {
+        guard let executableIndex = safeCodexExecutableIndex(in: argv) else { return nil }
+        guard executableIndex > 0 else { return executableIndex }
+
+        // These wrappers are the explicit prefix contracts documented and
+        // exercised by Toastty. A visible `codex` token inside an arbitrary
+        // prefix is not enough evidence that it is the executed subcommand.
+        let wrapperBasename = URL(fileURLWithPath: argv[0]).lastPathComponent.lowercased()
+        let supportedWrappers: Set<String> = ["agent-safehouse", "run-sandboxed.sh"]
+        guard supportedWrappers.contains(wrapperBasename),
+              ManagedAgentCommandResolver.inferManagedAgent(
+                  commandName: argv[0],
+                  argv: argv
+              ) == .codex else {
+            return nil
+        }
+        return executableIndex
+    }
+
+    private static func containsConflictingCodexConfigOverride(
+        in argv: [String],
+        after executableIndex: Int
+    ) -> Bool {
+        let boundaryIndex = argv[(executableIndex + 1)...].firstIndex(of: "--") ?? argv.endIndex
+        var index = executableIndex + 1
+        while index < boundaryIndex {
+            let argument = argv[index]
+            if argument == "-c" || argument == "--config" {
+                guard index + 1 < boundaryIndex else { return false }
+                if isConflictingCodexConfigValue(argv[index + 1]) {
+                    return true
+                }
+                index += 2
+                continue
+            }
+            if argument.hasPrefix("--config="),
+               isConflictingCodexConfigValue(String(argument.dropFirst("--config=".count))) {
+                return true
+            }
+            index += 1
+        }
+        return false
+    }
+
+    private static func isConflictingCodexConfigValue(_ value: String) -> Bool {
+        guard let equalsIndex = value.firstIndex(of: "=") else { return false }
+        let key = value[..<equalsIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        return key == "hooks"
+            || key.hasPrefix("hooks.")
+            || key == "notify"
+            || key == "skills.config"
+            || key.hasPrefix("skills.config.")
+    }
+
     static func baselineEnvironment(for agent: AgentKind) -> [String: String] {
         guard agent == .codex else {
             return [:]
@@ -1567,11 +1746,11 @@ extension AgentLaunchInstrumentation {
 
     // Internal test seam for validating Codex config escaping behavior directly.
     static func tomlStringArrayLiteralForTesting(_ values: [String]) -> String {
-        tomlStringArrayLiteral(values)
+        CodexSessionConfigSerializer.tomlStringArrayLiteral(values)
     }
 
     // Internal test seam for validating TOML basic string escaping directly.
     static func tomlBasicStringLiteralForTesting(_ value: String) -> String {
-        tomlBasicStringLiteral(value)
+        CodexSessionConfigSerializer.tomlBasicStringLiteral(value)
     }
 }

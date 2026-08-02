@@ -138,6 +138,12 @@ If an incoming event omits `requestID`, the server generates a response ID.
 If parsing fails before a request ID can be recovered, the response uses
 `requestID: "unknown"`.
 
+Internal Toastty command shims also use `agent.prepare_managed_launch`. Its
+payload remains backward compatible and may include
+`resolvedCodexExecutablePath` plus `codexHomePath` as optional hints for a
+direct `codex` or `cdx` executable. The app validates both hints locally;
+missing or unsafe values fall back to argv resolution and never block launch.
+
 ## 4) workspace and terminal target resolution
 
 Several commands and events accept `workspaceID`, `windowID`, or `panelID`.
@@ -721,6 +727,8 @@ Launch context environment:
   supplied, otherwise the target or restored panel working directory when known
 - `TOASTTY_REPO_ROOT` when Toastty can infer a repository root from the resolved
   launch working directory
+- `TOASTTY_SKILLS_ROOT` for supported managed Codex launches, pointing at the
+  stable copied Toastty plugin's `skills/` directory
 
 Request payload:
 
@@ -1158,7 +1166,7 @@ Result:
 
 ### `session.codex_hook_event`
 
-Internal event used by Toastty's installed Codex status hook forwarder. Manual
+Internal event used by Toastty's process-scoped Codex status hook forwarder. Manual
 wrappers should generally use `session.status` instead.
 
 Required:

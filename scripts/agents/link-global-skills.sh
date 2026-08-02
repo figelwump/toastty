@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 SOURCE_SKILLS_DIR="$ROOT_DIR/.agents/skills"
 DEFAULT_SKILLS=(
+  "toastty-capabilities"
   "toastty-open-markdown"
   "toastty-scratchpad"
   "worktree-create"
@@ -17,14 +18,15 @@ CLEAN=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/agents/link-global-skills.sh [--target agents|claude|codex|all] [--skill name] [--force] [--clean]
+Usage: scripts/agents/link-global-skills.sh [--target agents|claude|all] [--skill name] [--force] [--clean]
 
-Links Toastty repo skills into global agent skill directories.
+Links Toastty repo skills into global Claude and generic-agent skill directories
+for development. Codex receives these skills through Toastty's session-scoped
+plugin integration instead of global links.
 
 Targets:
   agents   ~/.agents/skills
   claude   ~/.claude/skills
-  codex    ~/.codex/skills
   all      agents and claude (default)
 
 Options:
@@ -50,7 +52,7 @@ append_target() {
     all)
       REQUESTED_TARGETS+=("agents" "claude")
       ;;
-    agents|claude|codex)
+    agents|claude)
       REQUESTED_TARGETS+=("$target")
       ;;
     *)
@@ -104,9 +106,6 @@ target_directory() {
       ;;
     claude)
       printf '%s/.claude/skills\n' "$HOME"
-      ;;
-    codex)
-      printf '%s/.codex/skills\n' "$HOME"
       ;;
     *)
       fail "unknown target: $1"

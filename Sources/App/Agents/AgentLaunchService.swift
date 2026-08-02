@@ -119,7 +119,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath,
         socketPathProvider: @escaping @Sendable () -> String = AgentLaunchService.defaultSocketPath,
         codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = ManagedAgentLaunchPlanner.defaultCodexStatusTrackingSource,
-        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil
+        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
+        codexSessionIntegrationResolver: (any CodexManagedLaunchIntegrationResolving)? = nil
     ) {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
@@ -139,7 +140,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             promptState: { [weak terminalCommandRouter] panelID in
                 terminalCommandRouter?.promptState(panelID: panelID) ?? .unavailable
             },
-            nativeSessionObserverRegistry: nativeSessionObserverRegistry
+            nativeSessionObserverRegistry: nativeSessionObserverRegistry,
+            codexSessionIntegrationResolver: codexSessionIntegrationResolver
         )
     }
 
@@ -166,6 +168,65 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         parentSessionID: String? = nil,
         focusPolicy: TerminalInputFocusPolicy = .focusTarget
     ) throws -> AgentLaunchResult {
+        let preparation = try makeLaunchPreparation(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            initialPrompt: initialPrompt,
+            initialCommands: initialCommands,
+            parentSessionID: parentSessionID,
+            focusPolicy: focusPolicy
+        )
+        let plan = try managedLaunchPlanner.prepareManagedLaunch(
+            preparation.request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+        return try completeLaunch(preparation, plan: plan)
+    }
+
+    func launchAsync(
+        profileID: String,
+        workspaceID: UUID? = nil,
+        panelID: UUID? = nil,
+        cwd: String? = nil,
+        environment: [String: String] = [:],
+        initialPrompt: String? = nil,
+        initialCommands: [String] = [],
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
+        parentSessionID: String? = nil,
+        focusPolicy: TerminalInputFocusPolicy = .focusTarget
+    ) async throws -> AgentLaunchResult {
+        let preparation = try makeLaunchPreparation(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            initialPrompt: initialPrompt,
+            initialCommands: initialCommands,
+            parentSessionID: parentSessionID,
+            focusPolicy: focusPolicy
+        )
+        let plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
+            preparation.request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+        return try completeLaunch(preparation, plan: plan)
+    }
+
+    private func makeLaunchPreparation(
+        profileID: String,
+        workspaceID: UUID?,
+        panelID: UUID?,
+        cwd: String?,
+        environment: [String: String],
+        initialPrompt: String?,
+        initialCommands: [String],
+        parentSessionID: String?,
+        focusPolicy: TerminalInputFocusPolicy
+    ) throws -> AgentLaunchPreparation {
         guard let terminalCommandRouter else {
             throw AgentLaunchError.serviceUnavailable
         }
@@ -178,10 +239,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 availableProfileIDs: availableProfileIDs()
             )
         }
-
         let target = try resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)
         try ensurePanelAppearsInteractive(panelID: target.panelID, terminalCommandRouter: terminalCommandRouter)
-
         guard let agent = AgentKind(rawValue: launchProfile.id) else {
             throw AgentLaunchError.profileNotFound(
                 profileID: launchProfile.id,
@@ -189,47 +248,68 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             )
         }
         let explicitCWD = try normalizedExplicitWorkingDirectory(cwd)
-        let launchEnvironment = try validatedLaunchEnvironment(environment)
-        let launchInitialCommands = try validatedInitialCommands(initialCommands)
-        let launchArgv = try argv(
-            for: launchProfile,
+        return AgentLaunchPreparation(
             agent: agent,
-            applyingInitialPrompt: initialPrompt
-        )
-        let plan = try managedLaunchPlanner.prepareManagedLaunch(
-            ManagedAgentLaunchRequest(
+            displayName: launchProfile.displayName,
+            target: target,
+            explicitCWD: explicitCWD,
+            initialCommands: try validatedInitialCommands(initialCommands),
+            focusPolicy: focusPolicy,
+            request: ManagedAgentLaunchRequest(
                 agent: agent,
                 panelID: target.panelID,
-                argv: launchArgv,
+                argv: try argv(
+                    for: launchProfile,
+                    agent: agent,
+                    applyingInitialPrompt: initialPrompt
+                ),
                 cwd: explicitCWD ?? target.cwd,
-                environment: launchEnvironment,
+                environment: try validatedLaunchEnvironment(environment),
                 parentSessionID: parentSessionID
-            ),
-            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+            )
         )
+    }
+
+    private func completeLaunch(
+        _ preparation: AgentLaunchPreparation,
+        plan: ManagedAgentLaunchPlan
+    ) throws -> AgentLaunchResult {
+        guard let terminalCommandRouter else {
+            managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+            throw AgentLaunchError.serviceUnavailable
+        }
+        do {
+            try ensurePanelAppearsInteractive(
+                panelID: preparation.target.panelID,
+                terminalCommandRouter: terminalCommandRouter
+            )
+        } catch {
+            managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+            throw error
+        }
         var commandEnvironment = plan.environment
         commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
         let commandLine = ShellCommandRenderer.render(
             argv: plan.argv,
             environment: commandEnvironment,
-            workingDirectory: explicitCWD,
-            initialCommands: launchInitialCommands
+            workingDirectory: preparation.explicitCWD,
+            initialCommands: preparation.initialCommands
         )
 
         guard terminalCommandRouter.sendText(
             commandLine,
             submit: true,
-            panelID: target.panelID,
-            focusPolicy: focusPolicy
+            panelID: preparation.target.panelID,
+            focusPolicy: preparation.focusPolicy
         ) else {
             managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
-            throw AgentLaunchError.terminalUnavailable(panelID: target.panelID)
+            throw AgentLaunchError.terminalUnavailable(panelID: preparation.target.panelID)
         }
         store?.recordSuccessfulAgentLaunch()
 
         return AgentLaunchResult(
-            agent: agent,
-            displayName: launchProfile.displayName,
+            agent: preparation.agent,
+            displayName: preparation.displayName,
             sessionID: plan.sessionID,
             windowID: plan.windowID,
             workspaceID: plan.workspaceID,
@@ -245,6 +325,16 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil
     ) throws -> ManagedAgentLaunchPlan {
         try managedLaunchPlanner.prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+    }
+
+    func prepareManagedLaunchAsync(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) async throws -> ManagedAgentLaunchPlan {
+        try await managedLaunchPlanner.prepareManagedLaunchAsync(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
         )
@@ -354,6 +444,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT",
         "CODEX_TUI_RECORD_SESSION",
         "CODEX_TUI_SESSION_LOG_PATH",
+        "TOASTTY_SKILLS_ROOT",
         "TOASTTY_PI_TELEMETRY_LOG_PATH",
     ]
 
@@ -588,4 +679,14 @@ private struct LaunchTarget {
     let workspaceID: UUID
     let panelID: UUID
     let cwd: String?
+}
+
+private struct AgentLaunchPreparation {
+    let agent: AgentKind
+    let displayName: String
+    let target: LaunchTarget
+    let explicitCWD: String?
+    let initialCommands: [String]
+    let focusPolicy: TerminalInputFocusPolicy
+    let request: ManagedAgentLaunchRequest
 }

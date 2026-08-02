@@ -405,6 +405,18 @@ let project = Project(
                 .folderReference(path: "Sources/App/Resources/WebPanels"),
                 "docs/keyboard-shortcuts.md",
             ],
+            copyFiles: [
+                .resources(
+                    name: "Bundle Toastty Codex Marketplace",
+                    subpath: "CodexPluginMarketplace/.agents/plugins",
+                    files: [".agents/plugins/marketplace.json"]
+                ),
+                .resources(
+                    name: "Bundle Toastty Codex Plugin",
+                    subpath: "CodexPluginMarketplace/plugins",
+                    files: [.folderReference(path: "plugins/toastty")]
+                ),
+            ],
             scripts: [
                 .post(
                     script: bundleToasttyHelpersScript,

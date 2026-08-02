@@ -20,6 +20,19 @@ Use this workflow when the current thread should continue in a fresh git worktre
    - Use `test`, `docs`, or `chore` when the branch is primarily test-only, documentation-only, or maintenance work.
    - If the user explicitly provides a prefix or branch name, honor it when it fits the repo's branch naming style.
 3. Confirm the Toastty-managed environment is present before using the launch helper.
+   - `TOASTTY_SKILLS_ROOT` must point to the copied Toastty plugin's `skills`
+     directory. If it is absent or does not contain `worktree-create`, stop
+     with `error: worktree-create must run inside a Toastty-managed agent session`.
+     Do not guess `.agents/skills`, `~/.agents/skills`,
+     `~/.codex/skills`, a repository checkout, or a versioned plugin cache.
+
+```bash
+if [[ -z "${TOASTTY_SKILLS_ROOT:-}" || ! -d "$TOASTTY_SKILLS_ROOT/worktree-create" ]]; then
+  echo "error: worktree-create must run inside a Toastty-managed agent session" >&2
+  exit 1
+fi
+```
+
    - `TOASTTY_CLI_PATH` must be set.
    - `TOASTTY_PANEL_ID` must be set for the default structured launch because parent `set-current` needs the current panel. It may be omitted only when using `--startup-command`, or when combining `--window-id` with `--no-scope-parent`.
    - `TOASTTY_SESSION_ID` must be set for the default structured launch because the helper scopes the current parent session before it creates the child workspace.
@@ -35,7 +48,7 @@ Use this workflow when the current thread should continue in a fresh git worktre
 5. Create the new worktree with the bundled helper, passing the selected branch prefix explicitly:
 
 ```bash
-.agents/skills/worktree-create/scripts/create-worktree.sh \
+"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/create-worktree.sh" \
   --slug browser-link-routing \
   --branch-prefix feat \
   --json
@@ -84,7 +97,7 @@ Use this workflow when the current thread should continue in a fresh git worktre
    - If you intentionally need to leave the parent session unrestricted, pass `--no-scope-parent` and mention that exception in the handoff.
 
 ```bash
-.agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh \
+"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" \
   --workspace-name browser-link-routing \
   --worktree-path /abs/path/to/repo-browser-link-routing \
   --handoff-file /abs/path/to/repo-browser-link-routing/WORKTREE_HANDOFF.md \
@@ -168,7 +181,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 - For validation or debugging, you can override the startup command:
 
 ```bash
-.agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh \
+"$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" \
   --workspace-name smoke-slug \
   --worktree-path /abs/path/to/repo-smoke-slug \
   --handoff-file /abs/path/to/repo-smoke-slug/WORKTREE_HANDOFF.md \

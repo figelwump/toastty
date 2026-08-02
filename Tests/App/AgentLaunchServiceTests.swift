@@ -249,7 +249,7 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
-    func agentLaunchUIRunAnywayBypassesCodexHooksWarningAndLaunches() throws {
+    func agentLaunchUIRunAnywayBypassesCodexHooksWarningAndLaunches() async throws {
         let fixture = try makeLaunchUITestFixture()
         let missingStatus = codexHookInstallStatus(state: .notInstalled)
 
@@ -266,6 +266,9 @@ struct AgentLaunchServiceTests {
         )
 
         #expect(launched)
+        for _ in 0..<100 where fixture.terminalRouter.sentTextByPanelID[fixture.panelID] == nil {
+            await Task.yield()
+        }
         #expect(fixture.terminalRouter.sentTextByPanelID[fixture.panelID] != nil)
         #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.count == 1)
     }
@@ -293,7 +296,8 @@ struct AgentLaunchServiceTests {
             nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) },
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-tests.sock" },
-            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") },
+            codexSessionIntegrationResolver: ImmediateCodexManagedLaunchIntegrationResolver()
         )
 
         let result = try service.launch(profileID: "codex")
@@ -621,7 +625,8 @@ struct AgentLaunchServiceTests {
 
         #expect(result.agent == .codex)
         #expect(result.displayName == "Codex")
-        #expect(command.contains("codex '/work-on POP-1234'"))
+        #expect(command.contains("codex -c 'notify=["))
+        #expect(command.hasSuffix("'/work-on POP-1234'\n"))
     }
 
     @Test
@@ -663,7 +668,8 @@ struct AgentLaunchServiceTests {
         #expect(command.contains("TOASTTY_DEV_WORKTREE_ROOT=\(projectRoot.path)"))
         #expect(command.contains("TOASTTY_DERIVED_PATH=\(projectRoot.path)/artifacts/Derived"))
         #expect(command.contains("TOASTTY_CWD=\(cwd)"))
-        #expect(command.contains("codex 'Read WORKTREE_HANDOFF.md'"))
+        #expect(command.contains("codex -c 'notify=["))
+        #expect(command.hasSuffix("'Read WORKTREE_HANDOFF.md'\n"))
         #expect(result.cwd == cwd)
         #expect(activeSession.cwd == cwd)
     }
@@ -699,7 +705,8 @@ struct AgentLaunchServiceTests {
 
         #expect(command.hasPrefix("cd \(cwd) && direnv allow && export FEATURE_FLAG=1 && "))
         #expect(command.contains("EXTRA_FLAG='alpha beta'"))
-        #expect(command.contains("codex '/work-on POP-1234'"))
+        #expect(command.contains("codex -c 'notify=["))
+        #expect(command.hasSuffix("'/work-on POP-1234'\n"))
     }
 
     @Test
@@ -756,7 +763,8 @@ struct AgentLaunchServiceTests {
 
         #expect(command.hasPrefix("cd \(shellQuoteForTest(cwdURL.path)) && "))
         #expect(command.contains("CUSTOM_VALUE=\(shellQuoteForTest(envValue))"))
-        #expect(command.contains("codex \(shellQuoteForTest(prompt))"))
+        #expect(command.contains("codex -c 'notify=["))
+        #expect(command.hasSuffix("\(shellQuoteForTest(prompt))\n"))
     }
 
     @Test
@@ -789,7 +797,8 @@ struct AgentLaunchServiceTests {
         let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
 
         #expect(command.contains(" && direnv allow && printf '%s\\n' ready && "))
-        #expect(command.contains("codex \(shellQuoteForTest("review 'quoted'; $(echo prompt)"))"))
+        #expect(command.contains("codex -c 'notify=["))
+        #expect(command.hasSuffix("\(shellQuoteForTest("review 'quoted'; $(echo prompt)"))\n"))
     }
 
     @Test
@@ -843,6 +852,12 @@ struct AgentLaunchServiceTests {
             _ = try service.launch(
                 profileID: "codex",
                 environment: ["TOASTTY_SESSION_ID": "user-value"]
+            )
+        }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_SKILLS_ROOT' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "codex",
+                environment: ["TOASTTY_SKILLS_ROOT": "/tmp/user-controlled"]
             )
         }
     }
@@ -1190,6 +1205,19 @@ private final class SpyNativeSessionObserverRegistry: ManagedAgentNativeSessionO
 
     func cancelObservation(sessionID: String) {
         cancelledSessionIDs.append(sessionID)
+    }
+}
+
+private final class ImmediateCodexManagedLaunchIntegrationResolver: CodexManagedLaunchIntegrationResolving, @unchecked Sendable {
+    func resolve(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?
+    ) -> CodexManagedLaunchIntegrationDecision {
+        CodexManagedLaunchIntegrationDecision(
+            configuration: nil,
+            assessment: nil,
+            statusTrackingSource: .sessionLogFallback(reason: "test")
+        )
     }
 }
 

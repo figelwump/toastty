@@ -85,25 +85,10 @@ enum CodexStatusHookInstallerError: LocalizedError, Equatable {
 
 final class CodexStatusHookInstaller {
     private static let installLock = NSLock()
-    private static let toasttyStatusMessage = "Toastty Agent Status"
-    private static let hookTimeoutSeconds = 5
-    private static let hookEventNames = [
-        "SessionStart",
-        "UserPromptSubmit",
-        "PermissionRequest",
-        "PreToolUse",
-        "SubagentStart",
-        "SubagentStop",
-        "Stop",
-    ]
+    private static let hookEventNames = CodexSessionIntegrationContract.hookDefinitions.map(\.event.rawValue)
     private static let legacyHookEventNames = [
         "PostToolUse",
     ]
-    private static let matcherByEventName: [String: String] = [
-        "PermissionRequest": "*",
-        "PreToolUse": "*",
-    ]
-
     private let homeDirectoryPath: String
     private let codexHomePath: String?
     private let fileManager: FileManager
@@ -124,33 +109,28 @@ final class CodexStatusHookInstaller {
         let expectedForwarder = Self.forwarderScriptContents(logFilePath: telemetryFailureLogURL().path)
         let expectedCommand = Self.hookCommand(forwarderScriptURL: forwarderScriptURL)
 
-        var state: CodexStatusHookInstallState = .notInstalled
-        var setupRequirement: CodexStatusHookSetupRequirement = .userSetup
+        let hasOwnedHooks: Bool
         if fileManager.fileExists(atPath: hooksFileURL.path) {
             let object = try readHooksJSONObject(from: hooksFileURL)
-            let hasCurrentHooks = Self.hooksAreInstalled(in: object, expectedCommand: expectedCommand)
-            let hasLegacyHooks = Self.containsLegacyToasttyHooks(in: object, expectedCommand: expectedCommand)
-            let hasOwnedHooks = hasCurrentHooks
-                || hasLegacyHooks
-                || Self.containsOwnedToasttyHooks(in: object, expectedCommand: expectedCommand)
-            let hasCurrentForwarder = Self.forwarderScriptIsCurrent(
-                at: forwarderScriptURL,
-                expectedForwarder: expectedForwarder
-            )
-            let hasUnexpectedOwnedHooks = Self.containsUnexpectedOwnedToasttyHooks(
-                in: object,
-                expectedCommand: expectedCommand
-            )
-            if hasCurrentHooks && !hasLegacyHooks && !hasUnexpectedOwnedHooks && hasCurrentForwarder {
-                state = .installed
-                setupRequirement = .none
-            } else if hasOwnedHooks {
-                state = .needsUpdate
-                setupRequirement = .automaticMaintenance
-            } else {
-                state = .notInstalled
-                setupRequirement = .userSetup
-            }
+            hasOwnedHooks = Self.containsOwnedToasttyHooks(in: object, expectedCommand: expectedCommand)
+        } else {
+            hasOwnedHooks = false
+        }
+        let hasCurrentForwarder = Self.forwarderScriptIsCurrent(
+            at: forwarderScriptURL,
+            expectedForwarder: expectedForwarder
+        )
+
+        let state: CodexStatusHookInstallState
+        let setupRequirement: CodexStatusHookSetupRequirement
+        if hasCurrentForwarder, hasOwnedHooks == false {
+            state = .installed
+            setupRequirement = .none
+        } else {
+            state = .needsUpdate
+            // Refreshing the stable forwarder is always safe. Removing working
+            // global hooks waits for explicit Codex integration setup.
+            setupRequirement = hasCurrentForwarder ? .userSetup : .automaticMaintenance
         }
 
         return CodexStatusHookInstallStatus(
@@ -162,8 +142,15 @@ final class CodexStatusHookInstaller {
     }
 
     func install() throws -> CodexStatusHookInstallResult {
+        try prepareSessionIntegrationMigration()
+    }
+
+    /// Explicit setup migration: maintain the stable forwarder and remove only
+    /// Toastty-owned current or legacy global hook entries. This never adds a
+    /// global hook.
+    func prepareSessionIntegrationMigration() throws -> CodexStatusHookInstallResult {
         try Self.withInstallLock {
-            try installWithLockHeld()
+            try prepareSessionIntegrationMigrationWithLockHeld()
         }
     }
 
@@ -172,28 +159,51 @@ final class CodexStatusHookInstaller {
         guard status.needsAutomaticMaintenance else {
             return nil
         }
-        return try install()
+        return try maintainForwarder()
     }
 
-    private func installWithLockHeld() throws -> CodexStatusHookInstallResult {
+    func maintainForwarder() throws -> CodexStatusHookInstallResult {
+        try Self.withInstallLock {
+            let forwarderScriptURL = forwarderScriptURL()
+            let expectedForwarder = Self.forwarderScriptContents(logFilePath: telemetryFailureLogURL().path)
+            let changed = try writeForwarderIfNeeded(expectedForwarder, to: forwarderScriptURL)
+            return CodexStatusHookInstallResult(
+                status: try installationStatus(),
+                hooksFileChanged: false,
+                forwarderScriptChanged: changed
+            )
+        }
+    }
+
+    func legacyGlobalHooksPresent() throws -> Bool {
+        let hooksFileURL = try self.hooksFileURL()
+        guard fileManager.fileExists(atPath: hooksFileURL.path) else { return false }
+        let object = try readHooksJSONObject(from: hooksFileURL)
+        return Self.containsOwnedToasttyHooks(
+            in: object,
+            expectedCommand: Self.hookCommand(forwarderScriptURL: forwarderScriptURL())
+        )
+    }
+
+    func sessionLaunchForwarderCommand() -> String {
+        Self.hookCommand(forwarderScriptURL: forwarderScriptURL())
+    }
+
+    private func prepareSessionIntegrationMigrationWithLockHeld() throws -> CodexStatusHookInstallResult {
         let hooksFileURL = try self.hooksFileURL()
         let forwarderScriptURL = forwarderScriptURL()
         let expectedForwarder = Self.forwarderScriptContents(logFilePath: telemetryFailureLogURL().path)
         let expectedCommand = Self.hookCommand(forwarderScriptURL: forwarderScriptURL)
 
         let previousHooksObject = try existingHooksJSONObject(from: hooksFileURL)
-        let nextHooksObject = Self.installingToasttyHooks(
-            in: previousHooksObject,
-            expectedCommand: expectedCommand
-        )
+        let nextHooksObject = Self.removingToasttyHooks(from: previousHooksObject, expectedCommand: expectedCommand)
+        let hooksChanged = (nextHooksObject as NSDictionary).isEqual(to: previousHooksObject) == false
         let nextHooksData = try JSONSerialization.data(
             withJSONObject: nextHooksObject,
             options: [.prettyPrinted, .sortedKeys]
         )
-        let previousHooksData = try? Data(contentsOf: hooksFileURL)
 
         let forwarderChanged = try writeForwarderIfNeeded(expectedForwarder, to: forwarderScriptURL)
-        let hooksChanged = previousHooksData != nextHooksData
         if hooksChanged {
             do {
                 try fileManager.createDirectory(
@@ -214,20 +224,7 @@ final class CodexStatusHookInstaller {
     }
 
     func uninstall() throws -> CodexStatusHookInstallStatus {
-        let hooksFileURL = try self.hooksFileURL()
-        guard fileManager.fileExists(atPath: hooksFileURL.path) else {
-            return try installationStatus()
-        }
-
-        let object = try readHooksJSONObject(from: hooksFileURL)
-        let nextObject = Self.removingToasttyHooks(from: object, expectedCommand: Self.hookCommand(forwarderScriptURL: forwarderScriptURL()))
-        do {
-            let data = try JSONSerialization.data(withJSONObject: nextObject, options: [.prettyPrinted, .sortedKeys])
-            try data.write(to: hooksFileURL, options: .atomic)
-        } catch {
-            throw CodexStatusHookInstallerError.unableToWriteHooksFile(hooksFileURL.path)
-        }
-        return try installationStatus()
+        try prepareSessionIntegrationMigration().status
     }
 }
 
@@ -301,56 +298,6 @@ private extension CodexStatusHookInstaller {
         }
     }
 
-    static func hooksAreInstalled(
-        in object: [String: Any],
-        expectedCommand: String
-    ) -> Bool {
-        guard let hooks = object["hooks"] as? [String: Any] else {
-            return false
-        }
-
-        return hookEventNames.allSatisfy { eventName in
-            guard let groups = hooks[eventName] as? [[String: Any]] else {
-                return false
-            }
-            return groups.contains { group in
-                if let matcher = matcherByEventName[eventName],
-                   (group["matcher"] as? String) != matcher {
-                    return false
-                }
-                guard let hookEntries = group["hooks"] as? [[String: Any]] else {
-                    return false
-                }
-                return hookEntries.contains { hookEntry in
-                    isExpectedToasttyHook(hookEntry, expectedCommand: expectedCommand)
-                }
-            }
-        }
-    }
-
-    static func containsLegacyToasttyHooks(
-        in object: [String: Any],
-        expectedCommand: String
-    ) -> Bool {
-        guard let hooks = object["hooks"] as? [String: Any] else {
-            return false
-        }
-
-        return legacyHookEventNames.contains { eventName in
-            guard let groups = hooks[eventName] as? [[String: Any]] else {
-                return false
-            }
-            return groups.contains { group in
-                guard let hookEntries = group["hooks"] as? [[String: Any]] else {
-                    return false
-                }
-                return hookEntries.contains {
-                    isOwnedToasttyHook($0, expectedCommand: expectedCommand)
-                }
-            }
-        }
-    }
-
     static func containsOwnedToasttyHooks(
         in object: [String: Any],
         expectedCommand: String
@@ -372,59 +319,6 @@ private extension CodexStatusHookInstaller {
                 }
             }
         }
-    }
-
-    static func containsUnexpectedOwnedToasttyHooks(
-        in object: [String: Any],
-        expectedCommand: String
-    ) -> Bool {
-        guard let hooks = object["hooks"] as? [String: Any] else {
-            return false
-        }
-
-        var expectedHookCountByEventName: [String: Int] = [:]
-        for eventName in hookEventNames + legacyHookEventNames {
-            guard let groups = hooks[eventName] as? [[String: Any]] else {
-                continue
-            }
-            for group in groups {
-                guard let hookEntries = group["hooks"] as? [[String: Any]] else {
-                    continue
-                }
-                for hookEntry in hookEntries where isOwnedToasttyHook(hookEntry, expectedCommand: expectedCommand) {
-                    guard legacyHookEventNames.contains(eventName) == false,
-                          isExpectedToasttyHook(
-                              hookEntry,
-                              in: group,
-                              for: eventName,
-                              expectedCommand: expectedCommand
-                          ) else {
-                        return true
-                    }
-                    let expectedHookCount = (expectedHookCountByEventName[eventName] ?? 0) + 1
-                    if expectedHookCount > 1 {
-                        return true
-                    }
-                    expectedHookCountByEventName[eventName] = expectedHookCount
-                }
-            }
-        }
-        return false
-    }
-
-    static func installingToasttyHooks(
-        in object: [String: Any],
-        expectedCommand: String
-    ) -> [String: Any] {
-        var nextObject = removingToasttyHooks(from: object, expectedCommand: expectedCommand)
-        var hooks = nextObject["hooks"] as? [String: Any] ?? [:]
-        for eventName in hookEventNames {
-            var groups = hooks[eventName] as? [[String: Any]] ?? []
-            groups.append(expectedGroup(for: eventName, expectedCommand: expectedCommand))
-            hooks[eventName] = groups
-        }
-        nextObject["hooks"] = hooks
-        return nextObject
     }
 
     static func removingToasttyHooks(
@@ -465,57 +359,11 @@ private extension CodexStatusHookInstaller {
         return nextObject
     }
 
-    static func expectedGroup(for eventName: String, expectedCommand: String) -> [String: Any] {
-        var group: [String: Any] = [:]
-        if let matcher = matcherByEventName[eventName] {
-            group["matcher"] = matcher
-        }
-        group["hooks"] = [
-            [
-                "type": "command",
-                "command": expectedCommand,
-                "timeout": hookTimeoutSeconds,
-                "statusMessage": toasttyStatusMessage,
-            ],
-        ]
-        return group
-    }
-
-    static func isExpectedToasttyHook(_ hook: [String: Any], expectedCommand: String) -> Bool {
-        guard isOwnedToasttyHook(hook, expectedCommand: expectedCommand),
-              (hook["type"] as? String) == "command",
-              (hook["command"] as? String) == expectedCommand,
-              (hook["statusMessage"] as? String) == toasttyStatusMessage else {
-            return false
-        }
-        if let timeout = hook["timeout"] as? NSNumber {
-            return timeout.intValue == hookTimeoutSeconds
-        }
-        if let timeout = hook["timeout"] as? Int {
-            return timeout == hookTimeoutSeconds
-        }
-        return false
-    }
-
-    static func isExpectedToasttyHook(
-        _ hook: [String: Any],
-        in group: [String: Any],
-        for eventName: String,
-        expectedCommand: String
-    ) -> Bool {
-        if let matcher = matcherByEventName[eventName],
-           (group["matcher"] as? String) != matcher {
-            return false
-        }
-        return isExpectedToasttyHook(hook, expectedCommand: expectedCommand)
-    }
-
     static func isOwnedToasttyHook(_ hook: [String: Any], expectedCommand: String) -> Bool {
         guard let command = hook["command"] as? String else {
             return false
         }
-        return command == expectedCommand ||
-            command.hasPrefix("/bin/sh ") && command.contains("/.toastty/codex-hooks/forwarder.sh")
+        return command == expectedCommand
     }
 
     static func forwarderScriptIsCurrent(

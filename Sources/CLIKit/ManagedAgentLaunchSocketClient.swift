@@ -94,6 +94,12 @@ enum ManagedAgentLaunchSocketClient {
                 }
             )
         }
+        if let hint = request.codexCapabilityHint {
+            payload["resolvedCodexExecutablePath"] = .string(hint.resolvedExecutablePath)
+            if let codexHomePath = hint.codexHomePath {
+                payload["codexHomePath"] = .string(codexHomePath)
+            }
+        }
         return payload
     }
 }

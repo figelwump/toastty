@@ -51,9 +51,16 @@ enum AgentStatusHooksStepState: Equatable {
     case installSucceeded(CodexStatusHookInstallResult)
     case unavailable(String)
     case installFailed(CodexStatusHookInstallStatus, String)
+    case integrationStatus(CodexIntegrationSetupStatus)
+    case settingUpIntegration(CodexIntegrationSetupStatus?)
+    case integrationSetupSucceeded(CodexIntegrationSetupResult)
+    case integrationActionFailed(CodexIntegrationSetupStatus?, String)
 
     var blocksNavigation: Bool {
         if case .installing = self {
+            return true
+        }
+        if case .settingUpIntegration = self {
             return true
         }
         return false
@@ -136,6 +143,8 @@ struct AgentGetStartedSheet: View {
     @State private var openKeyboardShortcutsReferenceErrorMessage: String?
     @State private var shellIntegrationTask: Task<Void, Never>?
     @State private var agentStatusHooksTask: Task<Void, Never>?
+    @State private var pendingCodexUninstallStatus: CodexIntegrationSetupStatus?
+    @State private var showsCodexUninstallConfirmation = false
 
     init(
         initialStep: AgentGetStartedStep = .chooser,
@@ -170,6 +179,25 @@ struct AgentGetStartedSheet: View {
                 agentStatusHooksState: agentStatusHooksState
             )
         )
+        .confirmationDialog(
+            "Uninstall Codex Integration?",
+            isPresented: $showsCodexUninstallConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Uninstall and Keep Legacy Backups", role: .destructive) {
+                if let status = pendingCodexUninstallStatus {
+                    uninstallCodexIntegration(currentStatus: status, restoreLegacySkills: false)
+                }
+            }
+            Button("Uninstall and Restore Legacy Skills", role: .destructive) {
+                if let status = pendingCodexUninstallStatus {
+                    uninstallCodexIntegration(currentStatus: status, restoreLegacySkills: true)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the Toastty plugin and marketplace. Codex must be restarted before the change is visible. Disabled-name tombstones remain because Codex cannot remove them individually.")
+        }
         .onAppear {
             loadInitialStepIfNeeded()
         }
@@ -225,12 +253,12 @@ struct AgentGetStartedSheet: View {
             }
 
             sectionCard(
-                title: "Agent Status Hooks",
+                title: "Codex Integration",
                 body: """
-                Install stable status hooks so Toastty can track agent progress, approval requests, and turn completion without relying on fragile terminal logs.
+                Install Toastty's Codex skills for managed sessions and use process-scoped status hooks. Ordinary Codex launches keep the skills disabled.
                 """
             ) {
-                Button("Set Up Agent Status Hooks") {
+                Button("Set Up Codex Integration") {
                     showAgentStatusHooksStep()
                 }
                 .accessibilityIdentifier("sheet.agent.get-started.status-hooks")
@@ -262,8 +290,8 @@ struct AgentGetStartedSheet: View {
     private var agentStatusHooksContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionCard(
-                title: "Codex Status Hooks",
-                body: "Toastty installs one stable Codex hook forwarder and adds it to ~/.codex/hooks.json. Codex may ask you to review and trust the hook once."
+                title: "Codex Integration",
+                body: "Toastty installs a skills-only plugin with its skills globally disabled, then enables the skills and status hooks only for managed Toastty sessions. Codex may ask you to review and trust the session hooks once."
             ) {
                 agentStatusHooksStateContent
             }
@@ -453,7 +481,7 @@ struct AgentGetStartedSheet: View {
         case .shellIntegration:
             return "Set Up Typed Commands"
         case .agentStatusHooks:
-            return "Agent Status Hooks"
+            return "Codex Integration"
         case .keyboardShortcuts:
             return "Keyboard Shortcuts"
         }
@@ -463,11 +491,58 @@ struct AgentGetStartedSheet: View {
     private var agentStatusHooksStateContent: some View {
         switch agentStatusHooksState {
         case .loading:
-            loadingContent(message: "Checking Codex hook setup.")
+            loadingContent(message: "Checking Codex integration status.")
+
+        case .integrationStatus(let status):
+            codexIntegrationStatusDetails(status)
+            Button(status.isReady ? "Update Codex Integration" : "Set Up Codex Integration") {
+                setUpCodexIntegration(currentStatus: status)
+            }
+            .keyboardShortcut(.defaultAction)
+            .accessibilityIdentifier("sheet.agent.get-started.install-status-hooks")
+            Button("Uninstall Codex Integration…", role: .destructive) {
+                requestCodexIntegrationUninstall(currentStatus: status)
+            }
+            .accessibilityIdentifier("sheet.agent.get-started.uninstall-codex-integration")
+
+        case .settingUpIntegration(let status):
+            if let status {
+                codexIntegrationStatusDetails(status)
+            }
+            loadingContent(message: "Updating Codex integration.")
+
+        case .integrationSetupSucceeded(let result):
+            inlineMessage(
+                "Codex integration setup completed.",
+                textColor: ToastyTheme.sessionReadyText,
+                backgroundColor: ToastyTheme.sessionReadyBackground,
+                identifier: "sheet.agent.get-started.status-hooks-installed"
+            )
+            codexIntegrationStatusDetails(result.status)
+            Button("Check for Updates") {
+                setUpCodexIntegration(currentStatus: result.status)
+            }
+            Button("Uninstall Codex Integration…", role: .destructive) {
+                requestCodexIntegrationUninstall(currentStatus: result.status)
+            }
+
+        case .integrationActionFailed(let status, let message):
+            if let status {
+                codexIntegrationStatusDetails(status)
+            }
+            inlineMessage(
+                message,
+                textColor: ToastyTheme.sessionErrorText,
+                backgroundColor: ToastyTheme.sessionErrorBackground,
+                identifier: "sheet.agent.get-started.error.status-hooks-install"
+            )
+            Button("Retry Codex Integration Setup") {
+                setUpCodexIntegration(currentStatus: status)
+            }
 
         case .installable(let status):
             codexStatusHooksDetails(status: status)
-            Button(status.state == .needsUpdate ? "Update Codex Hooks" : "Install Codex Hooks") {
+            Button(status.state == .needsUpdate ? "Update Codex Integration" : "Set Up Codex Integration") {
                 installAgentStatusHooks(status: status)
             }
             .keyboardShortcut(.defaultAction)
@@ -475,7 +550,7 @@ struct AgentGetStartedSheet: View {
 
         case .alreadyInstalled(let status):
             inlineMessage(
-                "Codex status hooks are installed.",
+                "Codex integration migration is complete.",
                 textColor: ToastyTheme.sessionReadyText,
                 backgroundColor: ToastyTheme.sessionReadyBackground,
                 identifier: "sheet.agent.get-started.status-hooks-ready"
@@ -484,7 +559,7 @@ struct AgentGetStartedSheet: View {
 
         case .installing(let status):
             codexStatusHooksDetails(status: status)
-            loadingContent(message: "Installing Codex status hooks.")
+            loadingContent(message: "Setting up the Codex integration.")
             Button("Installing…") {}
                 .disabled(true)
                 .accessibilityIdentifier("sheet.agent.get-started.installing-status-hooks")
@@ -514,7 +589,7 @@ struct AgentGetStartedSheet: View {
                 backgroundColor: ToastyTheme.sessionErrorBackground,
                 identifier: "sheet.agent.get-started.error.status-hooks-install"
             )
-            Button(status.state == .needsUpdate ? "Update Codex Hooks" : "Install Codex Hooks") {
+            Button(status.state == .needsUpdate ? "Update Codex Integration" : "Set Up Codex Integration") {
                 installAgentStatusHooks(status: status)
             }
             .keyboardShortcut(.defaultAction)
@@ -614,9 +689,49 @@ struct AgentGetStartedSheet: View {
         _ result: CodexStatusHookInstallResult
     ) -> String {
         if result.hooksFileChanged || result.forwarderScriptChanged {
-            return "Codex status hooks are installed."
+            return "Codex integration migration is complete."
         }
-        return "Codex status hooks were already current."
+        return "Codex integration migration was already current."
+    }
+
+    @ViewBuilder
+    private func codexIntegrationStatusDetails(_ status: CodexIntegrationSetupStatus) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            codexIntegrationStatusRow(title: "Plugin and disabled skills", status: status.plugin)
+            codexIntegrationStatusRow(title: "Legacy standalone skills", status: status.legacySkills)
+            codexIntegrationStatusRow(title: "Legacy global hooks", status: status.globalHooks)
+            codexIntegrationStatusRow(title: "Managed session hooks", status: status.sessionHooks)
+            codexIntegrationStatusRow(title: "Telemetry mode", status: status.fallback)
+            ForEach(status.legacySkillConflictPaths, id: \.self) { path in
+                Text("Preserved modified skill: \(path)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .textSelection(.enabled)
+            }
+            if status.sessionHooks.state == .warning {
+                Text("Run /hooks in a managed Codex session, trust the exact Toastty session hooks, then start a new session.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+            }
+            if status.disabledNameTombstones.isEmpty == false {
+                Text("Codex keeps harmless disabled-name entries after uninstall: \(status.disabledNameTombstones.joined(separator: ", ")).")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+            }
+        }
+    }
+
+    private func codexIntegrationStatusRow(
+        title: String,
+        status: CodexIntegrationComponentStatus
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+            Text(status.detail)
+                .font(.system(size: 11))
+                .foregroundStyle(status.state == .ready ? ToastyTheme.sessionReadyText : ToastyTheme.inactiveText)
+        }
     }
 
     private func sectionCard<Content: View>(
@@ -826,22 +941,94 @@ struct AgentGetStartedSheet: View {
             await MainActor.run {
                 agentStatusHooksState = .loading
             }
-            let result: Result<CodexStatusHookInstallStatus, AgentGetStartedActionError>
-            do {
-                let status = try CodexStatusHookInstaller().installationStatus()
-                result = .success(status)
-            } catch {
-                result = .failure(AgentGetStartedActionError(message: error.localizedDescription))
-            }
+            let result: Result<CodexIntegrationSetupStatus, AgentGetStartedActionError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    let runtime = try CodexIntegrationRuntimeLocator.resolve()
+                    return .success(CodexIntegrationManager().status(runtime: runtime))
+                } catch {
+                    return .failure(AgentGetStartedActionError(message: error.localizedDescription))
+                }
+            }.value
 
             guard Task.isCancelled == false else { return }
 
             await MainActor.run {
                 switch result {
                 case .success(let status):
-                    agentStatusHooksState = AgentStatusHooksStepResolver.loadedState(from: status)
+                    agentStatusHooksState = .integrationStatus(status)
                 case .failure(let error):
                     agentStatusHooksState = .unavailable(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func setUpCodexIntegration(currentStatus: CodexIntegrationSetupStatus?) {
+        agentStatusHooksTask?.cancel()
+        agentStatusHooksTask = Task(priority: .userInitiated) {
+            await MainActor.run {
+                agentStatusHooksState = .settingUpIntegration(currentStatus)
+            }
+            let result: Result<CodexIntegrationSetupResult, AgentGetStartedActionError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    let runtime = try CodexIntegrationRuntimeLocator.resolve()
+                    return .success(try CodexIntegrationManager().setup(runtime: runtime))
+                } catch {
+                    return .failure(AgentGetStartedActionError(message: error.localizedDescription))
+                }
+            }.value
+            guard Task.isCancelled == false else { return }
+            await MainActor.run {
+                switch result {
+                case .success(let setupResult):
+                    agentStatusHooksState = .integrationSetupSucceeded(setupResult)
+                case .failure(let error):
+                    agentStatusHooksState = .integrationActionFailed(currentStatus, error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func requestCodexIntegrationUninstall(currentStatus: CodexIntegrationSetupStatus) {
+        pendingCodexUninstallStatus = currentStatus
+        showsCodexUninstallConfirmation = true
+    }
+
+    private func uninstallCodexIntegration(
+        currentStatus: CodexIntegrationSetupStatus,
+        restoreLegacySkills: Bool
+    ) {
+        agentStatusHooksTask?.cancel()
+        agentStatusHooksTask = Task(priority: .userInitiated) {
+            await MainActor.run {
+                agentStatusHooksState = .settingUpIntegration(currentStatus)
+            }
+            let result: Result<CodexIntegrationSetupStatus, AgentGetStartedActionError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    let runtime = try CodexIntegrationRuntimeLocator.resolve()
+                    return .success(
+                        try CodexIntegrationManager().uninstall(
+                            runtime: runtime,
+                            restoreLegacySkills: restoreLegacySkills
+                        )
+                    )
+                } catch {
+                    return .failure(AgentGetStartedActionError(message: error.localizedDescription))
+                }
+            }.value
+            guard Task.isCancelled == false else { return }
+            await MainActor.run {
+                switch result {
+                case .success(let status):
+                    agentStatusHooksState = .integrationStatus(status)
+                case .failure(let error):
+                    agentStatusHooksState = .integrationActionFailed(currentStatus, error.localizedDescription)
                 }
             }
         }

@@ -240,7 +240,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .manageAgents:
             return "Manage Agents"
         case .setUpAgentStatusHooks:
-            return "Set Up Agent Status Hooks"
+            return "Set Up Codex Integration"
         case .copyDiagnosticsSnippet:
             return "Copy Diagnostics Collection Snippet"
         case .reloadConfiguration:

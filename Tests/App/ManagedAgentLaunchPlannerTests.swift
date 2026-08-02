@@ -1695,7 +1695,8 @@ private func makePlannerFixture(
     codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
     codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
         .sessionLogFallback(reason: "test")
-    }
+    },
+    codexSessionIntegrationResolver: (any CodexManagedLaunchIntegrationResolving)? = nil
 ) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
@@ -1719,6 +1720,14 @@ private func makePlannerFixture(
     let sessionRuntimeStore = SessionRuntimeStore()
     sessionRuntimeStore.bind(store: store)
 
+    let resolvedCodexSessionIntegrationResolver = codexSessionIntegrationResolver
+        ?? TestCodexManagedLaunchIntegrationResolver(
+            decision: CodexManagedLaunchIntegrationDecision(
+                configuration: nil,
+                assessment: nil,
+                statusTrackingSource: codexStatusTrackingSourceProvider()
+            )
+        )
     let planner = ManagedAgentLaunchPlanner(
         store: store,
         sessionRuntimeStore: sessionRuntimeStore,
@@ -1731,10 +1740,26 @@ private func makePlannerFixture(
         readVisibleText: { _ in nil },
         promptState: { _ in .unavailable },
         nativeSessionObserverRegistry: nativeSessionObserverRegistry,
-        codexResumeResolver: codexResumeResolver
+        codexResumeResolver: codexResumeResolver,
+        codexSessionIntegrationResolver: resolvedCodexSessionIntegrationResolver
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
+}
+
+private final class TestCodexManagedLaunchIntegrationResolver: CodexManagedLaunchIntegrationResolving, @unchecked Sendable {
+    private let decision: CodexManagedLaunchIntegrationDecision
+
+    init(decision: CodexManagedLaunchIntegrationDecision) {
+        self.decision = decision
+    }
+
+    func resolve(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) -> CodexManagedLaunchIntegrationDecision {
+        decision
+    }
 }
 
 @MainActor

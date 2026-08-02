@@ -2422,10 +2422,10 @@ struct ToasttyApp: App {
         appLifecycleDelegate.configureStore(store)
         appLifecycleDelegate.configureTerminalRuntimeRegistry(terminalRuntimeRegistry)
         appLifecycleDelegate.configureWebPanelRuntimeRegistry(webPanelRuntimeRegistry)
-        Self.scheduleCodexStatusHookMaintenanceIfNeeded(automationConfig: bootstrap.automationConfig)
+        Self.scheduleCodexIntegrationMaintenanceIfNeeded(automationConfig: bootstrap.automationConfig)
     }
 
-    private static func scheduleCodexStatusHookMaintenanceIfNeeded(
+    private static func scheduleCodexIntegrationMaintenanceIfNeeded(
         automationConfig: AutomationConfig?
     ) {
         guard automationConfig == nil else { return }
@@ -2436,7 +2436,7 @@ struct ToasttyApp: App {
                     return
                 }
                 ToasttyLog.info(
-                    "Automatically maintained Codex status hooks",
+                    "Automatically maintained the Codex integration forwarder",
                     category: .bootstrap,
                     metadata: [
                         "hooks_file": result.status.hooksFileURL.path,

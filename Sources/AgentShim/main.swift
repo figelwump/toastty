@@ -132,7 +132,14 @@ private enum AgentCommandShim {
                 panelID: panelID,
                 argv: invocation.argv,
                 cwd: cwd,
-                preflightPolicy: .interactive
+                preflightPolicy: .interactive,
+                codexCapabilityHint: invocation.agent == .codex
+                    && ["codex", "cdx"].contains(commandName.lowercased())
+                    ? ManagedCodexCapabilityHint(
+                        resolvedExecutablePath: realBinaryPath,
+                        codexHomePath: normalizedNonEmpty(resolvedLaunchEnvironment["CODEX_HOME"])
+                    )
+                    : nil
             ),
             environment: environment
         )
@@ -438,7 +445,8 @@ private enum AgentCommandShim {
                     panelID: request.panelID,
                     argv: request.argv,
                     cwd: request.cwd,
-                    preflightPolicy: .skip
+                    preflightPolicy: .skip,
+                    codexCapabilityHint: request.codexCapabilityHint
                 )
                 return prepareManagedLaunch(
                     cliPath: cliPath,
@@ -476,6 +484,14 @@ private enum AgentCommandShim {
         }
         arguments.append("--preflight-policy")
         arguments.append(request.preflightPolicy.rawValue)
+        if let hint = request.codexCapabilityHint {
+            arguments.append("--resolved-codex-executable")
+            arguments.append(hint.resolvedExecutablePath)
+            if let codexHomePath = normalizedNonEmpty(hint.codexHomePath) {
+                arguments.append("--codex-home")
+                arguments.append(codexHomePath)
+            }
+        }
         for argument in request.argv {
             arguments.append("--arg")
             arguments.append(argument)

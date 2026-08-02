@@ -125,7 +125,7 @@ documents, and Scratchpads. Open the list from the empty right-panel view or
 the right-panel Add menu to reopen supporting material without navigating back
 to its original workspace tab.
 
-`Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. After the `toastty-scratchpad` skill is installed for an agent, you can usually skip manual creation and ask the agent for a visual; the agent can create and bind its own Scratchpad on demand.
+`Cmd+Ctrl+S` starts an unbound manual Scratchpad. Use the binding chip in the Scratchpad header to attach it to an active Toastty-managed agent session in the current tab. Managed Codex sessions can use the session-only `toastty-scratchpad` skill after the Codex integration is set up, so you can usually ask the agent for a visual and let it create and bind its own Scratchpad on demand.
 
 Browser panel header actions can open the current page in the default browser, copy or save the visible page screenshot, insert a temporary PNG path into an active Toastty-managed agent session in the same workspace tab, or annotate the page with numbered comments and send that visual feedback to an active agent.
 
@@ -180,7 +180,7 @@ Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the c
 
 The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes five well-known IDs that receive first-party instrumentation:
 
-- **`codex`** — Uses installed Codex status hooks when set up, with notify and session-recording fallback paths for compatibility. Typed `cdx` launches are treated as Codex too.
+- **`codex`** — Enables Toastty's five Codex skills and seven lifecycle hooks only for the managed process when the Codex integration is set up, with notify and session-recording fallback paths for compatibility. Typed `cdx` launches are treated as Codex too.
 - **`claude`** — Injects Claude Code lifecycle hooks that report session state back to the sidebar automatically
 - **`opencode`** — Injects a temporary OpenCode-compatible status plugin through `OPENCODE_CONFIG_CONTENT`
 - **`mimocode`** — Injects a temporary OpenCode-compatible status plugin through `MIMOCODE_CONFIG_CONTENT`; typed `mimo` launches are treated as MiMo Code too
@@ -201,7 +201,7 @@ argv = ["codex"]              # (ID is "my-codex", not "codex")
 
 For Pi, Toastty adds its own `--extension <toastty-pi-extension.js>` argument after the actual `pi` executable. User `--extension` arguments remain additive; `pi --no-extensions` or `pi -ne` disables Toastty's injected extension for that launch too. Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
 
-For the most complete Codex progress and approval status, run `Toastty > Set Up Agent Status Hooks…` once. Toastty installs a stable hook forwarder under `~/.toastty/codex-hooks/` and adds it to `~/.codex/hooks.json`, so Codex can ask you to review and trust the same command instead of a new temporary script each session.
+Run `Toastty > Set Up Codex Integration…` once to install Toastty's skills-only Codex plugin and stable hook forwarder. The five Toastty skills remain disabled in ordinary Codex sessions and are enabled only for Codex processes launched as managed Toastty sessions. Toastty injects the seven lifecycle hooks into those processes instead of registering them globally in `~/.codex/hooks.json`; Codex may ask you to review the stable hook definitions once with `/hooks`. Until they are trusted—or on an older or incompatible Codex build—Toastty keeps the notify/session-recording fallback and never blocks the launch.
 
 ## CLI
 
@@ -233,7 +233,7 @@ For the full command reference including all flags, environment variables, JSON 
 
 The CLI can also drive higher-level workflows against a normal running Toastty instance. This repo's `worktree-create` skill is one example: it resolves the current Toastty window, scopes the current parent session when needed, creates a background workspace, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and launches the new agent with structured `agent.launch` arguments for `cwd`, environment, `initialPrompt`, and optional setup commands. Fully custom startup commands remain available through the helper's explicit `--startup-command` path.
 
-Repo-local skills can be linked into supported global agent skill directories with `scripts/agents/link-global-skills.sh`. Run it with `--help` to list supported targets, selected skills, and cleanup options.
+Repo-local skills can be linked into supported Claude and generic-agent skill directories with `scripts/agents/link-global-skills.sh`. Managed Codex uses the session-only plugin installed by Toastty instead of global skill links. Run the script with `--help` to list its supported targets, selected skills, and cleanup options.
 
 If you want to point an agent at that pattern and have it adapt the workflow for another repo, use this prompt:
 
@@ -256,7 +256,7 @@ Use `Toastty > Manage Config…` to open or create the live config file inside T
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local terminal UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
-- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations (`codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, and `pi`) inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. `manualCommandNames` is only for extra wrapper executable names; Codex status-hook checks apply to managed Codex launches from typed shims and UI launches. Set this flag to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
+- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations (`codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, and `pi`) inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. `manualCommandNames` is only for extra wrapper executable names; Codex integration checks apply to managed Codex launches from typed shims and UI launches. Set this flag to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
 - the `View` menu uses contextual labels for this shortcut family: focused terminals and local documents show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
 
 Example:
