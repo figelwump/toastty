@@ -898,11 +898,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     ) {
         guard let registration = codexRolloutWatchersBySessionID[sessionID],
               registration.id == registrationID,
-              registration.logURL == logURL else {
-            return
-        }
-        if let desiredLogURL = desiredCodexRolloutLogURLsBySessionID[sessionID],
-           desiredLogURL != logURL {
+              registration.logURL == logURL,
+              desiredCodexRolloutLogURLsBySessionID[sessionID] == logURL else {
             return
         }
         switch event.kind {

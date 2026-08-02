@@ -1322,6 +1322,58 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         }
     }
 
+    func testCodexRolloutWatcherRejectsFinalDrainEventsAfterDetach() async throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: codexResumeRecord(sessionFilePath: rolloutURL.path)
+            )
+        ))
+        try await Task.sleep(for: .milliseconds(50))
+
+        let occurredAtMilliseconds = Int(Date().addingTimeInterval(60).timeIntervalSince1970 * 1_000)
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_detach_drain","occurred_at_ms":\#(occurredAtMilliseconds),"agent_path":"/root/detach_drain","kind":"started"}}"#,
+            to: rolloutURL
+        )
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: nil
+            )
+        ))
+
+        await waitUntil {
+            fixture.planner.codexRolloutWatcherTransitionCountForTesting == 0 &&
+                fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID] == nil
+        }
+        XCTAssertNil(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/detach_drain"],
+            "Final-drain events must not mutate state after the rollout claim is detached"
+        )
+    }
+
     func testCodexRolloutWatcherAttachesWhenCodexInstrumentationFails() async throws {
         let fixture = try makePlannerFixture(fileManager: ThrowingCreateDirectoryFileManager())
         let rolloutURL = temporaryJSONLURL()
