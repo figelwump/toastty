@@ -207,12 +207,143 @@ private struct CodexMultiAgentPendingCalls: Sendable {
     private static let limit = 64
 }
 
+struct CodexSessionLogFileIdentity: Equatable, Sendable {
+    let deviceNumber: UInt64
+    let fileNumber: UInt64
+}
+
+struct CodexSessionLogCursor: Equatable, Sendable {
+    let fileIdentity: CodexSessionLogFileIdentity?
+    let completeLineOffset: UInt64
+    let lastCompleteLineHash: UInt64
+    let lastCompleteLineByteCount: UInt64
+}
+
+/// Reference storage avoids copying the complete lifetime dedupe set whenever
+/// the runtime cursor advances. Watcher replacement is serialized by
+/// `ManagedAgentLaunchPlanner`, so the cursor checkpoint and active parser have
+/// one logical owner even though both retain this storage.
+private final class CodexSessionLogSeenKeys: @unchecked Sendable {
+    private var storage: Set<String> = []
+
+    @discardableResult
+    func insert(_ key: String) -> (inserted: Bool, memberAfterInsert: String) {
+        storage.insert(key)
+    }
+}
+
+private struct CodexSessionLogParserState: Sendable {
+    var seenKeys = CodexSessionLogSeenKeys()
+    var sessionTopLevelApprovalsReviewer: CodexSessionLogContextField = .unspecified
+    var pendingMultiAgentCalls = CodexMultiAgentPendingCalls()
+}
+
+private struct CodexSessionLogCheckpoint: Sendable {
+    let cursor: CodexSessionLogCursor
+    let parserState: CodexSessionLogParserState
+}
+
+/// Runtime-only checkpoint retained by the App while one managed session owns
+/// a particular log stream. The parser state travels with the byte cursor so a
+/// watcher recreation behaves like one continuous watcher without replaying
+/// earlier lines or losing source-local parsing context.
+final class CodexSessionLogCursorState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var checkpoint: CodexSessionLogCheckpoint?
+
+    fileprivate func snapshot() -> CodexSessionLogCheckpoint? {
+        lock.lock()
+        defer { lock.unlock() }
+        return checkpoint
+    }
+
+    fileprivate func store(_ checkpoint: CodexSessionLogCheckpoint) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.checkpoint = checkpoint
+    }
+
+    fileprivate func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        checkpoint = nil
+    }
+
+    var cursorForTesting: CodexSessionLogCursor? {
+        snapshot()?.cursor
+    }
+}
+
+private struct CodexSessionLogFileSnapshot {
+    let byteCount: UInt64
+    let identity: CodexSessionLogFileIdentity?
+}
+
+private struct CodexSessionLogReaderState {
+    var handle: FileHandle?
+    var isInitialized = false
+    var fileIdentity: CodexSessionLogFileIdentity?
+    var readOffset: UInt64 = 0
+    var completeLineOffset: UInt64 = 0
+    var lastCompleteLineHash: UInt64?
+    var lastCompleteLineByteCount: UInt64?
+
+    var cursor: CodexSessionLogCursor? {
+        guard completeLineOffset > 0,
+              let lastCompleteLineHash,
+              let lastCompleteLineByteCount else {
+            return nil
+        }
+        return CodexSessionLogCursor(
+            fileIdentity: fileIdentity,
+            completeLineOffset: completeLineOffset,
+            lastCompleteLineHash: lastCompleteLineHash,
+            lastCompleteLineByteCount: lastCompleteLineByteCount
+        )
+    }
+
+    mutating func resume(
+        from cursor: CodexSessionLogCursor,
+        fileIdentity: CodexSessionLogFileIdentity?
+    ) {
+        isInitialized = true
+        self.fileIdentity = fileIdentity
+        readOffset = cursor.completeLineOffset
+        completeLineOffset = cursor.completeLineOffset
+        lastCompleteLineHash = cursor.lastCompleteLineHash
+        lastCompleteLineByteCount = cursor.lastCompleteLineByteCount
+    }
+
+    mutating func restart(fileIdentity: CodexSessionLogFileIdentity?) {
+        CodexSessionLogWatcher.close(&handle)
+        isInitialized = true
+        self.fileIdentity = fileIdentity
+        readOffset = 0
+        completeLineOffset = 0
+        lastCompleteLineHash = nil
+        lastCompleteLineByteCount = nil
+    }
+}
+
+private struct CodexSessionLogConsumedLines {
+    let byteCount: UInt64
+    let lastLineHash: UInt64
+    let lastLineByteCount: UInt64
+}
+
+private enum CodexSessionLogReadResult {
+    case data(Data)
+    case discardIncompleteRemainder
+    case restartFromZero
+}
+
 final class CodexSessionLogWatcher {
     typealias EventHandler = @Sendable (CodexSessionLogEvent) async -> Void
 
     private let logURL: URL
     private let pollIntervalNanoseconds: UInt64
     private let eventHandler: EventHandler
+    private let cursorState: CodexSessionLogCursorState
     // Ignore multi-agent lifecycle entries recorded before this instant.
     // Rollout files can be re-claimed across launches (workspace restore),
     // and replaying pre-launch spawns would resurrect dead collab agents.
@@ -223,11 +354,13 @@ final class CodexSessionLogWatcher {
         logURL: URL,
         pollIntervalNanoseconds: UInt64 = 250_000_000,
         multiAgentEventCutoff: Date? = nil,
+        cursorState: CodexSessionLogCursorState = CodexSessionLogCursorState(),
         eventHandler: @escaping EventHandler
     ) {
         self.logURL = logURL
         self.pollIntervalNanoseconds = pollIntervalNanoseconds
         self.multiAgentEventCutoff = multiAgentEventCutoff
+        self.cursorState = cursorState
         self.eventHandler = eventHandler
     }
 
@@ -238,6 +371,7 @@ final class CodexSessionLogWatcher {
             logURL: logURL,
             pollIntervalNanoseconds: pollIntervalNanoseconds,
             multiAgentEventCutoff: multiAgentEventCutoff,
+            cursorState: cursorState,
             eventHandler: eventHandler
         )
     }
@@ -256,26 +390,22 @@ private extension CodexSessionLogWatcher {
         logURL: URL,
         pollIntervalNanoseconds: UInt64,
         multiAgentEventCutoff: Date? = nil,
+        cursorState: CodexSessionLogCursorState,
         eventHandler: @escaping EventHandler
     ) -> Task<Void, Never> {
         Task.detached(priority: .utility) {
-            var handle: FileHandle?
-            var offset: UInt64 = 0
+            var readerState = CodexSessionLogReaderState()
             var bufferedRemainder = Data()
-            var seenKeys: Set<String> = []
-            var sessionTopLevelApprovalsReviewer: CodexSessionLogContextField = .unspecified
-            var pendingMultiAgentCalls = CodexMultiAgentPendingCalls()
-            defer { close(&handle) }
+            var parserState = CodexSessionLogParserState()
+            defer { close(&readerState.handle) }
 
             while true {
                 await Self.drainAvailableDeltas(
                     from: logURL,
-                    handle: &handle,
-                    offset: &offset,
+                    readerState: &readerState,
                     bufferedRemainder: &bufferedRemainder,
-                    seenKeys: &seenKeys,
-                    sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-                    pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                    parserState: &parserState,
+                    cursorState: cursorState,
                     multiAgentEventCutoff: multiAgentEventCutoff,
                     eventHandler: eventHandler
                 )
@@ -286,12 +416,10 @@ private extension CodexSessionLogWatcher {
                     // before teardown so we do not lose that last status update.
                     await Self.drainAvailableDeltas(
                         from: logURL,
-                        handle: &handle,
-                        offset: &offset,
+                        readerState: &readerState,
                         bufferedRemainder: &bufferedRemainder,
-                        seenKeys: &seenKeys,
-                        sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-                        pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                        parserState: &parserState,
+                        cursorState: cursorState,
                         multiAgentEventCutoff: multiAgentEventCutoff,
                         eventHandler: eventHandler
                     )
@@ -300,68 +428,91 @@ private extension CodexSessionLogWatcher {
 
                 try? await Task.sleep(nanoseconds: pollIntervalNanoseconds)
             }
-
-            let events = Self.parseBufferedRemainder(
-                bufferedRemainder,
-                seenKeys: &seenKeys,
-                sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-                pendingMultiAgentCalls: &pendingMultiAgentCalls,
-                multiAgentEventCutoff: multiAgentEventCutoff
-            )
-            if events.isEmpty == false {
-                for event in events {
-                    await eventHandler(event)
-                }
-            }
         }
     }
 
     static func drainAvailableDeltas(
         from logURL: URL,
-        handle: inout FileHandle?,
-        offset: inout UInt64,
+        readerState: inout CodexSessionLogReaderState,
         bufferedRemainder: inout Data,
-        seenKeys: inout Set<String>,
-        sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
-        pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
+        parserState: inout CodexSessionLogParserState,
+        cursorState: CodexSessionLogCursorState,
         multiAgentEventCutoff: Date? = nil,
         eventHandler: @escaping EventHandler
     ) async {
-        while let delta = readDelta(from: logURL, handle: &handle, offset: &offset) {
-            await processDelta(
-                delta,
-                bufferedRemainder: &bufferedRemainder,
-                seenKeys: &seenKeys,
-                sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-                pendingMultiAgentCalls: &pendingMultiAgentCalls,
-                multiAgentEventCutoff: multiAgentEventCutoff,
-                eventHandler: eventHandler
-            )
+        guard prepareReaderIfNeeded(
+            for: logURL,
+            readerState: &readerState,
+            bufferedRemainder: &bufferedRemainder,
+            parserState: &parserState,
+            cursorState: cursorState
+        ) else {
+            return
+        }
+
+        while let result = readDelta(from: logURL, readerState: &readerState) {
+            switch result {
+            case .restartFromZero:
+                bufferedRemainder.removeAll(keepingCapacity: true)
+                parserState = CodexSessionLogParserState()
+                cursorState.reset()
+
+            case .discardIncompleteRemainder:
+                bufferedRemainder.removeAll(keepingCapacity: true)
+
+            case .data(let delta):
+                guard let consumedLines = await processDelta(
+                    delta,
+                    bufferedRemainder: &bufferedRemainder,
+                    seenKeys: parserState.seenKeys,
+                    sessionTopLevelApprovalsReviewer: &parserState.sessionTopLevelApprovalsReviewer,
+                    pendingMultiAgentCalls: &parserState.pendingMultiAgentCalls,
+                    multiAgentEventCutoff: multiAgentEventCutoff,
+                    eventHandler: eventHandler
+                ) else {
+                    continue
+                }
+                readerState.completeLineOffset += consumedLines.byteCount
+                readerState.lastCompleteLineHash = consumedLines.lastLineHash
+                readerState.lastCompleteLineByteCount = consumedLines.lastLineByteCount
+                if let cursor = readerState.cursor {
+                    cursorState.store(CodexSessionLogCheckpoint(
+                        cursor: cursor,
+                        parserState: parserState
+                    ))
+                }
+            }
         }
     }
 
     static func processDelta(
         _ delta: Data,
         bufferedRemainder: inout Data,
-        seenKeys: inout Set<String>,
+        seenKeys: CodexSessionLogSeenKeys,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
         pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
         multiAgentEventCutoff: Date? = nil,
         eventHandler: @escaping EventHandler
-    ) async {
+    ) async -> CodexSessionLogConsumedLines? {
         guard delta.isEmpty == false else {
-            return
+            return nil
         }
 
         bufferedRemainder.append(delta)
         var pendingHistoryUpdate: CodexSessionLogEvent?
+        var consumedByteCount: UInt64 = 0
+        var lastLineHash: UInt64?
+        var lastLineByteCount: UInt64?
 
         while let newlineIndex = bufferedRemainder.firstIndex(of: newlineByte) {
-            let lineData = bufferedRemainder.prefix(upTo: newlineIndex)
+            let lineData = Data(bufferedRemainder.prefix(upTo: newlineIndex))
             bufferedRemainder.removeSubrange(...newlineIndex)
+            consumedByteCount += UInt64(lineData.count) + 1
+            lastLineHash = completeLineHash(lineData)
+            lastLineByteCount = UInt64(lineData.count)
             let events = parse(
-                lineData: Data(lineData),
-                seenKeys: &seenKeys,
+                lineData: lineData,
+                seenKeys: seenKeys,
                 sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
                 pendingMultiAgentCalls: &pendingMultiAgentCalls,
                 multiAgentEventCutoff: multiAgentEventCutoff
@@ -389,65 +540,167 @@ private extension CodexSessionLogWatcher {
         if let pendingHistoryUpdate {
             await eventHandler(pendingHistoryUpdate)
         }
+
+        guard let lastLineHash,
+              let lastLineByteCount else {
+            return nil
+        }
+        return CodexSessionLogConsumedLines(
+            byteCount: consumedByteCount,
+            lastLineHash: lastLineHash,
+            lastLineByteCount: lastLineByteCount
+        )
     }
 
-    static func readDelta(from logURL: URL, handle: inout FileHandle?, offset: inout UInt64) -> Data? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
-              let fileSize = attributes[.size] as? NSNumber else {
-            close(&handle)
-            offset = 0
+    static func prepareReaderIfNeeded(
+        for logURL: URL,
+        readerState: inout CodexSessionLogReaderState,
+        bufferedRemainder: inout Data,
+        parserState: inout CodexSessionLogParserState,
+        cursorState: CodexSessionLogCursorState
+    ) -> Bool {
+        guard readerState.isInitialized == false else {
+            return true
+        }
+        guard let fileSnapshot = fileSnapshot(at: logURL) else {
+            return false
+        }
+
+        if let checkpoint = cursorState.snapshot(),
+           cursor(checkpoint.cursor, matches: fileSnapshot, at: logURL) {
+            readerState.resume(
+                from: checkpoint.cursor,
+                fileIdentity: fileSnapshot.identity ?? checkpoint.cursor.fileIdentity
+            )
+            parserState = checkpoint.parserState
+            return true
+        }
+
+        cursorState.reset()
+        bufferedRemainder.removeAll(keepingCapacity: true)
+        parserState = CodexSessionLogParserState()
+        readerState.restart(fileIdentity: fileSnapshot.identity)
+        return true
+    }
+
+    static func readDelta(
+        from logURL: URL,
+        readerState: inout CodexSessionLogReaderState
+    ) -> CodexSessionLogReadResult? {
+        guard let fileSnapshot = fileSnapshot(at: logURL) else {
+            close(&readerState.handle)
             return nil
         }
 
-        let length = fileSize.uint64Value
-        if length < offset {
-            close(&handle)
-            offset = 0
+        if fileIdentitiesConflict(readerState.fileIdentity, fileSnapshot.identity) ||
+            fileSnapshot.byteCount < readerState.completeLineOffset ||
+            (readerState.cursor.map { cursor($0, matches: fileSnapshot, at: logURL) } == false) {
+            readerState.restart(fileIdentity: fileSnapshot.identity)
+            return .restartFromZero
         }
-        guard length > offset else {
+
+        if fileSnapshot.byteCount < readerState.readOffset {
+            close(&readerState.handle)
+            readerState.readOffset = readerState.completeLineOffset
+            return .discardIncompleteRemainder
+        }
+        guard fileSnapshot.byteCount > readerState.readOffset else {
             return nil
         }
 
-        if handle == nil {
-            handle = try? FileHandle(forReadingFrom: logURL)
+        if readerState.handle == nil {
+            readerState.handle = try? FileHandle(forReadingFrom: logURL)
         }
-        guard let fileHandle = handle else {
+        guard let fileHandle = readerState.handle else {
             return nil
         }
 
         do {
-            try fileHandle.seek(toOffset: offset)
+            try fileHandle.seek(toOffset: readerState.readOffset)
             let data = try fileHandle.readToEnd() ?? Data()
-            offset += UInt64(data.count)
-            return data.isEmpty ? nil : data
+            readerState.readOffset += UInt64(data.count)
+            return data.isEmpty ? nil : .data(data)
         } catch {
-            close(&handle)
+            close(&readerState.handle)
             return nil
         }
     }
 
-    static func parseBufferedRemainder(
-        _ bufferedRemainder: Data,
-        seenKeys: inout Set<String>,
-        sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
-        pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
-        multiAgentEventCutoff: Date? = nil
-    ) -> [CodexSessionLogEvent] {
-        guard bufferedRemainder.isEmpty == false else {
-            return []
+    static func fileSnapshot(at logURL: URL) -> CodexSessionLogFileSnapshot? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+              let fileSize = attributes[.size] as? NSNumber else {
+            return nil
         }
-        return parse(
-            lineData: bufferedRemainder,
-            seenKeys: &seenKeys,
-            sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-            pendingMultiAgentCalls: &pendingMultiAgentCalls,
-            multiAgentEventCutoff: multiAgentEventCutoff
+        let identity: CodexSessionLogFileIdentity?
+        if let deviceNumber = attributes[.systemNumber] as? NSNumber,
+           let fileNumber = attributes[.systemFileNumber] as? NSNumber {
+            identity = CodexSessionLogFileIdentity(
+                deviceNumber: deviceNumber.uint64Value,
+                fileNumber: fileNumber.uint64Value
+            )
+        } else {
+            identity = nil
+        }
+        return CodexSessionLogFileSnapshot(
+            byteCount: fileSize.uint64Value,
+            identity: identity
         )
+    }
+
+    static func cursor(
+        _ cursor: CodexSessionLogCursor,
+        matches fileSnapshot: CodexSessionLogFileSnapshot,
+        at logURL: URL
+    ) -> Bool {
+        guard fileIdentitiesConflict(cursor.fileIdentity, fileSnapshot.identity) == false,
+              cursor.completeLineOffset <= fileSnapshot.byteCount,
+              cursor.completeLineOffset > cursor.lastCompleteLineByteCount,
+              cursor.lastCompleteLineByteCount < UInt64(Int.max) else {
+            return false
+        }
+
+        let evidenceByteCount = Int(cursor.lastCompleteLineByteCount) + 1
+        let evidenceOffset = cursor.completeLineOffset - UInt64(evidenceByteCount)
+        guard let handle = try? FileHandle(forReadingFrom: logURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+
+        do {
+            try handle.seek(toOffset: evidenceOffset)
+            guard let evidence = try handle.read(upToCount: evidenceByteCount),
+                  evidence.count == evidenceByteCount,
+                  evidence.last == newlineByte else {
+                return false
+            }
+            return completeLineHash(evidence.dropLast()) == cursor.lastCompleteLineHash
+        } catch {
+            return false
+        }
+    }
+
+    static func completeLineHash<S: Sequence>(_ bytes: S) -> UInt64 where S.Element == UInt8 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in bytes {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return hash
+    }
+
+    static func fileIdentitiesConflict(
+        _ lhs: CodexSessionLogFileIdentity?,
+        _ rhs: CodexSessionLogFileIdentity?
+    ) -> Bool {
+        guard let lhs, let rhs else {
+            return false
+        }
+        return lhs != rhs
     }
 
     static func parse(
         lineData: Data,
-        seenKeys: inout Set<String>,
+        seenKeys: CodexSessionLogSeenKeys,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
         pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
         multiAgentEventCutoff: Date? = nil
@@ -466,7 +719,7 @@ private extension CodexSessionLogWatcher {
         if let event = parseTopLevelTurnContext(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys,
+            seenKeys: seenKeys,
             sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer
         ) {
             return [event]
@@ -474,7 +727,7 @@ private extension CodexSessionLogWatcher {
 
         let collaborationEvents = parseCollaborationLifecycleEvent(
             object: object,
-            seenKeys: &seenKeys,
+            seenKeys: seenKeys,
             pendingCalls: pendingMultiAgentCalls,
             multiAgentEventCutoff: multiAgentEventCutoff
         )
@@ -485,7 +738,7 @@ private extension CodexSessionLogWatcher {
         let backgroundActivityEvents = parseMultiAgentResponseItem(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys,
+            seenKeys: seenKeys,
             pendingCalls: &pendingMultiAgentCalls,
             multiAgentEventCutoff: multiAgentEventCutoff
         )
@@ -496,7 +749,7 @@ private extension CodexSessionLogWatcher {
         if let event = parseLegacyCodexEvent(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys
+            seenKeys: seenKeys
         ) {
             return [event]
         }
@@ -504,7 +757,7 @@ private extension CodexSessionLogWatcher {
         if let event = parseAppEvent(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys
+            seenKeys: seenKeys
         ) {
             return [event]
         }
@@ -512,7 +765,7 @@ private extension CodexSessionLogWatcher {
         if let event = parseHistoryInsertEvent(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys
+            seenKeys: seenKeys
         ) {
             return [event]
         }
@@ -520,7 +773,7 @@ private extension CodexSessionLogWatcher {
         if let event = parseOperationEvent(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys
+            seenKeys: seenKeys
         ) {
             return [event]
         }
@@ -529,7 +782,7 @@ private extension CodexSessionLogWatcher {
 
     static func parseCollaborationLifecycleEvent(
         object: [String: Any],
-        seenKeys: inout Set<String>,
+        seenKeys: CodexSessionLogSeenKeys,
         pendingCalls: CodexMultiAgentPendingCalls,
         multiAgentEventCutoff: Date? = nil
     ) -> [CodexSessionLogEvent] {
@@ -701,7 +954,7 @@ private extension CodexSessionLogWatcher {
     static func parseMultiAgentResponseItem(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>,
+        seenKeys: CodexSessionLogSeenKeys,
         pendingCalls: inout CodexMultiAgentPendingCalls,
         multiAgentEventCutoff: Date? = nil
     ) -> [CodexSessionLogEvent] {
@@ -914,7 +1167,7 @@ private extension CodexSessionLogWatcher {
     static func parseTopLevelTurnContext(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>,
+        seenKeys: CodexSessionLogSeenKeys,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["type"]) == "turn_context",
@@ -960,7 +1213,7 @@ private extension CodexSessionLogWatcher {
     static func parseLegacyCodexEvent(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>
+        seenKeys: CodexSessionLogSeenKeys
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "to_tui",
               normalizedString(object["kind"]) == "codex_event",
@@ -1074,7 +1327,7 @@ private extension CodexSessionLogWatcher {
     static func parseAppEvent(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>
+        seenKeys: CodexSessionLogSeenKeys
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "to_tui",
               normalizedString(object["kind"]) == "app_event",
@@ -1099,7 +1352,7 @@ private extension CodexSessionLogWatcher {
     static func parseOperationEvent(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>
+        seenKeys: CodexSessionLogSeenKeys
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "from_tui",
               normalizedString(object["kind"]) == "op",
@@ -1199,7 +1452,7 @@ private extension CodexSessionLogWatcher {
     static func parseHistoryInsertEvent(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>
+        seenKeys: CodexSessionLogSeenKeys
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "to_tui",
               normalizedString(object["kind"]) == "insert_history_cell" else {

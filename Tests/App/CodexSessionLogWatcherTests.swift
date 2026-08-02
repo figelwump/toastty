@@ -235,18 +235,17 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(events.map(\.nativeSessionID), [threadB, threadC, threadB])
     }
 
-    func testWatcherFlushesFinalBufferedLineOnStop() async throws {
+    func testWatcherLeavesFinalNonNewlineFragmentBufferedOnStop() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
-        let finalEvent = expectation(description: "Buffered final event flushes on stop")
-        finalEvent.assertForOverFulfill = true
+        let cursorState = CodexSessionLogCursorState()
 
         let watcher = CodexSessionLogWatcher(
             logURL: logURL,
-            pollIntervalNanoseconds: 10_000_000
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
         ) { event in
             await recorder.append(event)
-            finalEvent.fulfill()
         }
 
         watcher.start()
@@ -260,16 +259,10 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertTrue(bufferedEvents.isEmpty)
 
         await watcher.stop()
-        await fulfillment(of: [finalEvent], timeout: 1)
 
         let events = await recorder.snapshot()
-        XCTAssertEqual(events, [
-            CodexSessionLogEvent(
-                kind: .approvalNeeded,
-                detail: "Choose a path",
-                approvalID: "approval-1"
-            )
-        ])
+        XCTAssertEqual(events, [])
+        XCTAssertNil(cursorState.cursorForTesting)
     }
 
     func testWatcherPreservesApprovalIdentifiersFromPayloadAndMessageShapes() async throws {
@@ -571,6 +564,58 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 kind: .turnStarted,
                 detail: "Responding to your prompt",
                 rootTurnID: "turn-root",
+                approvalPolicy: "on-request",
+                approvalsReviewer: "auto_review"
+            )
+        ])
+    }
+
+    func testWatcherRetainsInferredAutoReviewAcrossCleanRestart() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let firstRecorder = EventRecorder()
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await firstRecorder.append(event)
+        }
+        firstWatcher.start()
+        try append(
+            #"{"timestamp":"2026-06-02T17:53:00.654Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\n`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy.\n</permissions instructions>"}]}}"# + "\n",
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await firstWatcher.stop()
+        XCTAssertNotNil(cursorState.cursorForTesting)
+        let firstEvents = await firstRecorder.snapshot()
+        XCTAssertEqual(firstEvents, [])
+
+        let recorder = EventRecorder()
+        let turnEvent = expectation(description: "Restarted watcher retains parser context")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            turnEvent.fulfill()
+        }
+        secondWatcher.start()
+        try append(
+            #"{"timestamp":"2026-06-02T17:53:00.655Z","type":"turn_context","payload":{"turn_id":"turn-after-restart","cwd":"/tmp/workspace","approval_policy":"on-request"}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [turnEvent], timeout: 1)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Responding to your prompt",
+                rootTurnID: "turn-after-restart",
                 approvalPolicy: "on-request",
                 approvalsReviewer: "auto_review"
             )
@@ -972,6 +1017,247 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 )
             )
         ])
+    }
+
+    func testWatcherResumesSameFileWithoutReplayingDeliveredLines() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let firstRecorder = EventRecorder()
+        let firstEvent = expectation(description: "First watcher delivers initial line")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await firstRecorder.append(event)
+            firstEvent.fulfill()
+        }
+
+        firstWatcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-first","msg":{"type":"user_message","message":"First prompt"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [firstEvent], timeout: 1)
+        await firstWatcher.stop()
+
+        let secondRecorder = EventRecorder()
+        let secondEvent = expectation(description: "Recreated watcher delivers only appended line")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await secondRecorder.append(event)
+            secondEvent.fulfill()
+        }
+
+        secondWatcher.start()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let eventsBeforeAppend = await secondRecorder.snapshot()
+        XCTAssertEqual(eventsBeforeAppend, [])
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-second","msg":{"type":"user_message","message":"Second prompt"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [secondEvent], timeout: 1)
+        await secondWatcher.stop()
+
+        let firstEvents = await firstRecorder.snapshot()
+        let secondEvents = await secondRecorder.snapshot()
+        XCTAssertEqual(firstEvents.map(\.detail), ["First prompt"])
+        XCTAssertEqual(secondEvents.map(\.detail), ["Second prompt"])
+    }
+
+    func testWatcherDoesNotCommitOrEmitTrailingLineUntilNewlineAfterRestart() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let line =
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-partial","msg":{"type":"user_message","message":"Completed after restart"}}}"#
+        let firstRecorder = EventRecorder()
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await firstRecorder.append(event)
+        }
+
+        firstWatcher.start()
+        try append(line, to: logURL)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await firstWatcher.stop()
+
+        let eventsBeforeNewline = await firstRecorder.snapshot()
+        XCTAssertEqual(eventsBeforeNewline, [])
+        XCTAssertNil(cursorState.cursorForTesting)
+
+        let secondRecorder = EventRecorder()
+        let completedEvent = expectation(description: "Trailing line emits once after newline")
+        completedEvent.assertForOverFulfill = true
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await secondRecorder.append(event)
+            completedEvent.fulfill()
+        }
+
+        secondWatcher.start()
+        try append("\n", to: logURL)
+        await fulfillment(of: [completedEvent], timeout: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await secondWatcher.stop()
+
+        let completedEvents = await secondRecorder.snapshot()
+        XCTAssertEqual(completedEvents.map(\.detail), ["Completed after restart"])
+        XCTAssertEqual(
+            cursorState.cursorForTesting?.completeLineOffset,
+            UInt64(Data((line + "\n").utf8).count)
+        )
+    }
+
+    func testWatcherInvalidatesCursorAfterTruncationBelowCompleteLine() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let firstEvent = expectation(description: "Initial line arrives before truncation")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { _ in
+            firstEvent.fulfill()
+        }
+        firstWatcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-before-truncate","msg":{"type":"user_message","message":"Before truncate"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [firstEvent], timeout: 1)
+        await firstWatcher.stop()
+
+        let writeHandle = try FileHandle(forWritingTo: logURL)
+        try writeHandle.truncate(atOffset: 0)
+        try writeHandle.close()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-after-truncate","msg":{"type":"user_message","message":"After truncate"}}}"# + "\n",
+            to: logURL
+        )
+
+        let recorder = EventRecorder()
+        let replacementEvent = expectation(description: "Truncated stream restarts from zero")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            replacementEvent.fulfill()
+        }
+        secondWatcher.start()
+        await fulfillment(of: [replacementEvent], timeout: 1)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events.map(\.detail), ["After truncate"])
+    }
+
+    func testWatcherInvalidatesCursorWhenLastLineEvidenceChangesWithoutSizeDecrease() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let initialLine =
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-before-rewrite","msg":{"type":"user_message","message":"Before rewrite"}}}"# + "\n"
+        let firstEvent = expectation(description: "Initial line arrives before rewrite")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { _ in
+            firstEvent.fulfill()
+        }
+        firstWatcher.start()
+        try append(initialLine, to: logURL)
+        await fulfillment(of: [firstEvent], timeout: 1)
+        await firstWatcher.stop()
+
+        let rewrittenLine =
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-after-rewrite","msg":{"type":"user_message","message":"After rewrite with enough extra text to exceed the prior cursor offset"}}}"# + "\n"
+        XCTAssertGreaterThan(rewrittenLine.utf8.count, initialLine.utf8.count)
+        let writeHandle = try FileHandle(forWritingTo: logURL)
+        try writeHandle.truncate(atOffset: 0)
+        try writeHandle.write(contentsOf: Data(rewrittenLine.utf8))
+        try writeHandle.close()
+
+        let recorder = EventRecorder()
+        let rewrittenEvent = expectation(description: "Last-line mismatch restarts from zero")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            rewrittenEvent.fulfill()
+        }
+        secondWatcher.start()
+        await fulfillment(of: [rewrittenEvent], timeout: 1)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(
+            events.map(\.detail),
+            ["After rewrite with enough extra text to exceed the prior cursor offset"]
+        )
+    }
+
+    func testWatcherInvalidatesCursorWhenPathIsReplaced() async throws {
+        let logURL = try makeLogURL()
+        let rotatedURL = logURL.deletingLastPathComponent().appendingPathComponent("rotated.jsonl")
+        let cursorState = CodexSessionLogCursorState()
+        let firstEvent = expectation(description: "Initial file line arrives")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { _ in
+            firstEvent.fulfill()
+        }
+        firstWatcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-old-file","msg":{"type":"user_message","message":"Old file"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [firstEvent], timeout: 1)
+        await firstWatcher.stop()
+
+        try FileManager.default.moveItem(at: logURL, to: rotatedURL)
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: Data()))
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-new-file","msg":{"type":"user_message","message":"New file"}}}"# + "\n",
+            to: logURL
+        )
+
+        let recorder = EventRecorder()
+        let replacementEvent = expectation(description: "Replacement file restarts from zero")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            replacementEvent.fulfill()
+        }
+        secondWatcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-rotated-file","msg":{"type":"user_message","message":"Rotated file"}}}"# + "\n",
+            to: rotatedURL
+        )
+        await fulfillment(of: [replacementEvent], timeout: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events.map(\.detail), ["New file"])
     }
 
     func testWatcherDeduplicatesRepeatedUserPromptPreviewEvents() async throws {

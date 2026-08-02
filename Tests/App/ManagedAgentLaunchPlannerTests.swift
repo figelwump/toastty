@@ -1211,9 +1211,17 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 )
             )
         )
+        await waitUntil {
+            fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID] == secondRolloutURL.path
+        }
         XCTAssertEqual(
             fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID],
             secondRolloutURL.path
+        )
+        XCTAssertEqual(
+            fixture.planner.codexSessionLogCursorStateCountForTesting,
+            2,
+            "Launch and canonical streams retain at most one cursor each when paths change"
         )
         XCTAssertEqual(
             fixture.sessionRuntimeStore.sessionRegistry
@@ -1227,6 +1235,91 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         }
 
         XCTAssertNil(fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID])
+    }
+
+    func testCodexRolloutWatcherReusesRuntimeCursorWhenSamePathReattaches() async throws {
+        let fixture = try makePlannerFixture()
+        let rolloutURL = temporaryJSONLURL()
+        defer { try? fixture.fileManager.removeItem(at: rolloutURL) }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        let artifactsDirectoryURL = try codexArtifactsDirectory(from: plan)
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            try? fixture.fileManager.removeItem(at: artifactsDirectoryURL)
+        }
+
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: codexResumeRecord(sessionFilePath: rolloutURL.path)
+            )
+        ))
+
+        let freshEventDate = Date().addingTimeInterval(60)
+        let occurredAtMilliseconds = Int(freshEventDate.timeIntervalSince1970 * 1_000)
+        try appendCodexSessionLogLine(
+            #"{"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_cursor_resume","occurred_at_ms":\#(occurredAtMilliseconds),"agent_path":"/root/cursor_resume","kind":"started"}}"#,
+            to: rolloutURL
+        )
+        await waitUntil {
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/cursor_resume"] != nil
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertTrue(fixture.sessionRuntimeStore.finishBackgroundActivity(
+            sessionID: plan.sessionID,
+            activityID: "/root/cursor_resume",
+            at: Date()
+        ))
+        XCTAssertNil(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/cursor_resume"]
+        )
+
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: nil
+            )
+        ))
+        XCTAssertTrue(fixture.store.send(
+            .updateTerminalPanelResumeRecord(
+                panelID: fixture.panelID,
+                resumeRecord: codexResumeRecord(sessionFilePath: rolloutURL.path)
+            )
+        ))
+        await waitUntil {
+            fixture.planner.codexRolloutWatcherTransitionCountForTesting == 0 &&
+                fixture.planner.codexRolloutWatcherPathsForTesting[plan.sessionID] == rolloutURL.path
+        }
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertNil(
+            fixture.sessionRuntimeStore
+                .sessionRegistry
+                .activeSession(sessionID: plan.sessionID)?
+                .backgroundActivitiesByID["/root/cursor_resume"],
+            "Reattaching the same session and path must not replay the consumed spawn"
+        )
+        XCTAssertEqual(fixture.planner.codexSessionLogCursorStateCountForTesting, 2)
+
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        await waitUntil {
+            fixture.planner.codexSessionLogCursorStateCountForTesting == 0
+        }
     }
 
     func testCodexRolloutWatcherAttachesWhenCodexInstrumentationFails() async throws {
