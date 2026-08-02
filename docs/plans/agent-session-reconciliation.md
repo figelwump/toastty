@@ -135,6 +135,8 @@ File replacement, identity change, truncation below the cursor, or a last-line-h
 
 The cursor is runtime state, not reducer state. Disk persistence is deferred until a concrete cross-process restore failure demonstrates that bootstrap from zero is insufficient.
 
+The runtime cursor slice is landed for both launch logs and canonical rollout streams. Cursor retention is bounded to one state per managed session and stream; a path change replaces that stream's retained state. Rollout watcher transitions stop and fully drain the old watcher before constructing its successor, coalesce rapid desired-path changes, and reject final-drain events once a path is detached. Parser context follows a valid cursor without replay, while truncation, replacement, or last-line evidence mismatch resets both cursor and parser context.
+
 ### Effects boundary
 
 The pure module may emit intent, not effects. `SessionRuntimeStore` or a smaller App coordinator remains responsible for:
@@ -244,7 +246,7 @@ Each step is independently revertible. Never let the legacy handler and the new 
 2. **Introduce the pure target with trace replay.** Add `CodexReconciliation` and reducer tests. The first implementation contains the Foundation-only native-claim evaluator and synthetic batch/permutation tests; fact-specific observation state and sanitized trace replay are added with the fact that needs them rather than as placeholder abstractions.
 3. **Migrate identity and rollout claims.** Route Codex claims through pure evaluation against an App ownership snapshot; App code remains the sole owner and continues applying accepted resume-record mutations and watcher attachment. This slice is landed. Claude deliberately remains on the legacy observer branch until it receives its own reviewed migration.
 4. **Migrate subagent correlation.** Move call/tool-use/agent-ID joins, finish tombstones, and bounded state into the reducer. Keep watcher lifecycle in the App.
-5. **Migrate status and background projection.** Move root-turn identity and progress decisions while preserving current fixed-at-launch source behavior. Add the runtime cursor before relying on watcher restart replay.
+5. **Migrate status and background projection.** Move root-turn identity and progress decisions while preserving current fixed-at-launch source behavior. The runtime cursor prerequisite is landed; effect-producing migrations must still add explicit bootstrap/live context and stable effect idempotency before relying on watcher replay.
 6. **Migrate approval, completion, and notification intent last.** Preserve fixed launch-selected authority, introduce stable effect IDs, and keep App-owned timers and notification suppression. Approval cross-source dedupe/fallback remains disabled until a future schema recheck finds a common exact ID; completion fallback remains gated by its identifier/delivery experiments and separate review.
 7. **Delete legacy reconciliation.** Remove old per-session notify state, approval deferral maps, auto-review arrays, duplicate source gates, subagent correlation maps, and temporary routing flags after every fact class has one owner.
 
