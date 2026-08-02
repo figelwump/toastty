@@ -701,6 +701,60 @@ struct ManagedAgentNativeSessionObserverTests {
     }
 
     @Test
+    func cancelledEarlyClaimDoesNotPoisonLiveSiblingDuringLaterScan() async throws {
+        let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let candidate = ManagedAgentNativeSessionCandidate(
+            agent: .codex,
+            nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
+            sessionFilePath: "/tmp/codex-session.jsonl",
+            cwd: "/tmp/repo",
+            updatedAt: launchStart.addingTimeInterval(1)
+        )
+        let scanner = CancellationRaceNativeSessionScanner(candidate: candidate)
+        var recordedSessionIDs: [String] = []
+        let registry = ManagedAgentNativeSessionObserverRegistry(
+            scanner: scanner,
+            timing: ManagedAgentNativeSessionObserverTiming(
+                pollIntervalNanoseconds: 60_000_000_000,
+                timeout: 90
+            ),
+            nowProvider: { launchStart.addingTimeInterval(2) },
+            recordHandler: { managedSessionID, _, _ in
+                recordedSessionIDs.append(managedSessionID)
+            }
+        )
+        defer {
+            registry.cancelObservation(sessionID: "managed-1")
+            registry.cancelObservation(sessionID: "managed-2")
+        }
+        for managedSessionID in ["managed-1", "managed-2"] {
+            registry.startObservation(
+                ManagedAgentNativeSessionObservationContext(
+                    managedSessionID: managedSessionID,
+                    agent: .codex,
+                    panelID: UUID(),
+                    cwd: "/tmp/repo",
+                    launchStart: launchStart
+                )
+            )
+        }
+        try await waitForAsyncCondition {
+            await scanner.blockedScanSessionID != nil
+        }
+
+        let cancelledSessionID = try #require(await scanner.firstScannedSessionID)
+        let survivingSessionID = cancelledSessionID == "managed-1" ? "managed-2" : "managed-1"
+        registry.cancelObservation(sessionID: cancelledSessionID)
+        await scanner.openGate()
+        try await waitForCondition(timeout: 0.5) {
+            recordedSessionIDs == [survivingSessionID]
+        }
+
+        #expect(recordedSessionIDs == [survivingSessionID])
+        #expect(registry.activeObservationCountForTesting == 0)
+    }
+
+    @Test
     func acceptedSiblingIsNotAppliedAfterRecordHandlerCancelsIt() async {
         let launchStart = Date(timeIntervalSince1970: 1_700_000_000)
         let candidates = [
@@ -1304,6 +1358,39 @@ private actor StubNativeSessionScanner: ManagedAgentNativeSessionScanning {
 
     func candidates(for observation: ManagedAgentNativeSessionObservationContext) async -> [ManagedAgentNativeSessionCandidate] {
         candidatesByManagedSessionID[observation.managedSessionID] ?? []
+    }
+}
+
+/// Returns the shared claim for the first observation, then suspends the
+/// second scan so the first observation can be cancelled after its claim has
+/// already entered the current evaluation batch.
+private actor CancellationRaceNativeSessionScanner: ManagedAgentNativeSessionScanning {
+    private let candidate: ManagedAgentNativeSessionCandidate
+    private(set) var firstScannedSessionID: String?
+    private(set) var blockedScanSessionID: String?
+    private var gateOpen = false
+
+    init(candidate: ManagedAgentNativeSessionCandidate) {
+        self.candidate = candidate
+    }
+
+    func candidates(
+        for observation: ManagedAgentNativeSessionObservationContext
+    ) async -> [ManagedAgentNativeSessionCandidate] {
+        if firstScannedSessionID == nil {
+            firstScannedSessionID = observation.managedSessionID
+            return [candidate]
+        }
+
+        blockedScanSessionID = observation.managedSessionID
+        while gateOpen == false {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return [candidate]
+    }
+
+    func openGate() {
+        gateOpen = true
     }
 }
 

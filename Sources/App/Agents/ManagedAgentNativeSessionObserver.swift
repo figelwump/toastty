@@ -457,6 +457,21 @@ final class ManagedAgentNativeSessionObserverRegistry: ManagedAgentNativeSession
             }
         }
 
+        // Scanning is async and MainActor-reentrant. An observation scanned
+        // early in this batch may have been cancelled or replaced while a
+        // later scan was suspended; exclude it before it can make a live
+        // sibling's otherwise-valid claim look ambiguous.
+        pendingCodexClaims.removeAll { pending in
+            guard let current = observationsBySessionID[pending.observation.managedSessionID] else {
+                return true
+            }
+            return current.agent != pending.observation.agent ||
+                current.panelID != pending.observation.panelID ||
+                current.cwd != pending.observation.cwd ||
+                current.launchStart != pending.observation.launchStart ||
+                current.expectedNativeSessionID != pending.observation.expectedNativeSessionID
+        }
+
         // Evaluate every claim against one complete point-in-time snapshot
         // before applying any accepted result. Ambiguous groups therefore
         // cannot partially update resume records based on iteration order.
