@@ -9,6 +9,7 @@ enum CodexLegacySessionPanelPlacement {
 
 struct CodexLegacyScenarioSnapshot: Equatable {
     let recordStatus: SessionStatus?
+    let recordStatusUpdatedAt: Date?
     let recordIsActive: Bool?
     let workspaceStatus: SessionStatus?
     let workspaceProjection: SessionStatusProjection?
@@ -175,6 +176,7 @@ final class CodexLegacyScenarioDriver {
 
         return CodexLegacyScenarioSnapshot(
             recordStatus: record?.status,
+            recordStatusUpdatedAt: record?.statusUpdatedAt,
             recordIsActive: record?.isActive,
             workspaceStatus: workspaceProjection?.status,
             workspaceProjection: workspaceProjection?.projection,

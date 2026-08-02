@@ -6,6 +6,106 @@ import Testing
 @MainActor
 struct CodexRootProgressCharacterizationTests {
     @Test
+    func repeatedIdenticalHookWorkingObservationsAdvanceRawStatusTimestamp() throws {
+        let scenario = CodexLegacyScenarioDriver(
+            trackingSource: .hooks,
+            applicationIsActive: false,
+            sessionPanelPlacement: .background
+        )
+        defer { scenario.reset() }
+        scenario.setStatus(SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
+        let working = SessionStatus(kind: .working, summary: "Working", detail: "Same hook progress")
+
+        #expect(scenario.sendHookEvent(
+            name: "UserPromptSubmit",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            status: working
+        ))
+        let firstUpdatedAt = try #require(scenario.snapshot().recordStatusUpdatedAt)
+
+        #expect(scenario.sendHookEvent(
+            name: "UserPromptSubmit",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            status: working
+        ))
+        let repeatedSnapshot = scenario.snapshot()
+        #expect(repeatedSnapshot.recordStatus == working)
+        #expect(repeatedSnapshot.recordStatusUpdatedAt.map { $0 > firstUpdatedAt } == true)
+    }
+
+    @Test
+    func repeatedIdenticalFallbackWorkingObservationsAdvanceRawStatusTimestamp() async throws {
+        let fixture = try CodexRootProgressPlannerFixture(source: .sessionLogFallback(reason: "characterization"))
+        defer { fixture.cleanUp() }
+        let working = SessionStatus(kind: .working, summary: "Working", detail: "Responding to your prompt")
+
+        try fixture.appendLaunchLog(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-a","msg":{"type":"task_started"}}}"#
+        )
+        #expect(await fixture.waitForStatus(working))
+        let firstUpdatedAt = try #require(fixture.statusUpdatedAt)
+
+        try fixture.appendLaunchLog(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-b","msg":{"type":"task_started"}}}"#
+        )
+        #expect(await fixture.waitUntil {
+            fixture.status == working && fixture.statusUpdatedAt.map { $0 > firstUpdatedAt } == true
+        })
+    }
+
+    @Test
+    func hookWorkingClearsApprovalUnreadWithoutAnotherNotification() async {
+        let scenario = CodexLegacyScenarioDriver(
+            trackingSource: .hooks,
+            applicationIsActive: false,
+            sessionPanelPlacement: .background
+        )
+        defer { scenario.reset() }
+        scenario.setStatus(SessionStatus(
+            kind: .needsApproval,
+            summary: "Needs approval",
+            detail: "Approve hook work"
+        ))
+        #expect(scenario.snapshot().panelIsUnread)
+        #expect(await scenario.capturedEffects(waitingForNotificationCount: 1).count == 1)
+
+        #expect(scenario.sendHookEvent(
+            name: "UserPromptSubmit",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Approval resolved")
+        ))
+
+        #expect(scenario.snapshot().panelIsUnread == false)
+        #expect(await scenario.capturedEffects(waitingForNotificationCount: 1).count == 1)
+    }
+
+    @Test
+    func fallbackWorkingClearsApprovalUnreadWithoutAnotherNotification() async throws {
+        let fixture = try CodexRootProgressPlannerFixture(source: .sessionLogFallback(reason: "characterization"))
+        defer { fixture.cleanUp() }
+        fixture.setStatus(SessionStatus(
+            kind: .needsApproval,
+            summary: "Needs approval",
+            detail: "Approve fallback work"
+        ))
+        #expect(fixture.panelIsUnread)
+        #expect(await fixture.waitForNotificationCount(1))
+
+        try fixture.appendLaunchLog(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-working","msg":{"type":"task_started"}}}"#
+        )
+        #expect(await fixture.waitForStatus(
+            SessionStatus(kind: .working, summary: "Working", detail: "Responding to your prompt")
+        ))
+
+        #expect(fixture.panelIsUnread == false)
+        #expect(await fixture.notificationCount == 1)
+    }
+
+    @Test
     func hookAuthorityProjectsPromptAndToolProgressWithoutActionableEffects() async {
         let scenario = CodexLegacyScenarioDriver(
             trackingSource: .hooks,
@@ -250,8 +350,8 @@ private final class CodexRootProgressPlannerFixture {
             },
             isApplicationActive: { false }
         )
+        let panelID = try Self.prepareBackgroundPanel(in: store)
         sessionStore.bind(store: store)
-        let panelID = try Self.requirePanelID(from: store)
         let planner = ManagedAgentLaunchPlanner(
             store: store,
             sessionRuntimeStore: sessionStore,
@@ -290,6 +390,10 @@ private final class CodexRootProgressPlannerFixture {
 
     var status: SessionStatus? {
         sessionStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.status
+    }
+
+    var statusUpdatedAt: Date? {
+        sessionStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.statusUpdatedAt
     }
 
     var workspaceStatus: SessionStatus? {
@@ -331,15 +435,21 @@ private final class CodexRootProgressPlannerFixture {
         await waitUntil { self.status == expectedStatus }
     }
 
+    func waitForNotificationCount(_ expectedCount: Int) async -> Bool {
+        await waitUntil { [notificationRecorder] in
+            await notificationRecorder.count() == expectedCount
+        }
+    }
+
     func waitUntil(
         timeout: TimeInterval = 2,
-        condition: @escaping @MainActor () -> Bool
+        condition: @escaping @MainActor () async -> Bool
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
-        while condition() == false, Date() < deadline {
+        while await condition() == false, Date() < deadline {
             await Task.yield()
         }
-        return condition()
+        return await condition()
     }
 
     func cleanUp() {
@@ -348,9 +458,14 @@ private final class CodexRootProgressPlannerFixture {
         try? FileManager.default.removeItem(at: artifactsDirectoryURL)
     }
 
-    private static func requirePanelID(from store: AppStore) throws -> UUID {
-        guard let panelID = store.selectedWorkspace?.focusedPanelID else {
+    private static func prepareBackgroundPanel(in store: AppStore) throws -> UUID {
+        guard let workspaceID = store.selectedWorkspace?.id,
+              let panelID = store.selectedWorkspace?.focusedPanelID else {
             throw CodexRootProgressFixtureError.missingPanel
+        }
+        guard store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal)),
+              store.selectedWorkspace?.focusedPanelID != panelID else {
+            throw CodexRootProgressFixtureError.couldNotCreateBackgroundPanel
         }
         return panelID
     }
@@ -365,6 +480,7 @@ private final class CodexRootProgressNativeSessionObserverStub: ManagedAgentNati
 private enum CodexRootProgressFixtureError: Error {
     case missingPanel
     case missingSessionLogPath
+    case couldNotCreateBackgroundPanel
 }
 
 private actor CodexRootProgressNotificationRecorder {
