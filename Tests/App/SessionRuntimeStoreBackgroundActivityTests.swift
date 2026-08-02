@@ -369,6 +369,59 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexSessionLogFallbackFinishTombstoneBlocksInferredFollowUpStart() {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_275)
+        let sessionID = "sess-codex-fallback-follow-up"
+        let activityID = "/root/plan_review"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .sessionLogFallback(reason: "characterization"),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        #expect(store.updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: activityID,
+                kind: .subagent,
+                displayName: "plan_review",
+                startedAt: now,
+                lastUpdatedAt: now
+            ),
+            at: now
+        ))
+        #expect(store.finishBackgroundActivity(
+            sessionID: sessionID,
+            activityID: activityID,
+            at: now.addingTimeInterval(1)
+        ))
+
+        #expect(store.updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: activityID,
+                kind: .subagent,
+                displayName: "plan_review",
+                startedAt: now.addingTimeInterval(2),
+                lastUpdatedAt: now.addingTimeInterval(2)
+            ),
+            at: now.addingTimeInterval(2)
+        ) == false)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID[activityID] == nil)
+    }
+
+    @Test
     func finishTombstoneBlocksStaleSyncUntilTTLExpires() {
         let store = SessionRuntimeStore()
         defer { store.reset() }

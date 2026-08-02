@@ -1492,16 +1492,69 @@ final class CodexSessionLogWatcherTests: XCTestCase {
             expectedCount: 4
         )
 
-        XCTAssertEqual(events.map(\.kind), [
-            .backgroundActivityStarted,
-            .backgroundActivityFinished,
-            .backgroundActivityStarted,
-            .backgroundActivityFinished,
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started plan_review",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/plan_review",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "plan_review"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/plan_review",
+                    kind: .subagent
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started plan_review",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/plan_review",
+                    kind: .subagent,
+                    displayName: "plan_review"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/plan_review",
+                    kind: .subagent
+                )
+            ),
         ])
-        XCTAssertEqual(
-            events.compactMap(\.backgroundActivity?.activityID),
-            Array(repeating: "/root/plan_review", count: 4)
+    }
+
+    func testWatcherKeepsPathFallbackWhenCollaborationActivityPrecedesSpawnMetadata() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783881851355,"agent_thread_id":"thread-1","agent_path":"/root/activity_first","kind":"started"}}
+                {"timestamp":"2026-07-12T18:44:11.356Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"message\":\"Inspect metadata ordering\",\"task_name\":\"metadata_name\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-12T18:44:11.357Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/activity_first\"}"}}
+                """#,
+            expectedCount: 1
         )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started activity_first",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/activity_first",
+                    hookActivityID: "thread-1",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "activity_first"
+                )
+            ),
+        ])
     }
 
     func testWatcherRejectsUndatedCollaborationEventsWhenCutoffIsActive() async throws {
