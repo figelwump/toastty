@@ -463,4 +463,70 @@ extension SessionRuntimeStoreTests {
         #expect(status?.detail == "Next task")
     }
 
+    @Test
+    func codexReplacementPendingApprovalSurvivesStaleExpiryTask() async {
+        let store = SessionRuntimeStore(codexHookApprovalDeferralNanoseconds: 10_000_000_000)
+        let sessionID = "sess-codex-replaced-pending-token"
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_100)
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        _ = store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: CodexInputFingerprint.fingerprint(for: "Run checks"),
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        for detail in ["Approve first request", "Approve replacement request"] {
+            #expect(store.handleCodexHookEvent(
+                sessionID: sessionID,
+                event: CodexHookEvent(
+                    hookEventName: "PermissionRequest",
+                    permissionMode: "default",
+                    threadID: "thread-root",
+                    turnID: "turn-root",
+                    promptFingerprint: nil,
+                    status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: detail),
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil
+                ),
+                at: startedAt.addingTimeInterval(2)
+            ) == false)
+        }
+
+        await settleNotificationTasks()
+        #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID))
+
+        store.recordCodexOverrideTurnContext(
+            sessionID: sessionID,
+            approvalPolicy: .string("on-request"),
+            approvalsReviewer: .null
+        )
+
+        let status = store.sessionRegistry.activeSession(sessionID: sessionID)?.status
+        #expect(status?.kind == .needsApproval)
+        #expect(status?.detail == "Approve replacement request")
+        #expect(store.hasPendingCodexHookApprovalForTesting(sessionID: sessionID) == false)
+    }
+
 }

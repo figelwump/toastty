@@ -521,6 +521,100 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexAcceptedHookApprovalPublishesExactAttentionEffects() async throws {
+        let appStore = AppStore(state: makeTwoPanelAppState(), persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let store = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            },
+            isApplicationActive: { false }
+        )
+        store.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let sessionID = "sess-codex-accepted-approval-effects"
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_100)
+        let fingerprint = CodexInputFingerprint.fingerprint(for: "Run checks")
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        store.recordCodexRootTurnInput(
+            sessionID: sessionID,
+            fingerprint: fingerprint,
+            threadID: "thread-root",
+            turnID: "turn-root",
+            approvalPolicyField: .string("on-request"),
+            approvalsReviewerField: .null
+        )
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "UserPromptSubmit",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: fingerprint,
+                status: SessionStatus(kind: .working, summary: "Working", detail: "Run checks"),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(1)
+        ))
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: CodexHookEvent(
+                hookEventName: "PermissionRequest",
+                threadID: "thread-root",
+                turnID: "turn-root",
+                promptFingerprint: nil,
+                status: SessionStatus(
+                    kind: .needsApproval,
+                    summary: "Needs approval",
+                    detail: "Approve command"
+                ),
+                nativeSessionID: "thread-root",
+                sessionFilePath: nil,
+                cwd: nil
+            ),
+            at: startedAt.addingTimeInterval(2)
+        ))
+
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+        let notifications = await recorder.notifications()
+        let notification = try #require(notifications.first)
+        #expect(notifications.count == 1)
+        #expect(notification.title == "Codex needs approval")
+        #expect(notification.body == "Approve command")
+        #expect(notification.workspaceID == selection.workspaceID)
+        #expect(notification.panelID == backgroundPanelID)
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.kind == .needsApproval)
+
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
+        #expect(workspaceAfter.unreadNotificationCount == 1)
+    }
+
+    @Test
     func codexHookPermissionRequestIsSuppressedWhenReviewerIsPresentForOnRequestPolicy() {
         let store = SessionRuntimeStore()
         let panelID = UUID()

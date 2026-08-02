@@ -345,6 +345,75 @@ extension SessionRuntimeStoreTests {
             store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: sessionID) ==
                 (2 ... 17).map { "turn-\($0)" }
         )
+
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: codexReconciliationPermissionEvent(
+                threadID: "thread-root",
+                turnID: "turn-1"
+            ),
+            at: startedAt.addingTimeInterval(101)
+        ) == false)
+        #expect(
+            store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: sessionID) ==
+                (3 ... 17).map { "turn-\($0)" } + ["turn-1"]
+        )
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?.status?.detail == "turn-17")
+    }
+
+    @Test
+    func codexSessionLogSuppressionRecordsOnlySourceObservedTurnIDs() {
+        let explicitSessionID = "sess-codex-log-explicit-review-history"
+        let synthesizedSessionID = "sess-codex-log-synthesized-review-history"
+        let startedAt = Date(timeIntervalSince1970: 1_700_002_550)
+        let store = SessionRuntimeStore()
+
+        for (sessionID, turnID) in [
+            (explicitSessionID, "turn-explicit"),
+            (synthesizedSessionID, "turn-synthesized"),
+        ] {
+            startCodexReconciliationSession(
+                store,
+                sessionID: sessionID,
+                source: .sessionLogFallback(reason: "test"),
+                at: startedAt
+            )
+            store.recordCodexRootTurnInput(
+                sessionID: sessionID,
+                fingerprint: CodexInputFingerprint.fingerprint(for: turnID),
+                threadID: "thread-root",
+                turnID: turnID,
+                approvalPolicyField: .string("on-request"),
+                approvalsReviewerField: .string("guardian_subagent")
+            )
+        }
+
+        #expect(store.handleCodexSessionLogApproval(
+            sessionID: explicitSessionID,
+            detail: "Explicit turn approval",
+            threadID: "thread-root",
+            turnID: "turn-explicit",
+            callID: nil,
+            approvalID: nil,
+            at: startedAt.addingTimeInterval(1)
+        ) == false)
+        #expect(
+            store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: explicitSessionID) ==
+                ["turn-explicit"]
+        )
+
+        #expect(store.handleCodexSessionLogApproval(
+            sessionID: synthesizedSessionID,
+            detail: "Root-fallback approval",
+            threadID: nil,
+            turnID: nil,
+            callID: nil,
+            approvalID: nil,
+            at: startedAt.addingTimeInterval(2)
+        ) == false)
+        #expect(
+            store.codexAutoReviewedPermissionTurnIDsForTesting(sessionID: synthesizedSessionID).isEmpty
+        )
     }
 
     @Test
