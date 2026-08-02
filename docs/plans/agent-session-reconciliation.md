@@ -81,7 +81,7 @@ Launch logs do expose `call_id` and may expose a more-specific `approval_id`, yi
 
 ## Target boundary
 
-Add a provider-specific pure module named `CodexReconciliation`, with its own tests. `ToasttyApp` depends on it. It may depend on `CoreState` because the shared `AgentKind` and `SessionStatus` values avoid duplicate adapters; it must not import AppKit, SwiftUI, filesystem APIs, notification APIs, or app-owned stores.
+Add a provider-specific pure module named `CodexReconciliation`, with its own tests. `ToasttyApp` depends on it. The landed native-claim slice is Foundation-only; add a `CoreState` dependency later only if a migrated fact genuinely needs shared status types and an App-owned adapter would be less clear. The module must not import AppKit, SwiftUI, filesystem APIs, notification APIs, or app-owned stores.
 
 The module contains:
 
@@ -92,6 +92,8 @@ The module contains:
 - typed decisions for identity/path claims, status, background activity, resume discovery, notification intent, ignored/conflicting observations, and diagnostics.
 
 It is explicitly not a generic event bus and introduces no speculative provider protocol.
+
+The first landed slice contains typed native-claim values and the pure batch evaluator. `ManagedAgentNativeSessionObserver` routes Codex claims through it against one complete App-supplied ownership snapshot, then applies accepted decisions synchronously on `MainActor`. Claude remains on its pre-existing observer policy during the provider-by-provider migration; importing `CodexReconciliation` must not silently change another provider's claim semantics.
 
 Identifiers added to normalized event contracts are ephemeral and non-`Codable`. Each source preserves only identifiers it actually exposes; Toastty does not synthesize a hook approval ID. These fields are not a persisted workspace schema or a promise to restore reconciliation state across app launches.
 
@@ -239,8 +241,8 @@ Persisting reducer state or the runtime cursor to disk is deferred. Add persiste
 Each step is independently revertible. Never let the legacy handler and the new reducer both mutate the same fact.
 
 1. **Preserve source-exposed identifiers and characterize behavior.** Add ephemeral, non-`Codable` log `approvalID` and `callID` fields without inventing a hook equivalent. Use `approvalID ?? callID` for launch-log approval dedupe only. Split parsing from file polling enough to test normalized observations. Capture sanitized traces and characterize current behavior under receipt-order permutations.
-2. **Introduce the pure target with trace replay.** Add `CodexReconciliation` and reducer tests. Replay recorded/synthetic normalized traces against fact-specific expected decisions while legacy code remains the only runtime writer.
-3. **Migrate identity and rollout claims.** Route claims through pure evaluation against an App ownership snapshot; App code remains the sole owner and continues applying accepted resume-record mutations and watcher attachment.
+2. **Introduce the pure target with trace replay.** Add `CodexReconciliation` and reducer tests. The first implementation contains the Foundation-only native-claim evaluator and synthetic batch/permutation tests; fact-specific observation state and sanitized trace replay are added with the fact that needs them rather than as placeholder abstractions.
+3. **Migrate identity and rollout claims.** Route Codex claims through pure evaluation against an App ownership snapshot; App code remains the sole owner and continues applying accepted resume-record mutations and watcher attachment. This slice is landed. Claude deliberately remains on the legacy observer branch until it receives its own reviewed migration.
 4. **Migrate subagent correlation.** Move call/tool-use/agent-ID joins, finish tombstones, and bounded state into the reducer. Keep watcher lifecycle in the App.
 5. **Migrate status and background projection.** Move root-turn identity and progress decisions while preserving current fixed-at-launch source behavior. Add the runtime cursor before relying on watcher restart replay.
 6. **Migrate approval, completion, and notification intent last.** Preserve fixed launch-selected authority, introduce stable effect IDs, and keep App-owned timers and notification suppression. Approval cross-source dedupe/fallback remains disabled until a future schema recheck finds a common exact ID; completion fallback remains gated by its identifier/delivery experiments and separate review.
