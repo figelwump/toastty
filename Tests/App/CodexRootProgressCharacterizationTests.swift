@@ -366,7 +366,7 @@ private final class CodexRootProgressPlannerFixture {
             readVisibleText: { _ in readVisibleText() },
             promptState: { _ in promptState() },
             nativeSessionObserverRegistry: CodexRootProgressNativeSessionObserverStub(),
-            codexSessionIntegrationResolver: CodexRootProgressIntegrationResolverStub(source: source)
+            codexSkillsResolver: CodexRootProgressSkillsResolverStub()
         )
         let plan = try planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -478,22 +478,12 @@ private final class CodexRootProgressNativeSessionObserverStub: ManagedAgentNati
     func cancelObservation(sessionID _: String) {}
 }
 
-private final class CodexRootProgressIntegrationResolverStub: CodexManagedLaunchIntegrationResolving {
-    private let source: CodexStatusTrackingSource
-
-    init(source: CodexStatusTrackingSource) {
-        self.source = source
-    }
-
+private final class CodexRootProgressSkillsResolverStub: CodexManagedLaunchSkillsResolving {
     func resolve(
         request _: ManagedAgentLaunchRequest,
         workingDirectory _: String?
-    ) -> CodexManagedLaunchIntegrationDecision {
-        CodexManagedLaunchIntegrationDecision(
-            configuration: nil,
-            assessment: nil,
-            statusTrackingSource: source
-        )
+    ) -> CodexManagedLaunchSkillsDecision {
+        CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
     }
 }
 

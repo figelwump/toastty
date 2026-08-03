@@ -46,6 +46,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case manageConfig
     case manageTerminalProfiles
     case manageAgents
+    case manageCodexSkills
     case setUpAgentStatusHooks
     case copyDiagnosticsSnippet
     case reloadConfiguration
@@ -144,6 +145,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "terminal.profiles.manage"
         case .manageAgents:
             return "agent.profiles.manage"
+        case .manageCodexSkills:
+            return "agent.codex-skills.manage"
         case .setUpAgentStatusHooks:
             return "agent.status-hooks.setup"
         case .copyDiagnosticsSnippet:
@@ -239,8 +242,10 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Manage Terminal Profiles"
         case .manageAgents:
             return "Manage Agents"
+        case .manageCodexSkills:
+            return "Manage Codex Skills"
         case .setUpAgentStatusHooks:
-            return "Set Up Codex Integration"
+            return "Set Up Agent Status Hooks"
         case .copyDiagnosticsSnippet:
             return "Copy Diagnostics Collection Snippet"
         case .reloadConfiguration:
@@ -332,7 +337,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .manageTerminalProfiles:
             return nil
-        case .manageAgents:
+        case .manageAgents, .manageCodexSkills:
             return nil
         case .setUpAgentStatusHooks:
             return nil
@@ -434,6 +439,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["manage", "open", "terminal", "profiles", "config", "toml"]
         case .manageAgents:
             return ["manage", "open", "agents", "agent", "profiles", "config", "toml"]
+        case .manageCodexSkills:
+            return ["manage", "codex", "skills", "plugin", "repair", "uninstall"]
         case .setUpAgentStatusHooks:
             return ["agent", "status", "hooks", "setup", "codex", "claude", "telemetry"]
         case .copyDiagnosticsSnippet:

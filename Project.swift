@@ -409,13 +409,13 @@ let project = Project(
             ],
             copyFiles: [
                 .resources(
-                    name: "Bundle Toastty Codex Marketplace",
-                    subpath: "CodexPluginMarketplace/.agents/plugins",
+                    name: "Bundle Toastty Agent Plugin Marketplace",
+                    subpath: "ToasttyAgentPluginBundle/.agents/plugins",
                     files: [".agents/plugins/marketplace.json"]
                 ),
                 .resources(
-                    name: "Bundle Toastty Codex Plugin",
-                    subpath: "CodexPluginMarketplace/plugins",
+                    name: "Bundle Toastty Agent Plugin",
+                    subpath: "ToasttyAgentPluginBundle/plugins",
                     files: [.folderReference(path: "plugins/toastty")]
                 ),
             ],

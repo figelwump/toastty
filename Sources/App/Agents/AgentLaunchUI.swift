@@ -91,10 +91,18 @@ enum AgentLaunchUI {
     static func codexStatusHooksPreflightState(
         profileID: String
     ) -> CodexStatusHookLaunchPreflightState {
-        // Integration capability and trust are assessed during managed-launch
-        // planning. Missing setup never blocks Codex; the planner safely keeps
-        // notify/session-log fallback telemetry for that launch.
-        .ready
+        guard profileID == AgentKind.codex.rawValue else {
+            return .ready
+        }
+
+        do {
+            return CodexStatusHookLaunchPreflightResolver.state(
+                profileID: profileID,
+                installationStatus: try CodexStatusHookInstaller().installationStatus()
+            )
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
     }
 
     static func presentCodexStatusHooksWarning(
@@ -104,7 +112,7 @@ enum AgentLaunchUI {
         let alert = codexStatusHooksWarningAlert(for: state)
 
         if canOpenSetup {
-            alert.addButton(withTitle: "Set Up Codex Integration")
+            alert.addButton(withTitle: "Set Up Hooks")
             alert.addButton(withTitle: "Run Anyway")
             alert.addButton(withTitle: "Cancel")
             return codexStatusHooksWarningChoice(response: alert.runModal(), canOpenSetup: true)
@@ -127,7 +135,7 @@ enum AgentLaunchUI {
         }
 
         let alert = codexStatusHooksWarningAlert(for: state)
-        alert.addButton(withTitle: "Set Up Codex Integration")
+        alert.addButton(withTitle: "Set Up Hooks")
         alert.addButton(withTitle: "Run Anyway")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
@@ -146,11 +154,11 @@ enum AgentLaunchUI {
     ) -> String {
         switch state {
         case .ready:
-            return "Codex Integration Is Ready"
+            return "Codex Status Hooks Are Ready"
         case .needsSetup:
-            return "Set Up Codex Integration?"
+            return "Set Up Codex Status Hooks?"
         case .unavailable:
-            return "Codex Integration Could Not Be Verified"
+            return "Codex Status Hooks Could Not Be Verified"
         }
     }
 
@@ -160,15 +168,16 @@ enum AgentLaunchUI {
         switch state {
         case .ready:
             return ""
-        case .needsSetup:
+        case .needsSetup(let status):
+            let stateDescription = status.state == .notInstalled ? "missing" : "out of date"
             return """
-            Toastty can run Codex now with fallback telemetry, but its managed-session skills and process-scoped hooks are not ready.
+            Toastty can run Codex now, but progress, approvals, and turn completion may be incomplete because Codex status hooks are \(stateDescription).
 
-            Set up the Codex integration to keep Toastty skills disabled globally and enable them only for managed sessions.
+            Set them up once to use Toastty's stable hook forwarder instead of the degraded log watcher fallback.
             """
         case .unavailable(let message):
             return """
-            Toastty can run Codex now with fallback telemetry, but its managed-session integration could not be checked.
+            Toastty can run Codex now, but progress, approvals, and turn completion may be incomplete because Codex status hooks could not be checked.
 
             \(message)
             """

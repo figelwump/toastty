@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Capabilities"
+  short_description: "Control workspaces, panels, and managed agents."
+  default_prompt: "Use $toastty-capabilities to inspect and control this Toastty workspace."

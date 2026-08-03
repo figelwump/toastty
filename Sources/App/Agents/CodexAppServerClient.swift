@@ -17,7 +17,7 @@ enum CodexAppServerClientError: LocalizedError, Equatable {
         case .launchFailed(let message):
             return "Unable to start the Codex app-server: \(message)"
         case .timedOut:
-            return "Codex integration assessment timed out."
+            return "Codex skills configuration timed out."
         case .serverExited(let message):
             return "Codex app-server exited before completing the request: \(message)"
         case .malformedResponse(let method):
@@ -25,6 +25,13 @@ enum CodexAppServerClientError: LocalizedError, Equatable {
         case .rpcError(let method, _, let message):
             return "Codex app-server rejected \(method): \(message)"
         }
+    }
+
+    var isUnsupported: Bool {
+        if case .rpcError(_, let code, _) = self {
+            return code == -32601
+        }
+        return false
     }
 }
 
@@ -34,6 +41,11 @@ struct CodexAppServerInvocation: Equatable, Sendable {
     let workingDirectoryURL: URL
     let configOverrides: [String]
     let timeout: TimeInterval
+}
+
+struct CodexSkillState: Equatable, Sendable {
+    let name: String
+    let enabled: Bool
 }
 
 struct CodexAppServerRPCRequest: Equatable, Sendable {
@@ -74,7 +86,6 @@ indirect enum CodexJSONValue: Equatable, Sendable {
             self = .string(value)
         case let values as [Any]:
             var converted: [CodexJSONValue] = []
-            converted.reserveCapacity(values.count)
             for value in values {
                 guard let item = CodexJSONValue(jsonObject: value) else { return nil }
                 converted.append(item)
@@ -123,27 +134,24 @@ indirect enum CodexJSONValue: Equatable, Sendable {
         guard case .bool(let value) = self else { return nil }
         return value
     }
-
-    var intValue: Int? {
-        guard case .int(let value) = self else { return nil }
-        return value
-    }
 }
 
-protocol CodexAppServerRPCTransporting {
+protocol CodexAppServerRPCTransporting: Sendable {
     func perform(
         invocation: CodexAppServerInvocation,
         requests: [CodexAppServerRPCRequest]
     ) throws -> [CodexAppServerRPCResponse]
 }
 
-struct CodexAppServerProcessTransport: CodexAppServerRPCTransporting {
+struct CodexAppServerProcessTransport: CodexAppServerRPCTransporting, @unchecked Sendable {
     private let fileManager: FileManager
     private let baseEnvironment: @Sendable () -> [String: String]
 
     init(
         fileManager: FileManager = .default,
-        baseEnvironment: @escaping @Sendable () -> [String: String] = { ProcessInfo.processInfo.environment }
+        baseEnvironment: @escaping @Sendable () -> [String: String] = {
+            ProcessInfo.processInfo.environment
+        }
     ) {
         self.fileManager = fileManager
         self.baseEnvironment = baseEnvironment
@@ -155,6 +163,9 @@ struct CodexAppServerProcessTransport: CodexAppServerRPCTransporting {
     ) throws -> [CodexAppServerRPCResponse] {
         guard fileManager.isExecutableFile(atPath: invocation.executableURL.path) else {
             throw CodexAppServerClientError.executableUnavailable(invocation.executableURL.path)
+        }
+        guard invocation.timeout > 0 else {
+            throw CodexAppServerClientError.timedOut
         }
 
         let process = Process()
@@ -174,15 +185,9 @@ struct CodexAppServerProcessTransport: CodexAppServerRPCTransporting {
         process.standardError = stderrPipe
 
         let state = CodexAppServerProcessState()
-        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-            state.consume(handle.availableData)
-        }
-        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-            state.consumeStderr(handle.availableData)
-        }
-        process.terminationHandler = { process in
-            state.recordExit(status: process.terminationStatus)
-        }
+        stdoutPipe.fileHandleForReading.readabilityHandler = { state.consume($0.availableData) }
+        stderrPipe.fileHandleForReading.readabilityHandler = { state.consumeStderr($0.availableData) }
+        process.terminationHandler = { state.recordExit(status: $0.terminationStatus) }
 
         do {
             try process.run()
@@ -205,9 +210,11 @@ struct CodexAppServerProcessTransport: CodexAppServerRPCTransporting {
             id: 1,
             params: [
                 "clientInfo": .object([
-                    "name": .string("toastty-codex-integration"),
-                    "title": .string("Toastty Codex Integration"),
-                    "version": .string(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"),
+                    "name": .string("toastty-codex-skills"),
+                    "title": .string("Toastty Codex Skills"),
+                    "version": .string(
+                        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+                    ),
                 ]),
                 "capabilities": .object(["experimentalApi": .bool(true)]),
             ],
@@ -225,8 +232,8 @@ struct CodexAppServerProcessTransport: CodexAppServerRPCTransporting {
             )
         }
 
-        return try requests.indices.map { index in
-            try state.waitForResponse(id: index + 2, deadline: deadline)
+        return try requests.indices.map {
+            try state.waitForResponse(id: $0 + 2, deadline: deadline)
         }
     }
 
@@ -334,19 +341,47 @@ private final class CodexAppServerProcessState: @unchecked Sendable {
     }
 }
 
-struct CodexAppServerClient: @unchecked Sendable {
+protocol CodexSkillsConfiguring: Sendable {
+    func writeSkillConfigs(
+        invocation: CodexAppServerInvocation,
+        states: [CodexSkillState]
+    ) throws
+    func listSkills(invocation: CodexAppServerInvocation) throws -> [CodexSkillState]
+}
+
+struct CodexAppServerClient: CodexSkillsConfiguring, @unchecked Sendable {
     private let transport: any CodexAppServerRPCTransporting
 
     init(transport: any CodexAppServerRPCTransporting = CodexAppServerProcessTransport()) {
         self.transport = transport
     }
 
-    func assess(
+    func writeSkillConfigs(
         invocation: CodexAppServerInvocation,
-        expectedSkillNames: [String],
-        forwarderCommand: String,
-        legacyGlobalHooksPresent: Bool
-    ) throws -> CodexSessionIntegrationAssessment {
+        states: [CodexSkillState]
+    ) throws {
+        let ordered = states.sorted { $0.name < $1.name }
+        let responses = try transport.perform(
+            invocation: invocation,
+            requests: ordered.map {
+                CodexAppServerRPCRequest(
+                    method: "skills/config/write",
+                    params: ["name": .string($0.name), "enabled": .bool($0.enabled)]
+                )
+            }
+        )
+        guard responses.count == ordered.count else {
+            throw CodexAppServerClientError.malformedResponse("skills/config/write")
+        }
+        for (state, response) in zip(ordered, responses) {
+            let result = try checkedResult(response, method: "skills/config/write")
+            guard result.objectValue?["effectiveEnabled"]?.boolValue == state.enabled else {
+                throw CodexAppServerClientError.malformedResponse("skills/config/write")
+            }
+        }
+    }
+
+    func listSkills(invocation: CodexAppServerInvocation) throws -> [CodexSkillState] {
         let responses = try transport.perform(
             invocation: invocation,
             requests: [
@@ -357,222 +392,13 @@ struct CodexAppServerClient: @unchecked Sendable {
                         "forceReload": .bool(true),
                     ]
                 ),
-                CodexAppServerRPCRequest(
-                    method: "hooks/list",
-                    params: ["cwds": .array([.string(invocation.workingDirectoryURL.path)])]
-                ),
             ]
         )
-        guard responses.count == 2 else {
-            throw CodexAppServerClientError.malformedResponse("assessment")
+        guard let response = responses.first else {
+            throw CodexAppServerClientError.malformedResponse("skills/list")
         }
-        let skillsResult = try checkedResult(responses[0], method: "skills/list")
-        let hooksResult = try checkedResult(responses[1], method: "hooks/list")
-
-        let expected = Set(expectedSkillNames)
-        let skillEntries = skillsResult.objectValue?["data"]?.arrayValue ?? []
-        let skillObjects = skillEntries.flatMap { entry in
-            entry.objectValue?["skills"]?.arrayValue ?? []
-        }.compactMap(\.objectValue)
-        let pluginPrefix = "\(CodexSessionIntegrationContract.pluginName):"
-        let installedSkills = skillObjects.compactMap { $0["name"]?.stringValue }
-            .filter { $0.hasPrefix(pluginPrefix) }
-        let enabledSkills = skillObjects.compactMap { skill -> String? in
-            guard skill["enabled"]?.boolValue == true,
-                  let name = skill["name"]?.stringValue,
-                  expected.contains(name) else {
-                return nil
-            }
-            return name
-        }
-        let skillErrors = skillEntries.flatMap { entry in
-            entry.objectValue?["errors"]?.arrayValue ?? []
-        }.compactMap { $0.objectValue?["message"]?.stringValue }
-
-        let hookEntries = hooksResult.objectValue?["data"]?.arrayValue ?? []
-        let hookObjects = hookEntries.flatMap { entry in
-            entry.objectValue?["hooks"]?.arrayValue ?? []
-        }.compactMap(\.objectValue)
-        let toasttyHookObjects = hookObjects.filter { hook in
-            hook["source"]?.stringValue == "sessionFlags"
-                && hook["command"]?.stringValue == forwarderCommand
-        }
-        let sessionHooks = toasttyHookObjects.compactMap { hook -> CodexSessionHookAssessment? in
-            guard hook["source"]?.stringValue == "sessionFlags",
-                  hook["command"]?.stringValue == forwarderCommand,
-                  let eventValue = hook["eventName"]?.stringValue,
-                  let event = CodexSessionHookEvent(listValue: eventValue) else {
-                return nil
-            }
-            let expectedDefinition = CodexSessionIntegrationContract.hookDefinitions.first {
-                $0.event == event
-            }
-            let definitionMatchesExpected = expectedDefinition != nil
-                && hook["matcher"]?.stringValue == expectedDefinition?.matcher
-                && hook["timeoutSec"]?.intValue == CodexSessionIntegrationContract.hookTimeoutSeconds
-                && hook["statusMessage"]?.stringValue == CodexSessionIntegrationContract.hookStatusMessage
-            return CodexSessionHookAssessment(
-                event: event,
-                trust: CodexHookTrustState(listValue: hook["trustStatus"]?.stringValue ?? "unknown"),
-                definitionHash: hook["currentHash"]?.stringValue,
-                definitionMatchesExpected: definitionMatchesExpected
-            )
-        }
-        let warnings = hookEntries.flatMap { entry in
-            entry.objectValue?["warnings"]?.arrayValue ?? []
-        }.compactMap(\.stringValue)
-        let hookErrors = hookEntries.flatMap { entry in
-            entry.objectValue?["errors"]?.arrayValue ?? []
-        }.compactMap { $0.objectValue?["message"]?.stringValue }
-        var identityErrors: [String] = []
-        for definition in CodexSessionIntegrationContract.hookDefinitions {
-            let matches = toasttyHookObjects.filter { hook in
-                hook["eventName"]?.stringValue == definition.event.appServerListValue
-            }
-            if matches.count != 1 {
-                identityErrors.append(
-                    "Expected exactly one \(definition.event.rawValue) Toastty session hook; found \(matches.count)."
-                )
-                continue
-            }
-            guard let hook = matches.first else { continue }
-            if hook["matcher"]?.stringValue != definition.matcher {
-                identityErrors.append("Toastty \(definition.event.rawValue) hook matcher differs from the expected definition.")
-            }
-            if hook["timeoutSec"]?.intValue != CodexSessionIntegrationContract.hookTimeoutSeconds {
-                identityErrors.append("Toastty \(definition.event.rawValue) hook timeout differs from the expected definition.")
-            }
-            if hook["statusMessage"]?.stringValue != CodexSessionIntegrationContract.hookStatusMessage {
-                identityErrors.append("Toastty \(definition.event.rawValue) hook status message differs from the expected definition.")
-            }
-        }
-
-        return CodexSessionIntegrationAssessment(
-            support: .supported,
-            expectedSkillNames: expectedSkillNames.sorted(),
-            installedSkillNames: Array(Set(installedSkills)).sorted(),
-            enabledSkillNames: Array(Set(enabledSkills)).sorted(),
-            sessionHooks: sessionHooks,
-            legacyGlobalHooksPresent: legacyGlobalHooksPresent,
-            warnings: warnings,
-            errors: skillErrors + hookErrors + identityErrors
-        )
-    }
-
-    func writeSkillConfig(
-        invocation: CodexAppServerInvocation,
-        name: String,
-        enabled: Bool
-    ) throws -> Bool {
-        let response = try one(
-            invocation: invocation,
-            method: "skills/config/write",
-            params: ["name": .string(name), "enabled": .bool(enabled)]
-        )
-        guard let effectiveEnabled = response.objectValue?["effectiveEnabled"]?.boolValue else {
-            throw CodexAppServerClientError.malformedResponse("skills/config/write")
-        }
-        return effectiveEnabled
-    }
-
-    func addMarketplace(
-        invocation: CodexAppServerInvocation,
-        source: String
-    ) throws -> String {
-        let response = try one(
-            invocation: invocation,
-            method: "marketplace/add",
-            params: ["source": .string(source)]
-        )
-        guard let name = response.objectValue?["marketplaceName"]?.stringValue else {
-            throw CodexAppServerClientError.malformedResponse("marketplace/add")
-        }
-        return name
-    }
-
-    func installPlugin(
-        invocation: CodexAppServerInvocation,
-        pluginName: String,
-        marketplacePath: String
-    ) throws {
-        _ = try one(
-            invocation: invocation,
-            method: "plugin/install",
-            params: [
-                "pluginName": .string(pluginName),
-                "marketplacePath": .string(marketplacePath),
-            ]
-        )
-    }
-
-    func upgradeMarketplace(
-        invocation: CodexAppServerInvocation,
-        marketplaceName: String
-    ) throws {
-        _ = try one(
-            invocation: invocation,
-            method: "marketplace/upgrade",
-            params: ["marketplaceName": .string(marketplaceName)]
-        )
-    }
-
-    func uninstallPlugin(
-        invocation: CodexAppServerInvocation,
-        pluginID: String
-    ) throws {
-        _ = try one(
-            invocation: invocation,
-            method: "plugin/uninstall",
-            params: ["pluginId": .string(pluginID)]
-        )
-    }
-
-    func removeMarketplace(
-        invocation: CodexAppServerInvocation,
-        marketplaceName: String
-    ) throws {
-        _ = try one(
-            invocation: invocation,
-            method: "marketplace/remove",
-            params: ["marketplaceName": .string(marketplaceName)]
-        )
-    }
-
-    func installedPluginID(
-        invocation: CodexAppServerInvocation,
-        pluginName: String,
-        marketplaceName: String
-    ) throws -> String? {
-        let response = try one(
-            invocation: invocation,
-            method: "plugin/installed",
-            params: [:]
-        )
-        let marketplaces = response.objectValue?["marketplaces"]?.arrayValue ?? []
-        for marketplace in marketplaces.compactMap(\.objectValue)
-            where marketplace["name"]?.stringValue == marketplaceName {
-            let plugins = marketplace["plugins"]?.arrayValue ?? []
-            for plugin in plugins.compactMap(\.objectValue)
-                where plugin["name"]?.stringValue == pluginName
-                    && plugin["installed"]?.boolValue == true {
-                return plugin["id"]?.stringValue
-            }
-        }
-        return nil
-    }
-
-    func listSkills(
-        invocation: CodexAppServerInvocation
-    ) throws -> [(name: String, enabled: Bool)] {
-        let response = try one(
-            invocation: invocation,
-            method: "skills/list",
-            params: [
-                "cwds": .array([.string(invocation.workingDirectoryURL.path)]),
-                "forceReload": .bool(true),
-            ]
-        )
-        return (response.objectValue?["data"]?.arrayValue ?? []).flatMap { entry in
+        let result = try checkedResult(response, method: "skills/list")
+        return (result.objectValue?["data"]?.arrayValue ?? []).flatMap { entry in
             entry.objectValue?["skills"]?.arrayValue ?? []
         }.compactMap { skill in
             guard let object = skill.objectValue,
@@ -580,23 +406,8 @@ struct CodexAppServerClient: @unchecked Sendable {
                   let enabled = object["enabled"]?.boolValue else {
                 return nil
             }
-            return (name, enabled)
+            return CodexSkillState(name: name, enabled: enabled)
         }
-    }
-
-    private func one(
-        invocation: CodexAppServerInvocation,
-        method: String,
-        params: [String: CodexJSONValue]
-    ) throws -> CodexJSONValue {
-        let responses = try transport.perform(
-            invocation: invocation,
-            requests: [CodexAppServerRPCRequest(method: method, params: params)]
-        )
-        guard let response = responses.first else {
-            throw CodexAppServerClientError.malformedResponse(method)
-        }
-        return try checkedResult(response, method: method)
     }
 
     private func checkedResult(
@@ -614,19 +425,5 @@ struct CodexAppServerClient: @unchecked Sendable {
             throw CodexAppServerClientError.malformedResponse(method)
         }
         return result
-    }
-}
-
-private extension CodexSessionHookEvent {
-    var appServerListValue: String {
-        switch self {
-        case .sessionStart: return "sessionStart"
-        case .userPromptSubmit: return "userPromptSubmit"
-        case .permissionRequest: return "permissionRequest"
-        case .preToolUse: return "preToolUse"
-        case .subagentStart: return "subagentStart"
-        case .subagentStop: return "subagentStop"
-        case .stop: return "stop"
-        }
     }
 }

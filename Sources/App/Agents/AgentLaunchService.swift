@@ -120,7 +120,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         socketPathProvider: @escaping @Sendable () -> String = AgentLaunchService.defaultSocketPath,
         codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = ManagedAgentLaunchPlanner.defaultCodexStatusTrackingSource,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
-        codexSessionIntegrationResolver: (any CodexManagedLaunchIntegrationResolving)? = nil
+        codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil
     ) {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
@@ -141,7 +141,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 terminalCommandRouter?.promptState(panelID: panelID) ?? .unavailable
             },
             nativeSessionObserverRegistry: nativeSessionObserverRegistry,
-            codexSessionIntegrationResolver: codexSessionIntegrationResolver
+            codexSkillsResolver: codexSkillsResolver
         )
     }
 
@@ -435,6 +435,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     private static let reservedLaunchEnvironmentKeys: Set<String> = [
         ToasttyLaunchContextEnvironment.sessionIDKey,
+        ToasttyLaunchContextEnvironment.agentKey,
         ToasttyLaunchContextEnvironment.panelIDKey,
         ToasttyLaunchContextEnvironment.socketPathKey,
         ToasttyLaunchContextEnvironment.cliPathKey,

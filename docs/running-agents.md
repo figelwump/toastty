@@ -5,11 +5,12 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 ## Quick start
 
 1. If you want to type `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
-2. If you use Codex, choose `Toastty > Set Up Codex Integration…` or open `Get Started…` and choose `Set Up Codex Integration` to install Toastty's session-only skills and lifecycle hooks
-3. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
-4. Uncomment or add a profile in `~/.toastty/agents.toml`
-5. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
-6. Click the agent name in the `Agent` menu, top bar, or command palette, or press its keyboard shortcut
+2. Toastty automatically exposes four session-only skills to supported managed Codex and Claude Code launches; no skills setup is required
+3. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…` or open `Get Started…` and choose `Set Up Agent Status Hooks`
+4. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
+5. Uncomment or add a profile in `~/.toastty/agents.toml`
+6. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
+7. Click the agent name in the `Agent` menu, top bar, or command palette, or press its keyboard shortcut
 
 Toastty sends the configured command into the focused terminal panel and starts tracking the session automatically.
 
@@ -93,7 +94,8 @@ arguments for automation:
   rejects exact-key collisions with its managed context and provider
   instrumentation keys: `TOASTTY_SESSION_ID`, `TOASTTY_PANEL_ID`,
   `TOASTTY_SOCKET_PATH`, `TOASTTY_CLI_PATH`, `TOASTTY_CWD`,
-  `TOASTTY_REPO_ROOT`, `TOASTTY_MANAGED_AGENT_SHIM_BYPASS`,
+  `TOASTTY_REPO_ROOT`, `TOASTTY_AGENT`, `TOASTTY_SKILLS_ROOT`,
+  `TOASTTY_MANAGED_AGENT_SHIM_BYPASS`,
   `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT`, `CODEX_TUI_RECORD_SESSION`,
   `CODEX_TUI_SESSION_LOG_PATH`, and `TOASTTY_PI_TELEMETRY_LOG_PATH`.
 - `initialPrompt` appends the first prompt as a trailing argv argument only when
@@ -148,10 +150,10 @@ Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the c
 Built-in Claude, OpenCode, MiMo Code, and Pi instrumentation also works when the configured
 command uses a wrapper or prefix command and the actual agent command still
 appears as its own `argv` element in a recognized launch shape. Codex uses the
-same rule for its existing fallback instrumentation, but injects plugin and hook
+same rule for its existing fallback instrumentation, but injects managed skill
 configuration only when it can prove the exact Codex executable insertion point
 without crossing a `--` boundary. Opaque wrapper or subcommand shapes still
-launch with fallback telemetry instead of risking a broken command. For predictable
+launch with fallback telemetry and without Toastty skills instead of risking a broken command. For predictable
 manual tracking of those wrapper executables when you type them into a Toastty
 terminal, declare the wrapper basename in `manualCommandNames`. When that field
 is present on a built-in profile, Toastty uses that explicit list for the
@@ -220,29 +222,29 @@ argv = ["scodex"]
 
 That launches from the Agent menu because Toastty sends the rendered command to
 your shell. Because Toastty cannot resolve an opaque shell function to a safe
-Codex executable before launch, it skips the session-only plugin/hook overrides
-and keeps fallback telemetry. See the manual-command shim section below for the
+Codex executable before launch, it skips the managed skill override and keeps
+fallback telemetry. See the manual-command shim section below for the
 additional limitation on typing shell functions directly.
 
 ### What `codex` enables
 
 When the profile ID is `codex`, Toastty:
 
-1. **Enables Toastty's Codex plugin skills only for the managed process**. `Toastty > Set Up Codex Integration…` installs a skills-only local plugin, keeps all five `toastty:*` skills disabled in the ordinary Codex configuration, and enables them with process-scoped configuration only for supported managed Toastty launches. The skills are `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, `worktree-create`, and `worktree-done`.
-2. **Injects process-scoped Codex status hooks when supported**. Toastty keeps a stable forwarder at `~/.toastty/codex-hooks/forwarder.sh`, but it does not add the seven hooks to `~/.codex/hooks.json`. Codex may ask you to review and trust the stable session-hook definitions once with `/hooks`; Toastty never bypasses hook trust.
+1. **Automatically enables four Toastty skills only for the managed process**. On the first supported managed launch, Toastty installs its local plugin through Codex, disables every Toastty skill in ordinary Codex, and enables `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, and `worktree-create` with a process-scoped override. Provisioning is fail-open and capped at four seconds. Later launches verify the installed version and update it before launch when no other managed Codex session is active; otherwise they use the previous verified version and defer the update. `Toastty > Manage Codex Skills…` shows status and skill details and offers repair or uninstall.
+2. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default. Skills provisioning never adds, removes, or changes hooks.
 3. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, `SubagentStart`, `SubagentStop`, and `Stop`. These events drive **Working**, actionable **Needs approval**, **Ready**, native resume metadata, and Codex collaboration-agent rows for managed Codex sessions. A recognized `PreToolUse` spawn event also captures the delegated task name and any plaintext description Codex exposes. Newer Codex builds leave the task name readable but may provide the message as opaque ciphertext, which Toastty discards. When session recording context shows Codex is using an auto-reviewer through `approvals_reviewer`, Toastty suppresses the matching auto-reviewed approval prompt instead of surfacing it as a user approval. When the reviewer field is omitted in a resumed session, Toastty treats the permission request as ambiguous instead of immediately showing **Needs approval**.
-4. **Creates a notification script whenever trusted session hooks cannot own telemetry** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path. This includes first-launch untrusted hooks, old or unsupported Codex versions, unsafe or opaque wrapper shapes, probe failures, and legacy global hooks that could not be removed safely.
-5. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script. Toastty locks either hook-primary or fallback telemetry ownership for the session lifetime so trusting hooks midway through a launch cannot duplicate events.
+4. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
+5. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 6. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit.
-7. **Starts local session watchers**. Toastty polls the temporary TUI session log (every 250 ms) for Codex root-turn and auto-review approval context; when trusted session hooks are not the selected telemetry source, that log also provides the compatibility status fallback. After Codex reports native resume metadata, Toastty separately watches that session's native rollout JSONL for collaboration-agent lifecycle and the spawn-tool-to-child-agent identity mapping. With hook-primary telemetry, hooks remain authoritative for collaboration lifecycle, while rollout events provide correlation metadata and a task-label fallback. Toastty joins that mapping with available `PreToolUse` metadata regardless of arrival order. In fallback mode, the rollout watcher also provides the compatibility collaboration-lifecycle fallback.
+7. **Starts local session watchers**. Toastty polls the temporary TUI session log (every 250 ms) for Codex root-turn and auto-review approval context; when hooks are unavailable, that log also provides the compatibility status fallback. After Codex reports native resume metadata, Toastty separately watches that session's native rollout JSONL for collaboration-agent lifecycle and the spawn-tool-to-child-agent identity mapping. When hooks are installed, hooks remain authoritative for collaboration lifecycle, while rollout events provide correlation metadata and a task-label fallback. Toastty joins that mapping with available `PreToolUse` metadata regardless of arrival order. When hooks are unavailable, the rollout watcher also provides the compatibility collaboration-lifecycle fallback.
 8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
-9. **Logs helper delivery failures**. The stable Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
+9. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
-The setup sheet also provides an explicit uninstall confirmation. You can keep
-any migrated legacy-skill backups under `~/.toastty/` or restore the latest
-backup while uninstalling. Codex currently cannot remove individual disabled
-skill-name entries, so the sheet reports those harmless tombstones after
-uninstall; restart Codex to observe plugin or marketplace changes.
+Uninstall removes only the Toastty Codex plugin registration, marketplace, and
+staged files. It leaves hooks, unrelated Codex state, legacy-skill backups, and
+modified or ambiguous legacy skills untouched. Codex cannot currently remove
+individual disabled-name entries, so the management sheet reports the harmless
+`toastty:worktree-done` tombstone after uninstall.
 
 Typed `cdx` launches use the same Codex instrumentation path as typed `codex`
 launches when Toastty's managed command shims are enabled.
@@ -251,9 +253,10 @@ launches when Toastty's managed command shims are enabled.
 
 When the profile ID is `claude`, Toastty:
 
-1. **Creates a hook script** that calls `toastty session ingest-agent-event --source claude-hooks`
-2. **Resolves existing Claude settings** — if the profile's `argv` includes `--settings`, Toastty reads and merges with those settings rather than replacing them
-3. **Injects lifecycle hooks** into the merged Claude settings JSON under `hooks`:
+1. **Adds the four Toastty skills without installing into Claude's user state**. Toastty stages an immutable validated plugin copy and passes it to supported managed launches with an additive `--plugin-dir`. Existing user `--plugin-dir` arguments remain in place. If staging fails or the launch shape is opaque, Claude still launches without Toastty skills.
+2. **Creates a hook script** that calls `toastty session ingest-agent-event --source claude-hooks`
+3. **Resolves existing Claude settings** — if the profile's `argv` includes `--settings`, Toastty reads and merges with those settings rather than replacing them
+4. **Injects lifecycle hooks** into the merged Claude settings JSON under `hooks`:
    - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
@@ -263,7 +266,7 @@ When the profile ID is `claude`, Toastty:
    - `PreToolUse` (wildcard matcher) — fires before any tool use
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
    - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
-4. **Writes a temporary settings file** and passes `--settings <path>` to Claude
+5. **Writes a temporary settings file** and passes `--settings <path>` to Claude
 
 These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). `SessionStart` also persists Claude native resume metadata so restored managed Claude panels can run `claude --resume <session-id>` instead of starting a fresh session. Non-actionable notifications such as `auth_success` are ignored.
 When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the temporary launch artifacts directory, but still exits successfully so Claude keeps running. Claude can retain those hook artifacts briefly after session stop so late hook invocations turn into no-op delivery instead of missing-file shell errors.
@@ -337,13 +340,14 @@ Outside the Agent menu, Toastty can also track manual `codex`, `cdx`, `claude`,
 invocations typed directly into Toastty terminals. By default, Toastty prepends
 managed wrappers for those commands into the terminal `PATH`, and those wrappers
 prepare the same managed-session context before handing off to the real binary.
-For Codex, the typed shim runs the same integration preflight as UI launches.
-If plugin setup is missing or session hooks still need their one-time trust
-review, Toastty shows the appropriate guidance before the real Codex process
-starts. Choosing to continue always preserves the compatibility fallback, and
-routine safe forwarder/config drift checks run outside the launch-critical path.
+For Codex, the typed shim automatically prepares the same session-only skills
+as a UI launch and runs the same status-hook preflight. If hooks still need
+first-time setup or cannot be verified, Toastty shows the setup warning before
+the real Codex process starts. Skills provisioning itself never prompts or
+blocks the launch. Once Toastty owns the hook entries, routine hook maintenance
+runs automatically in the background.
 `manualCommandNames` only controls extra executable
-names Toastty should intercept; it does not control Codex integration setup.
+names Toastty should intercept; it does not control status-hook setup.
 
 If you are setting this up from inside the app, the top-bar `Get Started…`
 button, when visible, routes to the same shell-integration flow as
@@ -418,9 +422,10 @@ Every agent launched through Toastty receives these environment variables, set i
 | `TOASTTY_PANEL_ID` | UUID of the terminal panel the agent was launched into |
 | `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude, Codex, OpenCode, MiMo Code, and Pi helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
 | `TOASTTY_CLI_PATH` | Path to the bundled `toastty` CLI executable |
+| `TOASTTY_AGENT` | Managed provider ID. The `worktree-create` skill preserves `codex` or `claude` when it launches the handoff session. |
 | `TOASTTY_CWD` | Resolved launch working directory: explicit automation `cwd` when supplied, otherwise the target or restored panel working directory when available |
 | `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |
-| `TOASTTY_SKILLS_ROOT` | Stable copied Toastty Codex plugin `skills/` path for supported managed Codex launches; absent when integration setup or verification is unavailable |
+| `TOASTTY_SKILLS_ROOT` | Immutable copied Toastty plugin `skills/` path for supported managed Codex and Claude Code launches; absent when preparation, verification, or safe argument insertion is unavailable |
 
 Agent-specific variables are added on top of these (for example, `CODEX_TUI_RECORD_SESSION` and `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT` for Codex launches).
 

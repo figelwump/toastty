@@ -1,205 +1,159 @@
 import CoreState
+import Foundation
 import XCTest
 @testable import ToasttyApp
 
-final class CodexManagedLaunchIntegrationResolverTests: XCTestCase {
-    func testInvalidDirectHintFallsBackToRecognizedWrapperCodexExecutable() async throws {
-        let fixture = try Fixture(trust: "trusted")
+final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
+    func testDirectLaunchUsesResolvedExecutableAndCustomCodexHomeThenFailsOpen() async throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let resolver = fixture.resolver()
+        let customHome = fixture.rootURL.appendingPathComponent("custom-codex-home", isDirectory: true)
         let request = ManagedAgentLaunchRequest(
             agent: .codex,
             panelID: UUID(),
-            argv: ["agent-safehouse", "codex"],
-            cwd: fixture.root.path,
-            codexCapabilityHint: ManagedCodexCapabilityHint(
-                resolvedExecutablePath: "/bin/sh",
-                codexHomePath: fixture.codexHome.path
-            )
+            argv: ["codex", "resume", "thread"],
+            cwd: fixture.rootURL.path,
+            environment: ["CODEX_HOME": customHome.path]
         )
 
-        let decision = await resolver.resolveForManagedLaunch(
+        let decision = await fixture.resolver.resolveForManagedLaunch(
             request: request,
-            workingDirectory: fixture.root.path
+            workingDirectory: fixture.rootURL.path
         )
 
-        XCTAssertNotNil(decision.configuration)
-        XCTAssertEqual(decision.statusTrackingSource, .hooks)
-        XCTAssertEqual(fixture.transport.invocations.first?.executableURL, fixture.executable)
+        XCTAssertNil(decision.configuration)
+        XCTAssertNil(decision.status)
+        let invocation = try XCTUnwrap(fixture.skillClient.invocations.first)
+        XCTAssertEqual(invocation.executableURL, fixture.executableURL)
+        XCTAssertEqual(invocation.codexHomeURL, customHome)
     }
 
-    func testOpaqueWrapperIsNotExecutedAsCapabilityProbe() throws {
-        let fixture = try Fixture(trust: "trusted")
+    func testOpaqueWrapperIsNeverProbed() async throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
         let request = ManagedAgentLaunchRequest(
             agent: .codex,
             panelID: UUID(),
             argv: ["opaque-wrapper", "codex"],
-            cwd: fixture.root.path,
-            codexCapabilityHint: ManagedCodexCapabilityHint(
-                resolvedExecutablePath: "/bin/sh",
-                codexHomePath: fixture.codexHome.path
-            )
+            cwd: fixture.rootURL.path
         )
 
-        let decision = fixture.resolver().resolve(request: request, workingDirectory: fixture.root.path)
-
-        XCTAssertNil(decision.configuration)
-        XCTAssertEqual(fixture.transport.invocations.count, 0)
-        XCTAssertEqual(decision.statusTrackingSource, .sessionLogFallback(reason: "codex_executable_unresolved"))
-    }
-
-    func testRecognizedWrapperDoesNotTreatFlagValueAsCodexExecutable() throws {
-        let fixture = try Fixture(trust: "trusted")
-        defer { fixture.cleanup() }
-        let request = ManagedAgentLaunchRequest(
-            agent: .codex,
-            panelID: UUID(),
-            argv: ["agent-safehouse", "--profile", "codex", "npm", "test"],
-            cwd: fixture.root.path
+        let decision = await fixture.resolver.resolveForManagedLaunch(
+            request: request,
+            workingDirectory: fixture.rootURL.path
         )
 
-        let decision = fixture.resolver().resolve(request: request, workingDirectory: fixture.root.path)
-
         XCTAssertNil(decision.configuration)
-        XCTAssertEqual(fixture.transport.invocations.count, 0)
+        XCTAssertNil(decision.status)
+        XCTAssertEqual(fixture.skillClient.invocations.count, 0)
     }
 
-    func testTrustedAssessmentCachesUntilLocalTrustStateChanges() async throws {
-        let fixture = try Fixture(trust: "trusted")
+    func testUnsupportedRuntimeIsCachedAfterFirstProbe() async throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let resolver = fixture.resolver()
         let request = fixture.directRequest()
 
-        _ = await resolver.resolveForManagedLaunch(request: request, workingDirectory: fixture.root.path)
-        _ = await resolver.resolveForManagedLaunch(request: request, workingDirectory: fixture.root.path)
-        XCTAssertEqual(fixture.transport.invocations.count, 1)
-
-        try Data(#"{"hooks":[]}"#.utf8).write(to: fixture.codexHome.appendingPathComponent("hooks.json"))
-        _ = await resolver.resolveForManagedLaunch(request: request, workingDirectory: fixture.root.path)
-        XCTAssertEqual(fixture.transport.invocations.count, 2)
-
-        try Data(#"{"definition":"changed"}"#.utf8).write(
-            to: fixture.home.appendingPathComponent(".toastty/codex-plugin/.agents/plugins/marketplace.json")
+        _ = await fixture.resolver.resolveForManagedLaunch(
+            request: request,
+            workingDirectory: fixture.rootURL.path
         )
-        _ = await resolver.resolveForManagedLaunch(request: request, workingDirectory: fixture.root.path)
-        XCTAssertEqual(fixture.transport.invocations.count, 3)
+        _ = await fixture.resolver.resolveForManagedLaunch(
+            request: request,
+            workingDirectory: fixture.rootURL.path
+        )
+
+        XCTAssertEqual(fixture.skillClient.invocations.count, 1)
     }
 
-    func testUntrustedAssessmentIsRecheckedOnEveryLaunch() async throws {
-        let fixture = try Fixture(trust: "untrusted")
+    func testUnsupportedRuntimeIsRetriedAfterExecutableChanges() async throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let resolver = fixture.resolver()
         let request = fixture.directRequest()
-
-        let first = await resolver.resolveForManagedLaunch(request: request, workingDirectory: fixture.root.path)
-        let second = await resolver.resolveForManagedLaunch(request: request, workingDirectory: fixture.root.path)
-
-        XCTAssertNotNil(first.configuration)
-        XCTAssertEqual(first.statusTrackingSource, .sessionLogFallback(reason: "session_hooks_awaiting_trust"))
-        XCTAssertEqual(second.statusTrackingSource, first.statusTrackingSource)
-        XCTAssertEqual(fixture.transport.invocations.count, 2)
-    }
-
-    func testProbeTimeoutReturnsFallbackWithoutBlockingMainActor() async throws {
-        let fixture = try Fixture(trust: "trusted", delay: 0.2)
-        defer { fixture.cleanup(after: 0.25) }
-        let resolver = fixture.resolver(timeout: 0.02)
-        let start = Date()
-
-        let decision = await resolver.resolveForManagedLaunch(
-            request: fixture.directRequest(),
-            workingDirectory: fixture.root.path
+        _ = await fixture.resolver.resolveForManagedLaunch(
+            request: request,
+            workingDirectory: fixture.rootURL.path
+        )
+        try "#!/bin/sh\n# updated\nexit 0\n".write(
+            to: fixture.executableURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: fixture.executableURL.path
         )
 
-        XCTAssertLessThan(Date().timeIntervalSince(start), 0.15)
+        _ = await fixture.resolver.resolveForManagedLaunch(
+            request: request,
+            workingDirectory: fixture.rootURL.path
+        )
+
+        XCTAssertEqual(fixture.skillClient.invocations.count, 2)
+    }
+
+    func testSynchronousRestorePathNeverStartsProvisioning() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+
+        let decision = fixture.resolver.resolve(
+            request: fixture.directRequest(),
+            workingDirectory: fixture.rootURL.path
+        )
+
         XCTAssertNil(decision.configuration)
-        XCTAssertEqual(decision.statusTrackingSource, .sessionLogFallback(reason: "session_integration_probe_failed"))
-    }
-
-    @MainActor
-    func testSlowProbeYieldsMainActorUntilTimeout() async throws {
-        let fixture = try Fixture(trust: "trusted", delay: 0.2)
-        defer { fixture.cleanup(after: 0.25) }
-        let resolver = fixture.resolver(timeout: 0.05)
-        var heartbeatRan = false
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(5))
-            heartbeatRan = true
-        }
-
-        _ = await resolver.resolveForManagedLaunch(
-            request: fixture.directRequest(),
-            workingDirectory: fixture.root.path
-        )
-
-        XCTAssertTrue(heartbeatRan)
+        XCTAssertNil(decision.status)
+        XCTAssertEqual(fixture.skillClient.invocations.count, 0)
     }
 }
 
-private extension CodexManagedLaunchIntegrationResolverTests {
+private extension CodexManagedLaunchSkillsResolverTests {
     final class Fixture {
-        let root: URL
-        let home: URL
-        let codexHome: URL
-        let executable: URL
-        let transport: AssessmentTransport
-        let manager: CodexIntegrationManager
+        let rootURL: URL
+        let homeURL: URL
+        let executableURL: URL
+        let skillClient: UnsupportedRecordingSkillsClient
+        let resolver: CodexManagedLaunchSkillsResolver
 
-        init(trust: String, delay: TimeInterval = 0) throws {
-            root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("toastty-codex-resolver-tests-\(UUID().uuidString)", isDirectory: true)
-            home = root.appendingPathComponent("home", isDirectory: true)
-            codexHome = root.appendingPathComponent("codex-home", isDirectory: true)
-            executable = root.appendingPathComponent("bin/codex")
-            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
-
-            let plugin = home.appendingPathComponent(
-                ".toastty/codex-plugin/plugins/toastty",
-                isDirectory: true
-            )
+        init() throws {
+            rootURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("toastty-codex-skills-resolver-\(UUID().uuidString)", isDirectory: true)
+            homeURL = rootURL.appendingPathComponent("home", isDirectory: true)
+            executableURL = rootURL.appendingPathComponent("bin/codex")
+            skillClient = UnsupportedRecordingSkillsClient()
+            try FileManager.default.createDirectory(at: homeURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(
-                at: plugin.appendingPathComponent(".codex-plugin", isDirectory: true),
+                at: executableURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try FileManager.default.createDirectory(
-                at: home.appendingPathComponent(".toastty/codex-plugin/.agents/plugins", isDirectory: true),
-                withIntermediateDirectories: true
+            try "#!/bin/sh\nexit 0\n".write(
+                to: executableURL,
+                atomically: true,
+                encoding: .utf8
             )
-            try Data(#"{"name":"toastty","skills":"skills"}"#.utf8)
-                .write(to: plugin.appendingPathComponent(".codex-plugin/plugin.json"))
-            let skill = plugin.appendingPathComponent("skills/alpha", isDirectory: true)
-            try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
-            try Data("---\nname: alpha\ndescription: test\n---\n".utf8)
-                .write(to: skill.appendingPathComponent("SKILL.md"))
-            try Data("{}".utf8).write(
-                to: home.appendingPathComponent(".toastty/codex-plugin/.agents/plugins/marketplace.json")
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: executableURL.path
             )
 
-            let forwarder = CodexStatusHookInstaller(
-                homeDirectoryPath: home.path,
-                codexHomePath: codexHome.path
-            ).sessionLaunchForwarderCommand()
-            transport = AssessmentTransport(trust: trust, forwarderCommand: forwarder, delay: delay)
-            manager = CodexIntegrationManager(
-                homeDirectoryURL: home,
-                sourceMarketplaceURLProvider: { nil },
-                client: CodexAppServerClient(transport: transport)
-            )
-        }
-
-        func resolver(timeout: TimeInterval = 0.5) -> CodexManagedLaunchIntegrationResolver {
-            CodexManagedLaunchIntegrationResolver(
-                homeDirectoryURL: home,
-                manager: manager,
-                processEnvironment: { [executable] in
-                    ["PATH": executable.deletingLastPathComponent().path]
+            let repositoryRoot = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            let manager = CodexSkillsManager(
+                homeDirectoryURL: homeURL,
+                sourcePluginURLProvider: {
+                    repositoryRoot.appendingPathComponent("plugins/toastty", isDirectory: true)
                 },
-                timeout: timeout
+                sourceMarketplaceURLProvider: { repositoryRoot },
+                pluginClient: PreflightOnlyPluginClient(),
+                skillClient: skillClient
+            )
+            resolver = CodexManagedLaunchSkillsResolver(
+                homeDirectoryURL: homeURL,
+                manager: manager,
+                processEnvironment: { [executableURL] in
+                    ["PATH": executableURL.deletingLastPathComponent().path]
+                }
             )
         }
 
@@ -208,33 +162,19 @@ private extension CodexManagedLaunchIntegrationResolverTests {
                 agent: .codex,
                 panelID: UUID(),
                 argv: ["codex"],
-                cwd: root.path,
-                codexCapabilityHint: ManagedCodexCapabilityHint(
-                    resolvedExecutablePath: executable.path,
-                    codexHomePath: codexHome.path
-                )
+                cwd: rootURL.path
             )
         }
 
-        func cleanup(after delay: TimeInterval = 0) {
-            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
-            try? FileManager.default.removeItem(at: root)
+        func cleanup() {
+            try? FileManager.default.removeItem(at: rootURL)
         }
     }
 }
 
-private final class AssessmentTransport: CodexAppServerRPCTransporting, @unchecked Sendable {
-    private let trust: String
-    private let forwarderCommand: String
-    private let delay: TimeInterval
+private final class UnsupportedRecordingSkillsClient: CodexSkillsConfiguring, @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [CodexAppServerInvocation] = []
-
-    init(trust: String, forwarderCommand: String, delay: TimeInterval) {
-        self.trust = trust
-        self.forwarderCommand = forwarderCommand
-        self.delay = delay
-    }
 
     var invocations: [CodexAppServerInvocation] {
         lock.lock()
@@ -242,64 +182,51 @@ private final class AssessmentTransport: CodexAppServerRPCTransporting, @uncheck
         return storage
     }
 
-    func perform(
+    func writeSkillConfigs(
         invocation: CodexAppServerInvocation,
-        requests: [CodexAppServerRPCRequest]
-    ) throws -> [CodexAppServerRPCResponse] {
+        states: [CodexSkillState]
+    ) throws {
         lock.lock()
         storage.append(invocation)
         lock.unlock()
-        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
-        return requests.map { request in
-            switch request.method {
-            case "skills/list":
-                .init(result: .object([
-                    "data": .array([.object([
-                        "cwd": .string(invocation.workingDirectoryURL.path),
-                        "skills": .array([.object([
-                            "name": .string("toastty:alpha"),
-                            "enabled": .bool(true),
-                        ])]),
-                        "errors": .array([]),
-                    ])]),
-                ]), errorCode: nil, errorMessage: nil)
-            case "hooks/list":
-                .init(result: Self.hooksResult(command: forwarderCommand, trust: trust), errorCode: nil, errorMessage: nil)
-            default:
-                .init(result: .object([:]), errorCode: nil, errorMessage: nil)
-            }
-        }
+        throw CodexAppServerClientError.rpcError(
+            method: "skills/config/write",
+            code: -32601,
+            message: "Method not found"
+        )
     }
 
-    private static func hooksResult(command: String, trust: String) -> CodexJSONValue {
-        let hooks = CodexSessionIntegrationContract.hookDefinitions.map { definition -> CodexJSONValue in
-            let event: String = switch definition.event {
-            case .sessionStart: "sessionStart"
-            case .userPromptSubmit: "userPromptSubmit"
-            case .permissionRequest: "permissionRequest"
-            case .preToolUse: "preToolUse"
-            case .subagentStart: "subagentStart"
-            case .subagentStop: "subagentStop"
-            case .stop: "stop"
-            }
-            return .object([
-                "source": .string("sessionFlags"),
-                "command": .string(command),
-                "eventName": .string(event),
-                "matcher": definition.matcher.map(CodexJSONValue.string) ?? .null,
-                "timeoutSec": .int(CodexSessionIntegrationContract.hookTimeoutSeconds),
-                "statusMessage": .string(CodexSessionIntegrationContract.hookStatusMessage),
-                "trustStatus": .string(trust),
-                "currentHash": .string("hash"),
-            ])
-        }
-        return .object([
-            "data": .array([.object([
-                "cwd": .string("/tmp"),
-                "hooks": .array(hooks),
-                "warnings": .array([]),
-                "errors": .array([]),
-            ])]),
-        ])
+    func listSkills(invocation: CodexAppServerInvocation) throws -> [CodexSkillState] {
+        XCTFail("listSkills should not run after the first write fails")
+        return []
+    }
+}
+
+private struct PreflightOnlyPluginClient: CodexPluginCLIManaging {
+    func listMarketplaces(runtime: CodexIntegrationRuntime, deadline: Date) throws -> [CodexPluginMarketplace] {
+        return []
+    }
+
+    func listInstalledPlugins(runtime: CodexIntegrationRuntime, deadline: Date) throws -> [CodexInstalledPlugin] {
+        // Provisioning checks for a foreign same-name plugin before touching Codex settings.
+        return []
+    }
+
+    func addMarketplace(runtime: CodexIntegrationRuntime, sourcePath: String, deadline: Date) throws -> String {
+        XCTFail("Plugin CLI should not run after the first skills write fails")
+        return "toastty"
+    }
+
+    func installPlugin(runtime: CodexIntegrationRuntime, selector: String, deadline: Date) throws -> CodexPluginInstallation {
+        XCTFail("Plugin CLI should not run after the first skills write fails")
+        throw CodexPluginCLIError.commandFailed("plugin add", 1, "unexpected")
+    }
+
+    func removePlugin(runtime: CodexIntegrationRuntime, selector: String, deadline: Date) throws {
+        XCTFail("Plugin CLI should not run")
+    }
+
+    func removeMarketplace(runtime: CodexIntegrationRuntime, name: String, deadline: Date) throws {
+        XCTFail("Plugin CLI should not run")
     }
 }

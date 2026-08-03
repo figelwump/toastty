@@ -15,7 +15,6 @@ EXPECTED_SKILLS = [
     "toastty-open-markdown",
     "toastty-scratchpad",
     "worktree-create",
-    "worktree-done",
 ]
 
 
@@ -77,7 +76,8 @@ def relative_files(root: Path) -> list[Path]:
 
 
 def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]) -> None:
-    manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+    codex_manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+    claude_manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
     skills_root = plugin_root / "skills"
 
     marketplace = load_json(marketplace_path, errors)
@@ -92,21 +92,31 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
     if marketplace.get("plugins") != [expected_entry]:
         errors.append("marketplace must contain only the exact Toastty plugin entry")
 
-    manifest = load_json(manifest_path, errors)
-    if manifest.get("name") != "toastty":
-        errors.append("plugin manifest name must be exactly `toastty`")
-    if manifest.get("skills") != "./skills/":
+    codex_manifest = load_json(codex_manifest_path, errors)
+    claude_manifest = load_json(claude_manifest_path, errors)
+    if codex_manifest.get("name") != "toastty":
+        errors.append("Codex plugin manifest name must be exactly `toastty`")
+    if claude_manifest.get("name") != "toastty":
+        errors.append("Claude plugin manifest name must be exactly `toastty`")
+    if codex_manifest.get("version") != claude_manifest.get("version"):
+        errors.append("Codex and Claude plugin manifest versions must match")
+    if codex_manifest.get("skills") != "./skills/":
         errors.append("plugin manifest skills path must be `./skills/`")
-    forbidden_components = sorted({"apps", "hooks", "mcpServers"}.intersection(manifest))
-    if forbidden_components:
-        errors.append(f"skills-only plugin declares forbidden components: {forbidden_components}")
+    for host, manifest in (("Codex", codex_manifest), ("Claude", claude_manifest)):
+        forbidden_components = sorted(
+            {"agents", "apps", "hooks", "mcpServers", "commands"}.intersection(manifest)
+        )
+        if forbidden_components:
+            errors.append(
+                f"{host} skills-only manifest declares forbidden components: {forbidden_components}"
+            )
 
     try:
         top_level_entries = sorted(path.name for path in plugin_root.iterdir())
     except OSError as error:
         errors.append(f"unable to enumerate {plugin_root}: {error}")
         return
-    if top_level_entries != [".codex-plugin", "skills"]:
+    if top_level_entries != [".claude-plugin", ".codex-plugin", "skills"]:
         errors.append(f"plugin top-level allowlist mismatch: found {top_level_entries}")
     unexpected_metadata = sorted(
         path.relative_to(plugin_root).as_posix()
@@ -185,6 +195,12 @@ def validate_repo_layout(repo_root: Path, errors: list[str]) -> None:
         if compatibility_path.resolve() != canonical_path.resolve():
             errors.append(f"compatibility link does not resolve to canonical skill: {compatibility_path}")
 
+    worktree_done_path = compatibility_root / "worktree-done"
+    if worktree_done_path.is_symlink() or not (worktree_done_path / "SKILL.md").is_file():
+        errors.append("worktree-done must be a real repo-local skill directory")
+    if (canonical_root / "worktree-done").exists():
+        errors.append("worktree-done must not be present in the shared plugin")
+
     link_script = (repo_root / "scripts" / "agents" / "link-global-skills.sh").read_text(
         encoding="utf-8"
     )
@@ -195,12 +211,16 @@ def validate_repo_layout(repo_root: Path, errors: list[str]) -> None:
     for skill_name in EXPECTED_SKILLS:
         if f'"{skill_name}"' not in link_script:
             errors.append(f"global skill linker omits {skill_name}")
+    if 'fail "--target is required for development links"' not in link_script:
+        errors.append("global skill linker must require an explicit development target")
+    if '"worktree-done"' in link_script:
+        errors.append("global skill linker must not expose repo-local worktree-done")
 
     project_text = (repo_root / "Project.swift").read_text(encoding="utf-8")
     resource_markers = [
-        'subpath: "CodexPluginMarketplace/.agents/plugins"',
+        'subpath: "ToasttyAgentPluginBundle/.agents/plugins"',
         'files: [".agents/plugins/marketplace.json"]',
-        'subpath: "CodexPluginMarketplace/plugins"',
+        'subpath: "ToasttyAgentPluginBundle/plugins"',
         'files: [.folderReference(path: "plugins/toastty")]',
     ]
     for marker in resource_markers:
@@ -211,7 +231,7 @@ def validate_repo_layout(repo_root: Path, errors: list[str]) -> None:
 def validate_bundled_copy(repo_root: Path, resources_root: Path, errors: list[str]) -> None:
     source_marketplace = repo_root / ".agents" / "plugins" / "marketplace.json"
     source_plugin = repo_root / "plugins" / "toastty"
-    bundled_root = resources_root / "CodexPluginMarketplace"
+    bundled_root = resources_root / "ToasttyAgentPluginBundle"
     bundled_marketplace = bundled_root / ".agents" / "plugins" / "marketplace.json"
     bundled_plugin = bundled_root / "plugins" / "toastty"
 
@@ -256,7 +276,7 @@ def main() -> int:
         for error in errors:
             print(f"error: {error}", file=sys.stderr)
         return 1
-    print("Toastty Codex plugin validation passed")
+    print("Toastty dual-host plugin validation passed")
     return 0
 
 

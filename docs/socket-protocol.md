@@ -727,8 +727,9 @@ Launch context environment:
   supplied, otherwise the target or restored panel working directory when known
 - `TOASTTY_REPO_ROOT` when Toastty can infer a repository root from the resolved
   launch working directory
-- `TOASTTY_SKILLS_ROOT` for supported managed Codex launches, pointing at the
-  stable copied Toastty plugin's `skills/` directory
+- `TOASTTY_AGENT` with the managed provider ID
+- `TOASTTY_SKILLS_ROOT` for supported managed Codex and Claude Code launches,
+  pointing at the immutable copied Toastty plugin's `skills/` directory
 
 Request payload:
 
@@ -1166,7 +1167,7 @@ Result:
 
 ### `session.codex_hook_event`
 
-Internal event used by Toastty's process-scoped Codex status hook forwarder. Manual
+Internal event used by Toastty's installed Codex status hook forwarder. Manual
 wrappers should generally use `session.status` instead.
 
 Required:

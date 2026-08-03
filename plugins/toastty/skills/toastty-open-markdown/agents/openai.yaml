@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Open Markdown"
+  short_description: "Open Markdown files for review inside Toastty."
+  default_prompt: "Use $toastty-open-markdown to open this Markdown file for review in Toastty."

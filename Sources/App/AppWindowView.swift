@@ -21,6 +21,8 @@ struct AppWindowView: View {
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
     @State private var agentGetStartedInitialStep: AgentGetStartedStep = .chooser
+    @State private var showsCodexSkillsManagementSheet = false
+    @State private var showsCodexSkillsProvisionedNotice = false
     @State private var appIsActive = true
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -97,6 +99,26 @@ struct AppWindowView: View {
 
             // Sidebar toggle button in the title bar area, right of traffic lights
             sidebarToggleButton
+
+            if showsCodexSkillsProvisionedNotice {
+                CodexSkillsProvisionedBanner(
+                    manage: {
+                        showsCodexSkillsProvisionedNotice = false
+                        showsCodexSkillsManagementSheet = true
+                    },
+                    dismiss: {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            showsCodexSkillsProvisionedNotice = false
+                        }
+                    }
+                )
+                .frame(maxWidth: 680)
+                .padding(.top, 42)
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(20)
+            }
         }
         .alert(
             "Close this workspace?",
@@ -123,6 +145,9 @@ struct AppWindowView: View {
         }
         .sheet(isPresented: $showsAgentGetStartedSheet) {
             agentGetStartedSheet
+        }
+        .sheet(isPresented: $showsCodexSkillsManagementSheet) {
+            CodexSkillsManagementSheet(sessionRuntimeStore: sessionRuntimeStore)
         }
         .onAppear {
             appIsActive = NSApplication.shared.isActive
@@ -166,6 +191,19 @@ struct AppWindowView: View {
                 notificationObject: notification.object
             ) else { return }
             presentAgentGetStartedFlow(initialStep: request.initialStep)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyShowCodexSkillsManagement)) { notification in
+            guard notification.object as? UUID == windowID else { return }
+            showsCodexSkillsManagementSheet = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyCodexSkillsProvisioned)) { notification in
+            guard CodexSkillsProvisionedNoticeStore.claim(
+                for: windowID,
+                notificationObject: notification.object
+            ) else { return }
+            withAnimation(.easeOut(duration: 0.15)) {
+                showsCodexSkillsProvisionedNotice = true
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true

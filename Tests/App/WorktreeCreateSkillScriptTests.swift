@@ -282,6 +282,41 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertLessThan(workspaceCreateIndex, childScopeIndex)
     }
 
+    func testOpenSessionScriptPreservesManagedClaudeAgentByDefault() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-claude-agent")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_AGENT": "claude",
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
+        XCTAssertTrue(agentLaunchLine.contains("profileID=claude"))
+        XCTAssertFalse(agentLaunchLine.contains("profileID=codex"))
+    }
+
     func testOpenSessionScriptPreservesAlreadyScopedParentSession() throws {
         let fileManager = FileManager.default
         let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-scoped-parent")

@@ -375,7 +375,7 @@ Hooks and UI cleanup/additions:
 - `Sources/App/Agents/AgentLaunchUI.swift`
 - `Sources/App/Agents/AgentGetStartedSheet.swift`
 - new `Sources/App/Agents/CodexSkillsManagementSheet.swift`
-- `Sources/App/AppWindowSceneView.swift` and a small notice/status store
+- `Sources/App/AppWindowView.swift` and a small notice/status store
 - `Sources/App/Commands/ToasttyBuiltInCommand.swift`
 - `Sources/App/Commands/ToasttyCommandMenus.swift`
 - `Sources/App/CommandPalette/CommandPaletteActionHandler.swift`

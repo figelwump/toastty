@@ -1,347 +1,721 @@
+import Foundation
 import XCTest
 @testable import ToasttyApp
 
-final class CodexIntegrationManagerTests: XCTestCase {
-    func testSetupDisablesBeforeInstallThenReappliesAndVerifies() throws {
-        let fixture = try Fixture(skillNames: ["alpha", "beta"])
+final class CodexSkillsManagerTests: XCTestCase {
+    func testFirstLaunchDisablesBeforeInstallThenVerifiesOrdinarySkills() throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let transport = StatefulSetupTransport()
-        let manager = fixture.manager(transport: transport)
 
-        let result = try manager.setup(runtime: fixture.runtime)
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
 
-        let methods = transport.methods
-        let installIndex = try XCTUnwrap(methods.firstIndex(of: "plugin/install"))
-        let writes = methods.enumerated().filter { $0.element == "skills/config/write" }.map(\.offset)
-        XCTAssertEqual(writes.count, 4)
-        XCTAssertTrue(writes.prefix(2).allSatisfy { $0 < installIndex })
-        XCTAssertTrue(writes.suffix(2).allSatisfy { $0 > installIndex })
-        XCTAssertTrue(result.status.plugin.state == .ready)
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: fixture.home.appendingPathComponent(".toastty/codex-plugin/plugins/toastty/.codex-plugin/plugin.json").path
-        ))
+        XCTAssertEqual(preparation.configuration?.qualifiedSkillNames, fixture.expectedQualifiedNames)
+        XCTAssertEqual(preparation.status.availability, .ready)
+        XCTAssertTrue(preparation.installedOrUpdated)
+        XCTAssertTrue(preparation.firstInstallSucceeded)
+        let operations = fixture.recorder.operations
+        let installIndex = try XCTUnwrap(operations.firstIndex(of: "plugin.install"))
+        let writes = operations.enumerated()
+            .filter { $0.element == "skills.write" }
+            .map(\.offset)
+        XCTAssertEqual(writes.count, 2)
+        XCTAssertLessThan(writes[0], installIndex)
+        XCTAssertGreaterThan(writes[1], installIndex)
         XCTAssertEqual(
-            transport.firstParams(method: "marketplace/add")?["source"]?.stringValue,
-            fixture.home.appendingPathComponent(".toastty/codex-plugin").path
+            fixture.skillClient.states(for: fixture.runtime()).filter { $0.key.hasPrefix("toastty:") },
+            Dictionary(uniqueKeysWithValues: (fixture.expectedQualifiedNames + ["toastty:worktree-done"]).map {
+                ($0, false)
+            })
         )
-        XCTAssertEqual(
-            transport.firstParams(method: "plugin/install")?["marketplacePath"]?.stringValue,
-            fixture.home.appendingPathComponent(
-                ".toastty/codex-plugin/.agents/plugins/marketplace.json"
-            ).path
-        )
-        XCTAssertTrue(transport.codexHomes.allSatisfy { $0 == fixture.codexHome.path })
     }
 
-    func testUpdateUsesMarketplaceUpgradeAndDisablesNewSkillBeforeRefresh() throws {
-        let fixture = try Fixture(skillNames: ["alpha"])
+    func testVerifiedSecondLaunchPerformsNoCLIOrConfigWork() throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let transport = StatefulSetupTransport()
-        let manager = fixture.manager(transport: transport)
-        _ = try manager.setup(runtime: fixture.runtime)
-        transport.resetRecordedMethods()
-        try fixture.addSkill(named: "beta")
+        _ = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+        fixture.recorder.reset()
 
-        _ = try manager.setup(runtime: fixture.runtime)
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
 
-        let methods = transport.methods
-        let upgradeIndex = try XCTUnwrap(methods.firstIndex(of: "marketplace/upgrade"))
-        XCTAssertNil(methods.firstIndex(of: "plugin/install"))
-        let betaWriteIndex = try XCTUnwrap(transport.firstWriteIndex(name: "toastty:beta"))
-        XCTAssertLessThan(betaWriteIndex, upgradeIndex)
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertFalse(preparation.installedOrUpdated)
+        XCTAssertEqual(fixture.recorder.operations, [])
     }
 
-    func testSetupRejectsUnexpectedToasttySkillFromInstalledPlugin() throws {
-        let fixture = try Fixture(skillNames: ["alpha"])
+    func testUpdateIsDeferredWhileSessionIsActiveAndAppliedLater() throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let transport = StatefulSetupTransport(extraInstalledSkill: "toastty:unexpected")
-        let manager = fixture.manager(transport: transport)
+        let first = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+        try fixture.changeBundledPlugin(version: "0.2.1")
+        fixture.recorder.reset()
 
-        XCTAssertThrowsError(try manager.setup(runtime: fixture.runtime)) { error in
-            guard case CodexIntegrationManagerError.installedSkillSetMismatch = error else {
-                return XCTFail("Unexpected error: \(error)")
+        let deferred = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: true
+        )
+
+        XCTAssertEqual(deferred.configuration?.contentDigest, first.configuration?.contentDigest)
+        XCTAssertTrue(deferred.status.updatePending)
+        XCTAssertFalse(fixture.recorder.operations.contains("plugin.install"))
+
+        fixture.recorder.reset()
+        let updated = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+
+        XCTAssertNotEqual(updated.configuration?.contentDigest, first.configuration?.contentDigest)
+        XCTAssertEqual(updated.configuration?.version, "0.2.1")
+        XCTAssertFalse(updated.status.updatePending)
+        XCTAssertTrue(fixture.recorder.operations.contains("plugin.install"))
+    }
+
+    func testFailedUpdateKeepsUsingPreviousVerifiedVersion() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let first = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+        try fixture.changeBundledPlugin(version: "0.2.1")
+        fixture.pluginClient.installError = CodexPluginCLIError.commandFailed(
+            "plugin add",
+            1,
+            "fixture update failure"
+        )
+
+        let fallback = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+
+        XCTAssertEqual(fallback.configuration, first.configuration)
+        XCTAssertEqual(fallback.status.availability, .failed)
+        XCTAssertTrue(fallback.status.updatePending)
+        XCTAssertFalse(fallback.installedOrUpdated)
+    }
+
+    func testFailedUpdateLaunchesWithoutSkillsWhenPreviousVersionCannotBeReverified() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        _ = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+        try fixture.changeBundledPlugin(version: "0.2.1")
+        fixture.pluginClient.installErrorAfterMutation = CodexPluginCLIError.commandFailed(
+            "plugin add",
+            1,
+            "fixture post-install failure"
+        )
+
+        XCTAssertThrowsError(
+            try fixture.manager.prepareForManagedLaunch(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: false
+            )
+        ) { error in
+            guard case .rollbackUnverified = error as? CodexSkillsManagerError else {
+                return XCTFail("Expected rollbackUnverified, got \(error)")
             }
         }
+        XCTAssertNil(fixture.manager.cachedLaunchConfiguration(runtime: fixture.runtime()))
     }
 
-    func testSetupMigratesOwnedLegacySkillAndPreservesModifiedConflict() throws {
-        let fixture = try Fixture(skillNames: ["alpha", "beta"])
+    func testUnprovisionedLaunchDefersInstallWhileAnotherSessionIsActive() throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let legacyRoot = fixture.codexHome.appendingPathComponent("skills", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacyRoot, withIntermediateDirectories: true)
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: true
+        )
+
+        XCTAssertNil(preparation.configuration)
+        XCTAssertEqual(preparation.status.availability, .notInstalled)
+        XCTAssertFalse(fixture.recorder.operations.contains("plugin.install"))
+    }
+
+    func testTwoIdenticalFailuresPauseAutomaticRetriesUntilRepair() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.pluginClient.installError = CodexPluginCLIError.commandFailed(
+            "plugin add",
+            1,
+            "fixture failure"
+        )
+
+        for _ in 0..<2 {
+            XCTAssertThrowsError(
+                try fixture.manager.prepareForManagedLaunch(
+                    runtime: fixture.runtime(),
+                    hasActiveManagedCodexSession: false
+                )
+            )
+        }
+        fixture.recorder.reset()
+
+        let paused = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+
+        XCTAssertNil(paused.configuration)
+        XCTAssertEqual(paused.status.availability, .failed)
+        XCTAssertTrue(paused.status.detail.contains("Repair"))
+        XCTAssertEqual(fixture.recorder.operations, [])
+
+        fixture.pluginClient.installError = nil
+        let repaired = try fixture.manager.repair(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+        XCTAssertEqual(repaired.availability, .ready)
+    }
+
+    func testLegacyOwnedSkillIsBackedUpAndModifiedSkillIsPreserved() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let skillsRoot = fixture.runtime().codexHomeURL.appendingPathComponent("skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: skillsRoot, withIntermediateDirectories: true)
+        let owned = skillsRoot.appendingPathComponent("toastty-capabilities", isDirectory: true)
         try FileManager.default.createSymbolicLink(
-            at: legacyRoot.appendingPathComponent("alpha"),
-            withDestinationURL: fixture.source.appendingPathComponent("plugins/toastty/skills/alpha")
+            at: owned,
+            withDestinationURL: fixture.sourcePluginURL
+                .appendingPathComponent("skills/toastty-capabilities", isDirectory: true)
         )
-        let modified = legacyRoot.appendingPathComponent("beta", isDirectory: true)
+        let modified = skillsRoot.appendingPathComponent("toastty-scratchpad", isDirectory: true)
         try FileManager.default.createDirectory(at: modified, withIntermediateDirectories: true)
-        try Data("modified".utf8).write(to: modified.appendingPathComponent("SKILL.md"))
+        try "---\nname: toastty-scratchpad\ndescription: User modified.\n---\n"
+            .write(to: modified.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
-        let result = try fixture.manager(transport: StatefulSetupTransport()).setup(runtime: fixture.runtime)
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyRoot.appendingPathComponent("alpha").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: modified.path))
-        XCTAssertEqual(result.status.legacySkillConflictPaths, [modified.path])
-        XCTAssertEqual(result.status.legacySkills.state, .warning)
+        XCTAssertEqual(preparation.status.legacySkillConflictPaths, [modified.path])
+        let backupRoot = fixture.homeURL.appendingPathComponent(".toastty/legacy-codex-skills-backup")
+        let backups = try FileManager.default.contentsOfDirectory(at: backupRoot, includingPropertiesForKeys: nil)
+        XCTAssertEqual(backups.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: backups[0].appendingPathComponent("codex-home/toastty-capabilities").path
+        ))
     }
 
-    func testUninstallRemovesPluginMarketplaceAndStableCopyButReportsDisabledTombstones() throws {
-        let fixture = try Fixture(skillNames: ["alpha", "beta"])
+    func testUninstallRemovesOnlyOwnedSkillsStateAndLeavesHooksUntouched() throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let transport = StatefulSetupTransport()
-        let manager = fixture.manager(transport: transport)
-        _ = try manager.setup(runtime: fixture.runtime)
-        transport.resetRecordedMethods()
-
-        let status = try manager.uninstall(runtime: fixture.runtime, restoreLegacySkills: false)
-
-        XCTAssertEqual(
-            transport.methods.filter { ["plugin/uninstall", "marketplace/remove"].contains($0) },
-            ["plugin/uninstall", "marketplace/remove"]
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
         )
-        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.stableMarketplaceURL.path))
-        XCTAssertEqual(status.plugin.state, .needsSetup)
-        XCTAssertEqual(status.disabledNameTombstones, ["toastty:alpha", "toastty:beta"])
+        let hooksURL = fixture.runtime().codexHomeURL.appendingPathComponent("hooks.json")
+        let hooksData = Data(#"{"hooks":{"Stop":[{"command":"/usr/bin/true"}]}}"#.utf8)
+        try hooksData.write(to: hooksURL)
+
+        let status = try fixture.manager.uninstall(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+
+        XCTAssertEqual(status.availability, .notInstalled)
+        XCTAssertEqual(try Data(contentsOf: hooksURL), hooksData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preparation.status.marketplacePath))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.manager.stateRootURL.appendingPathComponent("versions").path
+        ))
+        XCTAssertEqual(status.disabledNameTombstones, ["toastty:worktree-done"])
     }
 
-    func testLegacyGlobalHookPresenceKeepsFallbackOwnership() throws {
-        let fixture = try Fixture(skillNames: ["alpha"])
+    func testUninstallPreservesInstalledPluginWhoseDigestNoLongerMatchesOwnershipRecord() throws {
+        let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let transport = StatefulSetupTransport()
-        let manager = fixture.manager(transport: transport)
-        _ = try manager.setup(runtime: fixture.runtime)
-        let hooksURL = fixture.codexHome.appendingPathComponent("hooks.json")
-        let command = CodexStatusHookInstaller(
-            homeDirectoryPath: fixture.home.path,
-            codexHomePath: fixture.codexHome.path
-        ).sessionLaunchForwarderCommand()
-        let object: [String: Any] = [
-            "hooks": [
-                "Stop": [["hooks": [["type": "command", "command": command]]]],
-            ],
-        ]
-        try JSONSerialization.data(withJSONObject: object).write(to: hooksURL)
-
-        let decision = try manager.managedLaunchDecision(runtime: fixture.runtime)
-
-        XCTAssertEqual(
-            decision.statusTrackingSource,
-            .sessionLogFallback(reason: "legacy_global_hooks_present")
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
         )
-        XCTAssertEqual(decision.configuration?.legacyGlobalHooksPresent, true)
+        let installedPath = try XCTUnwrap(preparation.status.installedPath)
+        let skillURL = URL(fileURLWithPath: installedPath, isDirectory: true)
+            .appendingPathComponent("skills/toastty-capabilities/SKILL.md")
+        try "\nUser-modified installed bytes.\n".append(to: skillURL)
+        fixture.recorder.reset()
+
+        XCTAssertThrowsError(
+            try fixture.manager.uninstall(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: false
+            )
+        ) { error in
+            guard case .installedPluginMismatch = error as? CodexSkillsManagerError else {
+                return XCTFail("Expected installedPluginMismatch, got \(error)")
+            }
+        }
+        XCTAssertFalse(fixture.recorder.operations.contains("plugin.remove"))
+        XCTAssertFalse(fixture.recorder.operations.contains("marketplace.remove"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preparation.status.marketplacePath))
+    }
+
+    func testCustomCodexHomesUseIndependentMarketplaceState() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let firstRuntime = fixture.runtime(name: "codex-one")
+        let secondRuntime = fixture.runtime(name: "codex-two")
+
+        let first = try fixture.manager.prepareForManagedLaunch(
+            runtime: firstRuntime,
+            hasActiveManagedCodexSession: false
+        )
+        let second = try fixture.manager.prepareForManagedLaunch(
+            runtime: secondRuntime,
+            hasActiveManagedCodexSession: false
+        )
+
+        XCTAssertNotEqual(first.status.marketplacePath, second.status.marketplacePath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.status.marketplacePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.status.marketplacePath))
+    }
+
+    func testForeignMarketplaceDirectoryIsPreserved() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let marketplaceURL = URL(
+            fileURLWithPath: fixture.manager.status(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: false
+            ).marketplacePath,
+            isDirectory: true
+        )
+        let marker = marketplaceURL.appendingPathComponent("foreign.txt")
+        try FileManager.default.createDirectory(
+            at: marker.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "preserve me".write(to: marker, atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(
+            try fixture.manager.prepareForManagedLaunch(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: false
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CodexSkillsManagerError,
+                .ownedStateMismatch(marketplaceURL.path)
+            )
+        }
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "preserve me")
+        XCTAssertFalse(fixture.recorder.operations.contains("marketplace.add"))
+    }
+
+    func testForeignRegisteredMarketplaceIsRejectedBeforeSkillConfigChanges() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let foreignPath = fixture.rootURL.appendingPathComponent("foreign-marketplace").path
+        fixture.pluginClient.setMarketplaceRoot(
+            foreignPath,
+            runtime: fixture.runtime()
+        )
+
+        XCTAssertThrowsError(
+            try fixture.manager.prepareForManagedLaunch(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: false
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CodexSkillsManagerError,
+                .marketplaceConflict(foreignPath)
+            )
+        }
+        XCTAssertEqual(fixture.skillClient.states(for: fixture.runtime()), [:])
+        XCTAssertEqual(fixture.recorder.operations, ["marketplace.list"])
+    }
+
+    func testForeignPluginNamedToasttyIsRejectedBeforeSkillConfigChanges() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.pluginClient.setForeignToasttyPlugin(
+            CodexInstalledPlugin(
+                pluginID: "toastty@third-party",
+                name: "toastty",
+                marketplaceName: "third-party",
+                version: "9.9.9",
+                sourcePath: "/tmp/foreign-toastty",
+                marketplaceSourcePath: "/tmp/foreign-marketplace"
+            ),
+            runtime: fixture.runtime()
+        )
+
+        XCTAssertThrowsError(
+            try fixture.manager.prepareForManagedLaunch(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: false
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CodexSkillsManagerError,
+                .pluginConflict("toastty@third-party")
+            )
+        }
+        XCTAssertEqual(fixture.skillClient.states(for: fixture.runtime()), [:])
+        XCTAssertEqual(fixture.recorder.operations, ["marketplace.list", "plugin.list"])
+    }
+
+    func testRepairAndUninstallPreserveMarketplaceWhoseOwnedLayoutWasReplaced() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let installed = try fixture.manager.prepareForManagedLaunch(
+            runtime: fixture.runtime(),
+            hasActiveManagedCodexSession: false
+        )
+        let marketplaceURL = URL(
+            fileURLWithPath: installed.status.marketplacePath,
+            isDirectory: true
+        )
+        let manifest = marketplaceURL
+            .appendingPathComponent(".agents/plugins/marketplace.json")
+        let foreignData = Data(#"{"name":"foreign"}"#.utf8)
+        try foreignData.write(to: manifest, options: .atomic)
+        try fixture.changeBundledPlugin(version: "0.2.1")
+
+        XCTAssertThrowsError(
+            try fixture.manager.prepareForManagedLaunch(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: false
+            )
+        )
+        XCTAssertEqual(try Data(contentsOf: manifest), foreignData)
+        fixture.recorder.reset()
+        XCTAssertThrowsError(
+            try fixture.manager.uninstall(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: false
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CodexSkillsManagerError,
+                .ownedStateMismatch(marketplaceURL.path)
+            )
+        }
+        XCTAssertEqual(try Data(contentsOf: manifest), foreignData)
+        XCTAssertFalse(fixture.recorder.operations.contains("plugin.remove"))
+        XCTAssertFalse(fixture.recorder.operations.contains("marketplace.remove"))
+    }
+
+    func testSkillsManagerHasNoHookOrReconciliationDependency() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repositoryRoot.appendingPathComponent("Sources/App/Agents/CodexSkillsManager.swift"),
+            encoding: .utf8
+        )
+
+        for forbidden in [
+            "CodexStatusHookInstaller",
+            "hooks.json",
+            "hooks/list",
+            "CodexReconciliation",
+            "CodexStatusTrackingSource",
+        ] {
+            XCTAssertFalse(source.contains(forbidden), forbidden)
+        }
     }
 }
 
-private extension CodexIntegrationManagerTests {
+private extension CodexSkillsManagerTests {
     final class Fixture {
-        let root: URL
-        let home: URL
-        let codexHome: URL
-        let source: URL
-        let executable: URL
+        let rootURL: URL
+        let homeURL: URL
+        let sourceMarketplaceURL: URL
+        let sourcePluginURL: URL
+        let recorder = OperationRecorder()
+        let pluginClient: FakeCodexPluginClient
+        let skillClient: FakeCodexSkillClient
+        let manager: CodexSkillsManager
 
-        init(skillNames: [String]) throws {
-            root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("toastty-codex-manager-tests-\(UUID().uuidString)", isDirectory: true)
-            home = root.appendingPathComponent("home", isDirectory: true)
-            codexHome = root.appendingPathComponent("codex-home", isDirectory: true)
-            source = root.appendingPathComponent("bundle/CodexPluginMarketplace", isDirectory: true)
-            executable = root.appendingPathComponent("bin/codex", isDirectory: false)
-            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        init() throws {
+            rootURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("toastty-codex-skills-manager-\(UUID().uuidString)", isDirectory: true)
+            homeURL = rootURL.appendingPathComponent("home", isDirectory: true)
+            sourceMarketplaceURL = rootURL.appendingPathComponent("source", isDirectory: true)
+            sourcePluginURL = sourceMarketplaceURL.appendingPathComponent("plugins/toastty", isDirectory: true)
+            try FileManager.default.createDirectory(at: homeURL, withIntermediateDirectories: true)
+
+            let repositoryRoot = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
             try FileManager.default.createDirectory(
-                at: source.appendingPathComponent("plugins/toastty/.codex-plugin", isDirectory: true),
+                at: sourcePluginURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
+            try FileManager.default.copyItem(
+                at: repositoryRoot.appendingPathComponent("plugins/toastty", isDirectory: true),
+                to: sourcePluginURL
+            )
+            let marketplaceManifestURL = sourceMarketplaceURL
+                .appendingPathComponent(".agents/plugins/marketplace.json")
             try FileManager.default.createDirectory(
-                at: source.appendingPathComponent(".agents/plugins", isDirectory: true),
+                at: marketplaceManifestURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try Data(#"{"name":"toastty","plugins":[{"name":"toastty","source":"./plugins/toastty"}]}"#.utf8)
-                .write(to: source.appendingPathComponent(".agents/plugins/marketplace.json"))
-            try Data(#"{"name":"toastty","skills":"skills"}"#.utf8)
-                .write(to: source.appendingPathComponent("plugins/toastty/.codex-plugin/plugin.json"))
-            for name in skillNames {
-                try addSkill(named: name)
-            }
-        }
-
-        var runtime: CodexIntegrationRuntime {
-            CodexIntegrationRuntime(
-                executableURL: executable,
-                codexHomeURL: codexHome,
-                workingDirectoryURL: root
+            try FileManager.default.copyItem(
+                at: repositoryRoot.appendingPathComponent(".agents/plugins/marketplace.json"),
+                to: marketplaceManifestURL
             )
-        }
 
-        func manager(transport: StatefulSetupTransport) -> CodexIntegrationManager {
-            CodexIntegrationManager(
-                homeDirectoryURL: home,
-                sourceMarketplaceURLProvider: { [source] in source },
-                client: CodexAppServerClient(transport: transport),
+            pluginClient = FakeCodexPluginClient(recorder: recorder)
+            skillClient = FakeCodexSkillClient(recorder: recorder, pluginClient: pluginClient)
+            manager = CodexSkillsManager(
+                homeDirectoryURL: homeURL,
+                sourcePluginURLProvider: { [sourcePluginURL] in sourcePluginURL },
+                sourceMarketplaceURLProvider: { [sourceMarketplaceURL] in sourceMarketplaceURL },
+                pluginClient: pluginClient,
+                skillClient: skillClient,
                 nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) }
             )
         }
 
-        func addSkill(named name: String) throws {
-            let skill = source.appendingPathComponent("plugins/toastty/skills/\(name)", isDirectory: true)
-            try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
-            try Data("---\nname: \(name)\ndescription: test\n---\n".utf8)
-                .write(to: skill.appendingPathComponent("SKILL.md"))
+        var expectedQualifiedNames: [String] {
+            ToasttyAgentPluginBundle.skills.map { "toastty:\($0.name)" }
+        }
+
+        func runtime(name: String = "codex-home") -> CodexIntegrationRuntime {
+            CodexIntegrationRuntime(
+                executableURL: URL(fileURLWithPath: "/usr/bin/true"),
+                codexHomeURL: rootURL.appendingPathComponent(name, isDirectory: true),
+                workingDirectoryURL: rootURL
+            )
+        }
+
+        func changeBundledPlugin(version: String) throws {
+            for relativePath in [
+                ".codex-plugin/plugin.json",
+                ".claude-plugin/plugin.json",
+            ] {
+                let url = sourcePluginURL.appendingPathComponent(relativePath)
+                var object = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+                )
+                object["version"] = version
+                try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+                    .write(to: url, options: .atomic)
+            }
+            let skillURL = sourcePluginURL
+                .appendingPathComponent("skills/toastty-capabilities/SKILL.md")
+            var contents = try String(contentsOf: skillURL, encoding: .utf8)
+            contents += "\nUpdated fixture content.\n"
+            try contents.write(to: skillURL, atomically: true, encoding: .utf8)
         }
 
         func cleanup() {
-            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: rootURL)
         }
     }
 }
 
-private final class StatefulSetupTransport: CodexAppServerRPCTransporting, @unchecked Sendable {
+private final class OperationRecorder: @unchecked Sendable {
     private let lock = NSLock()
-    private var recorded: [(String, [String: CodexJSONValue])] = []
-    private var disabledNames = Set<String>()
-    private var pluginInstalled = false
-    private let extraInstalledSkill: String?
-    private(set) var codexHomes: [String] = []
+    private var storage: [String] = []
 
-    init(extraInstalledSkill: String? = nil) {
-        self.extraInstalledSkill = extraInstalledSkill
+    var operations: [String] {
+        lock.withLock { storage }
     }
 
-    var methods: [String] {
-        lock.withLock { recorded.map(\.0) }
+    func append(_ operation: String) {
+        lock.withLock { storage.append(operation) }
     }
 
-    func resetRecordedMethods() {
-        lock.withLock { recorded.removeAll() }
+    func reset() {
+        lock.withLock { storage.removeAll() }
+    }
+}
+
+private final class FakeCodexPluginClient: CodexPluginCLIManaging, @unchecked Sendable {
+    private let recorder: OperationRecorder
+    private let lock = NSLock()
+    private var marketplaceRoots: [String: String] = [:]
+    private var installedPaths: [String: String] = [:]
+    private var foreignToasttyPlugins: [String: CodexInstalledPlugin] = [:]
+    var installError: Error?
+    var installErrorAfterMutation: Error?
+
+    init(recorder: OperationRecorder) {
+        self.recorder = recorder
     }
 
-    func firstWriteIndex(name: String) -> Int? {
-        lock.withLock {
-            recorded.firstIndex { method, params in
-                method == "skills/config/write" && params["name"]?.stringValue == name
-            }
+    func listMarketplaces(runtime: CodexIntegrationRuntime, deadline: Date) throws -> [CodexPluginMarketplace] {
+        recorder.append("marketplace.list")
+        return lock.withLock {
+            guard let root = marketplaceRoots[key(runtime)] else { return [] }
+            return [CodexPluginMarketplace(name: "toastty", rootPath: root, sourcePath: root)]
         }
     }
 
-    func firstParams(method: String) -> [String: CodexJSONValue]? {
-        lock.withLock {
-            recorded.first(where: { $0.0 == method })?.1
+    func listInstalledPlugins(runtime: CodexIntegrationRuntime, deadline: Date) throws -> [CodexInstalledPlugin] {
+        recorder.append("plugin.list")
+        return try lock.withLock {
+            var plugins = foreignToasttyPlugins[key(runtime)].map { [$0] } ?? []
+            guard let path = installedPaths[key(runtime)] else { return plugins }
+            let descriptor = try ToasttyAgentPluginBundle.read(
+                pluginRootURL: URL(fileURLWithPath: path)
+            )
+            plugins.append(
+                CodexInstalledPlugin(
+                    pluginID: "toastty@toastty",
+                    name: "toastty",
+                    marketplaceName: "toastty",
+                    version: descriptor.version,
+                    sourcePath: path,
+                    marketplaceSourcePath: marketplaceRoots[key(runtime)]
+                )
+            )
+            return plugins
         }
     }
 
-    func perform(
+    func addMarketplace(
+        runtime: CodexIntegrationRuntime,
+        sourcePath: String,
+        deadline: Date
+    ) throws -> String {
+        recorder.append("marketplace.add")
+        lock.withLock { marketplaceRoots[key(runtime)] = sourcePath }
+        return "toastty"
+    }
+
+    func installPlugin(
+        runtime: CodexIntegrationRuntime,
+        selector: String,
+        deadline: Date
+    ) throws -> CodexPluginInstallation {
+        recorder.append("plugin.install")
+        if let installError { throw installError }
+        let marketplaceRoot = try lock.withLock {
+            try XCTUnwrap(marketplaceRoots[key(runtime)])
+        }
+        let source = URL(fileURLWithPath: marketplaceRoot, isDirectory: true)
+            .appendingPathComponent("plugins/toastty", isDirectory: true)
+            .resolvingSymlinksInPath()
+        let destination = runtime.codexHomeURL
+            .appendingPathComponent("plugins/cache/toastty/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: source, to: destination)
+        let descriptor = try ToasttyAgentPluginBundle.read(pluginRootURL: destination)
+        lock.withLock { installedPaths[key(runtime)] = destination.path }
+        if let installErrorAfterMutation { throw installErrorAfterMutation }
+        return CodexPluginInstallation(
+            pluginID: selector,
+            name: "toastty",
+            marketplaceName: "toastty",
+            version: descriptor.version,
+            installedPath: destination.path
+        )
+    }
+
+    func removePlugin(
+        runtime: CodexIntegrationRuntime,
+        selector: String,
+        deadline: Date
+    ) throws {
+        recorder.append("plugin.remove")
+        _ = lock.withLock { installedPaths.removeValue(forKey: key(runtime)) }
+    }
+
+    func removeMarketplace(
+        runtime: CodexIntegrationRuntime,
+        name: String,
+        deadline: Date
+    ) throws {
+        recorder.append("marketplace.remove")
+        _ = lock.withLock { marketplaceRoots.removeValue(forKey: key(runtime)) }
+    }
+
+    func installedDescriptor(runtime: CodexIntegrationRuntime) throws -> ToasttyAgentPluginDescriptor? {
+        try lock.withLock {
+            guard let path = installedPaths[key(runtime)] else { return nil }
+            return try ToasttyAgentPluginBundle.read(pluginRootURL: URL(fileURLWithPath: path))
+        }
+    }
+
+    func setMarketplaceRoot(_ root: String, runtime: CodexIntegrationRuntime) {
+        lock.withLock { marketplaceRoots[key(runtime)] = root }
+    }
+
+    func setForeignToasttyPlugin(
+        _ plugin: CodexInstalledPlugin,
+        runtime: CodexIntegrationRuntime
+    ) {
+        lock.withLock { foreignToasttyPlugins[key(runtime)] = plugin }
+    }
+
+    private func key(_ runtime: CodexIntegrationRuntime) -> String {
+        runtime.codexHomeURL.path
+    }
+
+}
+
+private final class FakeCodexSkillClient: CodexSkillsConfiguring, @unchecked Sendable {
+    private let recorder: OperationRecorder
+    private let pluginClient: FakeCodexPluginClient
+    private let lock = NSLock()
+    private var storedStates: [String: [String: Bool]] = [:]
+
+    init(recorder: OperationRecorder, pluginClient: FakeCodexPluginClient) {
+        self.recorder = recorder
+        self.pluginClient = pluginClient
+    }
+
+    func writeSkillConfigs(
         invocation: CodexAppServerInvocation,
-        requests: [CodexAppServerRPCRequest]
-    ) throws -> [CodexAppServerRPCResponse] {
-        lock.lock()
-        defer { lock.unlock() }
-        codexHomes.append(invocation.codexHomeURL.path)
-        return requests.map { request in
-            recorded.append((request.method, request.params))
-            switch request.method {
-            case "skills/config/write":
-                if let name = request.params["name"]?.stringValue {
-                    disabledNames.insert(name)
-                }
-                return .init(result: .object(["effectiveEnabled": .bool(false)]), errorCode: nil, errorMessage: nil)
-            case "marketplace/add":
-                return .init(result: .object([
-                    "marketplaceName": .string("toastty"),
-                    "installedRoot": .string(invocation.codexHomeURL.path),
-                    "alreadyAdded": .bool(pluginInstalled),
-                ]), errorCode: nil, errorMessage: nil)
-            case "plugin/installed":
-                let plugins: [CodexJSONValue] = pluginInstalled ? [
-                    .object([
-                        "id": .string("toastty@toastty"),
-                        "name": .string("toastty"),
-                        "installed": .bool(true),
-                    ]),
-                ] : []
-                return .init(result: .object([
-                    "marketplaces": .array([.object([
-                        "name": .string("toastty"),
-                        "path": .string("/tmp/marketplace.json"),
-                        "plugins": .array(plugins),
-                    ])]),
-                    "marketplaceLoadErrors": .array([]),
-                ]), errorCode: nil, errorMessage: nil)
-            case "plugin/install", "marketplace/upgrade":
-                pluginInstalled = true
-                return .init(result: .object([:]), errorCode: nil, errorMessage: nil)
-            case "plugin/uninstall":
-                pluginInstalled = false
-                return .init(result: .object([:]), errorCode: nil, errorMessage: nil)
-            case "marketplace/remove":
-                return .init(result: .object([:]), errorCode: nil, errorMessage: nil)
-            case "skills/list":
-                let managed = invocation.configOverrides.isEmpty == false
-                var names = disabledNames.sorted()
-                if let extraInstalledSkill { names.append(extraInstalledSkill) }
-                return .init(result: .object([
-                    "data": .array([.object([
-                        "cwd": .string(invocation.workingDirectoryURL.path),
-                        "skills": .array(names.map { name in
-                            .object(["name": .string(name), "enabled": .bool(managed)])
-                        }),
-                        "errors": .array([]),
-                    ])]),
-                ]), errorCode: nil, errorMessage: nil)
-            case "hooks/list":
-                let command = invocation.configOverrides
-                    .first(where: { $0.hasPrefix("hooks=") })
-                    .flatMap(Self.forwarderCommand(from:)) ?? "missing"
-                return .init(result: Self.hooksResult(command: command), errorCode: nil, errorMessage: nil)
-            default:
-                return .init(result: .object([:]), errorCode: nil, errorMessage: nil)
+        states: [CodexSkillState]
+    ) throws {
+        recorder.append("skills.write")
+        lock.withLock {
+            var values = storedStates[invocation.codexHomeURL.path] ?? [:]
+            for state in states {
+                values[state.name] = state.enabled
             }
+            storedStates[invocation.codexHomeURL.path] = values
         }
     }
 
-    private static func forwarderCommand(from override: String) -> String? {
-        // The assessment compares the parsed app-server command with the same
-        // stable command supplied by the manager. Tests recover that single
-        // TOML basic string without trying to parse unrelated config fields.
-        guard let range = override.range(of: "command=\"") else { return nil }
-        let suffix = override[range.upperBound...]
-        guard let end = suffix.firstIndex(of: "\"") else { return nil }
-        return String(suffix[..<end]).replacingOccurrences(of: "\\\\", with: "\\")
+    func listSkills(invocation: CodexAppServerInvocation) throws -> [CodexSkillState] {
+        recorder.append("skills.list")
+        let runtime = CodexIntegrationRuntime(
+            executableURL: invocation.executableURL,
+            codexHomeURL: invocation.codexHomeURL,
+            workingDirectoryURL: invocation.workingDirectoryURL
+        )
+        guard let descriptor = try pluginClient.installedDescriptor(runtime: runtime) else { return [] }
+        let values = lock.withLock { storedStates[invocation.codexHomeURL.path] ?? [:] }
+        return descriptor.qualifiedSkillNames.map {
+            CodexSkillState(name: $0, enabled: values[$0] ?? true)
+        }
     }
 
-    private static func hooksResult(command: String) -> CodexJSONValue {
-        let hooks = CodexSessionIntegrationContract.hookDefinitions.map { definition -> CodexJSONValue in
-            let listValue: String = switch definition.event {
-            case .sessionStart: "sessionStart"
-            case .userPromptSubmit: "userPromptSubmit"
-            case .permissionRequest: "permissionRequest"
-            case .preToolUse: "preToolUse"
-            case .subagentStart: "subagentStart"
-            case .subagentStop: "subagentStop"
-            case .stop: "stop"
-            }
-            return .object([
-                "source": .string("sessionFlags"),
-                "command": .string(command),
-                "eventName": .string(listValue),
-                "matcher": definition.matcher.map(CodexJSONValue.string) ?? .null,
-                "timeoutSec": .int(CodexSessionIntegrationContract.hookTimeoutSeconds),
-                "statusMessage": .string(CodexSessionIntegrationContract.hookStatusMessage),
-                "trustStatus": .string("untrusted"),
-                "currentHash": .string("hash"),
-            ])
-        }
-        return .object([
-            "data": .array([.object([
-                "cwd": .string("/tmp"),
-                "hooks": .array(hooks),
-                "warnings": .array([]),
-                "errors": .array([]),
-            ])]),
-        ])
+    func states(for runtime: CodexIntegrationRuntime) -> [String: Bool] {
+        lock.withLock { storedStates[runtime.codexHomeURL.path] ?? [:] }
     }
 }
 
@@ -350,5 +724,14 @@ private extension NSLock {
         lock()
         defer { unlock() }
         return try operation()
+    }
+}
+
+private extension String {
+    func append(to url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(utf8))
     }
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Worktree Create"
+  short_description: "Move work into an isolated Toastty worktree."
+  default_prompt: "Use $worktree-create to continue this task in a new Toastty worktree."

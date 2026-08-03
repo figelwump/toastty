@@ -19,10 +19,12 @@ cp -R "$ROOT_DIR/plugins/toastty" "$cache_root/plugins/toastty"
 
 "$VALIDATOR" --repo-root "$ROOT_DIR" --marketplace-root "$cache_root"
 
+isolated_home="$fixture_root/home"
+isolated_codex_home="$fixture_root/codex-home"
+isolated_claude_home="$fixture_root/claude-home"
+mkdir -p "$isolated_home" "$isolated_codex_home" "$isolated_claude_home"
+
 if command -v codex >/dev/null 2>&1; then
-  isolated_home="$fixture_root/home"
-  isolated_codex_home="$fixture_root/codex-home"
-  mkdir -p "$isolated_home" "$isolated_codex_home"
   marketplace_result="$(
     HOME="$isolated_home" CODEX_HOME="$isolated_codex_home" \
       codex plugin marketplace add "$cache_root" --json
@@ -35,6 +37,13 @@ if command -v codex >/dev/null 2>&1; then
     codex plugin add toastty@toastty --json >/dev/null
 else
   printf 'warning: codex is unavailable; skipped live marketplace acceptance check\n' >&2
+fi
+
+if command -v claude >/dev/null 2>&1; then
+  HOME="$isolated_home" CLAUDE_CONFIG_DIR="$isolated_claude_home" \
+    claude plugin validate --strict "$cache_root/plugins/toastty" >/dev/null
+else
+  printf 'warning: claude is unavailable; skipped live Claude plugin validation\n' >&2
 fi
 
 fake_cli="$fixture_root/fake-toastty"
@@ -71,4 +80,4 @@ printf '# Review\n' > "$markdown_file"
 "$TOASTTY_SKILLS_ROOT/worktree-create/scripts/create-toastty-worktree.sh" --help >/dev/null 2>&1
 "$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh" --help >/dev/null 2>&1
 
-printf 'Toastty Codex plugin copied-cache self-test passed\n'
+printf 'Toastty dual-host plugin copied-cache self-test passed\n'

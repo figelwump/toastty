@@ -35,6 +35,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.manageConfig.id, "app.config.manage")
         XCTAssertEqual(ToasttyBuiltInCommand.manageTerminalProfiles.id, "terminal.profiles.manage")
         XCTAssertEqual(ToasttyBuiltInCommand.manageAgents.id, "agent.profiles.manage")
+        XCTAssertEqual(ToasttyBuiltInCommand.manageCodexSkills.id, "agent.codex-skills.manage")
         XCTAssertEqual(ToasttyBuiltInCommand.setUpAgentStatusHooks.id, "agent.status-hooks.setup")
         XCTAssertEqual(ToasttyBuiltInCommand.copyDiagnosticsSnippet.id, "diagnostics.snippet.copy")
         XCTAssertEqual(ToasttyBuiltInCommand.selectPreviousRightPanelTab.id, "right-panel.tab.select-previous")
@@ -90,6 +91,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.manageConfig.id,
                 ToasttyBuiltInCommand.manageTerminalProfiles.id,
                 ToasttyBuiltInCommand.manageAgents.id,
+                ToasttyBuiltInCommand.manageCodexSkills.id,
                 ToasttyBuiltInCommand.setUpAgentStatusHooks.id,
                 ToasttyBuiltInCommand.copyDiagnosticsSnippet.id,
                 ToasttyBuiltInCommand.reloadConfiguration.id,
@@ -135,6 +137,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         actions.canManageConfigValue = false
         actions.canManageTerminalProfilesValue = false
         actions.canManageAgentsValue = false
+        actions.canManageCodexSkillsValue = false
         actions.canSetUpAgentStatusHooksValue = false
         actions.canCopyDiagnosticsSnippetValue = false
         actions.canSelectAdjacentRightPanelTabValue = false
@@ -152,6 +155,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.manageConfig.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.manageTerminalProfiles.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.manageAgents.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.manageCodexSkills.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.setUpAgentStatusHooks.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.copyDiagnosticsSnippet.id }))
         XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousRightPanelTab.id }))
@@ -279,6 +283,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageConfig.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageTerminalProfiles.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageAgents.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.manageCodexSkills.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.setUpAgentStatusHooks.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.copyDiagnosticsSnippet.id })).invocation, originWindowID: originWindowID))
         XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "workspace.switch.\(workspaceID.uuidString)" })).invocation, originWindowID: originWindowID))
@@ -292,6 +297,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(actions.managedConfigWindowIDs, [originWindowID])
         XCTAssertEqual(actions.managedTerminalProfilesWindowIDs, [originWindowID])
         XCTAssertEqual(actions.managedAgentsWindowIDs, [originWindowID])
+        XCTAssertEqual(actions.managedCodexSkillsWindowIDs, [originWindowID])
         XCTAssertEqual(actions.setUpAgentStatusHooksWindowIDs, [originWindowID])
         XCTAssertEqual(actions.copiedDiagnosticsSnippetWindowIDs, [originWindowID])
         XCTAssertEqual(

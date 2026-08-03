@@ -40,17 +40,21 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - One JSON file per Scratchpad document, including the document ID, revision, title metadata, optional live-session link metadata, and HTML content. Individual Scratchpad content is limited to 1,048,576 UTF-8 bytes.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
-- `~/.toastty/codex-plugin/` (created by `Toastty > Set Up Codex Integration…`)
-  - A stable local copy of Toastty's skills-only Codex marketplace and plugin. Codex installs from this copy so an app-bundle or development build path is never registered in user configuration.
-- `~/.toastty/codex-hooks/` (created by `Toastty > Set Up Codex Integration…`)
+- `~/.toastty/codex-plugin/` (created automatically for the default Codex home)
+  - Toastty's stable local Codex marketplace. Its plugin entry points at an immutable versioned copy under `~/.toastty/agent-plugins/codex/`, so an app-bundle or development build path is never registered in user configuration.
+- `~/.toastty/agent-plugins/codex/`
+  - Immutable versioned Toastty plugin copies plus per-Codex-home ownership records. A custom `CODEX_HOME` receives its own stable marketplace below the matching hashed home directory.
+- `~/.toastty/agent-plugins/claude/`
+  - Immutable validated Toastty plugin copies passed only to managed Claude Code processes with `--plugin-dir`. Toastty does not register these copies in Claude's user configuration.
+- `~/.toastty/codex-hooks/` (created by `Toastty > Set Up Agent Status Hooks…`)
   - A stable Codex hook forwarder script plus `telemetry-failures.log` when the forwarder cannot deliver hook events back to Toastty.
-- `~/.toastty/legacy-codex-skills-backup/` (created only when integration setup finds safe legacy global Toastty skills)
-  - Timestamped, uniquely suffixed backups of exact Toastty-owned symlinks or byte-identical legacy skill copies moved out of Codex's global skill roots. Modified or ambiguous directories are preserved in place and reported instead. The uninstall confirmation lets you keep these backups or restore the latest one without overwriting a skill path that already exists.
-- Codex user configuration and plugin storage (updated through Codex itself by `Toastty > Set Up Codex Integration…`)
-  - Toastty registers the stable local marketplace, installs or updates the `toastty` plugin, and writes disabled entries for the five namespaced Toastty skills using Codex's atomic configuration API. Unrelated plugins, skill settings, profiles, hooks, and other Codex configuration are preserved.
-  - Uninstall removes the Toastty plugin and marketplace after confirmation. Codex's current configuration API cannot delete individual disabled-name entries, so those harmless tombstones remain and are reported by Toastty.
-- `~/.codex/hooks.json` (read during setup and migration, and updated only when legacy Toastty hooks are removed)
-  - Toastty does not add global hooks. After explicit integration setup, it can remove only Toastty-owned current or legacy entries while preserving unrelated hooks byte-for-byte at the entry level. If cleanup cannot complete safely, Toastty leaves the file usable and falls back rather than injecting duplicate session hooks.
+- `~/.toastty/legacy-codex-skills-backup/` (created only when automatic provisioning finds safe legacy global Toastty skills)
+  - Timestamped, uniquely suffixed backups of exact Toastty-owned symlinks or byte-identical legacy skill copies moved out of Codex's global skill roots. Modified or ambiguous directories are preserved in place and reported instead. Uninstall leaves these backups in place.
+- Codex user configuration and plugin storage (updated automatically through Codex on the first supported managed launch and later repair or upgrade)
+  - Toastty registers its stable local marketplace, installs or updates the `toastty` plugin, and writes disabled entries for its four namespaced skills plus the retired `toastty:worktree-done` name using Codex's configuration API. Unrelated plugins, skill settings, profiles, hooks, and other Codex configuration are preserved.
+  - Uninstall removes only the verified Toastty plugin and marketplace after confirmation. Codex cannot currently delete individual disabled-name entries, so those harmless tombstones remain and are reported by Toastty.
+- `~/.codex/hooks.json` (updated by `Toastty > Set Up Agent Status Hooks…`)
+  - Toastty adds or updates only its own Codex hook entries while preserving unrelated hooks. Skills provisioning, repair, upgrade, and uninstall do not modify this file.
 - Temporary launch artifact directories under the system temporary directory for managed agent sessions.
   - OpenCode and MiMo Code launches include a Toastty-owned per-session plugin file plus `telemetry-failures.log` when the plugin cannot deliver status events back to Toastty. The failure log records event type, session context, exit status, and CLI stderr, not full provider event payload JSON. These artifacts are removed when the managed session stops.
 - `~/.toastty/history/pane-journals/`
@@ -92,12 +96,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
   reconciliation state is memory-only and discarded with its owning session or
   watcher. Child-agent display names can appear in Toastty's structured local
   logs. Toastty does not modify the Codex rollout file.
-- During Codex integration setup and launch assessment, Toastty invokes the
-  resolved local Codex app-server with the effective `CODEX_HOME` to list plugin
-  skills and hook metadata. Toastty uses skill names, enabled state, hook source,
-  definition hashes, and trust state to decide whether the managed process can
-  use session integrations; it does not bypass trust or send this assessment to
-  a remote Toastty service.
+- During Codex skill preparation, Toastty invokes the resolved local Codex CLI
+  and app-server with the effective `CODEX_HOME` to manage its plugin and read or
+  write Toastty skill enabled state. During optional status-hook setup, Toastty
+  reads the local hook file to manage only its own entries. Toastty does not send
+  this state to a remote Toastty service.
 
 ## What Toastty creates temporarily
 

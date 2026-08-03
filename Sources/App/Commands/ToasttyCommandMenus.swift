@@ -381,7 +381,12 @@ struct ToasttyCommandMenus: Commands {
             }
             Divider()
 
-            Button("Set Up Codex Integration…") {
+            Button("Manage Codex Skills…") {
+                showCodexSkillsManagement()
+            }
+            .disabled(agentGetStartedTargetWindowID == nil)
+
+            Button("Set Up Agent Status Hooks…") {
                 showAgentStatusHooksSetup()
             }
             .disabled(agentGetStartedTargetWindowID == nil)
@@ -894,6 +899,14 @@ struct ToasttyCommandMenus: Commands {
         NotificationCenter.default.post(
             name: .toasttyShowAgentGetStartedFlow,
             object: AgentGetStartedPresentationRequest(windowID: windowID, initialStep: .agentStatusHooks)
+        )
+    }
+
+    private func showCodexSkillsManagement() {
+        guard let windowID = agentGetStartedTargetWindowID else { return }
+        NotificationCenter.default.post(
+            name: .toasttyShowCodexSkillsManagement,
+            object: windowID
         )
     }
 

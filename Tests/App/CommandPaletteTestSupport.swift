@@ -36,6 +36,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var canManageConfigValue = true
     var canManageTerminalProfilesValue = true
     var canManageAgentsValue = true
+    var canManageCodexSkillsValue = true
     var canSetUpAgentStatusHooksValue = true
     var canCopyDiagnosticsSnippetValue = true
     var canReloadValue = true
@@ -67,6 +68,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var manageConfigResult = true
     var manageTerminalProfilesResult = true
     var manageAgentsResult = true
+    var manageCodexSkillsResult = true
     var setUpAgentStatusHooksResult = true
     var copyDiagnosticsSnippetResult = true
     var reloadConfigurationResult = true
@@ -104,6 +106,7 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
     var managedConfigWindowIDs: [UUID] = []
     var managedTerminalProfilesWindowIDs: [UUID] = []
     var managedAgentsWindowIDs: [UUID] = []
+    var managedCodexSkillsWindowIDs: [UUID] = []
     var setUpAgentStatusHooksWindowIDs: [UUID] = []
     var copiedDiagnosticsSnippetWindowIDs: [UUID] = []
     var reloadConfigurationCount = 0
@@ -452,6 +455,16 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return manageAgentsResult
     }
 
+    func canManageCodexSkills(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return canManageCodexSkillsValue
+    }
+
+    func manageCodexSkills(originWindowID: UUID) -> Bool {
+        managedCodexSkillsWindowIDs.append(originWindowID)
+        return manageCodexSkillsResult
+    }
+
     func canSetUpAgentStatusHooks(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return canSetUpAgentStatusHooksValue
@@ -584,6 +597,8 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
                 return manageTerminalProfiles(originWindowID: originWindowID)
             case .manageAgents:
                 return manageAgents(originWindowID: originWindowID)
+            case .manageCodexSkills:
+                return manageCodexSkills(originWindowID: originWindowID)
             case .setUpAgentStatusHooks:
                 return setUpAgentStatusHooks(originWindowID: originWindowID)
             case .copyDiagnosticsSnippet:

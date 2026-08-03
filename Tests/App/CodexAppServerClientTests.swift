@@ -2,78 +2,80 @@ import XCTest
 @testable import ToasttyApp
 
 final class CodexAppServerClientTests: XCTestCase {
-    func testAssessmentRequiresExactToasttyPluginSkillSet() throws {
+    func testWriteSkillConfigsSortsAndUsesOnlyPublicSkillsConfigWrite() throws {
         let transport = RecordingCodexRPCTransport { invocation, requests in
-            XCTAssertEqual(requests.map(\.method), ["skills/list", "hooks/list"])
-            return [
-                .success(Self.skillsResult([
-                    ("toastty:expected", true),
-                    ("toastty:unexpected", true),
-                    ("foreign:skill", true),
-                ])),
-                .success(Self.hooksResult(command: "forwarder", trust: "trusted")),
-            ]
+            XCTAssertEqual(invocation.codexHomeURL.path, "/tmp/codex-home")
+            XCTAssertEqual(requests.map(\.method), ["skills/config/write", "skills/config/write"])
+            XCTAssertEqual(requests.map { $0.params["name"]?.stringValue }, [
+                "toastty:toastty-scratchpad",
+                "toastty:worktree-create",
+            ])
+            XCTAssertTrue(requests.allSatisfy { $0.params["enabled"]?.boolValue == false })
+            return requests.map {
+                _ in .success(.object(["effectiveEnabled": .bool(false)]))
+            }
         }
-        let assessment = try CodexAppServerClient(transport: transport).assess(
-            invocation: Self.invocation(),
-            expectedSkillNames: ["toastty:expected"],
-            forwarderCommand: "forwarder",
-            legacyGlobalHooksPresent: false
-        )
 
-        XCTAssertEqual(assessment.installedSkillNames, ["toastty:expected", "toastty:unexpected"])
-        XCTAssertFalse(assessment.hasExactPluginSkillSet)
-        XCTAssertFalse(assessment.canInjectSessionConfiguration)
+        try CodexAppServerClient(transport: transport).writeSkillConfigs(
+            invocation: Self.invocation(),
+            states: [
+                CodexSkillState(name: "toastty:worktree-create", enabled: false),
+                CodexSkillState(name: "toastty:toastty-scratchpad", enabled: false),
+            ]
+        )
     }
 
-    func testAssessmentKeepsManagedTrustDistinctFromTrusted() throws {
-        let transport = RecordingCodexRPCTransport { _, _ in
-            [
-                .success(Self.skillsResult([("toastty:expected", true)])),
-                .success(Self.hooksResult(command: "forwarder", trust: "managed")),
-            ]
-        }
-        let assessment = try CodexAppServerClient(transport: transport).assess(
-            invocation: Self.invocation(),
-            expectedSkillNames: ["toastty:expected"],
-            forwarderCommand: "forwarder",
-            legacyGlobalHooksPresent: false
-        )
-
-        XCTAssertTrue(assessment.canInjectSessionConfiguration)
-        XCTAssertFalse(assessment.canUseSessionIntegrations)
-        XCTAssertTrue(assessment.sessionHooks.allSatisfy { $0.trust == .managed })
-    }
-
-    func testAssessmentRejectsDuplicateAndChangedHookDefinitions() throws {
-        let transport = RecordingCodexRPCTransport { _, _ in
-            var hooks = Self.hookObjects(command: "forwarder", trust: "trusted")
-            hooks.append(hooks[0])
-            var changed = hooks[1].objectValue!
-            changed["timeoutSec"] = .int(99)
-            hooks[1] = .object(changed)
+    func testListSkillsUsesForceReloadAndDecodesAllCwdGroups() throws {
+        let transport = RecordingCodexRPCTransport { invocation, requests in
+            XCTAssertEqual(requests.map(\.method), ["skills/list"])
+            XCTAssertEqual(requests[0].params["cwds"], .array([.string(invocation.workingDirectoryURL.path)]))
+            XCTAssertEqual(requests[0].params["forceReload"], .bool(true))
             return [
-                .success(Self.skillsResult([("toastty:expected", true)])),
                 .success(.object([
-                    "data": .array([.object([
-                        "cwd": .string("/tmp"),
-                        "hooks": .array(hooks),
-                        "warnings": .array([]),
-                        "errors": .array([]),
-                    ])]),
+                    "data": .array([
+                        .object([
+                            "cwd": .string("/tmp/one"),
+                            "skills": .array([
+                                .object(["name": .string("toastty:first"), "enabled": .bool(false)]),
+                            ]),
+                        ]),
+                        .object([
+                            "cwd": .string("/tmp/two"),
+                            "skills": .array([
+                                .object(["name": .string("foreign:skill"), "enabled": .bool(true)]),
+                            ]),
+                        ]),
+                    ]),
                 ])),
             ]
         }
-        let assessment = try CodexAppServerClient(transport: transport).assess(
-            invocation: Self.invocation(),
-            expectedSkillNames: ["toastty:expected"],
-            forwarderCommand: "forwarder",
-            legacyGlobalHooksPresent: false
+
+        let states = try CodexAppServerClient(transport: transport).listSkills(
+            invocation: Self.invocation()
         )
 
-        XCTAssertFalse(assessment.parsedAllSessionHooks)
-        XCTAssertFalse(assessment.canInjectSessionConfiguration)
-        XCTAssertFalse(assessment.errors.isEmpty)
+        XCTAssertEqual(states, [
+            CodexSkillState(name: "toastty:first", enabled: false),
+            CodexSkillState(name: "foreign:skill", enabled: true),
+        ])
+    }
+
+    func testWriteRejectsAnUnexpectedEffectiveEnabledValue() {
+        let transport = RecordingCodexRPCTransport { _, _ in
+            [.success(.object(["effectiveEnabled": .bool(true)]))]
+        }
+
+        XCTAssertThrowsError(
+            try CodexAppServerClient(transport: transport).writeSkillConfigs(
+                invocation: Self.invocation(),
+                states: [CodexSkillState(name: "toastty:test", enabled: false)]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CodexAppServerClientError,
+                .malformedResponse("skills/config/write")
+            )
+        }
     }
 }
 
@@ -86,63 +88,6 @@ private extension CodexAppServerClientTests {
             configOverrides: [],
             timeout: 1
         )
-    }
-
-    static func skillsResult(_ skills: [(String, Bool)]) -> CodexJSONValue {
-        .object([
-            "data": .array([.object([
-                "cwd": .string("/tmp"),
-                "skills": .array(skills.map { name, enabled in
-                    .object([
-                        "name": .string(name),
-                        "enabled": .bool(enabled),
-                        "description": .string("test"),
-                        "path": .string("/tmp/\(name)"),
-                        "scope": .string("user"),
-                    ])
-                }),
-                "errors": .array([]),
-            ])]),
-        ])
-    }
-
-    static func hooksResult(command: String, trust: String) -> CodexJSONValue {
-        .object([
-            "data": .array([.object([
-                "cwd": .string("/tmp"),
-                "hooks": .array(hookObjects(command: command, trust: trust)),
-                "warnings": .array([]),
-                "errors": .array([]),
-            ])]),
-        ])
-    }
-
-    static func hookObjects(command: String, trust: String) -> [CodexJSONValue] {
-        CodexSessionIntegrationContract.hookDefinitions.map { definition in
-            var object: [String: CodexJSONValue] = [
-                "source": .string("sessionFlags"),
-                "command": .string(command),
-                "eventName": .string(listValue(definition.event)),
-                "timeoutSec": .int(CodexSessionIntegrationContract.hookTimeoutSeconds),
-                "statusMessage": .string(CodexSessionIntegrationContract.hookStatusMessage),
-                "trustStatus": .string(trust),
-                "currentHash": .string("hash-\(definition.event.rawValue)"),
-            ]
-            object["matcher"] = definition.matcher.map(CodexJSONValue.string) ?? .null
-            return .object(object)
-        }
-    }
-
-    static func listValue(_ event: CodexSessionHookEvent) -> String {
-        switch event {
-        case .sessionStart: return "sessionStart"
-        case .userPromptSubmit: return "userPromptSubmit"
-        case .permissionRequest: return "permissionRequest"
-        case .preToolUse: return "preToolUse"
-        case .subagentStart: return "subagentStart"
-        case .subagentStop: return "subagentStop"
-        case .stop: return "stop"
-        }
     }
 }
 

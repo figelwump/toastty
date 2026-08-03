@@ -4,6 +4,33 @@ import XCTest
 
 @MainActor
 final class ManagedAgentLaunchPlannerTests: XCTestCase {
+    func testAsyncCodexPreparationSeesExistingManagedCodexSession() async throws {
+        let resolver = RecordingCodexManagedLaunchSkillsResolver(
+            decision: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+        )
+        let fixture = try makePlannerFixture(codexSkillsResolver: resolver)
+        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
+        try startManagedSession(
+            in: fixture.sessionRuntimeStore,
+            sessionID: "existing-codex",
+            panelID: fixture.panelID,
+            store: fixture.store,
+            workspaceID: workspaceID,
+            agent: .codex
+        )
+
+        _ = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(resolver.observedActiveSessionValues, [true])
+    }
+
     func testClaudeArtifactsRemainAfterSessionStops() async throws {
         let fixture = try makePlannerFixture()
         let claudePlan = try fixture.planner.prepareManagedLaunch(
@@ -885,6 +912,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
 
         XCTAssertEqual(plan.repoRoot, repoRoot)
         XCTAssertEqual(plan.environment[ToasttyLaunchContextEnvironment.repoRootKey], repoRoot)
+        XCTAssertEqual(plan.environment[ToasttyLaunchContextEnvironment.agentKey], AgentKind.claude.rawValue)
         XCTAssertEqual(
             fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.repoRoot,
             repoRoot
@@ -1841,7 +1869,8 @@ private func makePlannerFixture(
     codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
         .sessionLogFallback(reason: "test")
     },
-    codexSessionIntegrationResolver: (any CodexManagedLaunchIntegrationResolving)? = nil
+    codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
+    claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil
 ) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
@@ -1865,13 +1894,9 @@ private func makePlannerFixture(
     let sessionRuntimeStore = SessionRuntimeStore()
     sessionRuntimeStore.bind(store: store)
 
-    let resolvedCodexSessionIntegrationResolver = codexSessionIntegrationResolver
-        ?? TestCodexManagedLaunchIntegrationResolver(
-            decision: CodexManagedLaunchIntegrationDecision(
-                configuration: nil,
-                assessment: nil,
-                statusTrackingSource: codexStatusTrackingSourceProvider()
-            )
+    let resolvedCodexSkillsResolver = codexSkillsResolver
+        ?? TestCodexManagedLaunchSkillsResolver(
+            decision: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
         )
     let planner = ManagedAgentLaunchPlanner(
         store: store,
@@ -1886,24 +1911,71 @@ private func makePlannerFixture(
         promptState: { _ in .unavailable },
         nativeSessionObserverRegistry: nativeSessionObserverRegistry,
         codexResumeResolver: codexResumeResolver,
-        codexSessionIntegrationResolver: resolvedCodexSessionIntegrationResolver
+        codexSkillsResolver: resolvedCodexSkillsResolver,
+        claudeSkillsBundleManager: claudeSkillsBundleManager ?? TestClaudeSkillsBundleManager(configuration: nil)
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
 }
 
-private final class TestCodexManagedLaunchIntegrationResolver: CodexManagedLaunchIntegrationResolving, @unchecked Sendable {
-    private let decision: CodexManagedLaunchIntegrationDecision
+private final class TestClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Sendable {
+    private let configuration: ClaudeSkillsLaunchConfiguration?
 
-    init(decision: CodexManagedLaunchIntegrationDecision) {
+    init(configuration: ClaudeSkillsLaunchConfiguration?) {
+        self.configuration = configuration
+    }
+
+    func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration? {
+        configuration
+    }
+
+    func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration? {
+        configuration
+    }
+}
+
+private final class TestCodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
+    private let decision: CodexManagedLaunchSkillsDecision
+
+    init(decision: CodexManagedLaunchSkillsDecision) {
         self.decision = decision
     }
 
     func resolve(
         request _: ManagedAgentLaunchRequest,
         workingDirectory _: String?
-    ) -> CodexManagedLaunchIntegrationDecision {
+    ) -> CodexManagedLaunchSkillsDecision {
         decision
+    }
+}
+
+private final class RecordingCodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
+    private let lock = NSLock()
+    private let decision: CodexManagedLaunchSkillsDecision
+    private var activeSessionValues: [Bool] = []
+
+    init(decision: CodexManagedLaunchSkillsDecision) {
+        self.decision = decision
+    }
+
+    var observedActiveSessionValues: [Bool] {
+        lock.withLock { activeSessionValues }
+    }
+
+    func resolve(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        decision
+    }
+
+    func resolveForManagedLaunch(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?,
+        hasActiveManagedCodexSession: Bool
+    ) async -> CodexManagedLaunchSkillsDecision {
+        lock.withLock { activeSessionValues.append(hasActiveManagedCodexSession) }
+        return decision
     }
 }
 
@@ -1930,11 +2002,12 @@ private func startManagedSession(
     panelID: UUID,
     store: AppStore,
     workspaceID: UUID,
-    at now: Date = Date(timeIntervalSince1970: 1_700_000_000)
+    at now: Date = Date(timeIntervalSince1970: 1_700_000_000),
+    agent: AgentKind = .claude
 ) throws {
     sessionRuntimeStore.startSession(
         sessionID: sessionID,
-        agent: .claude,
+        agent: agent,
         panelID: panelID,
         windowID: try XCTUnwrap(store.state.windows.first?.id),
         workspaceID: workspaceID,

@@ -46,7 +46,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let promptState: @MainActor (UUID) -> TerminalPromptState
     private let nativeSessionObserverRegistry: any ManagedAgentNativeSessionObserving
     private let codexResumeResolver: any CodexManagedSessionResolving
-    private let codexSessionIntegrationResolver: any CodexManagedLaunchIntegrationResolving
+    private let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
+    private let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
     private var codexRolloutWatchersBySessionID: [String: CodexRolloutSessionLogWatcherRegistration] = [:]
@@ -67,7 +68,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         promptState: @escaping @MainActor (UUID) -> TerminalPromptState,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
         codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
-        codexSessionIntegrationResolver: (any CodexManagedLaunchIntegrationResolving)? = nil
+        codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
+        claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -87,8 +89,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 nowProvider: nowProvider
             )
         self.codexResumeResolver = codexResumeResolver ?? CodexManagedSessionResolver()
-        self.codexSessionIntegrationResolver = codexSessionIntegrationResolver
-            ?? CodexManagedLaunchIntegrationResolver(fileManager: fileManager)
+        self.codexSkillsResolver = codexSkillsResolver
+            ?? CodexManagedLaunchSkillsResolver(fileManager: fileManager)
+        self.claudeSkillsBundleManager = claudeSkillsBundleManager
+            ?? ClaudeSkillsBundleManager(fileManager: fileManager)
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
@@ -108,16 +112,20 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     ) throws -> ManagedAgentLaunchPlan {
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
-        let codexIntegrationDecision = request.agent == .codex
-            ? codexSessionIntegrationResolver.resolve(
+        let codexSkillsDecision = request.agent == .codex
+            ? codexSkillsResolver.resolve(
                 request: request,
                 workingDirectory: assessedWorkingDirectory
             )
             : nil
+        let claudeSkillsConfiguration = request.agent == .claude
+            ? claudeSkillsBundleManager.existingVerifiedConfiguration()
+            : nil
         return try prepareManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
-            codexIntegrationDecision: codexIntegrationDecision,
+            codexSkillsDecision: codexSkillsDecision,
+            claudeSkillsConfiguration: claudeSkillsConfiguration,
             assessedWorkingDirectory: assessedWorkingDirectory
         )
     }
@@ -128,16 +136,29 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     ) async throws -> ManagedAgentLaunchPlan {
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
-        let codexIntegrationDecision = request.agent == .codex
-            ? await codexSessionIntegrationResolver.resolveForManagedLaunch(
+        let hasActiveManagedCodexSession = sessionRuntimeStore?.sessionRegistry.sessionsByID.values
+            .contains { $0.isActive && $0.agent == .codex } == true
+        let codexSkillsDecision = request.agent == .codex
+            ? await codexSkillsResolver.resolveForManagedLaunch(
                 request: request,
-                workingDirectory: assessedWorkingDirectory
+                workingDirectory: assessedWorkingDirectory,
+                hasActiveManagedCodexSession: hasActiveManagedCodexSession
             )
             : nil
+        let claudeSkillsConfiguration = request.agent == .claude
+            ? await claudeSkillsBundleManager.prepareForManagedLaunch()
+            : nil
+        if codexSkillsDecision?.shouldPresentProvisionedNotice == true {
+            NotificationCenter.default.post(
+                name: .toasttyCodexSkillsProvisioned,
+                object: target.windowID
+            )
+        }
         return try prepareManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
-            codexIntegrationDecision: codexIntegrationDecision,
+            codexSkillsDecision: codexSkillsDecision,
+            claudeSkillsConfiguration: claudeSkillsConfiguration,
             assessedWorkingDirectory: assessedWorkingDirectory
         )
     }
@@ -145,7 +166,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private func prepareManagedLaunch(
         _ request: ManagedAgentLaunchRequest,
         inheritedScopedWorkspaceIDs: Set<UUID>?,
-        codexIntegrationDecision: CodexManagedLaunchIntegrationDecision?,
+        codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
+        claudeSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
         assessedWorkingDirectory: String?
     ) throws -> ManagedAgentLaunchPlan {
         guard let sessionRuntimeStore else {
@@ -154,15 +176,11 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
 
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let resolvedCWD = normalizedNonEmpty(request.cwd) ?? target.cwd
-        let effectiveCodexIntegrationDecision: CodexManagedLaunchIntegrationDecision? = if request.agent == .codex,
-                                                                                           resolvedCWD != assessedWorkingDirectory {
-            CodexManagedLaunchIntegrationDecision(
-                configuration: nil,
-                assessment: nil,
-                statusTrackingSource: .sessionLogFallback(reason: "working_directory_changed_during_probe")
-            )
+        let effectiveCodexSkillsConfiguration: CodexSkillsLaunchConfiguration? = if request.agent == .codex,
+                                                                                    resolvedCWD != assessedWorkingDirectory {
+            nil
         } else {
-            codexIntegrationDecision
+            codexSkillsDecision?.configuration
         }
         let repoRootResolution = repositoryRootResolver(resolvedCWD)
         let repoRoot = repoRootResolution.repoRoot
@@ -174,8 +192,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         )
         let cliExecutablePath = try resolveCLIExecutablePath()
         let sessionID = UUID().uuidString
-        let requestedCodexStatusTrackingSource = effectiveCodexIntegrationDecision?.statusTrackingSource
-            ?? statusTrackingSource(for: request.agent)
+        let codexStatusTrackingSource = statusTrackingSource(for: request.agent)
         let preparedLaunch = prepareLaunch(
             agent: request.agent,
             argv: request.argv,
@@ -183,11 +200,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             sessionID: sessionID,
             workingDirectory: resolvedCWD,
             launchEnvironment: request.environment,
-            codexStatusTrackingSource: requestedCodexStatusTrackingSource,
-            codexSessionIntegration: effectiveCodexIntegrationDecision?.configuration
+            codexStatusTrackingSource: codexStatusTrackingSource,
+            codexSkillsIntegration: effectiveCodexSkillsConfiguration,
+            claudeSkillsIntegration: claudeSkillsConfiguration
         )
-        let codexStatusTrackingSource = preparedLaunch.effectiveCodexStatusTrackingSource
-            ?? requestedCodexStatusTrackingSource
         let launchStart = nowProvider()
         let parentSessionID = resolvedParentSessionID(
             for: request,
@@ -262,6 +278,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             environment[key] = value
         }
         environment[ToasttyLaunchContextEnvironment.sessionIDKey] = sessionID
+        environment[ToasttyLaunchContextEnvironment.agentKey] = request.agent.rawValue
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = target.panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.socketPathKey] = socketPathProvider()
         environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
@@ -386,7 +403,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         workingDirectory: String?,
         launchEnvironment: [String: String],
         codexStatusTrackingSource: CodexStatusTrackingSource,
-        codexSessionIntegration: CodexSessionLaunchConfiguration?
+        codexSkillsIntegration: CodexSkillsLaunchConfiguration?,
+        claudeSkillsIntegration: ClaudeSkillsLaunchConfiguration?
     ) -> PreparedAgentLaunchCommand {
         do {
             return try AgentLaunchInstrumentation.prepare(
@@ -398,7 +416,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 fileManager: fileManager,
                 launchEnvironment: launchEnvironment,
                 codexStatusTrackingSource: codexStatusTrackingSource,
-                codexSessionIntegration: codexSessionIntegration
+                codexSkillsIntegration: codexSkillsIntegration,
+                claudeSkillsIntegration: claudeSkillsIntegration
             )
         } catch {
             ToasttyLog.warning(
@@ -410,7 +429,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     "error": error.localizedDescription,
                 ]
             )
-            if agent == .codex, codexSessionIntegration != nil,
+            if agent == .codex, codexSkillsIntegration != nil,
                let fallback = try? AgentLaunchInstrumentation.prepare(
                     agent: agent,
                     argv: argv,
@@ -419,10 +438,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     workingDirectory: workingDirectory,
                     fileManager: fileManager,
                     launchEnvironment: launchEnvironment,
-                    codexStatusTrackingSource: .sessionLogFallback(
-                        reason: "session_integration_preparation_failed"
-                    ),
-                    codexSessionIntegration: nil
+                    codexStatusTrackingSource: codexStatusTrackingSource,
+                    codexSkillsIntegration: nil
                ) {
                 return fallback
             }

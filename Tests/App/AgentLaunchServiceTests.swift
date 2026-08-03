@@ -297,7 +297,7 @@ struct AgentLaunchServiceTests {
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-tests.sock" },
             codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") },
-            codexSessionIntegrationResolver: ImmediateCodexManagedLaunchIntegrationResolver()
+            codexSkillsResolver: ImmediateCodexManagedLaunchSkillsResolver()
         )
 
         let result = try service.launch(profileID: "codex")
@@ -625,8 +625,7 @@ struct AgentLaunchServiceTests {
 
         #expect(result.agent == .codex)
         #expect(result.displayName == "Codex")
-        #expect(command.contains("codex -c 'notify=["))
-        #expect(command.hasSuffix("'/work-on POP-1234'\n"))
+        #expect(command.contains("codex '/work-on POP-1234'"))
     }
 
     @Test
@@ -668,8 +667,7 @@ struct AgentLaunchServiceTests {
         #expect(command.contains("TOASTTY_DEV_WORKTREE_ROOT=\(projectRoot.path)"))
         #expect(command.contains("TOASTTY_DERIVED_PATH=\(projectRoot.path)/artifacts/Derived"))
         #expect(command.contains("TOASTTY_CWD=\(cwd)"))
-        #expect(command.contains("codex -c 'notify=["))
-        #expect(command.hasSuffix("'Read WORKTREE_HANDOFF.md'\n"))
+        #expect(command.contains("codex 'Read WORKTREE_HANDOFF.md'"))
         #expect(result.cwd == cwd)
         #expect(activeSession.cwd == cwd)
     }
@@ -705,8 +703,7 @@ struct AgentLaunchServiceTests {
 
         #expect(command.hasPrefix("cd \(cwd) && direnv allow && export FEATURE_FLAG=1 && "))
         #expect(command.contains("EXTRA_FLAG='alpha beta'"))
-        #expect(command.contains("codex -c 'notify=["))
-        #expect(command.hasSuffix("'/work-on POP-1234'\n"))
+        #expect(command.contains("codex '/work-on POP-1234'"))
     }
 
     @Test
@@ -763,8 +760,7 @@ struct AgentLaunchServiceTests {
 
         #expect(command.hasPrefix("cd \(shellQuoteForTest(cwdURL.path)) && "))
         #expect(command.contains("CUSTOM_VALUE=\(shellQuoteForTest(envValue))"))
-        #expect(command.contains("codex -c 'notify=["))
-        #expect(command.hasSuffix("\(shellQuoteForTest(prompt))\n"))
+        #expect(command.contains("codex \(shellQuoteForTest(prompt))"))
     }
 
     @Test
@@ -797,8 +793,7 @@ struct AgentLaunchServiceTests {
         let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
 
         #expect(command.contains(" && direnv allow && printf '%s\\n' ready && "))
-        #expect(command.contains("codex -c 'notify=["))
-        #expect(command.hasSuffix("\(shellQuoteForTest("review 'quoted'; $(echo prompt)"))\n"))
+        #expect(command.contains("codex \(shellQuoteForTest("review 'quoted'; $(echo prompt)"))"))
     }
 
     @Test
@@ -858,6 +853,12 @@ struct AgentLaunchServiceTests {
             _ = try service.launch(
                 profileID: "codex",
                 environment: ["TOASTTY_SKILLS_ROOT": "/tmp/user-controlled"]
+            )
+        }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_AGENT' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "codex",
+                environment: ["TOASTTY_AGENT": "claude"]
             )
         }
     }
@@ -1208,16 +1209,12 @@ private final class SpyNativeSessionObserverRegistry: ManagedAgentNativeSessionO
     }
 }
 
-private final class ImmediateCodexManagedLaunchIntegrationResolver: CodexManagedLaunchIntegrationResolving, @unchecked Sendable {
+private final class ImmediateCodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
     func resolve(
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?
-    ) -> CodexManagedLaunchIntegrationDecision {
-        CodexManagedLaunchIntegrationDecision(
-            configuration: nil,
-            assessment: nil,
-            statusTrackingSource: .sessionLogFallback(reason: "test")
-        )
+    ) -> CodexManagedLaunchSkillsDecision {
+        CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
     }
 }
 

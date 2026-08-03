@@ -61,6 +61,77 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertNotNil(matcherEntry, "Notification hook should have a wildcard matcher entry")
     }
 
+    func testPrepareClaudeLaunchAddsToasttyPluginAlongsideUserPluginDirectories() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty plugin",
+            skillsRootPath: "/tmp/toastty plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude", "--plugin-dir", "/tmp/user-one", "--plugin-dir=/tmp/user-two", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            claudeSkillsIntegration: configuration
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertEqual(preparedLaunch.argv.filter { $0 == "--plugin-dir" }.count, 2)
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/toastty plugin"))
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/user-one"))
+        XCTAssertTrue(preparedLaunch.argv.contains("--plugin-dir=/tmp/user-two"))
+        XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPrepareClaudeLaunchAddsToasttyPluginAfterSupportedWrapperCommand() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-plugin",
+            skillsRootPath: "/tmp/toastty-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["agent-safehouse", "--cwd", "/tmp/repo", "claude", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            claudeSkillsIntegration: configuration
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        let claudeIndex = try XCTUnwrap(preparedLaunch.argv.firstIndex(of: "claude"))
+        XCTAssertEqual(preparedLaunch.argv[safe: claudeIndex + 3], "--plugin-dir")
+        XCTAssertEqual(preparedLaunch.argv[safe: claudeIndex + 4], configuration.pluginRootPath)
+        XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPrepareClaudeLaunchOmitsToasttyPluginForOpaqueWrapper() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-plugin",
+            skillsRootPath: "/tmp/toastty-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["custom-wrapper", "claude", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            claudeSkillsIntegration: configuration
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertFalse(preparedLaunch.argv.contains("--plugin-dir"))
+        XCTAssertNil(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"])
+    }
+
     func testPrepareCodexLaunchFormatsNotifyOverrideAsTomlArray() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"
@@ -162,11 +233,14 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
-    func testPrepareCodexLaunchInjectsDeterministicSessionSkillsAndSevenHooks() throws {
-        let configuration = codexSessionConfiguration(
-            skillNames: ["toastty:worktree-done", "toastty:toastty-scratchpad", "toastty:worktree-done"],
-            skillsRootPath: "/tmp/Skills ü\\root",
-            forwarderCommand: #"/bin/sh '/Users/Test ü/Back\slash/.toastty/codex-hooks/forwarder.sh'"#
+    func testPrepareCodexLaunchInjectsOnlyDeterministicManagedSkills() throws {
+        let configuration = codexSkillsConfiguration(
+            skillNames: [
+                "toastty:worktree-create",
+                "toastty:toastty-scratchpad",
+                "toastty:worktree-create",
+            ],
+            skillsRootPath: "/tmp/Skills ü\\root"
         )
 
         let first = try prepareCodex(
@@ -182,36 +256,20 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         defer { cleanup([first, second]) }
 
         XCTAssertEqual(first.argv, second.argv)
-        XCTAssertEqual(first.codexSessionIntegrationResult, .injected(skills: true, hooks: true))
-        XCTAssertEqual(first.effectiveCodexStatusTrackingSource, .hooks)
+        XCTAssertEqual(first.codexSkillsInjectionResult, .injected)
         XCTAssertEqual(first.environment["TOASTTY_SKILLS_ROOT"], "/tmp/Skills ü\\root")
         let overrides = configOverrides(in: first.argv)
-        XCTAssertEqual(overrides.count, 2)
+        XCTAssertEqual(overrides.count, 1)
         XCTAssertEqual(
             overrides[0],
-            #"skills.config=[{name="toastty:toastty-scratchpad",enabled=true},{name="toastty:worktree-done",enabled=true}]"#
+            #"skills.config=[{name="toastty:toastty-scratchpad",enabled=true},{name="toastty:worktree-create",enabled=true}]"#
         )
-        let hooks = overrides[1]
-        let definitions = CodexSessionIntegrationContract.hookDefinitions
-        XCTAssertEqual(definitions.count, 7)
-        XCTAssertEqual(Set(definitions.map(\.event)).count, definitions.count)
-        XCTAssertEqual(
-            hooks,
-            CodexSessionIntegrationContract.launchOverrides(
-                enabling: configuration.qualifiedSkillNames,
-                forwarderCommand: configuration.forwarderCommand
-            )[1]
-        )
-        XCTAssertTrue(
-            hooks.contains(
-                "command=\(CodexSessionConfigSerializer.tomlBasicStringLiteral(configuration.forwarderCommand))"
-            )
-        )
+        XCTAssertFalse(overrides.contains { $0.hasPrefix("hooks=") })
         XCTAssertEqual(Array(first.argv.suffix(2)), ["resume", "thread-id"])
     }
 
     func testPrepareCodexLaunchInjectsAfterDirectAliasWrapperResumeAndForkExecutable() throws {
-        let configuration = codexSessionConfiguration()
+        let configuration = codexSkillsConfiguration()
         let cases: [([String], Int, String)] = [
             (["codex", "--search"], 0, "direct"),
             (["cdx", "resume", "abc"], 0, "alias"),
@@ -224,31 +282,28 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             defer { cleanup([prepared]) }
             XCTAssertEqual(prepared.argv[executableIndex], argv[executableIndex], label)
             XCTAssertEqual(prepared.argv[executableIndex + 1], "-c", label)
-            XCTAssertEqual(configOverrides(in: prepared.argv).count, 2, label)
+            XCTAssertEqual(configOverrides(in: prepared.argv).count, 1, label)
         }
     }
 
-    func testPrepareCodexLaunchInjectsUntrustedHooksWhileNotifyFallbackOwnsTelemetry() throws {
+    func testPrepareCodexLaunchKeepsNotifyFallbackIndependentFromSkills() throws {
         let prepared = try prepareCodex(
             argv: ["codex", "exec", "prompt"],
             source: .sessionLogFallback(reason: "hooks_untrusted"),
-            configuration: codexSessionConfiguration()
+            configuration: codexSkillsConfiguration()
         )
         defer { cleanup([prepared]) }
 
-        XCTAssertEqual(prepared.codexSessionIntegrationResult, .injected(skills: true, hooks: true))
-        XCTAssertEqual(
-            prepared.effectiveCodexStatusTrackingSource,
-            .sessionLogFallback(reason: "hooks_untrusted")
-        )
+        XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
         let overrides = configOverrides(in: prepared.argv)
-        XCTAssertEqual(overrides.count, 3)
-        XCTAssertTrue(overrides.contains { $0.hasPrefix("hooks={") })
+        XCTAssertEqual(overrides.count, 2)
+        XCTAssertTrue(overrides.contains { $0.hasPrefix("skills.config=") })
         XCTAssertTrue(overrides.contains { $0.hasPrefix("notify=[") })
+        XCTAssertFalse(overrides.contains { $0.hasPrefix("hooks=") })
     }
 
-    func testPrepareCodexLaunchRefusesOpaqueAndBoundaryShapesAndKeepsFallback() throws {
-        let configuration = codexSessionConfiguration()
+    func testPrepareCodexLaunchRefusesOpaqueSkillsWithoutChangingHookStatusMode() throws {
+        let configuration = codexSkillsConfiguration()
         for argv in [
             ["my-codex-wrapper", "resume", "abc"],
             ["opaque-wrapper", "unexpected", "codex", "resume", "abc"],
@@ -258,12 +313,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             let prepared = try prepareCodex(argv: argv, source: .hooks, configuration: configuration)
             defer { cleanup([prepared]) }
             XCTAssertEqual(
-                prepared.codexSessionIntegrationResult,
+                prepared.codexSkillsInjectionResult,
                 .refused(reason: "opaque_or_unsafe_codex_argv")
-            )
-            XCTAssertEqual(
-                prepared.effectiveCodexStatusTrackingSource,
-                .sessionLogFallback(reason: "session_integration_not_injected")
             )
             XCTAssertEqual(prepared.argv, argv)
             XCTAssertNil(prepared.environment["TOASTTY_SKILLS_ROOT"])
@@ -272,7 +323,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
     }
 
     func testPrepareCodexLaunchRefusesWrapperFlagValuesAndShellIndirection() throws {
-        let configuration = codexSessionConfiguration()
+        let configuration = codexSkillsConfiguration()
         for argv in [
             ["agent-safehouse", "--profile", "codex", "npm", "test"],
             ["agent-safehouse", "sh", "-c", "codex"],
@@ -282,21 +333,20 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             defer { cleanup([prepared]) }
 
             XCTAssertEqual(
-                prepared.codexSessionIntegrationResult,
+                prepared.codexSkillsInjectionResult,
                 .refused(reason: "opaque_or_unsafe_codex_argv")
             )
-            XCTAssertEqual(prepared.argv, argv)
+            XCTAssertFalse(configOverrides(in: prepared.argv).contains { $0.hasPrefix("skills.config=") })
             XCTAssertNotNil(prepared.artifacts?.codexSessionLogURL)
         }
     }
 
-    func testPrepareCodexLaunchRefusesConflictingUserConfigOverrides() throws {
-        let configuration = codexSessionConfiguration()
+    func testPrepareCodexLaunchRefusesOnlyConflictingSkillsOverrides() throws {
+        let configuration = codexSkillsConfiguration()
         let cases = [
-            ["codex", "-c", "hooks={}", "exec", "prompt"],
-            ["codex", "--config", "notify=[\"/usr/bin/true\"]", "resume"],
             ["codex", "--config=skills.config=[]", "fork", "thread"],
-            ["codex", "-c", "hooks.SessionStart=[]", "exec", "prompt"],
+            ["codex", "-c", "skills.config=[]", "exec", "prompt"],
+            ["codex", "--config", "skills.enabled=false", "resume"],
         ]
 
         for argv in cases {
@@ -304,54 +354,32 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             defer { cleanup([prepared]) }
 
             XCTAssertEqual(
-                prepared.codexSessionIntegrationResult,
-                .refused(reason: "conflicting_codex_config_override")
-            )
-            XCTAssertEqual(
-                prepared.effectiveCodexStatusTrackingSource,
-                .sessionLogFallback(reason: "session_integration_not_injected")
+                prepared.codexSkillsInjectionResult,
+                .refused(reason: "conflicting_codex_skills_override")
             )
             XCTAssertNil(prepared.environment["TOASTTY_SKILLS_ROOT"])
             XCTAssertNotNil(prepared.artifacts?.codexSessionLogURL)
-            XCTAssertFalse(configOverrides(in: prepared.argv).contains { $0.hasPrefix("hooks={SessionStart") })
+            XCTAssertEqual(configOverrides(in: prepared.argv), configOverrides(in: argv))
         }
     }
 
-    func testPrepareCodexLaunchWithLegacyGlobalHooksInjectsSkillsOnly() throws {
-        let configuration = codexSessionConfiguration(legacyGlobalHooksPresent: true)
-        let prepared = try prepareCodex(
-            argv: ["codex", "fork", "abc"],
-            source: .hooks,
-            configuration: configuration
-        )
-        defer { cleanup([prepared]) }
+    func testPrepareCodexLaunchAllowsUnrelatedHookAndNotifyOverrides() throws {
+        for argv in [
+            ["codex", "-c", "hooks={}", "exec", "prompt"],
+            ["codex", "--config", "notify=[\"/usr/bin/true\"]", "resume"],
+            ["codex", "-c", "hooks.SessionStart=[]", "fork", "thread"],
+        ] {
+            let prepared = try prepareCodex(
+                argv: argv,
+                source: .hooks,
+                configuration: codexSkillsConfiguration()
+            )
+            defer { cleanup([prepared]) }
 
-        XCTAssertEqual(prepared.codexSessionIntegrationResult, .injected(skills: true, hooks: false))
-        XCTAssertEqual(prepared.effectiveCodexStatusTrackingSource, .hooks)
-        let overrides = configOverrides(in: prepared.argv)
-        XCTAssertEqual(overrides.count, 1)
-        XCTAssertTrue(overrides[0].hasPrefix("skills.config="))
-        XCTAssertFalse(prepared.argv.contains { $0.hasPrefix("notify=") })
-    }
-
-    func testPrepareCodexLaunchWithLegacyGlobalHooksAndFallbackDoesNotInjectSessionHooks() throws {
-        let prepared = try prepareCodex(
-            argv: ["codex", "resume", "abc"],
-            source: .sessionLogFallback(reason: "legacy_hooks_untrusted"),
-            configuration: codexSessionConfiguration(legacyGlobalHooksPresent: true)
-        )
-        defer { cleanup([prepared]) }
-
-        XCTAssertEqual(prepared.codexSessionIntegrationResult, .injected(skills: true, hooks: false))
-        XCTAssertEqual(
-            prepared.effectiveCodexStatusTrackingSource,
-            .sessionLogFallback(reason: "legacy_hooks_untrusted")
-        )
-        let overrides = configOverrides(in: prepared.argv)
-        XCTAssertEqual(overrides.count, 2)
-        XCTAssertTrue(overrides.contains { $0.hasPrefix("skills.config=") })
-        XCTAssertTrue(overrides.contains { $0.hasPrefix("notify=") })
-        XCTAssertFalse(overrides.contains { $0.hasPrefix("hooks=") })
+            XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
+            XCTAssertNotNil(configOverrides(in: prepared.argv).first { $0.hasPrefix("skills.config=") })
+            XCTAssertFalse(configOverrides(in: prepared.argv).contains { $0.hasPrefix("hooks={SessionStart") })
+        }
     }
 
     func testPrepareOpenCodeLaunchInjectsFilePluginThroughConfigContent() throws {
@@ -1224,24 +1252,22 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
-    private func codexSessionConfiguration(
+    private func codexSkillsConfiguration(
         skillNames: [String] = ["toastty:toastty-scratchpad"],
-        skillsRootPath: String = "/tmp/toastty plugin/skills",
-        forwarderCommand: String = "/bin/sh '/tmp/toastty hooks/forwarder.sh'",
-        legacyGlobalHooksPresent: Bool = false
-    ) -> CodexSessionLaunchConfiguration {
-        CodexSessionLaunchConfiguration(
+        skillsRootPath: String = "/tmp/toastty plugin/skills"
+    ) -> CodexSkillsLaunchConfiguration {
+        CodexSkillsLaunchConfiguration(
             qualifiedSkillNames: skillNames,
             skillsRootPath: skillsRootPath,
-            forwarderCommand: forwarderCommand,
-            legacyGlobalHooksPresent: legacyGlobalHooksPresent
+            version: "0.2.0",
+            contentDigest: "abc123"
         )
     }
 
     private func prepareCodex(
         argv: [String],
         source: CodexStatusTrackingSource,
-        configuration: CodexSessionLaunchConfiguration
+        configuration: CodexSkillsLaunchConfiguration
     ) throws -> PreparedAgentLaunchCommand {
         try AgentLaunchInstrumentation.prepare(
             agent: .codex,
@@ -1251,7 +1277,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             workingDirectory: nil,
             fileManager: .default,
             codexStatusTrackingSource: source,
-            codexSessionIntegration: configuration
+            codexSkillsIntegration: configuration
         )
     }
 

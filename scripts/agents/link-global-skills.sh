@@ -8,7 +8,6 @@ DEFAULT_SKILLS=(
   "toastty-open-markdown"
   "toastty-scratchpad"
   "worktree-create"
-  "worktree-done"
 )
 
 declare -a REQUESTED_TARGETS=()
@@ -18,7 +17,7 @@ CLEAN=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/agents/link-global-skills.sh [--target agents|claude|all] [--skill name] [--force] [--clean]
+Usage: scripts/agents/link-global-skills.sh --target agents|claude|all [--skill name] [--force] [--clean]
 
 Links Toastty repo skills into global Claude and generic-agent skill directories
 for development. Codex receives these skills through Toastty's session-scoped
@@ -27,7 +26,7 @@ plugin integration instead of global links.
 Targets:
   agents   ~/.agents/skills
   claude   ~/.claude/skills
-  all      agents and claude (default)
+  all      agents and claude
 
 Options:
   --skill name  Link only the named skill. May be repeated.
@@ -96,7 +95,7 @@ if [[ ! -d "$SOURCE_SKILLS_DIR" ]]; then
 fi
 
 if [[ "${#REQUESTED_TARGETS[@]}" -eq 0 ]]; then
-  append_target all
+  fail "--target is required for development links"
 fi
 
 target_directory() {

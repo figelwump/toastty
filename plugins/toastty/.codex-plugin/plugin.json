@@ -1,15 +1,15 @@
 {
   "name": "toastty",
-  "version": "0.1.0",
-  "description": "Session-scoped workflows for controlling Toastty from Codex.",
+  "version": "0.2.0",
+  "description": "Managed-session workflows for controlling Toastty from Codex and Claude Code.",
   "author": {
     "name": "Giant Things"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Toastty",
-    "shortDescription": "Control Toastty from managed Codex sessions.",
-    "longDescription": "Toastty adds workflows for app control, Scratchpad visuals, local-document review, and safe worktree handoffs. Toastty enables these skills only for managed sessions.",
+    "shortDescription": "Control Toastty from managed agent sessions.",
+    "longDescription": "Toastty adds workflows for app control, Scratchpad visuals, local-document review, and safe worktree handoffs. Toastty exposes these skills only to managed Codex and Claude Code sessions.",
     "developerName": "Giant Things",
     "category": "Developer Tools",
     "capabilities": [
