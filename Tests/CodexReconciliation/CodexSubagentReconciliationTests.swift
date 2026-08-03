@@ -349,6 +349,45 @@ struct CodexSubagentReconciliationTests {
     }
 
     @Test
+    func fallbackFinishTombstonesUseTTLOnlyAcrossLargeBurst() {
+        var reconciler = CodexSubagentReconciler(authority: .rolloutFallback)
+        let burstSize = 1_000
+
+        for index in 0 ..< burstSize {
+            _ = reconciler.reduce(
+                .rolloutFinish(activityID: activity("burst-\(index)")),
+                projection: .empty,
+                now: epoch
+            )
+        }
+
+        for index in 0 ..< burstSize {
+            let blocked = reconciler.reduce(
+                rolloutStart(activity: "burst-\(index)", displayName: "blocked"),
+                projection: .empty,
+                now: epoch.addingTimeInterval(119.999)
+            )
+            #expect(blocked.decisions.isEmpty)
+            #expect(blocked.diagnostics == [
+                .ignored(observation: .rolloutStart, reason: .activeFinishTombstone),
+            ])
+        }
+
+        for index in 0 ..< burstSize {
+            #expect(reconciler.reduce(
+                rolloutStart(activity: "burst-\(index)", displayName: "allowed"),
+                projection: .empty,
+                now: epoch.addingTimeInterval(120)
+            ).decisions == [
+                .fallbackUpsert(
+                    activityID: activity("burst-\(index)"),
+                    metadata: .init(displayName: "allowed")
+                ),
+            ])
+        }
+    }
+
+    @Test
     func repeatedUnknownFinishRefreshesTombstoneReceiveTime() {
         var reconciler = CodexSubagentReconciler(authority: .rolloutFallback)
 
