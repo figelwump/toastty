@@ -432,22 +432,45 @@ final class AppStore: ObservableObject {
         guard let workspace = state.workspacesByID[workspaceID] else {
             return false
         }
+        let requestedAnchor = Self.normalizedGettingStartedAnchor(anchor)
 
         if let tab = workspace.rightAuxPanel.orderedTabs.first(where: Self.isGettingStartedPanel) {
-            send(
+            var didNavigateToAnchor = true
+            if let requestedAnchor,
+               case .web(let webState) = tab.panelState {
+                let anchoredURL = Self.gettingStartedPanelURL(anchor: requestedAnchor)
+                if webState.restorableURL != anchoredURL {
+                    didNavigateToAnchor = send(
+                        .updateWebPanelMetadata(
+                            panelID: tab.panelID,
+                            title: webState.title,
+                            url: anchoredURL
+                        )
+                    )
+                }
+            }
+
+            _ = send(
                 .selectRightAuxPanelTab(
                     workspaceID: workspaceID,
                     tabID: tab.id,
                     focus: true
                 )
             )
-            return true
+            guard let selectedWorkspace = state.workspacesByID[workspaceID] else {
+                return false
+            }
+            let selectedPanel = selectedWorkspace.rightAuxPanel
+            return didNavigateToAnchor &&
+                selectedPanel.activeTabID == tab.id &&
+                selectedPanel.focusedPanelID == tab.panelID &&
+                selectedPanel.isVisible
         }
 
         return createBrowserPanel(
             workspaceID: workspaceID,
             request: BrowserPanelCreateRequest(
-                initialURL: Self.gettingStartedPanelURL(anchor: anchor),
+                initialURL: Self.gettingStartedPanelURL(anchor: requestedAnchor),
                 placementOverride: .rightPanel
             )
         )
@@ -1668,8 +1691,9 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func recordGettingStartedPanelAutoOpenIfNeeded() -> Bool {
+    func autoOpenGettingStartedPanelIfNeeded(workspaceID: UUID) -> Bool {
         guard hasAutoOpenedGettingStartedPanelThisLaunch == false else { return false }
+        guard openGettingStartedPanel(workspaceID: workspaceID) else { return false }
         hasAutoOpenedGettingStartedPanelThisLaunch = true
         return true
     }
@@ -1989,11 +2013,18 @@ final class AppStore: ObservableObject {
     }
 
     private static func gettingStartedPanelURL(anchor: String?) -> String {
-        guard let anchor = anchor?.trimmingCharacters(in: .whitespacesAndNewlines),
-              anchor.isEmpty == false else {
+        guard let anchor else {
             return "toastty://getting-started/"
         }
         return "toastty://getting-started/#\(anchor)"
+    }
+
+    private static func normalizedGettingStartedAnchor(_ anchor: String?) -> String? {
+        guard let anchor = anchor?.trimmingCharacters(in: .whitespacesAndNewlines),
+              anchor.isEmpty == false else {
+            return nil
+        }
+        return anchor
     }
 
     private func createdBrowserPanelID(

@@ -46,27 +46,37 @@ final class BrowserPanelRuntimeTests: XCTestCase {
     }
 
     func testGettingStartedActionNavigationPolicyWhitelistsNativeActions() throws {
+        let trustedSourceURL = try XCTUnwrap(URL(string: "toastty://getting-started/#onboarding"))
+
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
-                for: try XCTUnwrap(URL(string: "toastty://action/open-agent-profiles"))
+                for: try XCTUnwrap(URL(string: "toastty://action/open-agent-profiles")),
+                sourceFrameURL: trustedSourceURL,
+                sourceFrameIsMainFrame: true
             ),
             .dispatch(.openAgentProfiles)
         )
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
-                for: try XCTUnwrap(URL(string: "toastty://action/open-shortcut-reference"))
+                for: try XCTUnwrap(URL(string: "toastty://action/open-shortcut-reference")),
+                sourceFrameURL: trustedSourceURL,
+                sourceFrameIsMainFrame: true
             ),
             .dispatch(.openShortcutReference)
         )
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
-                for: try XCTUnwrap(URL(string: "toastty://action/delete-everything"))
+                for: try XCTUnwrap(URL(string: "toastty://action/delete-everything")),
+                sourceFrameURL: trustedSourceURL,
+                sourceFrameIsMainFrame: true
             ),
             .ignore
         )
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
-                for: try XCTUnwrap(URL(string: "toastty://getting-started/#shortcuts"))
+                for: try XCTUnwrap(URL(string: "toastty://getting-started/#shortcuts")),
+                sourceFrameURL: try XCTUnwrap(URL(string: "https://example.com")),
+                sourceFrameIsMainFrame: true
             ),
             .allow
         )
@@ -78,6 +88,43 @@ final class BrowserPanelRuntimeTests: XCTestCase {
                 targetFrameIsNil: false
             ),
             .allow
+        )
+    }
+
+    func testGettingStartedActionNavigationPolicyRejectsUntrustedSources() throws {
+        let actionURL = try XCTUnwrap(URL(string: "toastty://action/open-agent-profiles"))
+
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: actionURL,
+                sourceFrameURL: try XCTUnwrap(URL(string: "https://example.com")),
+                sourceFrameIsMainFrame: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: actionURL,
+                sourceFrameURL: nil,
+                sourceFrameIsMainFrame: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: actionURL,
+                sourceFrameURL: try XCTUnwrap(URL(string: "toastty://getting-started/asset.js")),
+                sourceFrameIsMainFrame: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: actionURL,
+                sourceFrameURL: try XCTUnwrap(URL(string: "toastty://getting-started/")),
+                sourceFrameIsMainFrame: false
+            ),
+            .ignore
         )
     }
 

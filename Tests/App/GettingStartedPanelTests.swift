@@ -24,7 +24,8 @@ final class GettingStartedPanelTests: XCTestCase {
                 request: BrowserPanelCreateRequest(initialURL: "https://example.com")
             )
         )
-        XCTAssertTrue(store.openGettingStartedPanel(workspaceID: workspaceID))
+        XCTAssertTrue(store.send(.setRightAuxPanelVisibility(workspaceID: workspaceID, isVisible: false)))
+        XCTAssertTrue(store.openGettingStartedPanel(workspaceID: workspaceID, anchor: "shortcuts"))
 
         let focusedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         let matchingTabs = focusedWorkspace.rightAuxPanel.orderedTabs.filter { tab in
@@ -35,6 +36,10 @@ final class GettingStartedPanelTests: XCTestCase {
         XCTAssertEqual(focusedWorkspace.rightAuxPanel.activeTabID, gettingStartedTab.id)
         XCTAssertEqual(focusedWorkspace.rightAuxPanel.focusedPanelID, gettingStartedTab.panelID)
         XCTAssertTrue(focusedWorkspace.rightAuxPanel.isVisible)
+        guard case .web(let focusedPanel) = focusedWorkspace.rightAuxPanel.activeTab?.panelState else {
+            return XCTFail("Expected the reused Getting Started tab to remain browser-backed")
+        }
+        XCTAssertEqual(focusedPanel.currentURL, "toastty://getting-started/#shortcuts")
     }
 
     func testOpenGettingStartedPanelRecognizesCurrentToasttyURLWhenAlreadyActiveAndFocused() throws {
@@ -66,10 +71,14 @@ final class GettingStartedPanelTests: XCTestCase {
         XCTAssertEqual(activeWorkspace.rightAuxPanel.focusedPanelID, browserPanelID)
         XCTAssertTrue(activeWorkspace.rightAuxPanel.isVisible)
 
-        XCTAssertTrue(store.openGettingStartedPanel(workspaceID: workspaceID))
+        XCTAssertTrue(store.openGettingStartedPanel(workspaceID: workspaceID, anchor: "   "))
 
         let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(workspace.rightAuxPanel.tabIDs.count, 1)
         XCTAssertEqual(workspace.rightAuxPanel.activePanelID, browserPanelID)
+        guard case .web(let webPanel) = workspace.rightAuxPanel.activeTab?.panelState else {
+            return XCTFail("Expected the reused Getting Started tab to remain browser-backed")
+        }
+        XCTAssertEqual(webPanel.currentURL, "toastty://getting-started/#shortcuts")
     }
 }

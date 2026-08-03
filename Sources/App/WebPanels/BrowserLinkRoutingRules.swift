@@ -19,11 +19,20 @@ enum GettingStartedActionNavigationDecision: Equatable {
 }
 
 enum GettingStartedActionNavigationPolicy {
-    static func decision(for url: URL?) -> GettingStartedActionNavigationDecision {
+    static func decision(
+        for url: URL?,
+        sourceFrameURL: URL?,
+        sourceFrameIsMainFrame: Bool
+    ) -> GettingStartedActionNavigationDecision {
         guard let url,
               url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
               url.host?.caseInsensitiveCompare("action") == .orderedSame else {
             return .allow
+        }
+
+        guard sourceFrameIsMainFrame,
+              isTrustedGettingStartedPage(sourceFrameURL) else {
+            return .ignore
         }
 
         let pathComponents = url.pathComponents.filter { $0 != "/" }
@@ -32,6 +41,15 @@ enum GettingStartedActionNavigationPolicy {
             return .ignore
         }
         return .dispatch(action)
+    }
+
+    private static func isTrustedGettingStartedPage(_ url: URL?) -> Bool {
+        guard let url,
+              url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
+              url.host?.caseInsensitiveCompare("getting-started") == .orderedSame else {
+            return false
+        }
+        return url.path.isEmpty || url.path == "/"
     }
 }
 

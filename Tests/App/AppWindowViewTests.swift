@@ -138,12 +138,17 @@ final class AppWindowViewTests: XCTestCase {
         )
     }
 
-    func testStoreRecordsGettingStartedPanelAutoOpenOnlyOncePerLaunch() {
-        let store = AppStore(persistTerminalFontPreference: false)
+    func testStoreRecordsGettingStartedPanelAutoOpenOnlyAfterSuccessfulOpen() throws {
+        let initialState = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(initialState.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: initialState, persistTerminalFontPreference: false)
 
         XCTAssertFalse(store.hasAutoOpenedGettingStartedPanelThisLaunch)
-        XCTAssertTrue(store.recordGettingStartedPanelAutoOpenIfNeeded())
+        XCTAssertFalse(store.autoOpenGettingStartedPanelIfNeeded(workspaceID: UUID()))
+        XCTAssertFalse(store.hasAutoOpenedGettingStartedPanelThisLaunch)
+
+        XCTAssertTrue(store.autoOpenGettingStartedPanelIfNeeded(workspaceID: workspaceID))
         XCTAssertTrue(store.hasAutoOpenedGettingStartedPanelThisLaunch)
-        XCTAssertFalse(store.recordGettingStartedPanelAutoOpenIfNeeded())
+        XCTAssertFalse(store.autoOpenGettingStartedPanelIfNeeded(workspaceID: workspaceID))
     }
 }

@@ -1427,7 +1427,11 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
             return
         }
 
-        switch GettingStartedActionNavigationPolicy.decision(for: navigationAction.request.url) {
+        switch GettingStartedActionNavigationPolicy.decision(
+            for: navigationAction.request.url,
+            sourceFrameURL: navigationAction.sourceFrame.request.url,
+            sourceFrameIsMainFrame: navigationAction.sourceFrame.isMainFrame
+        ) {
         case .allow:
             break
         case .dispatch(let action):

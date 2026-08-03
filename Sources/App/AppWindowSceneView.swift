@@ -184,11 +184,10 @@ struct AppWindowSceneView: View {
             allowsAutoPresentation: allowsGettingStartedAutoPresentation,
             hasAutoOpenedThisLaunch: store.hasAutoOpenedGettingStartedPanelThisLaunch
         ),
-        let workspaceID = store.selectedWorkspace(in: windowID)?.id,
-        store.recordGettingStartedPanelAutoOpenIfNeeded() else {
+        let workspaceID = store.selectedWorkspace(in: windowID)?.id else {
             return
         }
-        _ = store.openGettingStartedPanel(workspaceID: workspaceID)
+        _ = store.autoOpenGettingStartedPanelIfNeeded(workspaceID: workspaceID)
     }
 
     static func shouldAutoOpenGettingStartedPanel(
