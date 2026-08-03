@@ -2,69 +2,6 @@ import AppKit
 import CoreState
 import Foundation
 
-enum TabNavigationDirection: Equatable {
-    case previous
-    case next
-}
-
-struct WindowCommandSelection {
-    let windowID: UUID
-    let window: WindowState
-    let workspace: WorkspaceState
-}
-
-struct PendingWorkspaceCloseRequest: Equatable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let source: AppActionSource
-
-    init(
-        windowID: UUID,
-        workspaceID: UUID,
-        source: AppActionSource = .unknown
-    ) {
-        self.windowID = windowID
-        self.workspaceID = workspaceID
-        self.source = source
-    }
-
-    static func == (lhs: PendingWorkspaceCloseRequest, rhs: PendingWorkspaceCloseRequest) -> Bool {
-        lhs.windowID == rhs.windowID && lhs.workspaceID == rhs.workspaceID
-    }
-}
-
-struct PendingWorkspaceRenameRequest: Equatable {
-    let windowID: UUID
-    let workspaceID: UUID
-}
-
-struct PendingWorkspaceTabRenameRequest: Equatable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let tabID: UUID
-}
-
-struct PendingSidebarSessionFlashRequest: Equatable {
-    let requestID: UUID
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID?
-}
-
-struct PendingPanelFlashRequest: Equatable {
-    let requestID: UUID
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-}
-
-struct PendingBrowserLocationFocusRequest: Equatable {
-    let requestID: UUID
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-}
-
 private struct NextActiveCycleAnchor: Equatable {
     let windowID: UUID
     let workspaceID: UUID
@@ -73,6 +10,7 @@ private struct NextActiveCycleAnchor: Equatable {
 }
 
 private enum NextActiveCycleSegment: String, Equatable {
+    case actionRequired = "fallback_attention"
     case workingForward = "fallback_working"
     case later = "fallback_later"
     case workingWrapped = "fallback_working_wrapped"
@@ -87,155 +25,6 @@ private struct NextActiveCycleState: Equatable {
     let anchor: NextActiveCycleAnchor
     let entries: [NextActiveCycleEntry]
     let lastReturnedIndex: Int
-}
-
-struct BrowserPanelCreateRequest: Equatable, Sendable {
-    static let defaultPlacement: WebPanelPlacement = .rightPanel
-
-    var initialURL: String?
-    var placementOverride: WebPanelPlacement?
-
-    init(
-        initialURL: String? = nil,
-        placementOverride: WebPanelPlacement? = nil
-    ) {
-        self.initialURL = WebPanelState.normalizedInitialURL(initialURL)
-        self.placementOverride = placementOverride
-    }
-
-    var resolvedPlacement: WebPanelPlacement {
-        placementOverride ?? Self.defaultPlacement
-    }
-}
-
-struct LocalDocumentPanelCreateRequest: Equatable, Sendable {
-    static let defaultPlacement: WebPanelPlacement = .rightPanel
-
-    var filePath: String
-    var lineNumber: Int?
-    var placementOverride: WebPanelPlacement?
-    var formatOverride: LocalDocumentFormat?
-
-    init(
-        filePath: String,
-        lineNumber: Int? = nil,
-        placementOverride: WebPanelPlacement? = nil,
-        formatOverride: LocalDocumentFormat? = nil
-    ) {
-        self.filePath = filePath
-        self.lineNumber = lineNumber.flatMap { $0 > 0 ? $0 : nil }
-        self.placementOverride = placementOverride
-        self.formatOverride = formatOverride
-    }
-
-    var resolvedPlacement: WebPanelPlacement {
-        placementOverride ?? Self.defaultPlacement
-    }
-}
-
-enum LocalDocumentPanelOpenOutcome: Equatable {
-    case opened(panelID: UUID)
-    case focusedExisting(panelID: UUID)
-
-    var panelID: UUID {
-        switch self {
-        case .opened(let panelID), .focusedExisting(let panelID):
-            return panelID
-        }
-    }
-}
-
-enum ScratchpadPanelCreatePolicy: String, CaseIterable, Equatable, Sendable {
-    case reuse
-    case new
-}
-
-struct ScratchpadPanelSetContentRequest: Equatable, Sendable {
-    var sessionID: String
-    var title: String?
-    var content: String
-    var expectedRevision: Int?
-    var createPolicy: ScratchpadPanelCreatePolicy
-
-    init(
-        sessionID: String,
-        title: String? = nil,
-        content: String,
-        expectedRevision: Int? = nil,
-        createPolicy: ScratchpadPanelCreatePolicy = .reuse
-    ) {
-        self.sessionID = sessionID
-        self.title = WebPanelState.normalizedTitle(title)
-        self.content = content
-        self.expectedRevision = expectedRevision
-        self.createPolicy = createPolicy
-    }
-}
-
-struct ScratchpadPanelSetContentOutcome: Equatable, Sendable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-    let documentID: UUID
-    let revision: Int
-    let created: Bool
-}
-
-struct ScratchpadPanelPatchContentRequest: Equatable, Sendable {
-    var sessionID: String
-    var patch: String
-    var expectedRevision: Int
-}
-
-struct ScratchpadPanelPatchContentOutcome: Equatable, Sendable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-    let documentID: UUID
-    let previousRevision: Int
-    let revision: Int
-    let appliedEditCount: Int
-    let created: Bool
-}
-
-struct ScratchpadPanelCreateOutcome: Equatable, Sendable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-    let documentID: UUID
-    let revision: Int
-}
-
-struct ScratchpadPanelRebindOutcome: Equatable, Sendable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-    let documentID: UUID
-    let revision: Int
-    let sessionID: String
-}
-
-struct ScratchpadPanelUnbindOutcome: Equatable, Sendable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-    let documentID: UUID
-    let revision: Int
-}
-
-struct ScratchpadSessionLinkCleanupFailure: Equatable, Sendable {
-    let panelID: UUID
-    let errorDescription: String
-}
-
-struct ScratchpadSessionLinkCleanupOutcome: Equatable, Sendable {
-    let clearedPanelIDs: [UUID]
-    let clearedDocumentIDs: [UUID]
-    let failures: [ScratchpadSessionLinkCleanupFailure]
-
-    var didClearLinks: Bool {
-        clearedPanelIDs.isEmpty == false
-    }
 }
 
 private struct ScratchpadPanelSelection {
@@ -255,96 +44,6 @@ private struct ScratchpadPanelLinkUpdate {
 private struct ScratchpadLinkedPanel {
     let panelID: UUID
     let sessionID: String
-}
-
-enum ScratchpadPanelError: LocalizedError, Equatable {
-    case missingSession(String)
-    case missingSourcePanel(UUID)
-    case sourcePanelIsNotTerminal(UUID)
-    case createPanelFailed
-    case updatePanelFailed(UUID)
-    case missingScratchpadState(UUID)
-    case missingDocument(UUID)
-    case missingLinkedScratchpad(String)
-    case targetSessionOutsideScratchpadTab(String)
-    case sessionAlreadyLinkedToScratchpad(String, UUID)
-
-    var errorDescription: String? {
-        switch self {
-        case .missingSession(let sessionID):
-            return "active session does not exist: \(sessionID)"
-        case .missingSourcePanel(let panelID):
-            return "source terminal panel does not exist: \(panelID.uuidString)"
-        case .sourcePanelIsNotTerminal(let panelID):
-            return "source panel is not a terminal panel: \(panelID.uuidString)"
-        case .createPanelFailed:
-            return "scratchpad panel could not be created"
-        case .updatePanelFailed(let panelID):
-            return "scratchpad panel could not be updated: \(panelID.uuidString)"
-        case .missingScratchpadState(let panelID):
-            return "scratchpad panel has no scratchpad state: \(panelID.uuidString)"
-        case .missingDocument(let documentID):
-            return "scratchpad document is missing: \(documentID.uuidString)"
-        case .missingLinkedScratchpad(let sessionID):
-            return "no Scratchpad is linked to active session: \(sessionID)"
-        case .targetSessionOutsideScratchpadTab(let sessionID):
-            return "target session is not in the Scratchpad tab: \(sessionID)"
-        case .sessionAlreadyLinkedToScratchpad(let sessionID, let panelID):
-            return "target session \(sessionID) is already linked to Scratchpad panel: \(panelID.uuidString)"
-        }
-    }
-}
-
-struct FocusedBrowserPanelCommandSelection: Equatable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-}
-
-struct FocusedLocalDocumentPanelCommandSelection: Equatable {
-    let windowID: UUID
-    let workspaceID: UUID
-    let panelID: UUID
-}
-
-enum FocusedScaleCommandTarget: Equatable {
-    case terminal(windowID: UUID)
-    case markdown(windowID: UUID)
-    case browser(windowID: UUID, panelID: UUID)
-
-    var windowID: UUID {
-        switch self {
-        case .terminal(let windowID), .markdown(let windowID), .browser(let windowID, _):
-            return windowID
-        }
-    }
-
-    var increaseMenuTitle: String {
-        switch self {
-        case .browser:
-            return "Zoom In"
-        case .terminal, .markdown:
-            return "Increase Text Size"
-        }
-    }
-
-    var decreaseMenuTitle: String {
-        switch self {
-        case .browser:
-            return "Zoom Out"
-        case .terminal, .markdown:
-            return "Decrease Text Size"
-        }
-    }
-
-    var resetMenuTitle: String {
-        switch self {
-        case .browser:
-            return "Actual Size"
-        case .terminal, .markdown:
-            return "Reset Text Size"
-        }
-    }
 }
 
 private enum WorkspaceCommandTarget {
@@ -374,6 +73,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
+    @Published private(set) var recentRightPanelItems: [RecentRightPanelItem]
 
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
@@ -397,8 +97,10 @@ final class AppStore: ObservableObject {
     private let persistUserSettings: Bool
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private let windowActivationHandler: WindowActivationHandler
+    private let recentRightPanelItemsStore: RightPanelRecentItemsStore
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
     private var nextActiveCycleState: NextActiveCycleState?
+    private var browserRecentItemIDByPanelID: [UUID: RecentRightPanelItemID] = [:]
 
     init(
         state: AppState = .bootstrap(),
@@ -406,15 +108,18 @@ final class AppStore: ObservableObject {
         initialHasEverLaunchedAgent: Bool = false,
         initialAskBeforeQuitting: Bool = true,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
-        windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit
+        windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit,
+        recentRightPanelItemsStore: RightPanelRecentItemsStore = .inMemory()
     ) {
         self.state = state
         hasEverLaunchedAgent = initialHasEverLaunchedAgent
         askBeforeQuitting = initialAskBeforeQuitting
+        self.recentRightPanelItems = recentRightPanelItemsStore.items
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
         self.windowActivationHandler = windowActivationHandler
+        self.recentRightPanelItemsStore = recentRightPanelItemsStore
     }
 
     @discardableResult
@@ -436,6 +141,11 @@ final class AppStore: ObservableObject {
             return false
         }
         state = next
+        recordRecentRightPanelItemIfNeeded(
+            for: action,
+            previousState: previousState,
+            nextState: next
+        )
         logDestructiveLayoutActionIfNeeded(
             action: action,
             source: source,
@@ -805,6 +515,14 @@ final class AppStore: ObservableObject {
                     return nil
                 }
             }
+            if request.resolvedPlacement == .rightPanel {
+                recordRecentRightPanelItem(
+                    Self.recentLocalDocumentItem(
+                        normalizedFilePath: resolvedLocalDocument.normalizedFilePath,
+                        updatedAt: Date()
+                    )
+                )
+            }
             return .focusedExisting(panelID: existingPanelID)
         }
 
@@ -861,6 +579,178 @@ final class AppStore: ObservableObject {
             workspaceID: selection.workspace.id,
             request: request
         )
+    }
+
+    @discardableResult
+    func openRecentRightPanelItem(
+        _ item: RecentRightPanelItem,
+        workspaceID: UUID,
+        documentStore: ScratchpadDocumentStore
+    ) -> Bool {
+        guard let workspace = state.workspacesByID[workspaceID],
+              workspace.selectedTab != nil else {
+            return false
+        }
+
+        if let existingTab = selectedRightPanelTabMatchingRecentItem(
+            in: workspace,
+            itemID: item.id
+        ) {
+            if workspace.selectedTab?.rightAuxPanel.activeTabID != existingTab.id ||
+                workspace.selectedTab?.rightAuxPanel.isVisible == false ||
+                workspace.selectedTab?.rightAuxPanel.focusedPanelID != existingTab.panelID {
+                guard send(
+                    .selectRightAuxPanelTab(
+                        workspaceID: workspaceID,
+                        tabID: existingTab.id,
+                        focus: true
+                    )
+                ) else {
+                    return false
+                }
+            }
+            if let recentItem = Self.recentItem(
+                for: existingTab.panelState,
+                updatedAt: Date()
+            ) {
+                recordRecentRightPanelItem(
+                    recentItem,
+                    panelIDForBrowserCoalescing: existingTab.panelID
+                )
+            } else {
+                recordRecentRightPanelItem(
+                    RecentRightPanelItem(
+                        id: item.id,
+                        title: item.title,
+                        detail: item.detail,
+                        updatedAt: Date()
+                    )
+                )
+            }
+            return true
+        }
+
+        switch item.id {
+        case .localDocument(let path):
+            guard let resolvedLocalDocument = Self.resolvedLocalDocument(path) else {
+                removeRecentRightPanelItem(id: item.id)
+                ToasttyLog.warning(
+                    "Recent local document path is not openable",
+                    category: .store,
+                    metadata: ["path": path]
+                )
+                return false
+            }
+            let displayName = Self.localDocumentDisplayName(for: resolvedLocalDocument.normalizedFilePath)
+            guard send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(
+                        definition: .localDocument,
+                        title: displayName,
+                        localDocument: LocalDocumentState(
+                            filePath: resolvedLocalDocument.normalizedFilePath,
+                            format: resolvedLocalDocument.format
+                        )
+                    ),
+                    placement: .rightPanel
+                )
+            ) else {
+                return false
+            }
+            recordRecentRightPanelItem(
+                Self.recentLocalDocumentItem(
+                    normalizedFilePath: resolvedLocalDocument.normalizedFilePath,
+                    updatedAt: Date()
+                )
+            )
+            return true
+
+        case .scratchpad(let documentID):
+            let document: ScratchpadDocument
+            do {
+                guard let loadedDocument = try documentStore.load(documentID: documentID) else {
+                    removeRecentRightPanelItem(id: item.id)
+                    ToasttyLog.warning(
+                        "Recent Scratchpad document is missing",
+                        category: .store,
+                        metadata: ["document_id": documentID.uuidString]
+                    )
+                    return false
+                }
+                document = loadedDocument
+            } catch {
+                ToasttyLog.warning(
+                    "Failed loading recent Scratchpad document",
+                    category: .store,
+                    metadata: [
+                        "document_id": documentID.uuidString,
+                        "error": error.localizedDescription,
+                    ]
+                )
+                return false
+            }
+
+            guard send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(
+                        definition: .scratchpad,
+                        title: document.title,
+                        scratchpad: ScratchpadState(
+                            documentID: document.documentID,
+                            sessionLink: nil,
+                            revision: document.revision
+                        )
+                    ),
+                    placement: .rightPanel
+                )
+            ) else {
+                return false
+            }
+            recordRecentRightPanelItem(
+                Self.recentScratchpadItem(document: document, updatedAt: Date())
+            )
+            return true
+
+        case .browser(let url):
+            guard let normalizedURL = Self.normalizedBrowserRecentURL(url) else {
+                removeRecentRightPanelItem(id: item.id)
+                ToasttyLog.warning(
+                    "Recent browser URL is not openable",
+                    category: .store,
+                    metadata: ["url": url]
+                )
+                return false
+            }
+            guard send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(
+                        definition: .browser,
+                        title: item.title,
+                        initialURL: normalizedURL
+                    ),
+                    placement: .rightPanel
+                )
+            ) else {
+                return false
+            }
+            let recentItem = RecentRightPanelItem(
+                id: .browser(url: normalizedURL),
+                title: item.title,
+                detail: item.detail,
+                updatedAt: Date()
+            )
+            recordRecentRightPanelItem(recentItem)
+            if let panelID = selectedRightPanelBrowserPanelID(
+                workspaceID: workspaceID,
+                matchingURL: normalizedURL
+            ) {
+                browserRecentItemIDByPanelID[panelID] = recentItem.id
+            }
+            return true
+        }
     }
 
     func setScratchpadContentForSession(
@@ -930,6 +820,9 @@ final class AppStore: ObservableObject {
             markScratchpadUpdatedIfUnfocused(
                 workspaceID: existing.workspaceID,
                 panelID: existing.panelID
+            )
+            recordRecentRightPanelItem(
+                Self.recentScratchpadItem(document: document, updatedAt: Date())
             )
             return ScratchpadPanelSetContentOutcome(
                 windowID: existing.windowID,
@@ -1078,6 +971,9 @@ final class AppStore: ObservableObject {
         markScratchpadUpdatedIfUnfocused(
             workspaceID: existing.workspaceID,
             panelID: existing.panelID
+        )
+        recordRecentRightPanelItem(
+            Self.recentScratchpadItem(document: patchOutcome.document, updatedAt: Date())
         )
 
         return ScratchpadPanelPatchContentOutcome(
@@ -1416,13 +1312,33 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     func createWindowFromCommand(preferredWindowID: UUID?) -> Bool {
+        let windowIDsBeforeCreate = Set(state.windows.map(\.id))
+        let windowCountBeforeCreate = state.windows.count
         let selection = commandSelection(preferredWindowID: preferredWindowID)
-        return send(
+        let didCreateWindow = send(
             .createWindow(
                 seed: windowLaunchSeed(from: selection),
                 initialFrame: commandCreateWindowFrame(cascadingFromSourceWindow: selection != nil)
             )
         )
+        guard didCreateWindow else {
+            return false
+        }
+        let createdWindowID = state.windows
+            .map(\.id)
+            .first { windowIDsBeforeCreate.contains($0) == false }
+        ToasttyLog.info(
+            "Created window from command",
+            category: .store,
+            metadata: [
+                "preferred_window_id": preferredWindowID?.uuidString ?? "<none>",
+                "source_window_id": selection?.windowID.uuidString ?? "<none>",
+                "created_window_id": createdWindowID?.uuidString ?? "<unknown>",
+                "window_count_before": String(windowCountBeforeCreate),
+                "window_count_after": String(state.windows.count),
+            ]
+        )
+        return true
     }
 
     @discardableResult
@@ -1853,28 +1769,6 @@ final class AppStore: ObservableObject {
             return nil
         }
 
-        let attentionPanelIDs = sessionRuntimeStore.activePanelIDs(
-            matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
-        )
-        if let target = nextUnreadOrActiveFallbackTarget(
-            selection: selection,
-            selectedTabID: selectedTabID,
-            matchingPanelIDs: attentionPanelIDs
-        ) {
-            if updatingCycleState {
-                nextActiveCycleState = nil
-            }
-            logNextUnreadOrActivePanelResolution(
-                selection: selection,
-                selectedTabID: selectedTabID,
-                resolution: "fallback_attention",
-                target: target,
-                sessionRuntimeStore: sessionRuntimeStore,
-                cycleResetReason: "attention_preemption"
-            )
-            return target
-        }
-
         let activeCycleResolution = nextUnreadOrActiveCycleTarget(
             selection: selection,
             selectedTabID: selectedTabID,
@@ -1890,27 +1784,6 @@ final class AppStore: ObservableObject {
             cycleResetReason: activeCycleResolution.cycleResetReason
         )
         return activeCycleResolution.target
-    }
-
-    private func nextUnreadOrActiveFallbackTarget(
-        selection: WindowCommandSelection,
-        selectedTabID: UUID,
-        matchingPanelIDs: Set<UUID>,
-        includeCurrentWorkspaceWrap: Bool = true
-    ) -> PanelNavigationTarget? {
-        guard matchingPanelIDs.isEmpty == false else {
-            return nil
-        }
-
-        return state.nextMatchingPanel(
-            fromWindowID: selection.windowID,
-            workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID,
-            includeCurrentWorkspaceWrap: includeCurrentWorkspaceWrap
-        ) { _, panelID in
-            matchingPanelIDs.contains(panelID)
-        }
     }
 
     private func nextUnreadOrActiveCycleTarget(
@@ -1987,6 +1860,9 @@ final class AppStore: ObservableObject {
         anchor: NextActiveCycleAnchor,
         sessionRuntimeStore: SessionRuntimeStore
     ) -> [NextActiveCycleEntry] {
+        let actionRequiredPanelIDs = sessionRuntimeStore.activePanelIDs(
+            matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
+        )
         let workingPanelIDs = sessionRuntimeStore.activePanelIDs(
             matching: Self.nextUnreadOrWorkingFallbackStatusKinds
         )
@@ -1994,9 +1870,20 @@ final class AppStore: ObservableObject {
         var entries: [NextActiveCycleEntry] = []
         var seenPanelIDs = Set<UUID>()
 
+        // Preserve read action-required priority while storing it in the
+        // persisted cycle so repeated jumps can still reach working rows.
+        let actionRequiredTargets = orderedNextUnreadOrActiveFallbackTargets(
+            anchor: anchor,
+            matchingPanelIDs: actionRequiredPanelIDs
+        )
+        entries.append(contentsOf: actionRequiredTargets.map { target in
+            seenPanelIDs.insert(target.panelID)
+            return NextActiveCycleEntry(panelID: target.panelID, segment: .actionRequired)
+        })
+
         let forwardWorkingTargets = orderedNextUnreadOrActiveFallbackTargets(
             anchor: anchor,
-            matchingPanelIDs: workingPanelIDs,
+            matchingPanelIDs: workingPanelIDs.subtracting(seenPanelIDs),
             includeCurrentWorkspaceWrap: false
         )
         entries.append(contentsOf: forwardWorkingTargets.map { target in
@@ -2025,7 +1912,9 @@ final class AppStore: ObservableObject {
         if entries.isEmpty == false,
            let focusedPanelID = anchor.focusedPanelID,
            seenPanelIDs.contains(focusedPanelID) == false {
-            if workingPanelIDs.contains(focusedPanelID) {
+            if actionRequiredPanelIDs.contains(focusedPanelID) {
+                entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .actionRequired))
+            } else if workingPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .workingWrapped))
             } else if laterPanelIDs.contains(focusedPanelID) {
                 entries.append(NextActiveCycleEntry(panelID: focusedPanelID, segment: .later))
@@ -2308,6 +2197,284 @@ final class AppStore: ObservableObject {
             return
         }
         _ = send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
+    }
+
+    private func recordRecentRightPanelItemIfNeeded(
+        for action: AppAction,
+        previousState: AppState,
+        nextState: AppState
+    ) {
+        _ = previousState
+        pruneBrowserRecentItemPanelMap(in: nextState)
+
+        switch action {
+        case .createWebPanel(_, let panel, let placement):
+            guard placement == .rightPanel,
+                  panel.definition != .browser,
+                  let item = Self.recentItem(for: .web(panel), updatedAt: Date()) else {
+                return
+            }
+            recordRecentRightPanelItem(item)
+
+        case .createRightAuxWebPanel(_, _, _, let panel, _):
+            guard panel.definition != .browser,
+                  let item = Self.recentItem(for: .web(panel), updatedAt: Date()) else {
+                return
+            }
+            recordRecentRightPanelItem(item)
+
+        case .updateWebPanelMetadata(let panelID, _, _):
+            guard let webState = Self.rightAuxWebPanelState(panelID: panelID, in: nextState),
+                  webState.definition == .browser,
+                  let item = Self.recentBrowserItem(for: webState, updatedAt: Date()) else {
+                return
+            }
+            recordRecentRightPanelItem(
+                item,
+                replacingID: browserRecentItemIDByPanelID[panelID]
+            )
+            browserRecentItemIDByPanelID[panelID] = item.id
+
+        default:
+            return
+        }
+    }
+
+    private func recordRecentRightPanelItem(
+        _ item: RecentRightPanelItem,
+        replacingID: RecentRightPanelItemID? = nil
+    ) {
+        recentRightPanelItems = recentRightPanelItemsStore.record(
+            item,
+            replacingID: replacingID
+        )
+    }
+
+    private func recordRecentRightPanelItem(
+        _ item: RecentRightPanelItem,
+        panelIDForBrowserCoalescing panelID: UUID
+    ) {
+        let replacingID: RecentRightPanelItemID?
+        if case .browser = item.id {
+            replacingID = browserRecentItemIDByPanelID[panelID]
+            browserRecentItemIDByPanelID[panelID] = item.id
+        } else {
+            replacingID = nil
+        }
+        recordRecentRightPanelItem(item, replacingID: replacingID)
+    }
+
+    private func removeRecentRightPanelItem(id: RecentRightPanelItemID) {
+        recentRightPanelItems = recentRightPanelItemsStore.remove(id: id)
+        browserRecentItemIDByPanelID = browserRecentItemIDByPanelID.filter { $0.value != id }
+    }
+
+    private func pruneBrowserRecentItemPanelMap(in state: AppState) {
+        browserRecentItemIDByPanelID = browserRecentItemIDByPanelID.filter { panelID, _ in
+            guard let webState = Self.rightAuxWebPanelState(panelID: panelID, in: state) else {
+                return false
+            }
+            return webState.definition == .browser
+        }
+    }
+
+    private func selectedRightPanelTabMatchingRecentItem(
+        in workspace: WorkspaceState,
+        itemID: RecentRightPanelItemID
+    ) -> RightAuxPanelTabState? {
+        guard let selectedTab = workspace.selectedTab else { return nil }
+
+        return selectedTab.rightAuxPanel.orderedTabs.first { tab in
+            Self.panelState(tab.panelState, matchesRecentItemID: itemID)
+        }
+    }
+
+    private func selectedRightPanelBrowserPanelID(
+        workspaceID: UUID,
+        matchingURL url: String
+    ) -> UUID? {
+        guard let workspace = state.workspacesByID[workspaceID],
+              let activeTab = workspace.selectedTab?.rightAuxPanel.activeTab,
+              case .web(let webState) = activeTab.panelState,
+              webState.definition == .browser,
+              Self.normalizedBrowserRecentURL(webState.restorableURL) == url else {
+            return nil
+        }
+        return activeTab.panelID
+    }
+
+    private static func rightAuxWebPanelState(panelID: UUID, in state: AppState) -> WebPanelState? {
+        for workspace in state.workspacesByID.values {
+            for tab in workspace.orderedTabs {
+                guard case .web(let webState)? = tab.rightAuxPanel.panelState(for: panelID) else {
+                    continue
+                }
+                return webState
+            }
+        }
+        return nil
+    }
+
+    private static func recentItem(
+        for panelState: PanelState,
+        updatedAt: Date
+    ) -> RecentRightPanelItem? {
+        guard case .web(let webState) = panelState else { return nil }
+
+        switch webState.definition {
+        case .localDocument:
+            guard let filePath = webState.localDocument?.filePath,
+                  let resolved = resolvedLocalDocument(
+                      filePath,
+                      formatOverride: webState.localDocument?.format
+                  ) else {
+                return nil
+            }
+            return recentLocalDocumentItem(
+                normalizedFilePath: resolved.normalizedFilePath,
+                updatedAt: updatedAt
+            )
+
+        case .scratchpad:
+            guard let documentID = webState.scratchpad?.documentID else {
+                return nil
+            }
+            return RecentRightPanelItem(
+                id: .scratchpad(documentID: documentID),
+                title: webState.title,
+                detail: "Scratchpad",
+                updatedAt: updatedAt
+            )
+
+        case .browser:
+            return recentBrowserItem(for: webState, updatedAt: updatedAt)
+
+        case .diff:
+            return nil
+        }
+    }
+
+    private static func recentLocalDocumentItem(
+        normalizedFilePath: String,
+        updatedAt: Date
+    ) -> RecentRightPanelItem {
+        RecentRightPanelItem(
+            id: .localDocument(path: normalizedFilePath),
+            title: localDocumentDisplayName(for: normalizedFilePath),
+            detail: abbreviatedFilePath(normalizedFilePath),
+            updatedAt: updatedAt
+        )
+    }
+
+    private static func recentScratchpadItem(
+        document: ScratchpadDocument,
+        updatedAt: Date
+    ) -> RecentRightPanelItem {
+        RecentRightPanelItem(
+            id: .scratchpad(documentID: document.documentID),
+            title: document.title ?? WebPanelDefinition.scratchpad.defaultTitle,
+            detail: "Scratchpad",
+            updatedAt: updatedAt
+        )
+    }
+
+    private static func recentBrowserItem(
+        for webState: WebPanelState,
+        updatedAt: Date
+    ) -> RecentRightPanelItem? {
+        guard let normalizedURL = normalizedBrowserRecentURL(webState.restorableURL) else {
+            return nil
+        }
+
+        let id = RecentRightPanelItemID.browser(url: normalizedURL)
+        let title = normalizedBrowserTitle(webState.title, url: normalizedURL)
+        return RecentRightPanelItem(
+            id: id,
+            title: title,
+            detail: browserDetail(url: normalizedURL),
+            updatedAt: updatedAt
+        )
+    }
+
+    private static func panelState(
+        _ panelState: PanelState,
+        matchesRecentItemID itemID: RecentRightPanelItemID
+    ) -> Bool {
+        guard case .web(let webState) = panelState else { return false }
+
+        switch itemID {
+        case .localDocument(let path):
+            guard webState.definition == .localDocument,
+                  let recentPath = resolvedLocalDocument(path)?.normalizedFilePath,
+                  let panelPath = webState.localDocument?.filePath,
+                  let resolvedPanelPath = resolvedLocalDocument(
+                      panelPath,
+                      formatOverride: webState.localDocument?.format
+                  )?.normalizedFilePath else {
+                return false
+            }
+            return recentPath == resolvedPanelPath
+
+        case .scratchpad(let documentID):
+            return webState.definition == .scratchpad &&
+                webState.scratchpad?.documentID == documentID
+
+        case .browser(let url):
+            return webState.definition == .browser &&
+                normalizedBrowserRecentURL(webState.restorableURL) == normalizedBrowserRecentURL(url)
+        }
+    }
+
+    private static func normalizedBrowserRecentURL(_ value: String?) -> String? {
+        guard let normalized = WebPanelState.normalizedCurrentURL(value),
+              normalized.caseInsensitiveCompare("about:blank") != .orderedSame,
+              let url = URL(string: normalized),
+              let scheme = url.scheme?.lowercased() else {
+            return nil
+        }
+
+        switch scheme {
+        case "http", "https":
+            return url.absoluteString
+        case "file":
+            return url.standardizedFileURL.absoluteString
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizedBrowserTitle(_ title: String, url: String) -> String {
+        guard let normalizedTitle = WebPanelState.normalizedTitle(title),
+              normalizedTitle != WebPanelDefinition.browser.defaultTitle else {
+            return RecentRightPanelItemID.browser(url: url).fallbackTitle
+        }
+        return normalizedTitle
+    }
+
+    private static func browserDetail(url: String) -> String? {
+        guard let parsedURL = URL(string: url) else { return nil }
+
+        if parsedURL.isFileURL {
+            return abbreviatedFilePath(parsedURL.standardizedFileURL.path)
+        }
+
+        if let host = parsedURL.host(percentEncoded: false) {
+            return host
+        }
+
+        return parsedURL.scheme
+    }
+
+    private static func abbreviatedFilePath(_ path: String) -> String {
+        let standardizedPath = (path as NSString).standardizingPath
+        let homePath = NSHomeDirectory()
+        if standardizedPath == homePath {
+            return "~"
+        }
+        if standardizedPath.hasPrefix(homePath + "/") {
+            return "~" + standardizedPath.dropFirst(homePath.count)
+        }
+        return standardizedPath
     }
 
     private func requestSidebarFlashForExhaustedUnreadOrActiveJump(

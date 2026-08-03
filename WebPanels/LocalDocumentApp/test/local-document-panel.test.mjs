@@ -321,7 +321,7 @@ test("markdown gutter stays non-selectable while wrapped content stays continuou
 
 test("plain-code formats guard null highlight languages before touching highlight.js", async () => {
   const source = await readFile(
-    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    resolve(packageRoot, "src/DocumentHighlighting.ts"),
     "utf8"
   );
 
@@ -333,7 +333,7 @@ test("plain-code formats guard null highlight languages before touching highligh
 
 test("code highlighting uses bootstrap syntax metadata instead of file-path parsing", async () => {
   const source = await readFile(
-    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    resolve(packageRoot, "src/DocumentHighlighting.ts"),
     "utf8"
   );
 
@@ -352,7 +352,7 @@ test("header uses bootstrap-provided format labels", async () => {
 
 test("highlight status copy distinguishes large files from unsupported formats", async () => {
   const source = await readFile(
-    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    resolve(packageRoot, "src/DocumentHighlighting.ts"),
     "utf8"
   );
 
@@ -488,7 +488,7 @@ test("main module reports root lifecycle and React root errors through the nativ
 
 test("highlight.js registers the first-slice source-code grammars", async () => {
   const source = await readFile(
-    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    resolve(packageRoot, "src/DocumentHighlighting.ts"),
     "utf8"
   );
 
@@ -583,6 +583,10 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
     resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
     "utf8"
   );
+  const measurementSource = await readFile(
+    resolve(packageRoot, "src/LineRevealMeasurement.ts"),
+    "utf8"
+  );
 
   assert.match(source, /window\.ToasttyLocalDocumentPanel\?\.consumeRevealRequest\(revealRequest\.requestID\)/);
   assert.match(source, /const targetLineNumber = clampRevealLineNumber\(revealRequest\.lineNumber, lines\.length\)/);
@@ -590,19 +594,19 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
   // Reveal positioning directly measures line N's glyph rect and centers
   // a line-height-tall band around that glyph. First-line geometry is
   // retained as an empty-line fallback.
-  assert.match(source, /measureDirectLineGlyph\(/);
-  assert.match(source, /createTreeWalker\(element, NodeFilter\.SHOW_TEXT\)/);
-  assert.match(source, /measureFirstRenderedLineGlyph\(/);
-  assert.match(source, /range\.selectNodeContents\(element\)/);
-  assert.match(source, /range\.getClientRects\(\)/);
-  assert.match(source, /args\.lineHeight - direct\.height/);
-  assert.match(source, /args\.lineHeight - firstGlyph\.height/);
+  assert.match(measurementSource, /measureDirectLineGlyph\(/);
+  assert.match(measurementSource, /createTreeWalker\(element, NodeFilter\.SHOW_TEXT\)/);
+  assert.match(measurementSource, /measureFirstRenderedLineGlyph\(/);
+  assert.match(measurementSource, /range\.selectNodeContents\(element\)/);
+  assert.match(measurementSource, /range\.getClientRects\(\)/);
+  assert.match(measurementSource, /args\.lineHeight - direct\.height/);
+  assert.match(measurementSource, /args\.lineHeight - firstGlyph\.height/);
   // Empty-line fallback extrapolates from the nearest non-empty neighbor so
   // we don't depend on rects[0] from selectNodeContents being line 1 (a long,
   // decorated WKWebView code block has been seen to return a first rect that
   // sits many lines below actual line 1).
-  assert.match(source, /args\.lineHeight - candidate\.height/);
-  assert.match(source, /args\.lineNumber \+ offset/);
+  assert.match(measurementSource, /args\.lineHeight - candidate\.height/);
+  assert.match(measurementSource, /args\.lineNumber \+ offset/);
   assert.match(source, /setRevealLayout\(null\);/);
   assert.match(source, /revealScrollSequenceRef/);
   assert.match(source, /window\.requestAnimationFrame\(\(\) => \{/);
@@ -610,9 +614,9 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
   assert.match(source, /scrollElement\.scrollTop = revealLayout\.targetScrollTop/);
   assert.match(source, /event\.key !== "Escape"/);
   assert.doesNotMatch(source, /document\.hasFocus/);
-  assert.doesNotMatch(source, /getPropertyValue\("--local-document-code-line-height"\)/);
-  assert.doesNotMatch(source, /resolvedLineHeight\(/);
-  assert.doesNotMatch(source, /resolveMeasuredLineHeight\(/);
+  assert.doesNotMatch(measurementSource, /getPropertyValue\("--local-document-code-line-height"\)/);
+  assert.doesNotMatch(measurementSource, /resolvedLineHeight\(/);
+  assert.doesNotMatch(measurementSource, /resolveMeasuredLineHeight\(/);
   assert.match(source, /props\.bootstrap\.contentRevision !== activeReveal\.contentRevision/);
   assert.match(source, /props\.bootstrap\.filePath !== activeReveal\.filePath/);
   assert.match(source, /setActiveReveal\(null\)/);

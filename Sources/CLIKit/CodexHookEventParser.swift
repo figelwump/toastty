@@ -18,6 +18,9 @@ enum CodexHookEventParser {
         var commands: [CLICommand] = []
         let source = normalizedString(object["source"])
         let permissionMode = normalizedString(object["permission_mode"])
+        let toolUseID = normalizedString(object["tool_use_id"])
+        let callID = normalizedString(object["call_id"])
+        let approvalID = normalizedString(object["approval_id"])
         let threadID = normalizedString(object["session_id"])
         let turnID = normalizedString(object["turn_id"])
         let prompt = normalizedString(object["prompt"])
@@ -25,18 +28,27 @@ enum CodexHookEventParser {
         let status = status(for: eventName, object: object)
         let transcriptPath = normalizedPathString(object["transcript_path"])
         let cwd = normalizedPathString(object["cwd"])
+        let subagentID = normalizedString(object["agent_id"])
+        let subagentType = normalizedString(object["agent_type"])
+        let spawnMetadata = spawnMetadata(eventName: eventName, object: object)
 
         let event = CodexHookEvent(
             hookEventName: eventName,
             source: source,
             permissionMode: permissionMode,
+            toolUseID: toolUseID,
+            callID: callID,
+            approvalID: approvalID,
             threadID: threadID,
             turnID: turnID,
             promptFingerprint: promptFingerprint,
             status: status,
             nativeSessionID: threadID,
             sessionFilePath: transcriptPath,
-            cwd: cwd
+            cwd: cwd,
+            subagentID: subagentID,
+            subagentType: subagentType,
+            spawnMetadata: spawnMetadata
         )
         commands.append(.sessionCodexHookEvent(sessionID: sessionID, panelID: panelID, event: event))
 
@@ -45,6 +57,42 @@ enum CodexHookEventParser {
 }
 
 private extension CodexHookEventParser {
+    static func spawnMetadata(
+        eventName: String,
+        object: [String: Any]
+    ) -> CodexSpawnHookMetadata? {
+        guard eventName == "PreToolUse",
+              let toolName = normalizedString(object["tool_name"]),
+              isSpawnAgentToolName(toolName),
+              let toolUseID = normalizedString(object["tool_use_id"]),
+              let toolInput = object["tool_input"] as? [String: Any] else {
+            return nil
+        }
+
+        let taskName = normalizedSummaryText(toolInput["task_name"], limit: 80)
+        let message = normalizedSummaryText(toolInput["message"], limit: 512)
+        guard taskName != nil || message != nil else {
+            return nil
+        }
+        return CodexSpawnHookMetadata(
+            toolUseID: toolUseID,
+            taskName: taskName,
+            message: message
+        )
+    }
+
+    static func isSpawnAgentToolName(_ toolName: String) -> Bool {
+        switch toolName {
+        case "spawn_agent",
+             "collaborationspawn_agent",
+             "collaboration.spawn_agent",
+             "multi_agent_v1.spawn_agent":
+            return true
+        default:
+            return false
+        }
+    }
+
     static func status(for eventName: String, object: [String: Any]) -> SessionStatus? {
         switch eventName {
         case "UserPromptSubmit":

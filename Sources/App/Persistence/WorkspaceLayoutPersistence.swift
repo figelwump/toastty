@@ -409,6 +409,7 @@ final class WorkspaceLayoutPersistenceCoordinator {
                 metadata["previous_native_session_id"] = previousRecord.nativeSessionID
                 metadata["previous_session_file_basename"] = (previousRecord.sessionFilePath as NSString).lastPathComponent
                 metadata["previous_cwd"] = previousRecord.cwd
+                metadata["previous_workspace_scope"] = resumeRecordScopeMetadata(previousRecord.scopedWorkspaceIDs)
             }
             if let nextRecord = nextEntry?.resumeRecord {
                 metadata["agent"] = nextRecord.agent.rawValue
@@ -461,6 +462,15 @@ final class WorkspaceLayoutPersistenceCoordinator {
         case (nil, nil):
             return "none"
         }
+    }
+
+    private func resumeRecordScopeMetadata(_ scope: Set<UUID>?) -> String {
+        guard let scope else { return "unrestricted" }
+        if scope.isEmpty { return "own_workspace_only" }
+        return scope
+            .map(\.uuidString)
+            .sorted()
+            .joined(separator: ",")
     }
 
     private func sourcePanelID(

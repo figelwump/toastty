@@ -67,6 +67,132 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func claudeStopWithRunningSubagentSyncsBeforeReadyStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"Agent launched successfully. Waiting for completion...","background_tasks":[{"id":"a79d12ebe682a90d6","type":"subagent","status":"running","description":"Test background agent sleep command","agent_type":"general-purpose"}],"session_crons":[]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [
+                    SessionBackgroundActivitySyncEntry(
+                        id: "a79d12ebe682a90d6",
+                        displayName: "general-purpose",
+                        command: "Test background agent sleep command"
+                    ),
+                ],
+                pendingBackgroundTaskCount: 0,
+                preserveUnlistedActivities: false
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Agent launched successfully. Waiting for completion..."
+            ),
+        ])
+    }
+
+    @Test
+    func claudeStopWithRunningWorkflowPreservesLifecycleSubagents() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","last_assistant_message":"Workflow still running","background_tasks":[{"id":"workflow-1","type":"workflow","status":"running","description":"Review the diff"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 1,
+                preserveUnlistedActivities: true
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Workflow still running"
+            ),
+        ])
+    }
+
+    @Test
+    func claudeStopWithOnlyShellTasksSyncsPendingCount() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","last_assistant_message":"Shell still running","background_tasks":[{"id":"shell-1","type":"shell","status":"running","description":"npm test"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 1,
+                preserveUnlistedActivities: false
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Shell still running"
+            ),
+        ])
+    }
+
+    @Test
+    func claudeStopWithEmptyBackgroundTasksClearsSync() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Stop","last_assistant_message":"DONE-ALL","background_tasks":[]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 0,
+                preserveUnlistedActivities: false
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "DONE-ALL"
+            ),
+        ])
+    }
+
+    @Test
     func claudePermissionRequestMapsToNeedsApprovalStatus() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,
@@ -127,6 +253,157 @@ struct AgentEventParsersTests {
 
         #expect(postCommands.isEmpty)
         #expect(failureCommands.isEmpty)
+    }
+
+    @Test
+    func claudeForegroundAgentPostToolUseIsIgnored() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"description":"Foreground agent","subagent_type":"general-purpose"},"tool_response":{"description":"Foreground agent done"}}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func claudeAgentPostToolUseAsyncLaunchStartsSubagentActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"description":"Test background agent sleep command","prompt":"...","run_in_background":true,"subagent_type":"general-purpose"},"tool_response":{"agentId":"a79d12ebe682a90d6","canReadOutputFile":false,"description":"Test background agent sleep command","isAsync":true,"outputFile":"/path","prompt":"...","resolvedModel":"claude-haiku-4-5-20251001","status":"async_launched"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "a79d12ebe682a90d6",
+                kind: .subagent,
+                displayName: "general-purpose",
+                command: "Test background agent sleep command",
+                processID: nil,
+                preserveWhenUnlisted: false
+            ),
+        ])
+    }
+
+    @Test
+    func claudeTaskPostToolUseAsyncLaunchStartsSubagentActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PostToolUse","tool_name":"Task","tool_input":{"description":"Ask a task","subagent_type":"reviewer"},"tool_response":{"agentId":"task-agent-1","status":"async_launched"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "task-agent-1",
+                kind: .subagent,
+                displayName: "reviewer",
+                command: "Ask a task",
+                processID: nil,
+                preserveWhenUnlisted: false
+            ),
+        ])
+    }
+
+    @Test
+    func claudeSubagentStartCreatesGenericActivityFromLifecycleIdentity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStart","agent_id":"workflow-agent-1","agent_type":"workflow-subagent"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "workflow-agent-1",
+                kind: .subagent,
+                displayName: nil,
+                command: nil,
+                processID: nil,
+                preserveWhenUnlisted: true
+            ),
+        ])
+    }
+
+    @Test
+    func claudeSubagentStopFinishesSubagentActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStop","agent_id":"a79d12ebe682a90d6","agent_type":"general-purpose","agent_transcript_path":"/path","last_assistant_message":"done","background_tasks":[{"id":"a79d12ebe682a90d6","type":"subagent","status":"running","description":"...","agent_type":"general-purpose"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .finish,
+                activityID: "a79d12ebe682a90d6",
+                kind: .subagent,
+                displayName: nil,
+                command: nil,
+                processID: nil,
+                preserveWhenUnlisted: false
+            ),
+        ])
+    }
+
+    @Test
+    func claudeSubagentLifecycleWithoutAgentIDIsIgnored() throws {
+        let startCommands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"SubagentStart","agent_type":"workflow-subagent"}"#.utf8)
+        )
+        let stopCommands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hook_event_name":"SubagentStop","agent_type":"workflow-subagent"}"#.utf8)
+        )
+
+        #expect(startCommands.isEmpty)
+        #expect(stopCommands.isEmpty)
+    }
+
+    @Test
+    func claudeSubagentStartIgnoresNonWorkflowSubagents() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStart","agent_id":"regular-agent-1","agent_type":"general-purpose"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
     }
 
     @Test
@@ -455,6 +732,41 @@ struct AgentEventParsersTests {
                 )
             ),
         ])
+
+        guard case .sessionCodexHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Codex hook event")
+            return
+        }
+        // Codex's current PermissionRequest hook payload normally omits all
+        // operation identifiers. Preserve that absence rather than deriving one.
+        #expect(event.toolUseID == nil)
+        #expect(event.callID == nil)
+        #expect(event.approvalID == nil)
+    }
+
+    @Test
+    func codexHookPreservesIndependentOperationIdentifiersInEnvelope() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PermissionRequest","session_id":"thread-root","tool_use_id":" tool-1 ","call_id":" call-1 ","approval_id":" approval-1 "}"#.utf8
+            )
+        )
+
+        guard case .sessionCodexHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Codex hook event")
+            return
+        }
+        #expect(event.toolUseID == "tool-1")
+        #expect(event.callID == "call-1")
+        #expect(event.approvalID == "approval-1")
+
+        let envelope = try #require(commands.first?.makeEventEnvelope())
+        #expect(envelope.payload.string("toolUseID") == "tool-1")
+        #expect(envelope.payload.string("callID") == "call-1")
+        #expect(envelope.payload.string("approvalID") == "approval-1")
     }
 
     @Test
@@ -484,6 +796,92 @@ struct AgentEventParsersTests {
                 )
             ),
         ])
+    }
+
+    @Test
+    func codexSpawnPreToolUseHookCarriesCorrelationMetadata() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PreToolUse","session_id":"thread-root","tool_name":"collaborationspawn_agent","tool_use_id":"call-spawn","tool_input":{"task_name":"security_privacy","message":"Review the security and privacy implications"}}"#.utf8
+            )
+        )
+
+        guard case .sessionCodexHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Codex hook event")
+            return
+        }
+        #expect(event.spawnMetadata == CodexSpawnHookMetadata(
+            toolUseID: "call-spawn",
+            taskName: "security_privacy",
+            message: "Review the security and privacy implications"
+        ))
+        #expect(event.toolUseID == "call-spawn")
+
+        let envelope = try #require(commands.first?.makeEventEnvelope())
+        #expect(envelope.payload.string("toolUseID") == "call-spawn")
+        #expect(envelope.payload.string("spawnToolUseID") == "call-spawn")
+        #expect(envelope.payload.string("spawnTaskName") == "security_privacy")
+        #expect(envelope.payload.string("spawnMessage") == "Review the security and privacy implications")
+    }
+
+    @Test
+    func codexSubagentStartHookMapsLifecycleIdentity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStart","session_id":"thread-root","turn_id":"turn-root","agent_id":"agent-child","agent_type":"reviewer"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionCodexHookEvent(
+                sessionID: "sess-123",
+                panelID: nil,
+                event: CodexHookEvent(
+                    hookEventName: "SubagentStart",
+                    threadID: "thread-root",
+                    turnID: "turn-root",
+                    promptFingerprint: nil,
+                    status: nil,
+                    nativeSessionID: "thread-root",
+                    sessionFilePath: nil,
+                    cwd: nil,
+                    subagentID: "agent-child",
+                    subagentType: "reviewer"
+                )
+            ),
+        ])
+        let envelope = try #require(commands.first?.makeEventEnvelope())
+        #expect(envelope.eventType == "session.codex_hook_event")
+        #expect(envelope.payload.string("subagentID") == "agent-child")
+        #expect(envelope.payload.string("subagentType") == "reviewer")
+    }
+
+    @Test
+    func codexSubagentStopHookMapsLifecycleIdentity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"SubagentStop","session_id":"thread-root","turn_id":"turn-root","agent_id":"agent-child","agent_type":"reviewer","agent_transcript_path":"/tmp/child.jsonl"}"#.utf8
+            )
+        )
+
+        guard case .sessionCodexHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Codex hook event")
+            return
+        }
+        #expect(commands.count == 1)
+        #expect(event.hookEventName == "SubagentStop")
+        #expect(event.threadID == "thread-root")
+        #expect(event.subagentID == "agent-child")
+        #expect(event.subagentType == "reviewer")
     }
 
     @Test

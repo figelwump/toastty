@@ -22,6 +22,8 @@ RELEASE_SOURCE_DIRTY=""
 RELEASE_NOTES_PATH=""
 RELEASE_DMG_PATH=""
 RELEASE_SPARKLE_METADATA_PATH=""
+RELEASE_GHOSTTY_COMMIT_SHORT=""
+RELEASE_GHOSTTY_BUILD_FLAGS=""
 SPARKLE_METADATA_PATH=""
 SPARKLE_FEED_REPO=""
 SPARKLE_FEED_BRANCH="main"
@@ -221,6 +223,8 @@ load_release_metadata() {
   RELEASE_NOTES_PATH="${RELEASE_NOTES_PATH:-}"
   RELEASE_DMG_PATH="${RELEASE_DMG_PATH:-}"
   RELEASE_SPARKLE_METADATA_PATH="${RELEASE_SPARKLE_METADATA_PATH:-}"
+  RELEASE_GHOSTTY_COMMIT_SHORT="${RELEASE_GHOSTTY_COMMIT_SHORT:-}"
+  RELEASE_GHOSTTY_BUILD_FLAGS="${RELEASE_GHOSTTY_BUILD_FLAGS:-}"
 }
 
 load_sparkle_metadata() {
@@ -246,6 +250,9 @@ load_sparkle_metadata() {
 }
 
 verify_inputs() {
+  local expected_ghostty_build_flags_line=""
+  local expected_ghostty_commit_line=""
+
   if [[ ! -f "$NOTES_FILE" ]]; then
     fail "release notes file not found: $NOTES_FILE (author it before publishing; see .agents/skills/toastty-release/SKILL.md for the default workflow)"
   fi
@@ -259,6 +266,14 @@ verify_inputs() {
   [[ "$RELEASE_BUILD_NUMBER" == "$TOASTTY_BUILD_NUMBER" ]] || fail "release metadata build number mismatch: expected $TOASTTY_BUILD_NUMBER, got ${RELEASE_BUILD_NUMBER:-<unset>}"
   [[ -n "$RELEASE_SOURCE_COMMIT" ]] || fail "release metadata is missing RELEASE_SOURCE_COMMIT"
   [[ "$RELEASE_SOURCE_DIRTY" == "0" ]] || fail "release metadata reports a non-clean source snapshot (RELEASE_SOURCE_DIRTY=$RELEASE_SOURCE_DIRTY)"
+  [[ -n "$RELEASE_GHOSTTY_COMMIT_SHORT" ]] || fail "release metadata is missing RELEASE_GHOSTTY_COMMIT_SHORT"
+  [[ -n "$RELEASE_GHOSTTY_BUILD_FLAGS" ]] || fail "release metadata is missing RELEASE_GHOSTTY_BUILD_FLAGS"
+  expected_ghostty_commit_line="$(printf -- '- Commit: `%s`' "$RELEASE_GHOSTTY_COMMIT_SHORT")"
+  expected_ghostty_build_flags_line="$(printf -- '- Build flags: `%s`' "$RELEASE_GHOSTTY_BUILD_FLAGS")"
+  grep -Fqx -- "$expected_ghostty_commit_line" "$NOTES_FILE" \
+    || fail "release notes do not include the canonical shipped Ghostty commit line: $expected_ghostty_commit_line"
+  grep -Fqx -- "$expected_ghostty_build_flags_line" "$NOTES_FILE" \
+    || fail "release notes do not include the canonical shipped Ghostty build-flags line"
   [[ "$DMG_PATH" == "$RELEASE_DMG_PATH" ]] || fail "release metadata DMG path mismatch: expected $RELEASE_DMG_PATH, got $DMG_PATH"
   [[ -n "$SPARKLE_FEED_URL" ]] || fail "Sparkle metadata is missing SPARKLE_FEED_URL"
   [[ "$SPARKLE_FEED_URL" == */appcast.xml ]] || fail "Sparkle feed URL must point to appcast.xml: $SPARKLE_FEED_URL"

@@ -35,6 +35,25 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertTrue(DisplayShortcutInterceptor.isNewTabShortcut(matchingEvent))
         XCTAssertFalse(DisplayShortcutInterceptor.isNewTabShortcut(shiftedEvent))
         XCTAssertFalse(DisplayShortcutInterceptor.isNewTabShortcut(repeatedEvent))
+        XCTAssertTrue(DisplayShortcutInterceptor.isRepeatedNewTabShortcut(repeatedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isRepeatedNewTabShortcut(matchingEvent))
+    }
+
+    func testNewWindowShortcutMatchesPlainCommandNOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "n", modifiers: [.command], keyCode: 0x2D)
+        let shiftedEvent = try makeKeyEvent(characters: "N", modifiers: [.command, .shift], keyCode: 0x2D)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "n",
+            modifiers: [.command],
+            keyCode: 0x2D,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isNewWindowShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewWindowShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewWindowShortcut(repeatedEvent))
+        XCTAssertTrue(DisplayShortcutInterceptor.isRepeatedNewWindowShortcut(repeatedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isRepeatedNewWindowShortcut(matchingEvent))
     }
 
     func testTabSelectionShortcutNumberMatchesPlainCommandDigitsUpToConfiguredLimit() throws {
@@ -573,6 +592,149 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
 
         XCTAssertTrue(interceptor.handle(.commandPalette, appOwnedWindowID: windowID))
         XCTAssertEqual(toggledWindowID, windowID)
+    }
+
+    func testNewWindowShortcutCreatesSingleWindowWithSingleTab() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let interceptor = makeInterceptor(store: store)
+        let newWindowEvent = try makeKeyEvent(characters: "n", modifiers: [.command], keyCode: 0x2D)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: newWindowEvent, appOwnedWindowID: windowID),
+            .createWindow
+        )
+        XCTAssertTrue(interceptor.handle(.createWindow, appOwnedWindowID: windowID))
+
+        XCTAssertEqual(store.state.windows.count, 2)
+        let createdWindow = try XCTUnwrap(store.state.windows.last)
+        let workspaceID = try XCTUnwrap(createdWindow.selectedWorkspaceID)
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(createdWindow.workspaceIDs, [workspaceID])
+        XCTAssertEqual(workspace.tabIDs.count, 1)
+    }
+
+    func testNewWindowShortcutCreatesWindowWhenNoToasttyWindowExists() throws {
+        let store = AppStore(
+            state: AppState(windows: [], workspacesByID: [:], selectedWindowID: nil),
+            persistTerminalFontPreference: false
+        )
+        let interceptor = makeInterceptor(store: store)
+        let newWindowEvent = try makeKeyEvent(characters: "n", modifiers: [.command], keyCode: 0x2D)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: newWindowEvent, appOwnedWindowID: nil),
+            .createWindow
+        )
+        XCTAssertTrue(interceptor.handle(.createWindow, appOwnedWindowID: nil))
+        XCTAssertEqual(store.state.windows.count, 1)
+    }
+
+    func testNewWindowShortcutWithExistingStateAndNoAppOwnedWindowFallsThrough() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let interceptor = makeInterceptor(store: store)
+        let newWindowEvent = try makeKeyEvent(characters: "n", modifiers: [.command], keyCode: 0x2D)
+
+        XCTAssertNil(interceptor.shortcutAction(for: newWindowEvent, appOwnedWindowID: nil))
+    }
+
+    func testRepeatedNewWindowShortcutIsConsumedWithoutCreatingWindow() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let interceptor = makeInterceptor(store: store)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "n",
+            modifiers: [.command],
+            keyCode: 0x2D,
+            isARepeat: true
+        )
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: repeatedEvent, appOwnedWindowID: windowID),
+            .consumeShortcut
+        )
+        XCTAssertTrue(interceptor.handle(.consumeShortcut, appOwnedWindowID: windowID))
+        XCTAssertEqual(store.state.windows.count, 1)
+    }
+
+    func testRepeatedNewWindowShortcutIsConsumedDuringSceneMaterialization() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let interceptor = makeInterceptor(store: store)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "n",
+            modifiers: [.command],
+            keyCode: 0x2D,
+            isARepeat: true
+        )
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: repeatedEvent, appOwnedWindowID: nil),
+            .consumeShortcut
+        )
+        XCTAssertTrue(interceptor.handle(.consumeShortcut, appOwnedWindowID: nil))
+        XCTAssertEqual(store.state.windows.count, 1)
+    }
+
+    func testRepeatedNewTabShortcutIsConsumedWithoutCreatingTab() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let interceptor = makeInterceptor(store: store)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "t",
+            modifiers: [.command],
+            keyCode: 0x11,
+            isARepeat: true
+        )
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: repeatedEvent, appOwnedWindowID: windowID),
+            .consumeShortcut
+        )
+        XCTAssertTrue(interceptor.handle(.consumeShortcut, appOwnedWindowID: windowID))
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.tabIDs.count, 1)
+    }
+
+    func testRepeatedNewTabShortcutIsConsumedDuringSceneMaterialization() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let interceptor = makeInterceptor(store: store)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "t",
+            modifiers: [.command],
+            keyCode: 0x11,
+            isARepeat: true
+        )
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: repeatedEvent, appOwnedWindowID: nil),
+            .consumeShortcut
+        )
+        XCTAssertTrue(interceptor.handle(.consumeShortcut, appOwnedWindowID: nil))
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.tabIDs.count, 1)
+    }
+
+    func testNewTabShortcutUsesProvidedWindowID() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let interceptor = makeInterceptor(store: store)
+        let newTabEvent = try makeKeyEvent(characters: "t", modifiers: [.command], keyCode: 0x11)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: newTabEvent, appOwnedWindowID: windowID),
+            .createWorkspaceTab
+        )
+        XCTAssertTrue(interceptor.handle(.createWorkspaceTab, appOwnedWindowID: windowID))
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.tabIDs.count, 2)
+    }
+
+    func testNewTabShortcutWithoutAppOwnedWindowFallsThrough() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let interceptor = makeInterceptor(store: store)
+        let newTabEvent = try makeKeyEvent(characters: "t", modifiers: [.command], keyCode: 0x11)
+
+        XCTAssertNil(interceptor.shortcutAction(for: newTabEvent, appOwnedWindowID: nil))
     }
 
     func testToggleLaterFlagShortcutRequiresAppOwnedWindowSelection() throws {
@@ -1234,6 +1396,29 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertTrue(workspaceAfterClose.rightAuxPanel.isVisible)
         XCTAssertEqual(workspaceAfterClose.focusedPanelID, mainFocusedPanelID)
         XCTAssertEqual(workspaceAfterClose.layoutTree.allSlotInfos.count, 1)
+    }
+
+    func testClosePanelActionClosesEmptyStateWindow() throws {
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 120, y: 120, width: 900, height: 700),
+                    workspaceIDs: [],
+                    selectedWorkspaceID: nil
+                ),
+            ],
+            workspacesByID: [:],
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.closePanel, appOwnedWindowID: windowID))
+
+        XCTAssertTrue(store.state.windows.isEmpty)
+        XCTAssertNil(store.state.selectedWindowID)
     }
 
     func testFocusSplitActionConsumesShortcutWhenWorkspaceWindowResolves() throws {

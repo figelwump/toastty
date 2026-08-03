@@ -36,6 +36,30 @@ enum CodexSessionLogContextField: Equatable, Sendable {
     }
 }
 
+/// Newer Codex builds encrypt inter-agent message content, so rollout
+/// `spawn_agent` arguments and hook `tool_input` payloads can carry an opaque
+/// Fernet-style token instead of task text. Detect those tokens so ciphertext
+/// is never shown as a subagent label or description.
+func isLikelyEncryptedCodexAgentPayload(_ value: String) -> Bool {
+    var candidate = Substring(value)
+    if candidate.hasSuffix("...") {
+        candidate = candidate.dropLast(3)
+    }
+    if candidate.hasPrefix("gAAAAA") {
+        return true
+    }
+    guard candidate.count >= 64 else {
+        return false
+    }
+    return candidate.allSatisfy { character in
+        character.isASCII && (
+            character.isLetter || character.isNumber ||
+            character == "-" || character == "_" ||
+            character == "+" || character == "/" || character == "="
+        )
+    }
+}
+
 struct CodexSessionLogEvent: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case sessionConfigured
@@ -45,10 +69,13 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         case approvalNeeded
         case taskCompleted
         case turnAborted
+        case backgroundActivityStarted
+        case backgroundActivityFinished
     }
 
     let kind: Kind
     let detail: String
+    let backgroundActivity: CodexSessionBackgroundActivity?
     let rootInputFingerprint: String?
     let rootThreadID: String?
     let rootTurnID: String?
@@ -56,6 +83,8 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     let completionTurnID: String?
     let nativeSessionID: String?
     let nativeSessionFilePath: String?
+    let callID: String?
+    let approvalID: String?
     let approvalPolicyField: CodexSessionLogContextField
     let approvalsReviewerField: CodexSessionLogContextField
     let approvalPolicy: String?
@@ -64,6 +93,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     init(
         kind: Kind,
         detail: String,
+        backgroundActivity: CodexSessionBackgroundActivity? = nil,
         rootInputFingerprint: String? = nil,
         rootThreadID: String? = nil,
         rootTurnID: String? = nil,
@@ -71,6 +101,8 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         completionTurnID: String? = nil,
         nativeSessionID: String? = nil,
         nativeSessionFilePath: String? = nil,
+        callID: String? = nil,
+        approvalID: String? = nil,
         approvalPolicyField: CodexSessionLogContextField? = nil,
         approvalsReviewerField: CodexSessionLogContextField? = nil,
         approvalPolicy: String? = nil,
@@ -85,6 +117,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
 
         self.kind = kind
         self.detail = detail
+        self.backgroundActivity = backgroundActivity
         self.rootInputFingerprint = rootInputFingerprint
         self.rootThreadID = rootThreadID
         self.rootTurnID = rootTurnID
@@ -92,6 +125,8 @@ struct CodexSessionLogEvent: Equatable, Sendable {
         self.completionTurnID = completionTurnID
         self.nativeSessionID = nativeSessionID
         self.nativeSessionFilePath = nativeSessionFilePath
+        self.callID = callID
+        self.approvalID = approvalID
         self.approvalPolicyField = resolvedApprovalPolicyField
         self.approvalsReviewerField = resolvedApprovalsReviewerField
         self.approvalPolicy = resolvedApprovalPolicyField.stringValue
@@ -107,21 +142,336 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     }
 }
 
+struct CodexSessionBackgroundActivity: Equatable, Sendable {
+    let activityID: String
+    let hookActivityID: String?
+    let spawnToolUseID: String?
+    let kind: SessionBackgroundActivityKind
+    let displayName: String?
+    let command: String?
+
+    init(
+        activityID: String,
+        hookActivityID: String? = nil,
+        spawnToolUseID: String? = nil,
+        kind: SessionBackgroundActivityKind,
+        displayName: String? = nil,
+        command: String? = nil
+    ) {
+        self.activityID = activityID
+        self.hookActivityID = hookActivityID
+        self.spawnToolUseID = spawnToolUseID
+        self.kind = kind
+        self.displayName = displayName
+        self.command = command
+    }
+}
+
+private struct CodexMultiAgentPendingCall: Sendable {
+    var toolName: String
+    var argumentsJSONString: String?
+}
+
+private struct CodexMultiAgentPendingCalls: Sendable {
+    private var callsByID: [String: CodexMultiAgentPendingCall] = [:]
+    private var orderedCallIDs: [String] = []
+
+    mutating func store(callID: String, call: CodexMultiAgentPendingCall) {
+        if callsByID[callID] != nil {
+            orderedCallIDs.removeAll { $0 == callID }
+        }
+        callsByID[callID] = call
+        orderedCallIDs.append(callID)
+        trimToLimit()
+    }
+
+    mutating func resolve(callID: String) -> CodexMultiAgentPendingCall? {
+        guard let call = callsByID.removeValue(forKey: callID) else {
+            return nil
+        }
+        orderedCallIDs.removeAll { $0 == callID }
+        return call
+    }
+
+    func peek(callID: String) -> CodexMultiAgentPendingCall? {
+        callsByID[callID]
+    }
+
+    private mutating func trimToLimit() {
+        while callsByID.count > Self.limit, let oldestCallID = orderedCallIDs.first {
+            orderedCallIDs.removeFirst()
+            callsByID.removeValue(forKey: oldestCallID)
+        }
+    }
+
+    private static let limit = 64
+}
+
+struct CodexSessionLogFileIdentity: Equatable, Sendable {
+    let deviceNumber: UInt64
+    let fileNumber: UInt64
+}
+
+struct CodexSessionLogCursor: Equatable, Sendable {
+    let fileIdentity: CodexSessionLogFileIdentity?
+    let completeLineOffset: UInt64
+    let lastCompleteLineHash: UInt64
+    let lastCompleteLineByteCount: UInt64
+}
+
+/// Reference storage avoids copying the stream-local dedupe set whenever the
+/// runtime cursor advances. Watcher replacement is serialized by
+/// `ManagedAgentLaunchPlanner`, so the cursor checkpoint and active parser have
+/// one logical owner even though both retain this storage. Fixed-size dual
+/// fingerprints avoid retaining complete log lines, and a high-water ceiling
+/// fails open rather than turning memory pressure into lost session updates.
+private final class CodexSessionLogSeenKeys: @unchecked Sendable {
+    private struct Fingerprint: Hashable {
+        let primary: UInt64
+        let secondary: UInt64
+    }
+
+    private let lock = NSLock()
+    private let capacity: Int
+    private let onCapacityExceeded: @Sendable (Int) -> Void
+    private var storage: Set<Fingerprint> = []
+    private var didReportCapacityExceeded = false
+
+    init(
+        capacity: Int,
+        onCapacityExceeded: @escaping @Sendable (Int) -> Void
+    ) {
+        precondition(capacity > 0)
+        self.capacity = capacity
+        self.onCapacityExceeded = onCapacityExceeded
+    }
+
+    @discardableResult
+    func insertIfAbsent(_ key: String) -> Bool {
+        let fingerprint = Self.fingerprint(for: key)
+        var shouldReportCapacityExceeded = false
+
+        lock.lock()
+        if storage.contains(fingerprint) {
+            lock.unlock()
+            return false
+        }
+        if storage.count >= capacity {
+            if didReportCapacityExceeded == false {
+                didReportCapacityExceeded = true
+                shouldReportCapacityExceeded = true
+            }
+            lock.unlock()
+            if shouldReportCapacityExceeded {
+                onCapacityExceeded(capacity)
+            }
+            // Preserve already tracked duplicate protection without allowing
+            // the set to grow. New observations continue fail-open so memory
+            // pressure cannot suppress all later session updates.
+            return true
+        }
+        storage.insert(fingerprint)
+        lock.unlock()
+        return true
+    }
+
+    func reset() {
+        lock.lock()
+        storage.removeAll(keepingCapacity: false)
+        didReportCapacityExceeded = false
+        lock.unlock()
+    }
+
+    var trackedKeyCountForTesting: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage.count
+    }
+
+    private static func fingerprint(for key: String) -> Fingerprint {
+        var primary: UInt64 = 14_695_981_039_346_656_037
+        var secondary: UInt64 = 5_381
+        for byte in key.utf8 {
+            primary ^= UInt64(byte)
+            primary &*= 1_099_511_628_211
+            secondary = ((secondary << 5) &+ secondary) ^ UInt64(byte)
+        }
+        return Fingerprint(primary: primary, secondary: secondary)
+    }
+}
+
+private struct CodexSessionLogParserState: Sendable {
+    var seenKeys: CodexSessionLogSeenKeys
+    var sessionTopLevelApprovalsReviewer: CodexSessionLogContextField = .unspecified
+    var pendingMultiAgentCalls = CodexMultiAgentPendingCalls()
+
+    init(
+        seenKeyCapacity: Int,
+        onSeenKeyCapacityExceeded: @escaping @Sendable (Int) -> Void
+    ) {
+        seenKeys = CodexSessionLogSeenKeys(
+            capacity: seenKeyCapacity,
+            onCapacityExceeded: onSeenKeyCapacityExceeded
+        )
+    }
+
+    mutating func reset() {
+        seenKeys.reset()
+        sessionTopLevelApprovalsReviewer = .unspecified
+        pendingMultiAgentCalls = CodexMultiAgentPendingCalls()
+    }
+}
+
+private struct CodexSessionLogCheckpoint: Sendable {
+    let cursor: CodexSessionLogCursor
+    let parserState: CodexSessionLogParserState
+}
+
+/// Runtime-only checkpoint retained by the App while one managed session owns
+/// a particular log stream. The parser state travels with the byte cursor so a
+/// watcher recreation behaves like one continuous watcher without replaying
+/// earlier lines or losing source-local parsing context.
+final class CodexSessionLogCursorState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var checkpoint: CodexSessionLogCheckpoint?
+
+    fileprivate func snapshot() -> CodexSessionLogCheckpoint? {
+        lock.lock()
+        defer { lock.unlock() }
+        return checkpoint
+    }
+
+    fileprivate func store(_ checkpoint: CodexSessionLogCheckpoint) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.checkpoint = checkpoint
+    }
+
+    fileprivate func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        checkpoint = nil
+    }
+
+    var cursorForTesting: CodexSessionLogCursor? {
+        snapshot()?.cursor
+    }
+
+    var trackedSeenKeyCountForTesting: Int {
+        snapshot()?.parserState.seenKeys.trackedKeyCountForTesting ?? 0
+    }
+
+    var seenKeysObjectForTesting: AnyObject? {
+        snapshot()?.parserState.seenKeys
+    }
+}
+
+private struct CodexSessionLogFileSnapshot {
+    let byteCount: UInt64
+    let identity: CodexSessionLogFileIdentity?
+}
+
+private struct CodexSessionLogReaderState {
+    var handle: FileHandle?
+    var isInitialized = false
+    var fileIdentity: CodexSessionLogFileIdentity?
+    var readOffset: UInt64 = 0
+    var completeLineOffset: UInt64 = 0
+    var lastCompleteLineHash: UInt64?
+    var lastCompleteLineByteCount: UInt64?
+
+    var cursor: CodexSessionLogCursor? {
+        guard completeLineOffset > 0,
+              let lastCompleteLineHash,
+              let lastCompleteLineByteCount else {
+            return nil
+        }
+        return CodexSessionLogCursor(
+            fileIdentity: fileIdentity,
+            completeLineOffset: completeLineOffset,
+            lastCompleteLineHash: lastCompleteLineHash,
+            lastCompleteLineByteCount: lastCompleteLineByteCount
+        )
+    }
+
+    mutating func resume(
+        from cursor: CodexSessionLogCursor,
+        fileIdentity: CodexSessionLogFileIdentity?
+    ) {
+        isInitialized = true
+        self.fileIdentity = fileIdentity
+        readOffset = cursor.completeLineOffset
+        completeLineOffset = cursor.completeLineOffset
+        lastCompleteLineHash = cursor.lastCompleteLineHash
+        lastCompleteLineByteCount = cursor.lastCompleteLineByteCount
+    }
+
+    mutating func restart(fileIdentity: CodexSessionLogFileIdentity?) {
+        CodexSessionLogWatcher.close(&handle)
+        isInitialized = true
+        self.fileIdentity = fileIdentity
+        readOffset = 0
+        completeLineOffset = 0
+        lastCompleteLineHash = nil
+        lastCompleteLineByteCount = nil
+    }
+}
+
+private struct CodexSessionLogConsumedLines {
+    let byteCount: UInt64
+    let lastLineHash: UInt64
+    let lastLineByteCount: UInt64
+}
+
+private enum CodexSessionLogReadResult {
+    case data(Data)
+    case discardIncompleteRemainder
+    case restartFromZero
+}
+
 final class CodexSessionLogWatcher {
     typealias EventHandler = @Sendable (CodexSessionLogEvent) async -> Void
+
+    static let maximumTrackedSeenKeyCount = 65_536
 
     private let logURL: URL
     private let pollIntervalNanoseconds: UInt64
     private let eventHandler: EventHandler
+    private let cursorState: CodexSessionLogCursorState
+    private let seenKeyCapacity: Int
+    private let onSeenKeyCapacityExceeded: @Sendable (Int) -> Void
+    // Ignore multi-agent lifecycle entries recorded before this instant.
+    // Rollout files can be re-claimed across launches (workspace restore),
+    // and replaying pre-launch spawns would resurrect dead collab agents.
+    private let multiAgentEventCutoff: Date?
     private var task: Task<Void, Never>?
 
     init(
         logURL: URL,
         pollIntervalNanoseconds: UInt64 = 250_000_000,
+        multiAgentEventCutoff: Date? = nil,
+        cursorState: CodexSessionLogCursorState = CodexSessionLogCursorState(),
+        seenKeyCapacity: Int = CodexSessionLogWatcher.maximumTrackedSeenKeyCount,
+        onSeenKeyCapacityExceeded: (@Sendable (Int) -> Void)? = nil,
         eventHandler: @escaping EventHandler
     ) {
+        precondition(seenKeyCapacity > 0)
         self.logURL = logURL
         self.pollIntervalNanoseconds = pollIntervalNanoseconds
+        self.multiAgentEventCutoff = multiAgentEventCutoff
+        self.cursorState = cursorState
+        self.seenKeyCapacity = seenKeyCapacity
+        self.onSeenKeyCapacityExceeded = onSeenKeyCapacityExceeded ?? { capacity in
+            ToasttyLog.warning(
+                "Codex session log dedupe capacity reached",
+                category: .terminal,
+                metadata: [
+                    "capacity": String(capacity),
+                    "degradation": "fail_open",
+                    "stream_file": logURL.lastPathComponent,
+                ]
+            )
+        }
         self.eventHandler = eventHandler
     }
 
@@ -131,6 +481,10 @@ final class CodexSessionLogWatcher {
         task = Self.makePollingTask(
             logURL: logURL,
             pollIntervalNanoseconds: pollIntervalNanoseconds,
+            multiAgentEventCutoff: multiAgentEventCutoff,
+            cursorState: cursorState,
+            seenKeyCapacity: seenKeyCapacity,
+            onSeenKeyCapacityExceeded: onSeenKeyCapacityExceeded,
             eventHandler: eventHandler
         )
     }
@@ -148,24 +502,29 @@ private extension CodexSessionLogWatcher {
     static func makePollingTask(
         logURL: URL,
         pollIntervalNanoseconds: UInt64,
+        multiAgentEventCutoff: Date? = nil,
+        cursorState: CodexSessionLogCursorState,
+        seenKeyCapacity: Int,
+        onSeenKeyCapacityExceeded: @escaping @Sendable (Int) -> Void,
         eventHandler: @escaping EventHandler
     ) -> Task<Void, Never> {
         Task.detached(priority: .utility) {
-            var handle: FileHandle?
-            var offset: UInt64 = 0
+            var readerState = CodexSessionLogReaderState()
             var bufferedRemainder = Data()
-            var seenKeys: Set<String> = []
-            var sessionTopLevelApprovalsReviewer: CodexSessionLogContextField = .unspecified
-            defer { close(&handle) }
+            var parserState = CodexSessionLogParserState(
+                seenKeyCapacity: seenKeyCapacity,
+                onSeenKeyCapacityExceeded: onSeenKeyCapacityExceeded
+            )
+            defer { close(&readerState.handle) }
 
             while true {
                 await Self.drainAvailableDeltas(
                     from: logURL,
-                    handle: &handle,
-                    offset: &offset,
+                    readerState: &readerState,
                     bufferedRemainder: &bufferedRemainder,
-                    seenKeys: &seenKeys,
-                    sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
+                    parserState: &parserState,
+                    cursorState: cursorState,
+                    multiAgentEventCutoff: multiAgentEventCutoff,
                     eventHandler: eventHandler
                 )
 
@@ -175,11 +534,11 @@ private extension CodexSessionLogWatcher {
                     // before teardown so we do not lose that last status update.
                     await Self.drainAvailableDeltas(
                         from: logURL,
-                        handle: &handle,
-                        offset: &offset,
+                        readerState: &readerState,
                         bufferedRemainder: &bufferedRemainder,
-                        seenKeys: &seenKeys,
-                        sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
+                        parserState: &parserState,
+                        cursorState: cursorState,
+                        multiAgentEventCutoff: multiAgentEventCutoff,
                         eventHandler: eventHandler
                     )
                     break
@@ -187,190 +546,746 @@ private extension CodexSessionLogWatcher {
 
                 try? await Task.sleep(nanoseconds: pollIntervalNanoseconds)
             }
-
-            if let event = Self.parseBufferedRemainder(
-                bufferedRemainder,
-                seenKeys: &seenKeys,
-                sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer
-            ) {
-                await eventHandler(event)
-            }
         }
     }
 
     static func drainAvailableDeltas(
         from logURL: URL,
-        handle: inout FileHandle?,
-        offset: inout UInt64,
+        readerState: inout CodexSessionLogReaderState,
         bufferedRemainder: inout Data,
-        seenKeys: inout Set<String>,
-        sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
+        parserState: inout CodexSessionLogParserState,
+        cursorState: CodexSessionLogCursorState,
+        multiAgentEventCutoff: Date? = nil,
         eventHandler: @escaping EventHandler
     ) async {
-        while let delta = readDelta(from: logURL, handle: &handle, offset: &offset) {
-            await processDelta(
-                delta,
-                bufferedRemainder: &bufferedRemainder,
-                seenKeys: &seenKeys,
-                sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
-                eventHandler: eventHandler
-            )
+        guard prepareReaderIfNeeded(
+            for: logURL,
+            readerState: &readerState,
+            bufferedRemainder: &bufferedRemainder,
+            parserState: &parserState,
+            cursorState: cursorState
+        ) else {
+            return
+        }
+
+        while let result = readDelta(from: logURL, readerState: &readerState) {
+            switch result {
+            case .restartFromZero:
+                bufferedRemainder.removeAll(keepingCapacity: true)
+                parserState.reset()
+                cursorState.reset()
+
+            case .discardIncompleteRemainder:
+                bufferedRemainder.removeAll(keepingCapacity: true)
+
+            case .data(let delta):
+                guard let consumedLines = await processDelta(
+                    delta,
+                    bufferedRemainder: &bufferedRemainder,
+                    seenKeys: parserState.seenKeys,
+                    sessionTopLevelApprovalsReviewer: &parserState.sessionTopLevelApprovalsReviewer,
+                    pendingMultiAgentCalls: &parserState.pendingMultiAgentCalls,
+                    multiAgentEventCutoff: multiAgentEventCutoff,
+                    eventHandler: eventHandler
+                ) else {
+                    continue
+                }
+                readerState.completeLineOffset += consumedLines.byteCount
+                readerState.lastCompleteLineHash = consumedLines.lastLineHash
+                readerState.lastCompleteLineByteCount = consumedLines.lastLineByteCount
+                if let cursor = readerState.cursor {
+                    cursorState.store(CodexSessionLogCheckpoint(
+                        cursor: cursor,
+                        parserState: parserState
+                    ))
+                }
+            }
         }
     }
 
     static func processDelta(
         _ delta: Data,
         bufferedRemainder: inout Data,
-        seenKeys: inout Set<String>,
+        seenKeys: CodexSessionLogSeenKeys,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
+        pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil,
         eventHandler: @escaping EventHandler
-    ) async {
+    ) async -> CodexSessionLogConsumedLines? {
         guard delta.isEmpty == false else {
-            return
+            return nil
         }
 
         bufferedRemainder.append(delta)
         var pendingHistoryUpdate: CodexSessionLogEvent?
+        var consumedByteCount: UInt64 = 0
+        var lastLineHash: UInt64?
+        var lastLineByteCount: UInt64?
 
         while let newlineIndex = bufferedRemainder.firstIndex(of: newlineByte) {
-            let lineData = bufferedRemainder.prefix(upTo: newlineIndex)
+            let lineData = Data(bufferedRemainder.prefix(upTo: newlineIndex))
             bufferedRemainder.removeSubrange(...newlineIndex)
-            guard let event = parse(
-                lineData: Data(lineData),
-                seenKeys: &seenKeys,
-                sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer
-            ) else {
-                continue
-            }
-            if event.kind == .historyUpdated {
-                pendingHistoryUpdate = event
+            consumedByteCount += UInt64(lineData.count) + 1
+            lastLineHash = completeLineHash(lineData)
+            lastLineByteCount = UInt64(lineData.count)
+            let events = parse(
+                lineData: lineData,
+                seenKeys: seenKeys,
+                sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer,
+                pendingMultiAgentCalls: &pendingMultiAgentCalls,
+                multiAgentEventCutoff: multiAgentEventCutoff
+            )
+            guard events.isEmpty == false else {
                 continue
             }
 
-            if event.kind != .turnStarted,
-               let coalescedHistoryUpdate = pendingHistoryUpdate {
-                await eventHandler(coalescedHistoryUpdate)
-                pendingHistoryUpdate = nil
-            }
+            for event in events {
+                if event.kind == .historyUpdated {
+                    pendingHistoryUpdate = event
+                    continue
+                }
 
-            await eventHandler(event)
+                if event.kind != .turnStarted,
+                   let coalescedHistoryUpdate = pendingHistoryUpdate {
+                    await eventHandler(coalescedHistoryUpdate)
+                    pendingHistoryUpdate = nil
+                }
+
+                await eventHandler(event)
+            }
         }
 
         if let pendingHistoryUpdate {
             await eventHandler(pendingHistoryUpdate)
         }
+
+        guard let lastLineHash,
+              let lastLineByteCount else {
+            return nil
+        }
+        return CodexSessionLogConsumedLines(
+            byteCount: consumedByteCount,
+            lastLineHash: lastLineHash,
+            lastLineByteCount: lastLineByteCount
+        )
     }
 
-    static func readDelta(from logURL: URL, handle: inout FileHandle?, offset: inout UInt64) -> Data? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
-              let fileSize = attributes[.size] as? NSNumber else {
-            close(&handle)
-            offset = 0
+    static func prepareReaderIfNeeded(
+        for logURL: URL,
+        readerState: inout CodexSessionLogReaderState,
+        bufferedRemainder: inout Data,
+        parserState: inout CodexSessionLogParserState,
+        cursorState: CodexSessionLogCursorState
+    ) -> Bool {
+        guard readerState.isInitialized == false else {
+            return true
+        }
+        guard let fileSnapshot = fileSnapshot(at: logURL) else {
+            return false
+        }
+
+        if let checkpoint = cursorState.snapshot(),
+           cursor(checkpoint.cursor, matches: fileSnapshot, at: logURL) {
+            readerState.resume(
+                from: checkpoint.cursor,
+                fileIdentity: fileSnapshot.identity ?? checkpoint.cursor.fileIdentity
+            )
+            parserState = checkpoint.parserState
+            return true
+        }
+
+        cursorState.reset()
+        bufferedRemainder.removeAll(keepingCapacity: true)
+        parserState.reset()
+        readerState.restart(fileIdentity: fileSnapshot.identity)
+        return true
+    }
+
+    static func readDelta(
+        from logURL: URL,
+        readerState: inout CodexSessionLogReaderState
+    ) -> CodexSessionLogReadResult? {
+        guard let fileSnapshot = fileSnapshot(at: logURL) else {
+            close(&readerState.handle)
             return nil
         }
 
-        let length = fileSize.uint64Value
-        if length < offset {
-            close(&handle)
-            offset = 0
+        if fileIdentitiesConflict(readerState.fileIdentity, fileSnapshot.identity) ||
+            fileSnapshot.byteCount < readerState.completeLineOffset ||
+            (readerState.cursor.map { cursor($0, matches: fileSnapshot, at: logURL) } == false) {
+            readerState.restart(fileIdentity: fileSnapshot.identity)
+            return .restartFromZero
         }
-        guard length > offset else {
+
+        if fileSnapshot.byteCount < readerState.readOffset {
+            close(&readerState.handle)
+            readerState.readOffset = readerState.completeLineOffset
+            return .discardIncompleteRemainder
+        }
+        guard fileSnapshot.byteCount > readerState.readOffset else {
             return nil
         }
 
-        if handle == nil {
-            handle = try? FileHandle(forReadingFrom: logURL)
+        if readerState.handle == nil {
+            readerState.handle = try? FileHandle(forReadingFrom: logURL)
         }
-        guard let fileHandle = handle else {
+        guard let fileHandle = readerState.handle else {
             return nil
         }
 
         do {
-            try fileHandle.seek(toOffset: offset)
+            try fileHandle.seek(toOffset: readerState.readOffset)
             let data = try fileHandle.readToEnd() ?? Data()
-            offset += UInt64(data.count)
-            return data.isEmpty ? nil : data
+            readerState.readOffset += UInt64(data.count)
+            return data.isEmpty ? nil : .data(data)
         } catch {
-            close(&handle)
+            close(&readerState.handle)
             return nil
         }
     }
 
-    static func parseBufferedRemainder(
-        _ bufferedRemainder: Data,
-        seenKeys: inout Set<String>,
-        sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField
-    ) -> CodexSessionLogEvent? {
-        guard bufferedRemainder.isEmpty == false else {
+    static func fileSnapshot(at logURL: URL) -> CodexSessionLogFileSnapshot? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+              let fileSize = attributes[.size] as? NSNumber else {
             return nil
         }
-        return parse(
-            lineData: bufferedRemainder,
-            seenKeys: &seenKeys,
-            sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer
+        let identity: CodexSessionLogFileIdentity?
+        if let deviceNumber = attributes[.systemNumber] as? NSNumber,
+           let fileNumber = attributes[.systemFileNumber] as? NSNumber {
+            identity = CodexSessionLogFileIdentity(
+                deviceNumber: deviceNumber.uint64Value,
+                fileNumber: fileNumber.uint64Value
+            )
+        } else {
+            identity = nil
+        }
+        return CodexSessionLogFileSnapshot(
+            byteCount: fileSize.uint64Value,
+            identity: identity
         )
+    }
+
+    static func cursor(
+        _ cursor: CodexSessionLogCursor,
+        matches fileSnapshot: CodexSessionLogFileSnapshot,
+        at logURL: URL
+    ) -> Bool {
+        guard fileIdentitiesConflict(cursor.fileIdentity, fileSnapshot.identity) == false,
+              cursor.completeLineOffset <= fileSnapshot.byteCount,
+              cursor.completeLineOffset > cursor.lastCompleteLineByteCount,
+              cursor.lastCompleteLineByteCount < UInt64(Int.max) else {
+            return false
+        }
+
+        let evidenceByteCount = Int(cursor.lastCompleteLineByteCount) + 1
+        let evidenceOffset = cursor.completeLineOffset - UInt64(evidenceByteCount)
+        guard let handle = try? FileHandle(forReadingFrom: logURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+
+        do {
+            try handle.seek(toOffset: evidenceOffset)
+            guard let evidence = try handle.read(upToCount: evidenceByteCount),
+                  evidence.count == evidenceByteCount,
+                  evidence.last == newlineByte else {
+                return false
+            }
+            return completeLineHash(evidence.dropLast()) == cursor.lastCompleteLineHash
+        } catch {
+            return false
+        }
+    }
+
+    static func completeLineHash<S: Sequence>(_ bytes: S) -> UInt64 where S.Element == UInt8 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in bytes {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return hash
+    }
+
+    static func fileIdentitiesConflict(
+        _ lhs: CodexSessionLogFileIdentity?,
+        _ rhs: CodexSessionLogFileIdentity?
+    ) -> Bool {
+        guard let lhs, let rhs else {
+            return false
+        }
+        return lhs != rhs
     }
 
     static func parse(
         lineData: Data,
-        seenKeys: inout Set<String>,
-        sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField
-    ) -> CodexSessionLogEvent? {
+        seenKeys: CodexSessionLogSeenKeys,
+        sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField,
+        pendingMultiAgentCalls: inout CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil
+    ) -> [CodexSessionLogEvent] {
         guard let normalizedLineData = normalizedJSONLineData(from: lineData),
               let object = try? JSONSerialization.jsonObject(with: normalizedLineData) as? [String: Any] else {
-            return nil
+            return []
         }
         let fallbackLine = String(data: normalizedLineData, encoding: .utf8) ?? ""
 
         if let approvalsReviewer = topLevelDeveloperPermissionsApprovalsReviewer(from: object) {
             sessionTopLevelApprovalsReviewer = approvalsReviewer
-            return nil
+            return []
         }
 
         if let event = parseTopLevelTurnContext(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys,
+            seenKeys: seenKeys,
             sessionTopLevelApprovalsReviewer: &sessionTopLevelApprovalsReviewer
         ) {
-            return event
+            return [event]
+        }
+
+        let collaborationEvents = parseCollaborationLifecycleEvent(
+            object: object,
+            seenKeys: seenKeys,
+            pendingCalls: pendingMultiAgentCalls,
+            multiAgentEventCutoff: multiAgentEventCutoff
+        )
+        if collaborationEvents.isEmpty == false {
+            return collaborationEvents
+        }
+
+        let backgroundActivityEvents = parseMultiAgentResponseItem(
+            object: object,
+            fallbackLine: fallbackLine,
+            seenKeys: seenKeys,
+            pendingCalls: &pendingMultiAgentCalls,
+            multiAgentEventCutoff: multiAgentEventCutoff
+        )
+        if backgroundActivityEvents.isEmpty == false {
+            return backgroundActivityEvents
         }
 
         if let event = parseLegacyCodexEvent(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys
+            seenKeys: seenKeys
         ) {
-            return event
+            return [event]
         }
 
         if let event = parseAppEvent(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys
+            seenKeys: seenKeys
         ) {
-            return event
+            return [event]
         }
 
         if let event = parseHistoryInsertEvent(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys
+            seenKeys: seenKeys
         ) {
-            return event
+            return [event]
         }
 
-        return parseOperationEvent(
+        if let event = parseOperationEvent(
             object: object,
             fallbackLine: fallbackLine,
-            seenKeys: &seenKeys
+            seenKeys: seenKeys
+        ) {
+            return [event]
+        }
+        return []
+    }
+
+    static func parseCollaborationLifecycleEvent(
+        object: [String: Any],
+        seenKeys: CodexSessionLogSeenKeys,
+        pendingCalls: CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil
+    ) -> [CodexSessionLogEvent] {
+        guard let payload = object["payload"] as? [String: Any],
+              let payloadType = normalizedString(payload["type"]) else {
+            return []
+        }
+
+        switch (normalizedString(object["type"]), payloadType) {
+        case ("event_msg", "sub_agent_activity"):
+            guard let agentPath = nonEmptyString(payload["agent_path"]),
+                  isCurrentMultiAgentEvent(
+                    object: object,
+                    payload: payload,
+                    cutoff: multiAgentEventCutoff
+                  ) else {
+                return []
+            }
+            let eventID = nonEmptyString(payload["event_id"])
+                ?? "\(agentPath):\(normalizedString(payload["kind"]) ?? "unknown"):"
+                    + "\(collaborationEventDate(object: object, payload: payload)?.timeIntervalSince1970 ?? 0)"
+            guard seenKeys.insertIfAbsent("collaboration_activity:\(eventID)") else {
+                return []
+            }
+
+            switch normalizedString(payload["kind"]) {
+            case "started":
+                let pendingCall = pendingCalls.peek(callID: eventID)
+                let spawnArguments = pendingCall?.toolName == "spawn_agent"
+                    ? jsonObject(fromJSONString: pendingCall?.argumentsJSONString)
+                    : nil
+                return [collaborationStartedEvent(
+                    activityID: agentPath,
+                    hookActivityID: nonEmptyString(payload["agent_thread_id"]),
+                    spawnToolUseID: eventID,
+                    displayName: spawnMetadataSummaryText(spawnArguments?["task_name"], limit: 80),
+                    command: spawnMetadataSummaryText(spawnArguments?["message"], limit: 512)
+                )]
+
+            case "interrupted":
+                return [collaborationFinishedEvent(activityID: agentPath)]
+
+            default:
+                // "interacted" records message delivery, not a lifecycle transition.
+                return []
+            }
+
+        case ("response_item", "agent_message"):
+            guard isCurrentMultiAgentEvent(
+                object: object,
+                payload: payload,
+                cutoff: multiAgentEventCutoff
+            ), let messageType = collaborationMessageType(from: payload) else {
+                return []
+            }
+            let timestamp = normalizedString(object["timestamp"]) ?? "unknown"
+            switch messageType {
+            case "NEW_TASK":
+                guard let author = nonEmptyString(payload["author"]),
+                      let recipient = nonEmptyString(payload["recipient"]),
+                      collaborationParentPath(of: recipient) == author,
+                      seenKeys.insertIfAbsent("collaboration_new_task:\(recipient):\(timestamp)") else {
+                    return []
+                }
+                return [collaborationStartedEvent(activityID: recipient)]
+
+            case "FINAL_ANSWER":
+                guard let author = nonEmptyString(payload["author"]),
+                      let recipient = nonEmptyString(payload["recipient"]),
+                      collaborationParentPath(of: author) == recipient,
+                      seenKeys.insertIfAbsent("collaboration_final_answer:\(author):\(timestamp)") else {
+                    return []
+                }
+                return [collaborationFinishedEvent(activityID: author)]
+
+            default:
+                return []
+            }
+
+        default:
+            return []
+        }
+    }
+
+    static func isCurrentMultiAgentEvent(
+        object: [String: Any],
+        payload: [String: Any],
+        cutoff: Date?
+    ) -> Bool {
+        guard let cutoff else {
+            return true
+        }
+        guard let eventDate = collaborationEventDate(object: object, payload: payload) else {
+            return false
+        }
+        return eventDate >= cutoff
+    }
+
+    static func collaborationEventDate(
+        object: [String: Any],
+        payload: [String: Any]
+    ) -> Date? {
+        if let occurredAtMilliseconds = payload["occurred_at_ms"] as? NSNumber {
+            return Date(timeIntervalSince1970: occurredAtMilliseconds.doubleValue / 1_000)
+        }
+        return rolloutEntryDate(from: object)
+    }
+
+    static func collaborationAgentDisplayName(from agentPath: String) -> String {
+        agentPath.split(separator: "/").last.map(String.init) ?? agentPath
+    }
+
+    static func collaborationParentPath(of agentPath: String) -> String? {
+        let components = agentPath.split(separator: "/")
+        guard components.count > 1 else { return nil }
+        return "/" + components.dropLast().joined(separator: "/")
+    }
+
+    static func collaborationStartedEvent(
+        activityID: String,
+        hookActivityID: String? = nil,
+        spawnToolUseID: String? = nil,
+        displayName: String? = nil,
+        command: String? = nil
+    ) -> CodexSessionLogEvent {
+        let resolvedDisplayName = displayName ?? collaborationAgentDisplayName(from: activityID)
+        return CodexSessionLogEvent(
+            kind: .backgroundActivityStarted,
+            detail: "Started \(resolvedDisplayName)",
+            backgroundActivity: CodexSessionBackgroundActivity(
+                activityID: activityID,
+                hookActivityID: hookActivityID,
+                spawnToolUseID: spawnToolUseID,
+                kind: .subagent,
+                displayName: resolvedDisplayName,
+                command: command
+            )
         )
+    }
+
+    static func collaborationMessageType(from payload: [String: Any]) -> String? {
+        guard let content = payload["content"] as? [[String: Any]] else {
+            return nil
+        }
+        for item in content where normalizedString(item["type"]) == "input_text" {
+            guard let text = item["text"] as? String,
+                  let firstLine = text.split(separator: "\n", maxSplits: 1).first else {
+                continue
+            }
+            let prefix = "Message Type:"
+            guard firstLine.hasPrefix(prefix) else { continue }
+            return firstLine.dropFirst(prefix.count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    static func collaborationFinishedEvent(activityID: String) -> CodexSessionLogEvent {
+        CodexSessionLogEvent(
+            kind: .backgroundActivityFinished,
+            detail: "Finished sub-agent",
+            backgroundActivity: CodexSessionBackgroundActivity(
+                activityID: activityID,
+                kind: .subagent
+            )
+        )
+    }
+
+    static func parseMultiAgentResponseItem(
+        object: [String: Any],
+        fallbackLine: String,
+        seenKeys: CodexSessionLogSeenKeys,
+        pendingCalls: inout CodexMultiAgentPendingCalls,
+        multiAgentEventCutoff: Date? = nil
+    ) -> [CodexSessionLogEvent] {
+        guard normalizedString(object["type"]) == "response_item",
+              let payload = object["payload"] as? [String: Any],
+              let type = normalizedString(payload["type"]) else {
+            return []
+        }
+        if let multiAgentEventCutoff,
+           let eventDate = rolloutEntryDate(from: object),
+           eventDate < multiAgentEventCutoff {
+            // Replayed history from before this managed session launched;
+            // those collab agents died with their original process.
+            return []
+        }
+
+        switch type {
+        case "function_call":
+            guard let callID = nonEmptyString(payload["call_id"]),
+                  let rawName = nonEmptyString(payload["name"]),
+                  let toolName = multiAgentToolName(
+                    rawName: rawName,
+                    namespace: nonEmptyString(payload["namespace"])
+                  ),
+                  shouldTrackMultiAgentTool(named: toolName) else {
+                return []
+            }
+            let dedupeKey = "multi_agent_function_call:\(callID)"
+            guard seenKeys.insertIfAbsent(dedupeKey) else {
+                return []
+            }
+            pendingCalls.store(
+                callID: callID,
+                call: CodexMultiAgentPendingCall(
+                    toolName: toolName,
+                    argumentsJSONString: nonEmptyString(payload["arguments"])
+                )
+            )
+            return []
+
+        case "function_call_output":
+            guard let callID = nonEmptyString(payload["call_id"]),
+                  let pendingCall = pendingCalls.resolve(callID: callID) else {
+                return []
+            }
+            let dedupeKey = "multi_agent_function_call_output:\(callID)"
+            guard seenKeys.insertIfAbsent(dedupeKey) else {
+                return []
+            }
+            return resolvedMultiAgentEvents(
+                for: pendingCall,
+                callID: callID,
+                outputJSONString: nonEmptyString(payload["output"]),
+                fallbackLine: fallbackLine
+            )
+
+        default:
+            return []
+        }
+    }
+
+    static func resolvedMultiAgentEvents(
+        for call: CodexMultiAgentPendingCall,
+        callID: String,
+        outputJSONString: String?,
+        fallbackLine _: String
+    ) -> [CodexSessionLogEvent] {
+        let arguments = jsonObject(fromJSONString: call.argumentsJSONString)
+        let output = jsonObject(fromJSONString: outputJSONString)
+
+        switch call.toolName {
+        case "spawn_agent":
+            guard let output,
+                  let agentID = nonEmptyString(output["agent_id"]) else {
+                return []
+            }
+            let displayName = normalizedSummaryText(output["nickname"], limit: 80)
+                ?? normalizedSummaryText(arguments?["agent_type"], limit: 80)
+                ?? "Sub-agent"
+            return [
+                CodexSessionLogEvent(
+                    kind: .backgroundActivityStarted,
+                    detail: "Started \(displayName)",
+                    backgroundActivity: CodexSessionBackgroundActivity(
+                        activityID: agentID,
+                        hookActivityID: agentID,
+                        spawnToolUseID: callID,
+                        kind: .subagent,
+                        displayName: displayName,
+                        command: spawnMetadataSummaryText(arguments?["message"], limit: 512)
+                    )
+                ),
+            ]
+
+        case "wait_agent":
+            guard let output else { return [] }
+            return terminalAgentIDs(fromWaitOutput: output).map { agentID in
+                CodexSessionLogEvent(
+                    kind: .backgroundActivityFinished,
+                    detail: "Finished sub-agent",
+                    backgroundActivity: CodexSessionBackgroundActivity(
+                        activityID: agentID,
+                        kind: .subagent
+                    )
+                )
+            }
+
+        case "close_agent":
+            guard let output else { return [] }
+            return closeAgentIDs(fromOutput: output, arguments: arguments).map { agentID in
+                CodexSessionLogEvent(
+                    kind: .backgroundActivityFinished,
+                    detail: "Finished sub-agent",
+                    backgroundActivity: CodexSessionBackgroundActivity(
+                        activityID: agentID,
+                        kind: .subagent
+                    )
+                )
+            }
+
+        default:
+            return []
+        }
+    }
+
+    static func rolloutEntryDate(from object: [String: Any]) -> Date? {
+        guard let raw = normalizedString(object["timestamp"]) else { return nil }
+        return (try? Date(raw, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+            ?? (try? Date(raw, strategy: Date.ISO8601FormatStyle()))
+    }
+
+    static func multiAgentToolName(rawName: String, namespace: String?) -> String? {
+        switch namespace {
+        case "multi_agent_v1":
+            return strippedMultiAgentToolName(rawName) ?? rawName
+        case "collaboration":
+            return rawName == "spawn_agent" ? rawName : nil
+        case nil:
+            if rawName == "spawn_agent" {
+                return rawName
+            }
+            return strippedMultiAgentToolName(rawName)
+        default:
+            return nil
+        }
+    }
+
+    static func strippedMultiAgentToolName(_ rawName: String) -> String? {
+        for prefix in ["multi_agent_v1.", "multi_agent_v1/", "multi_agent_v1::", "multi_agent_v1_"] {
+            guard rawName.hasPrefix(prefix) else { continue }
+            let toolName = String(rawName.dropFirst(prefix.count))
+            return toolName.isEmpty ? nil : toolName
+        }
+        return nil
+    }
+
+    static func shouldTrackMultiAgentTool(named toolName: String) -> Bool {
+        switch toolName {
+        case "spawn_agent", "wait_agent", "close_agent":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func jsonObject(fromJSONString jsonString: String?) -> [String: Any]? {
+        guard let jsonString,
+              let data = jsonString.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    static func terminalAgentIDs(fromWaitOutput output: [String: Any]) -> [String] {
+        guard let statuses = output["status"] as? [String: Any] else {
+            return []
+        }
+        return statuses.compactMap { agentID, status in
+            guard let statusObject = status as? [String: Any],
+                  statusObject.keys.contains(where: { terminalMultiAgentStatusKeys.contains($0) }) else {
+                return nil
+            }
+            return nonEmptyString(agentID)
+        }
+        .sorted()
+    }
+
+    static func closeAgentIDs(fromOutput output: [String: Any], arguments: [String: Any]?) -> [String] {
+        var agentIDs: Set<String> = []
+        collectAgentIDs(from: output, into: &agentIDs)
+        if let arguments {
+            collectAgentIDs(from: arguments, into: &agentIDs)
+        }
+        return agentIDs.sorted()
+    }
+
+    static func collectAgentIDs(from object: [String: Any], into agentIDs: inout Set<String>) {
+        if let agentID = nonEmptyString(object["agent_id"]) {
+            agentIDs.insert(agentID)
+        }
+        if let values = object["agent_ids"] as? [Any] {
+            for value in values {
+                if let agentID = nonEmptyString(value) {
+                    agentIDs.insert(agentID)
+                }
+            }
+        }
     }
 
     static func parseTopLevelTurnContext(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>,
+        seenKeys: CodexSessionLogSeenKeys,
         sessionTopLevelApprovalsReviewer: inout CodexSessionLogContextField
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["type"]) == "turn_context",
@@ -400,7 +1315,7 @@ private extension CodexSessionLogWatcher {
         }
 
         let dedupeKey = "top_level_turn_context:\(topLevelEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
-        guard seenKeys.insert(dedupeKey).inserted else {
+        guard seenKeys.insertIfAbsent(dedupeKey) else {
             return nil
         }
 
@@ -416,7 +1331,7 @@ private extension CodexSessionLogWatcher {
     static func parseLegacyCodexEvent(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>
+        seenKeys: CodexSessionLogSeenKeys
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "to_tui",
               normalizedString(object["kind"]) == "codex_event",
@@ -436,7 +1351,7 @@ private extension CodexSessionLogWatcher {
 
             let rolloutPath = nonEmptyString(message["rollout_path"])
             let dedupeKey = "session_configured:\(fallbackLine)"
-            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
             return CodexSessionLogEvent(
                 kind: .sessionConfigured,
                 detail: "Codex session configured",
@@ -446,7 +1361,7 @@ private extension CodexSessionLogWatcher {
 
         case "user_message":
             let dedupeKey = "user_message:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
             return CodexSessionLogEvent(
                 kind: .turnStarted,
                 detail: normalizedSummaryText(message["message"], limit: 140) ?? "Responding to your prompt",
@@ -456,12 +1371,12 @@ private extension CodexSessionLogWatcher {
 
         case "task_started":
             let dedupeKey = "task_started:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
             return CodexSessionLogEvent(kind: .turnStarted, detail: "Responding to your prompt")
 
         case "exec_command_begin":
             let dedupeKey = "exec_command_begin:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
             return CodexSessionLogEvent(
                 kind: .turnStarted,
                 detail: enrichedCommandDetail(from: message)
@@ -469,7 +1384,7 @@ private extension CodexSessionLogWatcher {
 
         case "patch_apply_begin":
             let dedupeKey = "patch_apply_begin:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
             return CodexSessionLogEvent(
                 kind: .turnStarted,
                 detail: patchApplyDetail(from: message)
@@ -477,7 +1392,7 @@ private extension CodexSessionLogWatcher {
 
         case "task_complete":
             let dedupeKey = "task_complete:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
             return CodexSessionLogEvent(
                 kind: .taskCompleted,
                 detail: normalizedSummaryText(message["last_agent_message"], limit: 240) ?? "Turn complete",
@@ -487,7 +1402,7 @@ private extension CodexSessionLogWatcher {
 
         case "turn_aborted":
             let dedupeKey = "turn_aborted:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
             return CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
 
         case "context_compacted":
@@ -499,13 +1414,30 @@ private extension CodexSessionLogWatcher {
             guard type.hasSuffix("_approval_request") || type == "request_user_input" else {
                 return nil
             }
-            let dedupeKey = "approval:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            let callID = eventField("call_id", payload: payload, message: message)
+            let approvalID = eventField("approval_id", payload: payload, message: message)
+            let effectiveApprovalID: String
+            if let approvalID {
+                effectiveApprovalID = "approval_id:\(approvalID)"
+            } else if let callID {
+                effectiveApprovalID = "call_id:\(callID)"
+            } else {
+                let legacyIdentifier = eventIdentifier(
+                    from: payload,
+                    message: message,
+                    fallback: fallbackLine
+                )
+                effectiveApprovalID = "legacy:\(legacyIdentifier)"
+            }
+            let dedupeKey = "approval:\(effectiveApprovalID)"
+            guard seenKeys.insertIfAbsent(dedupeKey) else { return nil }
             return CodexSessionLogEvent(
                 kind: .approvalNeeded,
                 detail: approvalDetail(type: type, message: message),
                 rootThreadID: eventThreadID(payload: payload, message: message),
-                rootTurnID: eventTurnID(from: object, payload: payload, message: message)
+                rootTurnID: eventTurnID(from: object, payload: payload, message: message),
+                callID: callID,
+                approvalID: approvalID
             )
         }
     }
@@ -513,7 +1445,7 @@ private extension CodexSessionLogWatcher {
     static func parseAppEvent(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>
+        seenKeys: CodexSessionLogSeenKeys
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "to_tui",
               normalizedString(object["kind"]) == "app_event",
@@ -523,7 +1455,7 @@ private extension CodexSessionLogWatcher {
         }
 
         let dedupeKey = "set_thread_goal_objective:\(fallbackLine)"
-        guard seenKeys.insert(dedupeKey).inserted else {
+        guard seenKeys.insertIfAbsent(dedupeKey) else {
             return nil
         }
 
@@ -538,7 +1470,7 @@ private extension CodexSessionLogWatcher {
     static func parseOperationEvent(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>
+        seenKeys: CodexSessionLogSeenKeys
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "from_tui",
               normalizedString(object["kind"]) == "op",
@@ -549,7 +1481,7 @@ private extension CodexSessionLogWatcher {
         switch operation.type {
         case "user_turn":
             let dedupeKey = "op_user_turn:\(operationEventIdentifier(from: object, payload: operation.payload, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else {
+            guard seenKeys.insertIfAbsent(dedupeKey) else {
                 return nil
             }
 
@@ -585,7 +1517,7 @@ private extension CodexSessionLogWatcher {
                 return nil
             }
             let dedupeKey = "op_override_turn_context:\(operationEventIdentifier(from: object, payload: operation.payload, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else {
+            guard seenKeys.insertIfAbsent(dedupeKey) else {
                 return nil
             }
 
@@ -602,7 +1534,7 @@ private extension CodexSessionLogWatcher {
             // Treat it as the modern equivalent of the legacy turn_aborted
             // record so the sidebar clears the working spinner promptly.
             let dedupeKey = "op_interrupt:\(operationEventIdentifier(from: object, payload: operation.payload, fallback: fallbackLine))"
-            guard seenKeys.insert(dedupeKey).inserted else {
+            guard seenKeys.insertIfAbsent(dedupeKey) else {
                 return nil
             }
 
@@ -638,7 +1570,7 @@ private extension CodexSessionLogWatcher {
     static func parseHistoryInsertEvent(
         object: [String: Any],
         fallbackLine: String,
-        seenKeys: inout Set<String>
+        seenKeys: CodexSessionLogSeenKeys
     ) -> CodexSessionLogEvent? {
         guard normalizedString(object["dir"]) == "to_tui",
               normalizedString(object["kind"]) == "insert_history_cell" else {
@@ -651,7 +1583,7 @@ private extension CodexSessionLogWatcher {
         }
 
         let dedupeKey = "insert_history_cell:\(fallbackLine)"
-        guard seenKeys.insert(dedupeKey).inserted else {
+        guard seenKeys.insertIfAbsent(dedupeKey) else {
             return nil
         }
 
@@ -764,6 +1696,14 @@ private extension CodexSessionLogWatcher {
             }
         }
         return fallback
+    }
+
+    static func eventField(
+        _ key: String,
+        payload: [String: Any],
+        message: [String: Any]
+    ) -> String? {
+        normalizedString(message[key]) ?? normalizedString(payload[key])
     }
 
     static func contextField(
@@ -1045,6 +1985,14 @@ private extension CodexSessionLogWatcher {
         return String(string[..<endIndex]) + "..."
     }
 
+    static func spawnMetadataSummaryText(_ value: Any?, limit: Int) -> String? {
+        guard let normalized = normalizedString(value),
+              isLikelyEncryptedCodexAgentPayload(normalized) == false else {
+            return nil
+        }
+        return normalizedSummaryText(normalized, limit: limit)
+    }
+
     static func lastPathComponent(_ path: String) -> String {
         URL(fileURLWithPath: path).lastPathComponent
     }
@@ -1057,4 +2005,10 @@ private extension CodexSessionLogWatcher {
     static let newlineByte = UInt8(ascii: "\n")
     static let nulByte: UInt8 = 0
     static let whitespaceBytes: Set<UInt8> = [9, 10, 13, 32]
+    static let terminalMultiAgentStatusKeys: Set<String> = [
+        "completed",
+        "failed",
+        "errored",
+        "cancelled",
+    ]
 }

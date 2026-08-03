@@ -500,6 +500,7 @@ final class AppControlExecutor {
                 initialPrompt: args.stringValue("initialPrompt"),
                 initialCommands: try agentLaunchInitialCommands(args: args),
                 inheritedScopedWorkspaceIDs: inheritedWorkspaceScopeForChildLaunch(),
+                parentSessionID: parentSessionIDForChildLaunch(),
                 focusPolicy: .preserveFirstResponder
             )
             try bindWorkspaceToScopedCallerIfNeeded(result.workspaceID, operation: action.rawValue)
@@ -541,6 +542,7 @@ final class AppControlExecutor {
                 panelID: resolved.panelID,
                 focusPolicy: .preserveFirstResponder
             ) {
+                recordPendingParentSessionIDForSendTextIfNeeded(targetPanelID: resolved.panelID)
                 return .init(
                     didMutateState: false,
                     result: [
@@ -674,6 +676,26 @@ final class AppControlExecutor {
                 runtimeState: runtime.automationState()
             )
 
+        case .panelScratchpadLookup:
+            guard let sessionID = normalizedOptionalText(args.stringValue("sessionID")) else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            guard let record = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+                throw AutomationSocketError.invalidPayload("sessionID does not refer to an active session")
+            }
+            try enforceWorkspaceAutomationAccess(record.workspaceID)
+            guard let target = scratchpadTarget(linkedToSessionID: sessionID) else {
+                return scratchpadLookupSnapshot(sessionRecord: record)
+            }
+            try enforceWorkspaceAutomationAccess(target.workspaceID)
+            return try scratchpadLookupSnapshot(
+                sessionID: sessionID,
+                windowID: target.windowID,
+                workspaceID: target.workspaceID,
+                panelID: target.panelID,
+                webState: target.webState
+            )
+
         case .panelScratchpadState:
             let resolved = try resolveScratchpadTarget(payload: args)
             let runtime = webPanelRuntimeRegistry.scratchpadRuntime(for: resolved.panelID)
@@ -783,6 +805,25 @@ private extension AppControlExecutor {
             return nil
         }
         return sessionRuntimeStore.effectiveWorkspaceScope(sessionID: callerSessionID)
+    }
+
+    func parentSessionIDForChildLaunch() -> String? {
+        guard let callerSessionID = requestContext().callerSessionID,
+              let caller = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
+              caller.agent != .processWatch else {
+            return nil
+        }
+        return caller.sessionID
+    }
+
+    func recordPendingParentSessionIDForSendTextIfNeeded(targetPanelID: UUID) {
+        guard let parentSessionID = parentSessionIDForChildLaunch() else {
+            return
+        }
+        sessionRuntimeStore.recordPendingPanelParentSessionID(
+            parentSessionID: parentSessionID,
+            forPanelID: targetPanelID
+        )
     }
 
     func bindWorkspaceToScopedCallerIfNeeded(
@@ -1791,6 +1832,54 @@ private extension AppControlExecutor {
         }
 
         return result
+    }
+
+    func scratchpadLookupSnapshot(sessionRecord: SessionRecord) -> [String: AutomationJSONValue] {
+        [
+            "linked": .bool(false),
+            "sessionID": .string(sessionRecord.sessionID),
+            "windowID": .string(sessionRecord.windowID.uuidString),
+            "workspaceID": .string(sessionRecord.workspaceID.uuidString),
+            "panelID": .null,
+            "documentID": .null,
+            "revision": .null,
+            "title": .null,
+            "sourcePanelID": .string(sessionRecord.panelID.uuidString),
+            "sourceWorkspaceID": .string(sessionRecord.workspaceID.uuidString),
+            "displayTitle": sessionRecord.displayTitleOverride.map { .string($0) } ?? .null,
+            "repoRoot": sessionRecord.repoRoot.map { .string($0) } ?? .null,
+            "cwd": sessionRecord.cwd.map { .string($0) } ?? .null,
+        ]
+    }
+
+    func scratchpadLookupSnapshot(
+        sessionID: String,
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState
+    ) throws -> [String: AutomationJSONValue] {
+        guard let scratchpad = webState.scratchpad,
+              let sessionLink = scratchpad.sessionLink,
+              sessionLink.sessionID == sessionID else {
+            throw AutomationSocketError.invalidPayload("sessionID has no linked Scratchpad panel")
+        }
+
+        return [
+            "linked": .bool(true),
+            "windowID": .string(windowID.uuidString),
+            "workspaceID": .string(workspaceID.uuidString),
+            "panelID": .string(panelID.uuidString),
+            "documentID": .string(scratchpad.documentID.uuidString),
+            "revision": .int(scratchpad.revision),
+            "title": .string(webState.title),
+            "sessionID": .string(sessionLink.sessionID),
+            "sourcePanelID": .string(sessionLink.sourcePanelID.uuidString),
+            "sourceWorkspaceID": .string(sessionLink.sourceWorkspaceID.uuidString),
+            "displayTitle": sessionLink.displayTitle.map { .string($0) } ?? .null,
+            "repoRoot": sessionLink.repoRoot.map { .string($0) } ?? .null,
+            "cwd": sessionLink.cwd.map { .string($0) } ?? .null,
+        ]
     }
 
     static func scratchpadDiagnosticJSON(

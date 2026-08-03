@@ -13,6 +13,12 @@ struct CLIInvocation: Equatable {
     var command: CLICommand
 }
 
+struct SessionBackgroundActivitySyncEntry: Equatable {
+    var id: String
+    var displayName: String?
+    var command: String?
+}
+
 enum CLICommand: Equatable {
     case agentPrepareManagedLaunch(ManagedAgentLaunchRequest)
     case agentManagedLaunchPreflightDecision(token: String)
@@ -25,6 +31,25 @@ enum CLICommand: Equatable {
     case setup(SetupCommand)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
+    case sessionBackgroundActivity(
+        sessionID: String,
+        panelID: UUID?,
+        phase: SessionBackgroundActivityPhase,
+        activityID: String,
+        kind: SessionBackgroundActivityKind,
+        displayName: String?,
+        command: String?,
+        processID: Int32?,
+        preserveWhenUnlisted: Bool
+    )
+    case sessionBackgroundActivitySync(
+        sessionID: String,
+        panelID: UUID?,
+        kind: SessionBackgroundActivityKind,
+        entries: [SessionBackgroundActivitySyncEntry],
+        pendingBackgroundTaskCount: Int,
+        preserveUnlistedActivities: Bool
+    )
     case sessionCodexHookEvent(sessionID: String, panelID: UUID?, event: CodexHookEvent)
     case sessionCodexNotifyCompletion(sessionID: String, panelID: UUID?, completion: CodexNotifyCompletion)
     case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
@@ -42,7 +67,7 @@ enum CLICommand: Equatable {
         requestID: String = UUID().uuidString
     ) -> AutomationRequestEnvelope? {
         switch self {
-        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
+        case .agentPrepareManagedLaunch, .agentManagedLaunchPreflightDecision, .doctor, .diagnosticsCollect, .diagnosticsSubmit, .notify, .setup, .sessionStart, .sessionStatus, .sessionBackgroundActivity, .sessionBackgroundActivitySync, .sessionCodexHookEvent, .sessionCodexNotifyCompletion, .sessionUpdateFiles, .sessionUpdateResumeRecord, .sessionIngestAgentEvent, .sessionStop:
             return nil
         case .appControlList(let kind):
             let command = kind == .action ? "app_control.list_actions" : "app_control.list_queries"
@@ -166,6 +191,76 @@ enum CLICommand: Equatable {
                 payload: payload
             )
 
+        case .sessionBackgroundActivity(
+            let sessionID,
+            let panelID,
+            let phase,
+            let activityID,
+            let kind,
+            let displayName,
+            let command,
+            let processID,
+            let preserveWhenUnlisted
+        ):
+            var payload: [String: AutomationJSONValue] = [
+                "phase": .string(phase.rawValue),
+                "activityID": .string(activityID),
+                "kind": .string(kind.rawValue),
+            ]
+            if let displayName {
+                payload["displayName"] = .string(displayName)
+            }
+            if let command {
+                payload["command"] = .string(command)
+            }
+            if let processID {
+                payload["processID"] = .int(Int(processID))
+            }
+            if preserveWhenUnlisted {
+                payload["preserveWhenUnlisted"] = .bool(true)
+            }
+            return AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: panelID?.uuidString,
+                requestID: requestID,
+                payload: payload
+            )
+
+        case .sessionBackgroundActivitySync(
+            let sessionID,
+            let panelID,
+            let kind,
+            let entries,
+            let pendingBackgroundTaskCount,
+            let preserveUnlistedActivities
+        ):
+            let entryValues = entries.map { entry -> AutomationJSONValue in
+                var object: [String: AutomationJSONValue] = [
+                    "id": .string(entry.id),
+                ]
+                if let displayName = entry.displayName {
+                    object["displayName"] = .string(displayName)
+                }
+                if let command = entry.command {
+                    object["command"] = .string(command)
+                }
+                return .object(object)
+            }
+            return AutomationEventEnvelope(
+                eventType: "session.background_activity",
+                sessionID: sessionID,
+                panelID: panelID?.uuidString,
+                requestID: requestID,
+                payload: [
+                    "phase": .string(SessionBackgroundActivityPhase.sync.rawValue),
+                    "kind": .string(kind.rawValue),
+                    "entries": .array(entryValues),
+                    "pendingCount": .int(max(0, pendingBackgroundTaskCount)),
+                    "preserveUnlistedActivities": .bool(preserveUnlistedActivities),
+                ]
+            )
+
         case .sessionCodexHookEvent(let sessionID, let panelID, let event):
             var payload: [String: AutomationJSONValue] = [
                 "hookEventName": .string(event.hookEventName),
@@ -175,6 +270,15 @@ enum CLICommand: Equatable {
             }
             if let permissionMode = event.permissionMode {
                 payload["permissionMode"] = .string(permissionMode)
+            }
+            if let toolUseID = event.toolUseID {
+                payload["toolUseID"] = .string(toolUseID)
+            }
+            if let callID = event.callID {
+                payload["callID"] = .string(callID)
+            }
+            if let approvalID = event.approvalID {
+                payload["approvalID"] = .string(approvalID)
             }
             if let threadID = event.threadID {
                 payload["threadID"] = .string(threadID)
@@ -200,6 +304,21 @@ enum CLICommand: Equatable {
             }
             if let cwd = event.cwd {
                 payload["cwd"] = .string(cwd)
+            }
+            if let subagentID = event.subagentID {
+                payload["subagentID"] = .string(subagentID)
+            }
+            if let subagentType = event.subagentType {
+                payload["subagentType"] = .string(subagentType)
+            }
+            if let spawnMetadata = event.spawnMetadata {
+                payload["spawnToolUseID"] = .string(spawnMetadata.toolUseID)
+                if let taskName = spawnMetadata.taskName {
+                    payload["spawnTaskName"] = .string(taskName)
+                }
+                if let message = spawnMetadata.message {
+                    payload["spawnMessage"] = .string(message)
+                }
             }
             return AutomationEventEnvelope(
                 eventType: "session.codex_hook_event",
@@ -314,6 +433,10 @@ enum CLICommand: Equatable {
             return resolvedSessionID
         case .sessionStatus(let sessionID, _, let kind, let summary, _):
             return "updated \(sessionID) to \(kind.rawValue): \(summary)"
+        case .sessionBackgroundActivity(let sessionID, _, let phase, let activityID, _, _, _, _, _):
+            return "\(phase.rawValue)ed background activity \(activityID) for \(sessionID)"
+        case .sessionBackgroundActivitySync(let sessionID, _, _, let entries, let pendingBackgroundTaskCount, _):
+            return "synced \(entries.count) background activities and \(pendingBackgroundTaskCount) pending tasks for \(sessionID)"
         case .sessionCodexHookEvent(let sessionID, _, let event):
             return "processed Codex hook \(event.hookEventName) for \(sessionID)"
         case .sessionCodexNotifyCompletion(let sessionID, _, _):
@@ -557,6 +680,7 @@ public enum ToasttyCLI {
       toastty [--json] setup install-skill <name> [--runtime agents|claude|codex|all] [--dry-run | --apply]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
+      toastty [--json] [--socket-path <path>] session background-activity start|finish --session <id> --activity <id> --kind child_agent|subagent [--panel <id>] [--display-name <text>] [--command <text>] [--pid <pid>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session scope show [--session <id>]
       toastty [--json] [--socket-path <path>] session scope set-current [--session <id>]
@@ -1093,6 +1217,9 @@ public enum ToasttyCLI {
                 )?.nonEmptyValue
             )
 
+        case "background-activity":
+            return try parseSessionBackgroundActivityCommand(remainingArguments, environment: environment)
+
         case "scope":
             return try parseSessionScopeCommand(remainingArguments, environment: environment)
 
@@ -1240,6 +1367,58 @@ public enum ToasttyCLI {
         default:
             throw ToasttyCLIError.usage("unknown session scope subcommand: \(subcommand)\n\n\(usage)")
         }
+    }
+
+    private static func parseSessionBackgroundActivityCommand(
+        _ arguments: [String],
+        environment: [String: String]
+    ) throws -> CLICommand {
+        guard let rawPhase = arguments.first,
+              let phase = SessionBackgroundActivityPhase(rawValue: rawPhase),
+              phase != .sync else {
+            throw ToasttyCLIError.usage("session background-activity requires start or finish\n\n\(usage)")
+        }
+        let parsed = try parseCommandArguments(
+            Array(arguments.dropFirst()),
+            valueOptions: ["--session", "--panel", "--activity", "--kind", "--display-name", "--command", "--pid"]
+        )
+
+        guard parsed.positionals.isEmpty else {
+            throw ToasttyCLIError.usage("session background-activity does not accept positional arguments\n\n\(usage)")
+        }
+
+        let kindValue = try requireValue("--kind", in: parsed)
+        guard let kind = SessionBackgroundActivityKind(rawValue: kindValue) else {
+            throw ToasttyCLIError.usage("kind must be one of: child_agent, subagent")
+        }
+        let processID = try parsed.singleValue("--pid").map { value in
+            guard let intValue = Int32(value), intValue > 0 else {
+                throw ToasttyCLIError.usage("--pid must be a positive 32-bit integer")
+            }
+            return intValue
+        }
+
+        return .sessionBackgroundActivity(
+            sessionID: try requireValue(
+                "--session",
+                environmentKey: ToasttyLaunchContextEnvironment.sessionIDKey,
+                in: parsed,
+                environment: environment
+            ),
+            panelID: try parseOptionalUUID(
+                flag: "--panel",
+                environmentKey: ToasttyLaunchContextEnvironment.panelIDKey,
+                in: parsed,
+                environment: environment
+            ),
+            phase: phase,
+            activityID: try requireValue("--activity", in: parsed),
+            kind: kind,
+            displayName: parsed.singleValue("--display-name"),
+            command: parsed.singleValue("--command"),
+            processID: processID,
+            preserveWhenUnlisted: false
+        )
     }
 
     private static func scopeCommandSessionID(

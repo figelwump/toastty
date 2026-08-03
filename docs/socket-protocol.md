@@ -96,6 +96,9 @@ Required top-level fields:
 
 Optional top-level fields:
 
+- `callerSessionID: String`
+  - identifies the managed session making a request for cooperative workspace
+    scope enforcement and diagnostics audit attribution
 - `payload: Object`
   - omitted payloads are treated as `{}`
 
@@ -286,6 +289,10 @@ Notable action-specific behavior:
     first-party command, or profiles that declare
     `initialPromptPlacement = "trailing"`. Blank values are ignored; nonblank
     prompts must not contain NUL bytes and are limited to 65,536 UTF-8 bytes.
+  - When an active managed session invokes `agent.launch`, Toastty records that
+    caller as the new session's parent. Same-workspace child sessions are
+    surfaced as nested sidebar rows; cross-workspace children retain their
+    canonical row and carry parent context.
 - `panel.scratchpad.set-content`
   - requires `args.sessionID`.
   - requires exactly one of `args.filePath` or `args.content`.
@@ -377,6 +384,7 @@ Common query IDs include:
 - `terminal.visible-text`
 - `panel.local-document.state`
 - `panel.browser.state`
+- `panel.scratchpad.lookup`
 - `panel.scratchpad.state`
 
 `panel.scratchpad.state` resolves a Scratchpad panel from `panelID`, or from
@@ -385,6 +393,13 @@ Scratchpad, active right-panel Scratchpad, any right-panel Scratchpad, then
 layout Scratchpad order. It returns Scratchpad document metadata, linked session
 ID when present, host lifecycle state, bootstrap content hashes, and recent
 Scratchpad diagnostics.
+
+`panel.scratchpad.lookup` requires `args.sessionID` and resolves only the
+Scratchpad linked to that active session. It returns `linked: false` with null
+panel/document metadata when the session has no linked Scratchpad, or
+`linked: true` with the panel ID, document ID, revision, title, and source
+session metadata when one exists. It never exports document content or guesses
+from focused/active Scratchpad state.
 
 ## 6) implemented automation commands
 
@@ -741,8 +756,9 @@ Validation:
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
 - if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
-- explicit `profileID=codex`, `profileID=claude`, and `profileID=pi` can be
-  launched by automation even when no `agents.toml` profile exists.
+- explicit `profileID=codex`, `profileID=claude`, `profileID=opencode`,
+  `profileID=mimocode`, and `profileID=pi` can be launched by automation even
+  when no `agents.toml` profile exists.
 - `initialCommands` entries must be non-blank single-line strings with no NUL
   bytes. The list is capped at 16 entries, and each entry is capped at 4096
   UTF-8 bytes.
@@ -1008,12 +1024,58 @@ Validation:
 
 - `panelID` must refer to a live panel
 - `agent` must be a valid lowercase agent ID
-- Built-in examples include `claude`, `codex`, and `pi`
+- Built-in examples include `claude`, `codex`, `opencode`, `mimocode`, and `pi`
 
 Result:
 
 - `eventType`
 - `stateVersion`
+
+### `session.scope.*`
+
+These are request commands, not event envelopes. They manage cooperative
+workspace scope for active managed sessions. Requests can identify the caller
+with top-level `callerSessionID`; if a scope command omits payload `sessionID`,
+Toastty falls back to that caller session ID.
+
+Common result:
+
+- `sessionID: String`
+- `isScoped: Bool`
+- `workspaceIDs: [UUID string]`
+- `effectiveWorkspaceIDs: [UUID string] | null`
+- `stateVersion?: Int` when the command mutates state
+
+Commands:
+
+- `session.scope.show`
+  - payload `sessionID?: String`
+  - returns the current scope without changing state
+- `session.scope.set_current`
+  - payload `sessionID?: String`
+  - payload `panelID: UUID string`
+  - scopes the caller session to its current workspace only by storing an empty
+    explicit scope
+  - if top-level `callerSessionID` is present, it must match the resolved
+    session ID
+  - rejects when `panelID` does not match the active session or no longer
+    resolves to a Toastty panel
+- `session.scope.set`
+  - payload `sessionID?: String`
+  - payload `workspaceIDs: [UUID string]`
+  - replaces the explicit workspace scope with the supplied workspace IDs
+- `session.scope.add`
+  - payload `sessionID?: String`
+  - payload `workspaceIDs: [UUID string]`
+  - adds the supplied workspace IDs to the existing explicit scope
+- `session.scope.clear`
+  - payload `sessionID?: String`
+  - clears the explicit scope and returns the session to unrestricted
+    automation
+
+Scoped app-control requests that target an unassigned workspace fail with
+`scope_denied`. See [Workspace Scope](agents/workspace-scope.md) for v1
+semantics, inherited child-launch scope, and enforcement coverage.
 
 ### `session.status`
 
@@ -1044,6 +1106,56 @@ Result:
 - `eventType`
 - `stateVersion`
 
+### `session.background_activity`
+
+Internal event used by Toastty-owned provider instrumentation to report child
+agents and in-process subagents. Third-party integrations should generally use
+`session.status` instead.
+
+Required:
+
+- top-level `sessionID`
+- payload `phase`
+- payload `kind`
+
+Optional top-level fields:
+
+- `panelID?: UUID string`
+
+Accepted payload keys:
+
+- `phase: "start" | "finish" | "sync"`
+- `kind: "child_agent" | "subagent"`
+- `activityID?: String`
+- `displayName?: String`
+- `command?: String`
+- `processID?: Int` (positive 32-bit integer)
+- `preserveWhenUnlisted?: Bool` (optional for `start`; defaults to `false`)
+- `pendingCount?: Int` (required and non-negative for `sync`)
+- `entries?: [{ id, displayName?, command? }]` (required for `sync`)
+- `preserveUnlistedActivities?: Bool` (optional for `sync`; defaults to `false`)
+
+Behavior:
+
+- `sessionID` must identify an active session
+- `panelID` is optional; when present it must match the active session
+- `start` requires `activityID` and creates or refreshes one child activity
+- `finish` requires `activityID` and removes that activity
+- `sync` is valid only for `kind: "subagent"`; it replaces the current
+  subagent activity set and records the pending background-task count
+- `sync` with `preserveUnlistedActivities: true` also retains unlisted rows
+  previously started with `preserveWhenUnlisted: true`; other unlisted rows
+  still follow replacement semantics
+- outstanding activities contribute child rows and can keep the parent in its
+  waiting status projection instead of treating an intermediate ready/idle
+  event as completion
+
+Result:
+
+- `eventType`
+- `status: "accepted" | "noop"`
+- `stateVersion`
+
 ### `session.codex_hook_event`
 
 Internal event used by Toastty's installed Codex status hook forwarder. Manual
@@ -1063,8 +1175,16 @@ Accepted payload keys:
 - `hookEventName: String`
 - `source?: String`
 - `permissionMode?: String`
+- `toolUseID?: String`
+- `callID?: String`
+- `approvalID?: String`
 - `threadID?: String`
 - `turnID?: String`
+- `subagentID?: String`
+- `subagentType?: String`
+- `spawnToolUseID?: String`
+- `spawnTaskName?: String` (bounded to 80 characters)
+- `spawnMessage?: String` (bounded to 512 characters)
 - `promptFingerprint?: String`
 - `kind?: "idle" | "working" | "needs_approval" | "ready" | "error"`
 - `summary?: String`
@@ -1073,15 +1193,49 @@ Accepted payload keys:
 - `sessionFilePath?: String`
 - `cwd?: String`
 
-The socket payload key is `permissionMode`; Toastty's CLI maps Codex hook JSON
-`permission_mode` into that camelCase payload field.
+The socket payload keys use camelCase; Toastty's CLI maps Codex hook JSON
+`permission_mode`, `tool_use_id`, `call_id`, and `approval_id` into
+`permissionMode`, `toolUseID`, `callID`, and `approvalID` respectively. These
+three operation identifiers are independent optional values. Missing, null,
+empty, or non-string identifier values are treated as absent. Codex's current
+`PermissionRequest` hook payload normally supplies none of them, so consumers
+must not assume approval hooks have an operation identifier or synthesize one.
+
+For recognized
+`spawn_agent` `PreToolUse` events, the CLI also maps `tool_use_id` and the task
+fields as provided into the internal `spawn*` keys. `spawnToolUseID` is required
+whenever either other spawn field is present. Newer Codex builds leave the task
+name readable but encrypt the delegated `message` as an opaque ciphertext token;
+Toastty discards such message payloads app-side so they never become row
+descriptions.
 
 Behavior:
 
 - `sessionID` must identify an active session
 - `panelID` is optional; when present it must match the active session
-- When `kind` is present, `summary` is required and Toastty updates the session
-  status
+- When `kind` is present, `summary` is required for payload validation. Its
+  presence does not guarantee a session-status update: managed Codex sessions
+  keep the status authority selected at launch, and root-thread/turn
+  qualification can reject an otherwise valid hook before status projection.
+  Subagent lifecycle hooks are reconciled through their own path and can return
+  after updating collaboration state without applying the payload's generic
+  status.
+- `SubagentStart` with a `subagentID` creates or reopens a collaboration-agent
+  child row. `SubagentStop` with the same ID removes it. The optional
+  `subagentType` becomes the initial row label; the generic `default` type is
+  shown as `Sub-agent` only when the row is created, so a repeated Start for a
+  live row keeps a correlated task-name label instead of resetting it. A
+  meaningful `subagentType` always becomes the label. For managed Codex sessions, Toastty correlates the
+  `PreToolUse` spawn metadata with the session recording's tool-use-to-agent-ID
+  mapping. The task name and any available plaintext description may arrive
+  before or after `SubagentStart` and enrich the row without changing its
+  hook-owned lifecycle. An encrypted message leaves the named row without a
+  description.
+  Correlation state is bounded and cleared with the session; metadata alone
+  cannot create, reopen, finish, or resurrect a row.
+- Hook-tracked collaboration agents are lifecycle-driven: they are not removed
+  by the session-recording fallback's stale-activity limit or by a corrected
+  Codex rollout path while the owning session remains active.
 - For first-party Codex sessions that use Toastty status notifications, Toastty
   latches root identity from root-starting hooks (`SessionStart` and
   `UserPromptSubmit`) and ignores later hook events from different threads.

@@ -223,11 +223,11 @@ typing shell functions directly.
 When the profile ID is `codex`, Toastty:
 
 1. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default.
-2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, and `Stop`. These events drive **Working**, actionable **Needs approval**, **Ready**, and native resume metadata for managed Codex sessions. When session recording context shows Codex is using an auto-reviewer through `approvals_reviewer`, Toastty suppresses the matching auto-reviewed approval prompt instead of surfacing it as a user approval. When the reviewer field is omitted in a resumed session, Toastty treats the permission request as ambiguous instead of immediately showing **Needs approval**.
+2. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, `SubagentStart`, `SubagentStop`, and `Stop`. These events drive **Working**, actionable **Needs approval**, **Ready**, native resume metadata, and Codex collaboration-agent rows for managed Codex sessions. A recognized `PreToolUse` spawn event also captures the delegated task name and any plaintext description Codex exposes. Newer Codex builds leave the task name readable but may provide the message as opaque ciphertext, which Toastty discards. When session recording context shows Codex is using an auto-reviewer through `approvals_reviewer`, Toastty suppresses the matching auto-reviewed approval prompt instead of surfacing it as a user approval. When the reviewer field is omitted in a resumed session, Toastty treats the permission request as ambiguous instead of immediately showing **Needs approval**.
 3. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
 4. **Injects Codex config for the notification fallback** with `-c notify=["/bin/sh", "<script-path>"]` to route notify events through that script.
 5. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`, and disables Codex enhanced keyboard reporting with `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT=1` so terminal keyboard modes are not left behind after exit.
-6. **Starts a session recording watcher** that polls the session log file (every 250 ms) for Codex root-turn context, including auto-review approval context. When hooks are installed, hooks remain authoritative for sidebar status and the watcher is context-only; when hooks are unavailable, the watcher also acts as the compatibility status fallback.
+6. **Starts local session watchers**. Toastty polls the temporary TUI session log (every 250 ms) for Codex root-turn and auto-review approval context; when hooks are unavailable, that log also provides the compatibility status fallback. After Codex reports native resume metadata, Toastty separately watches that session's native rollout JSONL for collaboration-agent lifecycle and the spawn-tool-to-child-agent identity mapping. When hooks are installed, hooks remain authoritative for collaboration lifecycle, while rollout events provide correlation metadata and a task-label fallback. Toastty joins that mapping with available `PreToolUse` metadata regardless of arrival order. When hooks are unavailable, the rollout watcher also provides the compatibility collaboration-lifecycle fallback.
 7. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
 8. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
@@ -244,6 +244,9 @@ When the profile ID is `claude`, Toastty:
    - `SessionStart` — captures Claude's native session ID, transcript path, and working directory for restored-session resume
    - `UserPromptSubmit` — fires when the user submits a prompt
    - `Stop` — fires when Claude stops
+   - `PostToolUse` for `Agent` and `Task` — tracks asynchronously launched Claude subagents with available launch metadata
+   - `SubagentStart` — tracks children launched by Claude dynamic workflows
+   - `SubagentStop` — removes completed Claude subagent rows
    - `PreToolUse` (wildcard matcher) — fires before any tool use
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
    - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
@@ -414,6 +417,49 @@ Actionable lifecycle events — `needs_approval`, `ready`, and `error` — drive
 - **macOS desktop notifications** (if the user has granted notification permission)
 
 While a managed agent session is active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel so the session status path stays authoritative.
+
+### Nested sessions and background activity
+
+When a managed session launches another managed agent through Toastty automation,
+Toastty records the launching session as the parent. Child sessions in the same
+workspace appear beneath that parent as expandable sidebar rows instead of
+duplicating the same work at the top level. A child in another workspace keeps
+its canonical row there and receives a parent label for context.
+
+The same child-row surface includes provider-reported background activity, such
+as a Codex collaboration agent or a Claude in-process subagent. Child rows show
+their provider status when available, and parent rows expand automatically when
+a child needs approval or reports an error. A parent can also show a waiting
+projection while children or other background tasks are still outstanding, so a
+brief ready/idle event does not make an orchestration wave look complete. A
+short resuming grace period prevents stale ready state from flashing between
+waves.
+
+For Codex, `SubagentStart` and `SubagentStop` hooks are the authoritative source
+for collaboration-agent rows when status hooks are installed. Session-recording
+events correlate the spawn tool-use ID with the child agent ID; the matching
+`PreToolUse` hook supplies the delegated task name and any available plaintext
+description. Toastty
+keeps a small bounded pending join so either event may arrive first, but metadata
+cannot create, reopen, or finish a row. When hooks are unavailable,
+session-recording events provide the compatibility lifecycle fallback and may
+still supply the label or a plaintext description. Newer Codex builds encrypt
+delegated task messages while leaving the task name readable; opaque ciphertext
+payloads are dropped whether they arrive via hook `tool_input` or the session
+recording, so the named row shows no description rather than ciphertext. This
+avoids duplicate rows and lets hook-tracked agents remain visible until Codex
+reports their completion.
+
+For Claude, asynchronous `Agent` and `Task` results create labeled subagent
+rows, and `SubagentStop` removes them. Dynamic Workflow results do not expose
+their child IDs, so `SubagentStart` creates one generic row per Workflow child;
+those lifecycle-owned rows remain visible through Claude's aggregate Workflow
+snapshot until their matching `SubagentStop` events arrive.
+
+Toastty-owned provider integrations report this activity through the internal
+`session background-activity` CLI command and `session.background_activity`
+socket event. Custom agents should normally use the ordinary `session status`,
+`session update-files`, and `session stop` commands instead.
 
 ### Later flags
 

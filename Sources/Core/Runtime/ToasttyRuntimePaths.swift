@@ -25,6 +25,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let configFileName = "config"
     private static let workspaceLayoutsFileName = "workspace-layout-profiles.json"
     private static let terminalProfilesFileName = "terminal-profiles.toml"
+    private static let recentRightPanelItemsFileName = "recent-right-panel-items.json"
     private static let logFileName = "toastty.log"
     private static let socketFileName = "events-v1.sock"
     private static let runtimeVersionFileName = "runtime-version.txt"
@@ -75,6 +76,10 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
     public var terminalProfilesFileURL: URL {
         configDirectoryURL.appending(path: Self.terminalProfilesFileName, directoryHint: .notDirectory)
+    }
+
+    public var recentRightPanelItemsFileURL: URL {
+        configDirectoryURL.appending(path: Self.recentRightPanelItemsFileName, directoryHint: .notDirectory)
     }
 
     public var defaultLogFileURL: URL {

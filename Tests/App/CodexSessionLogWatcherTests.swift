@@ -5,6 +5,157 @@ import XCTest
 
 @MainActor
 final class CodexSessionLogWatcherTests: XCTestCase {
+    func testWatcherTracksExactCapacityWithoutDegrading() async throws {
+        XCTAssertEqual(CodexSessionLogWatcher.maximumTrackedSeenKeyCount, 65_536)
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let eventsExpectation = expectation(description: "Events through exact capacity arrive")
+        eventsExpectation.expectedFulfillmentCount = 2
+        let capacityExpectation = expectation(description: "Exact capacity does not degrade")
+        capacityExpectation.isInverted = true
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState,
+            seenKeyCapacity: 2,
+            onSeenKeyCapacityExceeded: { _ in capacityExpectation.fulfill() }
+        ) { _ in
+            eventsExpectation.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-1","msg":{"type":"user_message","message":"One"}}}
+            {"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-2","msg":{"type":"user_message","message":"Two"}}}
+            """ + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [eventsExpectation], timeout: 1)
+        await fulfillment(of: [capacityExpectation], timeout: 0.1)
+        await watcher.stop()
+
+        XCTAssertEqual(cursorState.trackedSeenKeyCountForTesting, 2)
+    }
+
+    func testWatcherBoundsSeenKeysAndFailsOpenAfterCapacity() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let eventCount = 128
+        let eventsExpectation = expectation(description: "Unique events and untracked duplicate arrive")
+        eventsExpectation.expectedFulfillmentCount = eventCount + 1
+        eventsExpectation.assertForOverFulfill = true
+        let capacityExpectation = expectation(description: "Capacity diagnostic arrives once")
+        capacityExpectation.assertForOverFulfill = true
+        let cursorState = CodexSessionLogCursorState()
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState,
+            seenKeyCapacity: 8,
+            onSeenKeyCapacityExceeded: { capacity in
+                XCTAssertEqual(capacity, 8)
+                capacityExpectation.fulfill()
+            }
+        ) { event in
+            await recorder.append(event)
+            eventsExpectation.fulfill()
+        }
+
+        let lines = (0 ..< eventCount).map { index in
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-\#(index)","msg":{"type":"user_message","message":"Prompt \#(index)"}}}"#
+        }
+
+        watcher.start()
+        try append((lines + [lines[0], lines[eventCount - 1]]).joined(separator: "\n") + "\n", to: logURL)
+        await fulfillment(of: [eventsExpectation, capacityExpectation], timeout: 2)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events.count, eventCount + 1)
+        XCTAssertEqual(events.filter { $0.detail == "Prompt 0" }.count, 1)
+        XCTAssertEqual(events.filter { $0.detail == "Prompt 127" }.count, 2)
+        XCTAssertEqual(cursorState.trackedSeenKeyCountForTesting, 8)
+    }
+
+    func testWatcherRetainsOneShotCapacityStateAcrossCursorResume() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let capacityExpectation = expectation(description: "Capacity diagnostic remains one-shot")
+        capacityExpectation.assertForOverFulfill = true
+        let firstEvents = expectation(description: "First watcher consumes tracked and overflow events")
+        firstEvents.expectedFulfillmentCount = 2
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState,
+            seenKeyCapacity: 1,
+            onSeenKeyCapacityExceeded: { _ in capacityExpectation.fulfill() }
+        ) { _ in
+            firstEvents.fulfill()
+        }
+
+        let trackedLine = #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-tracked","msg":{"type":"user_message","message":"Tracked"}}}"#
+        firstWatcher.start()
+        try append(
+            trackedLine + "\n" +
+                #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-overflow-1","msg":{"type":"user_message","message":"Overflow one"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [firstEvents, capacityExpectation], timeout: 1)
+        await firstWatcher.stop()
+
+        let resumedEvents = expectation(description: "Resumed watcher processes only the untracked key")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState,
+            seenKeyCapacity: 1,
+            onSeenKeyCapacityExceeded: { _ in capacityExpectation.fulfill() }
+        ) { _ in
+            resumedEvents.fulfill()
+        }
+        secondWatcher.start()
+        try append(
+            trackedLine + "\n" +
+                #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-overflow-2","msg":{"type":"user_message","message":"Overflow two"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [resumedEvents], timeout: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await secondWatcher.stop()
+
+        XCTAssertEqual(cursorState.trackedSeenKeyCountForTesting, 1)
+    }
+
+    func testReleasingWatcherAndCursorStateReleasesSeenKeyStorage() async throws {
+        let logURL = try makeLogURL()
+        var cursorState: CodexSessionLogCursorState? = CodexSessionLogCursorState()
+        let eventExpectation = expectation(description: "Watcher stores a checkpoint")
+        var watcher: CodexSessionLogWatcher? = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: try XCTUnwrap(cursorState)
+        ) { _ in
+            eventExpectation.fulfill()
+        }
+
+        watcher?.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-release","msg":{"type":"user_message","message":"Release state"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [eventExpectation], timeout: 1)
+        await watcher?.stop()
+
+        let seenKeysBox = WeakObjectBox(cursorState?.seenKeysObjectForTesting)
+        XCTAssertNotNil(seenKeysBox.value)
+        watcher = nil
+        cursorState = nil
+        XCTAssertNil(seenKeysBox.value)
+    }
+
     func testWatcherDeduplicatesRepeatedExecCommandEvents() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
@@ -235,18 +386,17 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(events.map(\.nativeSessionID), [threadB, threadC, threadB])
     }
 
-    func testWatcherFlushesFinalBufferedLineOnStop() async throws {
+    func testWatcherLeavesFinalNonNewlineFragmentBufferedOnStop() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
-        let finalEvent = expectation(description: "Buffered final event flushes on stop")
-        finalEvent.assertForOverFulfill = true
+        let cursorState = CodexSessionLogCursorState()
 
         let watcher = CodexSessionLogWatcher(
             logURL: logURL,
-            pollIntervalNanoseconds: 10_000_000
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
         ) { event in
             await recorder.append(event)
-            finalEvent.fulfill()
         }
 
         watcher.start()
@@ -260,11 +410,99 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertTrue(bufferedEvents.isEmpty)
 
         await watcher.stop()
-        await fulfillment(of: [finalEvent], timeout: 1)
 
         let events = await recorder.snapshot()
+        XCTAssertEqual(events, [])
+        XCTAssertNil(cursorState.cursorForTesting)
+    }
+
+    func testWatcherPreservesApprovalIdentifiersFromPayloadAndMessageShapes() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"call_id":"call-outer","approval_id":"approval-outer","msg":{"type":"request_user_input","question":"Outer identifiers"}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Message identifiers","call_id":"call-message","approval_id":"approval-message"}}}
+                """,
+            expectedCount: 2
+        )
+
         XCTAssertEqual(events, [
-            CodexSessionLogEvent(kind: .approvalNeeded, detail: "Choose a path")
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "Outer identifiers",
+                callID: "call-outer",
+                approvalID: "approval-outer"
+            ),
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "Message identifiers",
+                callID: "call-message",
+                approvalID: "approval-message"
+            ),
+        ])
+    }
+
+    func testWatcherEmitsDistinctApprovalIDsThatShareCallID() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"First","call_id":"call-shared","approval_id":"approval-1"}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Second","call_id":"call-shared","approval_id":"approval-2"}}}
+                """,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events.map(\.approvalID), ["approval-1", "approval-2"])
+        XCTAssertEqual(events.map(\.callID), ["call-shared", "call-shared"])
+    }
+
+    func testWatcherDeduplicatesExactEffectiveApprovalID() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"First","call_id":"call-1","approval_id":"approval-shared"}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Duplicate","call_id":"call-2","approval_id":"approval-shared"}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "First",
+                callID: "call-1",
+                approvalID: "approval-shared"
+            ),
+        ])
+    }
+
+    func testWatcherKeepsLegacyApprovalWithoutOperationIdentifiers() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Legacy"}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .approvalNeeded, detail: "Legacy")
+        ])
+    }
+
+    func testWatcherFallsBackFromEmptyApprovalIDToCallIDAcrossShapes() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"call_id":"call-shared","approval_id":"","msg":{"type":"request_user_input","question":"First"}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"request_user_input","question":"Duplicate","call_id":"call-shared"}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .approvalNeeded,
+                detail: "First",
+                callID: "call-shared"
+            ),
         ])
     }
 
@@ -477,6 +715,58 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 kind: .turnStarted,
                 detail: "Responding to your prompt",
                 rootTurnID: "turn-root",
+                approvalPolicy: "on-request",
+                approvalsReviewer: "auto_review"
+            )
+        ])
+    }
+
+    func testWatcherRetainsInferredAutoReviewAcrossCleanRestart() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let firstRecorder = EventRecorder()
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await firstRecorder.append(event)
+        }
+        firstWatcher.start()
+        try append(
+            #"{"timestamp":"2026-06-02T17:53:00.654Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\n`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy.\n</permissions instructions>"}]}}"# + "\n",
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await firstWatcher.stop()
+        XCTAssertNotNil(cursorState.cursorForTesting)
+        let firstEvents = await firstRecorder.snapshot()
+        XCTAssertEqual(firstEvents, [])
+
+        let recorder = EventRecorder()
+        let turnEvent = expectation(description: "Restarted watcher retains parser context")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            turnEvent.fulfill()
+        }
+        secondWatcher.start()
+        try append(
+            #"{"timestamp":"2026-06-02T17:53:00.655Z","type":"turn_context","payload":{"turn_id":"turn-after-restart","cwd":"/tmp/workspace","approval_policy":"on-request"}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [turnEvent], timeout: 1)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Responding to your prompt",
+                rootTurnID: "turn-after-restart",
                 approvalPolicy: "on-request",
                 approvalsReviewer: "auto_review"
             )
@@ -880,6 +1170,247 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherResumesSameFileWithoutReplayingDeliveredLines() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let firstRecorder = EventRecorder()
+        let firstEvent = expectation(description: "First watcher delivers initial line")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await firstRecorder.append(event)
+            firstEvent.fulfill()
+        }
+
+        firstWatcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-first","msg":{"type":"user_message","message":"First prompt"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [firstEvent], timeout: 1)
+        await firstWatcher.stop()
+
+        let secondRecorder = EventRecorder()
+        let secondEvent = expectation(description: "Recreated watcher delivers only appended line")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await secondRecorder.append(event)
+            secondEvent.fulfill()
+        }
+
+        secondWatcher.start()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let eventsBeforeAppend = await secondRecorder.snapshot()
+        XCTAssertEqual(eventsBeforeAppend, [])
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-second","msg":{"type":"user_message","message":"Second prompt"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [secondEvent], timeout: 1)
+        await secondWatcher.stop()
+
+        let firstEvents = await firstRecorder.snapshot()
+        let secondEvents = await secondRecorder.snapshot()
+        XCTAssertEqual(firstEvents.map(\.detail), ["First prompt"])
+        XCTAssertEqual(secondEvents.map(\.detail), ["Second prompt"])
+    }
+
+    func testWatcherDoesNotCommitOrEmitTrailingLineUntilNewlineAfterRestart() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let line =
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-partial","msg":{"type":"user_message","message":"Completed after restart"}}}"#
+        let firstRecorder = EventRecorder()
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await firstRecorder.append(event)
+        }
+
+        firstWatcher.start()
+        try append(line, to: logURL)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await firstWatcher.stop()
+
+        let eventsBeforeNewline = await firstRecorder.snapshot()
+        XCTAssertEqual(eventsBeforeNewline, [])
+        XCTAssertNil(cursorState.cursorForTesting)
+
+        let secondRecorder = EventRecorder()
+        let completedEvent = expectation(description: "Trailing line emits once after newline")
+        completedEvent.assertForOverFulfill = true
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await secondRecorder.append(event)
+            completedEvent.fulfill()
+        }
+
+        secondWatcher.start()
+        try append("\n", to: logURL)
+        await fulfillment(of: [completedEvent], timeout: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await secondWatcher.stop()
+
+        let completedEvents = await secondRecorder.snapshot()
+        XCTAssertEqual(completedEvents.map(\.detail), ["Completed after restart"])
+        XCTAssertEqual(
+            cursorState.cursorForTesting?.completeLineOffset,
+            UInt64(Data((line + "\n").utf8).count)
+        )
+    }
+
+    func testWatcherInvalidatesCursorAfterTruncationBelowCompleteLine() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let firstEvent = expectation(description: "Initial line arrives before truncation")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { _ in
+            firstEvent.fulfill()
+        }
+        firstWatcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-before-truncate","msg":{"type":"user_message","message":"Before truncate"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [firstEvent], timeout: 1)
+        await firstWatcher.stop()
+
+        let writeHandle = try FileHandle(forWritingTo: logURL)
+        try writeHandle.truncate(atOffset: 0)
+        try writeHandle.close()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-after-truncate","msg":{"type":"user_message","message":"After truncate"}}}"# + "\n",
+            to: logURL
+        )
+
+        let recorder = EventRecorder()
+        let replacementEvent = expectation(description: "Truncated stream restarts from zero")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            replacementEvent.fulfill()
+        }
+        secondWatcher.start()
+        await fulfillment(of: [replacementEvent], timeout: 1)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events.map(\.detail), ["After truncate"])
+    }
+
+    func testWatcherInvalidatesCursorWhenLastLineEvidenceChangesWithoutSizeDecrease() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let initialLine =
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-before-rewrite","msg":{"type":"user_message","message":"Before rewrite"}}}"# + "\n"
+        let firstEvent = expectation(description: "Initial line arrives before rewrite")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { _ in
+            firstEvent.fulfill()
+        }
+        firstWatcher.start()
+        try append(initialLine, to: logURL)
+        await fulfillment(of: [firstEvent], timeout: 1)
+        await firstWatcher.stop()
+
+        let rewrittenLine =
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-after-rewrite","msg":{"type":"user_message","message":"After rewrite with enough extra text to exceed the prior cursor offset"}}}"# + "\n"
+        XCTAssertGreaterThan(rewrittenLine.utf8.count, initialLine.utf8.count)
+        let writeHandle = try FileHandle(forWritingTo: logURL)
+        try writeHandle.truncate(atOffset: 0)
+        try writeHandle.write(contentsOf: Data(rewrittenLine.utf8))
+        try writeHandle.close()
+
+        let recorder = EventRecorder()
+        let rewrittenEvent = expectation(description: "Last-line mismatch restarts from zero")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            rewrittenEvent.fulfill()
+        }
+        secondWatcher.start()
+        await fulfillment(of: [rewrittenEvent], timeout: 1)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(
+            events.map(\.detail),
+            ["After rewrite with enough extra text to exceed the prior cursor offset"]
+        )
+    }
+
+    func testWatcherInvalidatesCursorWhenPathIsReplaced() async throws {
+        let logURL = try makeLogURL()
+        let rotatedURL = logURL.deletingLastPathComponent().appendingPathComponent("rotated.jsonl")
+        let cursorState = CodexSessionLogCursorState()
+        let firstEvent = expectation(description: "Initial file line arrives")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { _ in
+            firstEvent.fulfill()
+        }
+        firstWatcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-old-file","msg":{"type":"user_message","message":"Old file"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [firstEvent], timeout: 1)
+        await firstWatcher.stop()
+
+        try FileManager.default.moveItem(at: logURL, to: rotatedURL)
+        XCTAssertTrue(FileManager.default.createFile(atPath: logURL.path, contents: Data()))
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-new-file","msg":{"type":"user_message","message":"New file"}}}"# + "\n",
+            to: logURL
+        )
+
+        let recorder = EventRecorder()
+        let replacementEvent = expectation(description: "Replacement file restarts from zero")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            replacementEvent.fulfill()
+        }
+        secondWatcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-rotated-file","msg":{"type":"user_message","message":"Rotated file"}}}"# + "\n",
+            to: rotatedURL
+        )
+        await fulfillment(of: [replacementEvent], timeout: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events.map(\.detail), ["New file"])
+    }
+
     func testWatcherDeduplicatesRepeatedUserPromptPreviewEvents() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
@@ -968,6 +1499,422 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherIgnoresMultiAgentEntriesBeforeCutoff() async throws {
+        // Entries at 05:41 predate the cutoff; the spawn at 06:10 does not.
+        let cutoff = ISO8601DateFormatter().date(from: "2026-07-09T06:00:00Z")!
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp": "2026-07-09T05:41:47.374Z", "type": "response_item", "payload": {"type": "function_call", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"stale spawn\"}", "call_id": "call_stale"}}
+                {"timestamp": "2026-07-09T05:41:47.881Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_stale", "output": "{\"agent_id\":\"stale-agent-id\",\"nickname\":\"Stale\"}"}}
+                {"timestamp": "2026-07-09T06:10:01.000Z", "type": "response_item", "payload": {"type": "function_call", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"fresh spawn\"}", "call_id": "call_fresh"}}
+                {"timestamp": "2026-07-09T06:10:02.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_fresh", "output": "{\"agent_id\":\"fresh-agent-id\",\"nickname\":\"Fresh\"}"}}
+                """#,
+            expectedCount: 1,
+            multiAgentEventCutoff: cutoff
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started Fresh",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "fresh-agent-id",
+                    hookActivityID: "fresh-agent-id",
+                    spawnToolUseID: "call_fresh",
+                    kind: .subagent,
+                    displayName: "Fresh",
+                    command: "fresh spawn"
+                )
+            ),
+        ])
+    }
+
+    func testWatcherParsesCurrentCollaborationLifecycle() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T18:44:10.355Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"message\":\"Inspect the scroll implementation and report risks\",\"task_name\":\"scroll_implementation\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783881851355,"agent_thread_id":"thread-1","agent_path":"/root/scroll_implementation","kind":"started"}}
+                {"timestamp":"2026-07-12T18:44:11.356Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/scroll_implementation\"}"}}
+                {"timestamp":"2026-07-12T18:46:28.517Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_message","occurred_at_ms":1783881988517,"agent_thread_id":"thread-1","agent_path":"/root/scroll_implementation","kind":"interacted"}}
+                {"timestamp":"2026-07-12T18:46:54.952Z","type":"response_item","payload":{"type":"agent_message","author":"/root/scroll_implementation","recipient":"/root","content":[{"type":"input_text","text":"Message Type: MESSAGE\nTask name: /root"}]}}
+                {"timestamp":"2026-07-12T18:49:54.952Z","type":"response_item","payload":{"type":"agent_message","author":"/root/scroll_implementation","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
+                """#,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started scroll_implementation",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/scroll_implementation",
+                    hookActivityID: "thread-1",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "scroll_implementation",
+                    command: "Inspect the scroll implementation and report risks"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/scroll_implementation",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
+    func testWatcherDropsEncryptedCollaborationSpawnMessage() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-13T20:10:14.011Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"task_name\":\"native_nav_sort\",\"fork_turns\":\"all\",\"message\":\"gAAAAABqVUYlTXM2t_RUiRJdyhJC7EScV_pvZf4oTf1czpLtlOnI53DmSgBobosvD5Be9dNM6WH5zQ6yMDpeYZ2vCxX3NxFWC6mgu-Y0O8lYQO-AQStZWi7216SJYD53GT4jg_KMQxU1ILOdm0eHXkSjWTy\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-13T20:10:14.636Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783973414635,"agent_thread_id":"thread-1","agent_path":"/root/native_nav_sort","kind":"started"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started native_nav_sort",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/native_nav_sort",
+                    hookActivityID: "thread-1",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "native_nav_sort"
+                )
+            ),
+        ])
+    }
+
+    func testWatcherTreatsCurrentCollaborationInterruptAsFinish() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783881851355,"agent_path":"/root/reviewer","kind":"started"}}
+                {"timestamp":"2026-07-12T18:45:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_interrupt","occurred_at_ms":1783881911355,"agent_path":"/root/reviewer","kind":"interrupted"}}
+                """#,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events.map(\.kind), [
+            .backgroundActivityStarted,
+            .backgroundActivityFinished,
+        ])
+        XCTAssertEqual(
+            events.compactMap(\.backgroundActivity?.activityID),
+            ["/root/reviewer", "/root/reviewer"]
+        )
+    }
+
+    func testWatcherUsesCollaborationOccurrenceTimeForReplayCutoff() async throws {
+        let cutoff = Date(timeIntervalSince1970: 1_783_881_800)
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_stale","occurred_at_ms":1783875653886,"agent_path":"/root/stale","kind":"started"}}
+                {"timestamp":"2026-07-12T18:44:12.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_fresh","occurred_at_ms":1783881851355,"agent_path":"/root/fresh","kind":"started"}}
+                """#,
+            expectedCount: 1,
+            multiAgentEventCutoff: cutoff
+        )
+
+        XCTAssertEqual(
+            events.compactMap(\.backgroundActivity?.activityID),
+            ["/root/fresh"]
+        )
+    }
+
+    func testWatcherRestartsCompletedCollaborationAgentForFollowUpTask() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T17:06:52.466Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783876012466,"agent_path":"/root/plan_review","kind":"started"}}
+                {"timestamp":"2026-07-12T17:09:47.604Z","type":"response_item","payload":{"type":"agent_message","author":"/root/plan_review","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
+                {"timestamp":"2026-07-12T17:15:38.831Z","type":"response_item","payload":{"type":"agent_message","author":"/root","recipient":"/root/plan_review","content":[{"type":"input_text","text":"Message Type: NEW_TASK\nTask name: /root/plan_review"}]}}
+                {"timestamp":"2026-07-12T17:16:14.745Z","type":"response_item","payload":{"type":"agent_message","author":"/root/plan_review","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
+                """#,
+            expectedCount: 4
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started plan_review",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/plan_review",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "plan_review"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/plan_review",
+                    kind: .subagent
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started plan_review",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/plan_review",
+                    kind: .subagent,
+                    displayName: "plan_review"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/plan_review",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
+    func testWatcherKeepsPathFallbackWhenCollaborationActivityPrecedesSpawnMetadata() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","occurred_at_ms":1783881851355,"agent_thread_id":"thread-1","agent_path":"/root/activity_first","kind":"started"}}
+                {"timestamp":"2026-07-12T18:44:11.356Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"message\":\"Inspect metadata ordering\",\"task_name\":\"metadata_name\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-12T18:44:11.357Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/activity_first\"}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started activity_first",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/activity_first",
+                    hookActivityID: "thread-1",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "activity_first"
+                )
+            ),
+        ])
+    }
+
+    func testWatcherRejectsUndatedCollaborationEventsWhenCutoffIsActive() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_stale","agent_path":"/root/stale","kind":"started"}}
+                {"type":"response_item","payload":{"type":"agent_message","author":"/root/current","recipient":"/root","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root"}]}}
+                """#,
+            expectedCount: 0,
+            multiAgentEventCutoff: Date()
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherRejectsCollaborationMessagesOutsideDirectParentRoute() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-12T17:15:38.831Z","type":"response_item","payload":{"type":"agent_message","author":"/root","recipient":"/root/reviewer/nested","content":[{"type":"input_text","text":"Message Type: NEW_TASK\nTask name: /root/reviewer/nested"}]}}
+                {"timestamp":"2026-07-12T17:16:14.745Z","type":"response_item","payload":{"type":"agent_message","author":"/root/reviewer","recipient":"/other","content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /other"}]}}
+                """#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherParsesMultiAgentFixtureAsSubagentActivities() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp": "2026-07-09T05:41:47.374Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_01adacd050d2bed9016a4f349b59c88195b2dc9e9fb19e352d", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"Reply with exactly the single word: done\"}", "call_id": "call_xKGDxu7LPYxEiAiAWXwGYJVl", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:47.397Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_01adacd050d2bed9016a4f349b59e0819584d369de5229f896", "name": "spawn_agent", "namespace": "multi_agent_v1", "arguments": "{\"agent_type\":\"default\",\"message\":\"Reply with exactly the single word: done\"}", "call_id": "call_JkGuvNP9Ih7rl4tZEqtd1yxu", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:47.881Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_xKGDxu7LPYxEiAiAWXwGYJVl", "output": "{\"agent_id\":\"019f4565-7efd-7393-aefc-a600f5e0724e\",\"nickname\":\"Herschel\"}", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:48.340Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_JkGuvNP9Ih7rl4tZEqtd1yxu", "output": "{\"agent_id\":\"019f4565-80fa-7c03-915a-9e48e5b869a9\",\"nickname\":\"Halley\"}", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:50.780Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_01adacd050d2bed9016a4f349df3f88195afce3bb18c7ad3c0", "name": "wait_agent", "namespace": "multi_agent_v1", "arguments": "{\"targets\":[\"019f4565-7efd-7393-aefc-a600f5e0724e\",\"019f4565-80fa-7c03-915a-9e48e5b869a9\"],\"timeout_ms\":60000}", "call_id": "call_d9kje1jqhIHq9DsE4zg6Dy3d", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:51.209Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_d9kje1jqhIHq9DsE4zg6Dy3d", "output": "{\"status\":{\"019f4565-7efd-7393-aefc-a600f5e0724e\":{\"completed\":\"done\"}},\"timed_out\":false}", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:53.216Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_01adacd050d2bed9016a4f34a0ca7c819589f4994647c114cc", "name": "wait_agent", "namespace": "multi_agent_v1", "arguments": "{\"targets\":[\"019f4565-80fa-7c03-915a-9e48e5b869a9\"],\"timeout_ms\":60000}", "call_id": "call_8crieQN3luM8YuC2fp6sqAo4", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                {"timestamp": "2026-07-09T05:41:53.230Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_8crieQN3luM8YuC2fp6sqAo4", "output": "{\"status\":{\"019f4565-80fa-7c03-915a-9e48e5b869a9\":{\"completed\":\"done\"}},\"timed_out\":false}", "internal_chat_message_metadata_passthrough": {"turn_id": "019f4565-6618-7c53-a502-46cfe18ef04e"}}}
+                """#,
+            expectedCount: 4
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started Herschel",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "019f4565-7efd-7393-aefc-a600f5e0724e",
+                    hookActivityID: "019f4565-7efd-7393-aefc-a600f5e0724e",
+                    spawnToolUseID: "call_xKGDxu7LPYxEiAiAWXwGYJVl",
+                    kind: .subagent,
+                    displayName: "Herschel",
+                    command: "Reply with exactly the single word: done"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started Halley",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "019f4565-80fa-7c03-915a-9e48e5b869a9",
+                    hookActivityID: "019f4565-80fa-7c03-915a-9e48e5b869a9",
+                    spawnToolUseID: "call_JkGuvNP9Ih7rl4tZEqtd1yxu",
+                    kind: .subagent,
+                    displayName: "Halley",
+                    command: "Reply with exactly the single word: done"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "019f4565-7efd-7393-aefc-a600f5e0724e",
+                    kind: .subagent
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "019f4565-80fa-7c03-915a-9e48e5b869a9",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
+    func testWatcherIgnoresUnknownMultiAgentOutputCallID() async throws {
+        let events = try await recordEvents(
+            from: #"""
+                {"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_missing","output":"{\"agent_id\":\"agent-1\",\"nickname\":\"Herschel\"}"}}
+                """#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherDoesNotFinishTimedOutMultiAgentWaitWithoutTerminalStatus() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:50.780Z","type":"response_item","payload":{"type":"function_call","name":"wait_agent","namespace":"multi_agent_v1","arguments":"{\"targets\":[\"agent-1\"],\"timeout_ms\":1}","call_id":"call_wait"}}
+                {"timestamp":"2026-07-09T05:41:51.209Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_wait","output":"{\"status\":{\"agent-1\":{\"pending\":\"still running\"}},\"timed_out\":true}"}}
+                """#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherParsesMultiAgentNamePrefixWhenNamespaceIsAbsent() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:47.374Z","type":"response_item","payload":{"type":"function_call","name":"multi_agent_v1.spawn_agent","arguments":"{\"agent_type\":\"reviewer\",\"message\":\"Inspect the diff\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\"}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started reviewer",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "agent-1",
+                    hookActivityID: "agent-1",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "reviewer",
+                    command: "Inspect the diff"
+                )
+            ),
+        ])
+    }
+
+    func testWatcherParsesRawSpawnAgentWhenNamespaceIsAbsent() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:47.374Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"agent_type\":\"reviewer\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\"}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events.first?.backgroundActivity?.activityID, "agent-1")
+    }
+
+    func testWatcherRejectsRawSpawnAgentFromUnknownNamespace() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:47.374Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"other","arguments":"{\"agent_type\":\"reviewer\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-07-09T05:41:47.881Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"agent-1\"}"}}
+                """#,
+            expectedCount: 0
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testWatcherTreatsCloseAgentOutputAsFinish() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:53.216Z","type":"response_item","payload":{"type":"function_call","name":"close_agent","namespace":"multi_agent_v1","arguments":"{\"agent_id\":\"agent-1\"}","call_id":"call_close"}}
+                {"timestamp":"2026-07-09T05:41:53.230Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_close","output":"{\"agent_id\":\"agent-1\"}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "agent-1",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
+    func testWatcherFallsBackToCloseAgentArgumentsWhenOutputHasNoAgentID() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-07-09T05:41:53.216Z","type":"response_item","payload":{"type":"function_call","name":"close_agent","namespace":"multi_agent_v1","arguments":"{\"agent_id\":\"agent-1\"}","call_id":"call_close"}}
+                {"timestamp":"2026-07-09T05:41:53.230Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_close","output":"{\"ok\":true}"}}
+                """#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "agent-1",
+                    kind: .subagent
+                )
+            ),
+        ])
+    }
+
     private func makeLogURL() throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-codex-watcher-tests-\(UUID().uuidString)", isDirectory: true)
@@ -995,7 +1942,8 @@ final class CodexSessionLogWatcherTests: XCTestCase {
     private func recordEvents(
         from contents: String,
         expectedCount: Int,
-        pollIntervalNanoseconds: UInt64 = 10_000_000
+        pollIntervalNanoseconds: UInt64 = 10_000_000,
+        multiAgentEventCutoff: Date? = nil
     ) async throws -> [CodexSessionLogEvent] {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
@@ -1005,7 +1953,11 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         eventsExpectation?.expectedFulfillmentCount = expectedCount
         eventsExpectation?.assertForOverFulfill = true
 
-        let watcher = CodexSessionLogWatcher(logURL: logURL, pollIntervalNanoseconds: pollIntervalNanoseconds) { event in
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: pollIntervalNanoseconds,
+            multiAgentEventCutoff: multiAgentEventCutoff
+        ) { event in
             await recorder.append(event)
             eventsExpectation?.fulfill()
         }
@@ -1035,5 +1987,13 @@ private actor EventRecorder {
 
     func snapshot() -> [CodexSessionLogEvent] {
         events
+    }
+}
+
+private final class WeakObjectBox {
+    weak var value: AnyObject?
+
+    init(_ value: AnyObject?) {
+        self.value = value
     }
 }

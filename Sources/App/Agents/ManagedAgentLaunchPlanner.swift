@@ -34,6 +34,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let codexResumeResolver: any CodexManagedSessionResolving
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
+    private var codexRolloutWatchersBySessionID: [String: CodexRolloutSessionLogWatcherRegistration] = [:]
+    private var desiredCodexRolloutLogURLsBySessionID: [String: URL] = [:]
+    private var codexRolloutWatcherTransitionsBySessionID: [String: CodexRolloutWatcherTransition] = [:]
+    private var codexSessionLogCursorStatesByKey: [CodexSessionLogStreamKey: CodexSessionLogCursorStateRegistration] = [:]
 
     init(
         store: AppStore,
@@ -72,6 +76,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
             }
         }
+        store.addActionAppliedObserver { [weak self] action, _, nextState in
+            guard case .updateTerminalPanelResumeRecord = action else {
+                return
+            }
+            self?.synchronizeCodexRolloutWatchers(with: nextState)
+        }
     }
 
     func prepareManagedLaunch(
@@ -105,6 +115,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             codexStatusTrackingSource: codexStatusTrackingSource
         )
         let launchStart = nowProvider()
+        let parentSessionID = resolvedParentSessionID(
+            for: request,
+            panelID: target.panelID,
+            sessionRuntimeStore: sessionRuntimeStore,
+            at: launchStart
+        )
 
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
@@ -112,6 +128,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             panelID: target.panelID,
             windowID: target.windowID,
             workspaceID: target.workspaceID,
+            parentSessionID: parentSessionID,
             usesSessionStatusNotifications: true,
             codexStatusTrackingSource: request.agent == .codex ? codexStatusTrackingSource : nil,
             cwd: resolvedCWD,
@@ -245,6 +262,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         sessionRuntimeStore.stopSession(sessionID: sessionID, at: nowProvider())
         Task { @MainActor in
             await cleanupManagedArtifacts(for: sessionID)
+            await cleanupCodexRolloutWatcher(for: sessionID)
+            removeCodexSessionLogCursorStates(for: sessionID)
         }
     }
 
@@ -326,6 +345,22 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         return codexStatusTrackingSourceProvider()
     }
 
+    private func resolvedParentSessionID(
+        for request: ManagedAgentLaunchRequest,
+        panelID: UUID,
+        sessionRuntimeStore: SessionRuntimeStore,
+        at now: Date
+    ) -> String? {
+        if let parentSessionID = request.parentSessionID {
+            sessionRuntimeStore.discardPendingPanelParentSessionID(forPanelID: panelID)
+            return parentSessionID
+        }
+        return sessionRuntimeStore.consumePendingPanelParentSessionID(
+            forPanelID: panelID,
+            at: now
+        )
+    }
+
     private func logCodexStatusTrackingSourceIfNeeded(
         agent: AgentKind,
         source: CodexStatusTrackingSource,
@@ -377,6 +412,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         )
         watcher?.start()
         managedArtifactsBySessionID[sessionID] = managedArtifacts
+        synchronizeCodexRolloutWatcherForActiveSession(sessionID: sessionID)
     }
 
     private func makeCodexSessionLogWatcher(
@@ -385,7 +421,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         codexStatusTrackingSource: CodexStatusTrackingSource
     ) -> CodexSessionLogWatcher {
         // TODO: Remove this watcher once Codex exposes stable start/approval hooks.
-        CodexSessionLogWatcher(logURL: logURL) { [weak self] event in
+        CodexSessionLogWatcher(
+            logURL: logURL,
+            cursorState: codexSessionLogCursorState(
+                sessionID: sessionID,
+                stream: .launchLog,
+                logURL: logURL
+            )
+        ) { [weak self] event in
             guard let self else { return }
             if event.kind == .sessionConfigured {
                 await self.handleCodexSessionConfiguredEvent(event, sessionID: sessionID)
@@ -438,9 +481,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
 
-        nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
         var scopedRecord = record
         scopedRecord.scopedWorkspaceIDs = currentActiveSession.scopedWorkspaceIDs
+        guard shouldAcceptCodexSessionLogResumeRecord(
+            scopedRecord,
+            activeSession: currentActiveSession,
+            sessionID: sessionID
+        ) else {
+            return
+        }
+        nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
         let didUpdate = store.send(
             .updateTerminalPanelResumeRecord(panelID: currentActiveSession.panelID, resumeRecord: scopedRecord)
         )
@@ -452,8 +502,54 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 "session_id": sessionID,
                 "panel_id": currentActiveSession.panelID.uuidString,
                 "native_session_id": scopedRecord.nativeSessionID,
+                "workspace_scope": workspaceScopeMetadata(currentActiveSession.scopedWorkspaceIDs),
             ]
         )
+    }
+
+    private func shouldAcceptCodexSessionLogResumeRecord(
+        _ resumeRecord: ManagedAgentResumeRecord,
+        activeSession: SessionRecord,
+        sessionID: String
+    ) -> Bool {
+        guard let store,
+              let sessionRuntimeStore,
+              let ownerPanelID = store.state.panelIDOwningManagedAgentResumeRecord(
+                agent: resumeRecord.agent,
+                nativeSessionID: resumeRecord.nativeSessionID
+              ),
+              ownerPanelID != activeSession.panelID,
+              let ownerSession = sessionRuntimeStore.sessionRegistry.activeSession(for: ownerPanelID),
+              ownerSession.agent == resumeRecord.agent else {
+            return true
+        }
+
+        ToasttyLog.info(
+            "Refused Codex session log resume record because native session is owned by an active panel",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "agent": resumeRecord.agent.rawValue,
+                "panel_id": activeSession.panelID.uuidString,
+                "owner_panel_id": ownerPanelID.uuidString,
+                "owner_session_id": ownerSession.sessionID,
+                "native_session_id": resumeRecord.nativeSessionID,
+                "session_file_basename": (resumeRecord.sessionFilePath as NSString).lastPathComponent,
+                "cwd": resumeRecord.cwd,
+                "workspace_scope": workspaceScopeMetadata(activeSession.scopedWorkspaceIDs),
+                "owner_workspace_scope": workspaceScopeMetadata(ownerSession.scopedWorkspaceIDs),
+            ]
+        )
+        return false
+    }
+
+    private func workspaceScopeMetadata(_ scope: Set<UUID>?) -> String {
+        guard let scope else { return "unrestricted" }
+        if scope.isEmpty { return "own_workspace_only" }
+        return scope
+            .map(\.uuidString)
+            .sorted()
+            .joined(separator: ",")
     }
 
     private func handleCodexSessionStatusEvent(
@@ -465,9 +561,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
 
-        let status: SessionStatus
         switch event.kind {
         case .sessionConfigured:
+            return
+        case .backgroundActivityStarted:
+            forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
+            return
+        case .backgroundActivityFinished:
+            forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
             return
         case .turnContextUpdated:
             sessionRuntimeStore.recordCodexOverrideTurnContext(
@@ -487,10 +588,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     approvalsReviewerField: event.approvalsReviewerField
                 )
             }
-            guard codexStatusTrackingSource != .hooks else {
-                return
-            }
-            status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
+            _ = sessionRuntimeStore.handleCodexSessionLogRootProgressObservation(
+                sessionID: sessionID,
+                observation: .sessionLogWorking(detail: event.detail),
+                at: nowProvider()
+            )
+            return
         case .historyUpdated:
             guard codexStatusTrackingSource != .hooks else {
                 return
@@ -518,6 +621,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 detail: event.detail,
                 threadID: event.rootThreadID,
                 turnID: event.rootTurnID,
+                callID: event.callID,
+                approvalID: event.approvalID,
                 at: nowProvider()
             )
             return
@@ -534,29 +639,222 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
             return
         case .turnAborted:
-            guard codexStatusTrackingSource != .hooks else {
-                return
-            }
-            guard let currentKind = sessionRuntimeStore
-                .sessionRegistry
-                .activeSession(sessionID: sessionID)?
-                .status?
-                .kind,
-                  currentKind == .working || currentKind == .needsApproval else {
-                return
-            }
-            status = SessionStatus(kind: .idle, summary: "Waiting", detail: event.detail)
+            _ = sessionRuntimeStore.handleCodexSessionLogRootProgressObservation(
+                sessionID: sessionID,
+                observation: .sessionLogTurnAborted(detail: event.detail),
+                at: nowProvider()
+            )
+            return
+        }
+    }
+
+    private func forwardCodexBackgroundActivityObservation(
+        _ event: CodexSessionLogEvent,
+        sessionID: String
+    ) {
+        guard let sessionRuntimeStore,
+              let activity = event.backgroundActivity else {
+            return
         }
 
-        sessionRuntimeStore.updateStatus(
+        let observation: CodexSubagentRolloutObservation
+        switch event.kind {
+        case .backgroundActivityStarted:
+            observation = .started(activity)
+        case .backgroundActivityFinished:
+            observation = .finished(activity)
+        default:
+            return
+        }
+        _ = sessionRuntimeStore.handleCodexSubagentRolloutObservation(
             sessionID: sessionID,
-            status: status,
+            observation: observation,
             at: nowProvider()
         )
     }
 
+    private func synchronizeCodexRolloutWatchers(with state: AppState) {
+        guard let sessionRuntimeStore else {
+            return
+        }
+
+        let activeSessions = sessionRuntimeStore.sessionRegistry.sessionsByID.values.compactMap { record in
+            sessionRuntimeStore.sessionRegistry.activeSession(sessionID: record.sessionID)
+        }
+        let activeSessionIDs = Set(activeSessions.map(\.sessionID))
+        for sessionID in Array(codexRolloutWatchersBySessionID.keys) where activeSessionIDs.contains(sessionID) == false {
+            detachCodexRolloutWatcher(sessionID: sessionID)
+        }
+        for activeSession in activeSessions {
+            synchronizeCodexRolloutWatcher(for: activeSession, state: state)
+        }
+    }
+
+    private func synchronizeCodexRolloutWatcherForActiveSession(sessionID: String) {
+        guard let store,
+              let sessionRuntimeStore,
+              let activeSession = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            return
+        }
+        synchronizeCodexRolloutWatcher(for: activeSession, state: store.state)
+    }
+
+    private func synchronizeCodexRolloutWatcher(
+        for activeSession: SessionRecord,
+        state: AppState
+    ) {
+        guard activeSession.agent == .codex else {
+            detachCodexRolloutWatcher(sessionID: activeSession.sessionID)
+            return
+        }
+        guard case .terminal(let terminalState)? = state
+            .workspaceSelection(containingPanelID: activeSession.panelID)?
+            .workspace
+            .panelState(for: activeSession.panelID),
+            let resumeRecord = terminalState.resumeRecord,
+            resumeRecord.agent == .codex,
+            resumeRecord.capturedAt >= activeSession.startedAt,
+            let rolloutPath = normalizedNonEmpty(resumeRecord.sessionFilePath) else {
+            detachCodexRolloutWatcher(sessionID: activeSession.sessionID)
+            return
+        }
+
+        attachCodexRolloutWatcher(
+            sessionID: activeSession.sessionID,
+            logURL: URL(fileURLWithPath: rolloutPath)
+        )
+    }
+
+    private func attachCodexRolloutWatcher(sessionID: String, logURL: URL) {
+        let previousLogURL = codexRolloutWatchersBySessionID[sessionID]?.logURL
+        desiredCodexRolloutLogURLsBySessionID[sessionID] = logURL
+        if previousLogURL != nil,
+           previousLogURL != logURL {
+            // A replaced rollout claim means every subagent row sourced from the
+            // old file is stale in fallback mode. Hook authority retains its
+            // projected rows and correlation state across watcher replacement.
+            _ = sessionRuntimeStore?.handleCodexSubagentRolloutObservation(
+                sessionID: sessionID,
+                observation: .streamReset,
+                at: nowProvider()
+            )
+        }
+        reconcileCodexRolloutWatcher(sessionID: sessionID)
+    }
+
+    private func detachCodexRolloutWatcher(sessionID: String) {
+        desiredCodexRolloutLogURLsBySessionID.removeValue(forKey: sessionID)
+        reconcileCodexRolloutWatcher(sessionID: sessionID)
+    }
+
+    /// Replacements are serialized so two watchers never parse or checkpoint
+    /// the same managed-session stream concurrently. Requests received while a
+    /// watcher is stopping are coalesced to the latest desired URL.
+    private func reconcileCodexRolloutWatcher(sessionID: String) {
+        guard codexRolloutWatcherTransitionsBySessionID[sessionID] == nil else {
+            return
+        }
+        let desiredLogURL = desiredCodexRolloutLogURLsBySessionID[sessionID]
+        guard let registration = codexRolloutWatchersBySessionID[sessionID] else {
+            guard let desiredLogURL else {
+                return
+            }
+            startCodexRolloutWatcher(sessionID: sessionID, logURL: desiredLogURL)
+            return
+        }
+        guard registration.logURL != desiredLogURL else {
+            return
+        }
+
+        let transitionID = UUID()
+        let task = Task { @MainActor [weak self] in
+            await registration.watcher.stop()
+            guard let self else { return }
+            if self.codexRolloutWatchersBySessionID[sessionID]?.id == registration.id {
+                self.codexRolloutWatchersBySessionID.removeValue(forKey: sessionID)
+            }
+            guard self.codexRolloutWatcherTransitionsBySessionID[sessionID]?.id == transitionID else {
+                return
+            }
+            self.codexRolloutWatcherTransitionsBySessionID.removeValue(forKey: sessionID)
+            self.reconcileCodexRolloutWatcher(sessionID: sessionID)
+        }
+        codexRolloutWatcherTransitionsBySessionID[sessionID] = CodexRolloutWatcherTransition(
+            id: transitionID,
+            task: task
+        )
+    }
+
+    private func startCodexRolloutWatcher(sessionID: String, logURL: URL) {
+        let registrationID = UUID()
+        let watcher = makeCodexRolloutSessionLogWatcher(
+            sessionID: sessionID,
+            logURL: logURL,
+            registrationID: registrationID
+        )
+        codexRolloutWatchersBySessionID[sessionID] = CodexRolloutSessionLogWatcherRegistration(
+            id: registrationID,
+            logURL: logURL,
+            watcher: watcher
+        )
+        watcher.start()
+    }
+
+    private func makeCodexRolloutSessionLogWatcher(
+        sessionID: String,
+        logURL: URL,
+        registrationID: UUID
+    ) -> CodexSessionLogWatcher {
+        // Rollout files can be re-claimed across launches (workspace restore);
+        // collab lifecycle entries older than this managed session belong to a
+        // process that no longer exists.
+        let multiAgentEventCutoff = sessionRuntimeStore?.sessionRegistry
+            .activeSession(sessionID: sessionID)?
+            .startedAt
+        return CodexSessionLogWatcher(
+            logURL: logURL,
+            multiAgentEventCutoff: multiAgentEventCutoff,
+            cursorState: codexSessionLogCursorState(
+                sessionID: sessionID,
+                stream: .canonicalRollout,
+                logURL: logURL
+            )
+        ) { [weak self] event in
+            await self?.handleCodexRolloutSessionLogEvent(
+                event,
+                sessionID: sessionID,
+                logURL: logURL,
+                registrationID: registrationID
+            )
+        }
+    }
+
+    private func handleCodexRolloutSessionLogEvent(
+        _ event: CodexSessionLogEvent,
+        sessionID: String,
+        logURL: URL,
+        registrationID: UUID
+    ) {
+        guard let registration = codexRolloutWatchersBySessionID[sessionID],
+              registration.id == registrationID,
+              registration.logURL == logURL,
+              desiredCodexRolloutLogURLsBySessionID[sessionID] == logURL else {
+            return
+        }
+        switch event.kind {
+        case .backgroundActivityStarted, .backgroundActivityFinished:
+            forwardCodexBackgroundActivityObservation(event, sessionID: sessionID)
+        default:
+            return
+        }
+    }
+
     private func cleanupManagedArtifacts(forInactiveSessionsIn registry: SessionRegistry) async {
-        let inactiveSessionIDs = managedArtifactsBySessionID.keys.filter { sessionID in
+        let trackedSessionIDs = Set(managedArtifactsBySessionID.keys)
+            .union(codexRolloutWatchersBySessionID.keys)
+            .union(desiredCodexRolloutLogURLsBySessionID.keys)
+            .union(codexRolloutWatcherTransitionsBySessionID.keys)
+        let inactiveSessionIDs = trackedSessionIDs.filter { sessionID in
             registry.activeSession(sessionID: sessionID) == nil
         }
         for sessionID in inactiveSessionIDs {
@@ -565,6 +863,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             }
             nativeSessionObserverRegistry.cancelObservation(sessionID: sessionID)
             await cleanupManagedArtifacts(for: sessionID)
+            await cleanupCodexRolloutWatcher(for: sessionID)
+            removeCodexSessionLogCursorStates(for: sessionID)
         }
     }
 
@@ -573,6 +873,17 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
         await cleanup(managedArtifacts)
+    }
+
+    private func cleanupCodexRolloutWatcher(for sessionID: String) async {
+        desiredCodexRolloutLogURLsBySessionID.removeValue(forKey: sessionID)
+        if let transition = codexRolloutWatcherTransitionsBySessionID[sessionID] {
+            await transition.task.value
+        }
+        if let registration = codexRolloutWatchersBySessionID.removeValue(forKey: sessionID) {
+            await registration.watcher.stop()
+        }
+        codexRolloutWatcherTransitionsBySessionID.removeValue(forKey: sessionID)
     }
 
     private func cleanup(_ managedArtifacts: ManagedLaunchArtifacts) async {
@@ -584,6 +895,34 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return
         }
         try? fileManager.removeItem(at: managedArtifacts.directoryURL)
+    }
+
+    private func codexSessionLogCursorState(
+        sessionID: String,
+        stream: CodexSessionLogStream,
+        logURL: URL
+    ) -> CodexSessionLogCursorState {
+        let key = CodexSessionLogStreamKey(
+            sessionID: sessionID,
+            stream: stream
+        )
+        let standardizedPath = logURL.standardizedFileURL.path
+        if let registration = codexSessionLogCursorStatesByKey[key],
+           registration.standardizedPath == standardizedPath {
+            return registration.cursorState
+        }
+        let cursorState = CodexSessionLogCursorState()
+        codexSessionLogCursorStatesByKey[key] = CodexSessionLogCursorStateRegistration(
+            standardizedPath: standardizedPath,
+            cursorState: cursorState
+        )
+        return cursorState
+    }
+
+    private func removeCodexSessionLogCursorStates(for sessionID: String) {
+        codexSessionLogCursorStatesByKey = codexSessionLogCursorStatesByKey.filter { key, _ in
+            key.sessionID != sessionID
+        }
     }
 
     private static func locatePanel(
@@ -612,6 +951,20 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             return .sessionLogFallback(reason: "hook_status_unavailable")
         }
     }
+
+    var codexRolloutWatcherPathsForTesting: [String: String] {
+        codexRolloutWatchersBySessionID.mapValues { registration in
+            registration.logURL.path
+        }
+    }
+
+    var codexSessionLogCursorStateCountForTesting: Int {
+        codexSessionLogCursorStatesByKey.count
+    }
+
+    var codexRolloutWatcherTransitionCountForTesting: Int {
+        codexRolloutWatcherTransitionsBySessionID.count
+    }
 }
 
 private struct ManagedLaunchTarget {
@@ -625,6 +978,32 @@ private struct ManagedLaunchArtifacts {
     let directoryURL: URL
     let codexSessionLogWatcher: CodexSessionLogWatcher?
     let cleanupPolicy: LaunchArtifactsCleanupPolicy
+}
+
+private struct CodexRolloutSessionLogWatcherRegistration {
+    let id: UUID
+    let logURL: URL
+    let watcher: CodexSessionLogWatcher
+}
+
+private struct CodexRolloutWatcherTransition {
+    let id: UUID
+    let task: Task<Void, Never>
+}
+
+private enum CodexSessionLogStream: Hashable {
+    case launchLog
+    case canonicalRollout
+}
+
+private struct CodexSessionLogStreamKey: Hashable {
+    let sessionID: String
+    let stream: CodexSessionLogStream
+}
+
+private struct CodexSessionLogCursorStateRegistration {
+    let standardizedPath: String
+    let cursorState: CodexSessionLogCursorState
 }
 
 private func normalizedNonEmpty(_ value: String?) -> String? {

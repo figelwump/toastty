@@ -8,6 +8,8 @@ This guide covers building Toastty from source, running validation, and producin
 - [Tuist](https://tuist.io) (build system)
 - Xcode 16+ with Swift 6.0
 - [sv](https://github.com/figelwump/sv) (secret vault for development credentials)
+- Node.js/npm (web-panel tests and release-notice checks)
+- `jq` and ripgrep (required by the full validation gate)
 - Ghostty XCFramework (optional — Toastty can build in fallback mode without it)
 
 ## Clone and generate
@@ -74,7 +76,7 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 ## Validate
 
 ```bash
-# Full gate: generate + build + workspace-tabs smoke + test
+# Full gate: generate, self-tests, web-panel tests, build, smoke, and app tests
 ./scripts/automation/check.sh
 
 # Smoke UI automation
@@ -166,6 +168,7 @@ The release script expects:
 - a clean Toastty git working tree
 - a release Ghostty artifact at `Dependencies/GhosttyKit.Release.xcframework`
 - Ghostty provenance metadata at `Dependencies/GhosttyKit.Release.metadata.env`
+- access to the clean Ghostty source checkout containing the recorded release commit
 - a local `Developer ID Application` certificate
 - notarization credentials injected at runtime
 - a Sparkle private key injected at runtime as `TOASTTY_SPARKLE_PRIVATE_KEY`
@@ -188,6 +191,10 @@ sv exec -- env \
 
 The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
 `sv exec` must provide `TUIST_TOASTTY_DIAGNOSTICS_ENDPOINT` and `TUIST_TOASTTY_DIAGNOSTICS_UPLOAD_KEY`; release builds fail if the generated project would embed empty diagnostics submit endpoint or upload-key settings.
+Before the archive is built, the release workflow verifies the generated
+third-party notices against the pinned production web-panel dependencies,
+Ghostty, Sparkle, and the checked-in Toastty license. The verified notices are
+bundled at `Contents/Resources/ThirdPartyNotices.txt` in the app.
 It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags
@@ -203,7 +210,7 @@ Prerequisites:
 - `gh` is installed and authenticated for the target repo
 - the recorded release commit is available in the current checkout
 
-Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags.
+Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags; the publisher verifies those exact provenance lines before creating the release.
 
 ```bash
 sv exec -- env \

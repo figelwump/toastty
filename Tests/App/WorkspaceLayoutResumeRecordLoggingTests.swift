@@ -32,7 +32,8 @@ final class WorkspaceLayoutResumeRecordLoggingTests: XCTestCase {
             nativeSessionID: "db4f311b-12d0-4f61-ba81-0ae44ed10492",
             sessionFilePath: "/tmp/claude/session.jsonl",
             cwd: "/tmp/active-session-repo",
-            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scopedWorkspaceIDs: [workspaceID]
         )
 
         XCTAssertTrue(store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: record)))
@@ -47,6 +48,7 @@ final class WorkspaceLayoutResumeRecordLoggingTests: XCTestCase {
         XCTAssertEqual(metadata["agent"], "claude")
         XCTAssertEqual(metadata["native_session_id"], "db4f311b-12d0-4f61-ba81-0ae44ed10492")
         XCTAssertEqual(metadata["session_file_basename"], "session.jsonl")
+        XCTAssertEqual(metadata["workspace_scope"], workspaceID.uuidString)
         XCTAssertEqual(metadata["tab_selected"], "true")
         XCTAssertEqual(metadata["workspace_selected"], "true")
     }
@@ -98,7 +100,8 @@ final class WorkspaceLayoutResumeRecordLoggingTests: XCTestCase {
             nativeSessionID: "019e2823-f520-7690-91b6-cd84eb52dd8a",
             sessionFilePath: "/tmp/toastty/session.jsonl",
             cwd: "/tmp/toastty",
-            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scopedWorkspaceIDs: [workspaceID]
         )
         var resumeState = splitState
         XCTAssertTrue(
@@ -123,6 +126,7 @@ final class WorkspaceLayoutResumeRecordLoggingTests: XCTestCase {
         XCTAssertEqual(resumeLog.metadata["agent"], "codex")
         XCTAssertEqual(resumeLog.metadata["native_session_id"], "019e2823-f520-7690-91b6-cd84eb52dd8a")
         XCTAssertEqual(resumeLog.metadata["session_file_basename"], "session.jsonl")
+        XCTAssertEqual(resumeLog.metadata["workspace_scope"], workspaceID.uuidString)
         XCTAssertEqual(resumeLog.metadata["next_count"], "1")
 
         logs.removeAll()
@@ -146,6 +150,7 @@ final class WorkspaceLayoutResumeRecordLoggingTests: XCTestCase {
         XCTAssertEqual(clearLog.metadata["resume_record_action"], "clear")
         XCTAssertEqual(clearLog.metadata["panel_id"], focusedPanelID.uuidString)
         XCTAssertEqual(clearLog.metadata["previous_agent"], "codex")
+        XCTAssertEqual(clearLog.metadata["previous_workspace_scope"], workspaceID.uuidString)
         XCTAssertEqual(clearLog.metadata["resume_record_present"], "false")
         XCTAssertEqual(clearLog.metadata["next_count"], "0")
 

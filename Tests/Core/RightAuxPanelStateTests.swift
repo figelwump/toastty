@@ -47,6 +47,18 @@ struct RightAuxPanelStateTests {
     }
 
     @Test
+    func scratchpadTabIdentityUsesDocumentIDWhenAvailable() {
+        let panelID = UUID()
+        let documentID = UUID()
+        let webState = WebPanelState(
+            definition: .scratchpad,
+            scratchpad: ScratchpadState(documentID: documentID, revision: 1)
+        )
+
+        #expect(RightAuxPanelTabIdentity.identity(for: webState, panelID: panelID) == .scratchpad(id: documentID))
+    }
+
+    @Test
     func removingFinalTabKeepsVisiblePanelShellOpen() throws {
         let tabID = UUID()
         let panelID = UUID()

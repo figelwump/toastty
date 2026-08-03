@@ -25,6 +25,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
     session file path or Toastty-owned marker path, working directory, capture
     timestamp, and any explicit workspace-scope identifiers needed to restore a
     scoped session after app restart.
+- `~/.toastty/recent-right-panel-items.json`
+  - The locally persisted Recently Opened list for right-panel browsers, local
+    document paths, and Scratchpad document IDs/titles. The list contains up to
+    20 items and may contain URLs or local paths that identify the supporting
+    material you opened.
 - `~/.toastty/managed-agent-resume/`
   - Toastty-owned marker files for OpenCode and MiMo Code native resume records.
     Marker filenames are derived from hashed resume metadata. Marker contents
@@ -53,6 +58,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
+  - `<runtime-home>/recent-right-panel-items.json`
   - `<runtime-home>/managed-agent-resume/`
   - `<runtime-home>/scratchpad-documents/`
   - `<runtime-home>/history/pane-journals/`
@@ -60,11 +66,31 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/instance.json`
   - a dedicated `UserDefaults` suite derived from that runtime-home path
 
+## What Toastty reads locally for agent status
+
+- For managed Codex sessions, Toastty reads the temporary TUI session record it
+  requested through `CODEX_TUI_SESSION_LOG_PATH` for root-turn and approval
+  context. After Codex identifies its native session file, Toastty also watches
+  that rollout JSONL for collaboration-agent lifecycle and identity mapping.
+  Toastty derives child-agent IDs, task/display names, and available plaintext
+  descriptions for the live sidebar; task names are limited to 80 characters,
+  descriptions to 512 characters, and opaque encrypted descriptions are
+  discarded. Per managed session, Toastty retains at most 64 pending and 64
+  resolved subagent metadata correlations and 16 recent auto-reviewed turn IDs.
+  Active collaboration rows and 120-second finish tombstones are not
+  cardinality-capped. The launch-log watcher retains at most 65,536 compact
+  deduplication fingerprints per stream; after that ceiling, it preserves
+  existing duplicate protection but processes new observations without
+  retaining additional fingerprints and records a local warning. This
+  reconciliation state is memory-only and discarded with its owning session or
+  watcher. Child-agent display names can appear in Toastty's structured local
+  logs. Toastty does not modify the Codex rollout file.
+
 ## What Toastty creates temporarily
 
 - Automation mode creates a Unix domain socket at a short temp path derived from the active runtime home when runtime isolation is enabled, otherwise under `$TMPDIR/toastty-$UID/events-v1.sock`, unless `TOASTTY_SOCKET_PATH` overrides it.
 - Automation runs can also write screenshots and state dumps under `artifacts/` or the directory provided via `--artifacts-dir`.
-- `Toastty > Send Diagnostics to Developer…` copies an agent snippet that first runs `toastty doctor --json` into a temporary local file, then writes a redacted diagnostics JSON bundle to a per-run temporary path with restrictive permissions. The bundle includes app/runtime metadata, socket probe results, shell-integration checks, shell probe output when provided, embedded redacted Toastty log contents, and a sanitized in-memory audit of recent automation socket requests when the running app can provide it.
+- `Toastty > Copy Diagnostics Collection Snippet…` copies an agent snippet that first runs `toastty doctor --json` into a temporary local file, then writes a redacted diagnostics JSON bundle to a per-run temporary path with restrictive permissions. The bundle includes app/runtime metadata, socket probe results, shell-integration checks, shell probe output when provided, embedded redacted Toastty log contents, and a sanitized in-memory audit of recent automation socket requests when the running app can provide it.
 - Browser panel screenshot actions can write user-selected PNG files, place PNG data on the macOS pasteboard, or write temporary agent-share screenshots under the system temp directory in `toastty-browser-screenshots/`.
 - Browser annotation sends can write temporary annotated PNG files under the system temp directory in `toastty-browser-annotations/`, then send the selected managed agent a prompt containing those file paths plus the page title, URL, viewport, and numbered comments when available.
 

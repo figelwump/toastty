@@ -37,6 +37,58 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertEqual(outcome.result?.bool("available"), true)
     }
 
+    func testTerminalSendTextFromManagedSessionStampsPendingParentForTargetPanelLaunch() throws {
+        let fixture = try TerminalAppControlFixture()
+        XCTAssertTrue(fixture.store.send(.splitFocusedSlot(workspaceID: fixture.workspaceID, orientation: .horizontal)))
+        let targetPanelID = try XCTUnwrap(
+            fixture.store.state.workspacesByID[fixture.workspaceID]?
+                .layoutTree
+                .allSlotInfos
+                .map(\.panelID)
+                .first { $0 != fixture.panelID }
+        )
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, panelID, _ in
+            panelID == targetPanelID
+        }
+        let parentSessionID = "send-text-parent"
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: parentSessionID,
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: fixture.windowID,
+            workspaceID: fixture.workspaceID,
+            cwd: "/tmp/repo",
+            repoRoot: "/tmp/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        _ = try fixture.executor.runAction(
+            id: AppControlActionID.terminalSendText.rawValue,
+            args: [
+                "panelID": .string(targetPanelID.uuidString),
+                "text": .string("codex"),
+                "submit": .bool(true),
+            ],
+            context: AutomationRequestContext(
+                callerSessionID: parentSessionID,
+                commandName: "app_control.run_action"
+            )
+        )
+        let plan = try fixture.agentLaunchService.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: targetPanelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(
+            fixture.sessionRuntimeStore.sessionRegistry.sessionsByID[plan.sessionID]?.parentSessionID,
+            parentSessionID
+        )
+    }
+
     func testTerminalRuntimeSendTextDefaultsToFocusingTarget() throws {
         let fixture = try TerminalAppControlFixture()
         var capturedFocusPolicy: TerminalInputFocusPolicy?
@@ -556,6 +608,7 @@ private struct TerminalAppControlFixture {
     let store: AppStore
     let executor: AppControlExecutor
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let agentLaunchService: AgentLaunchService
     let sessionRuntimeStore: SessionRuntimeStore
     let windowID: UUID
     let workspaceID: UUID
@@ -585,7 +638,7 @@ private struct TerminalAppControlFixture {
             runtimeRegistry: terminalRuntimeRegistry,
             slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
         )
-        let agentLaunchService = AgentLaunchService(
+        let launchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: agentTerminalCommandRouter ?? terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -593,13 +646,14 @@ private struct TerminalAppControlFixture {
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-test.sock" }
         )
+        agentLaunchService = launchService
         executor = AppControlExecutor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
-            agentLaunchService: agentLaunchService,
+            agentLaunchService: launchService,
             reloadConfigurationAction: nil
         )
     }

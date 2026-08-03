@@ -377,6 +377,7 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
     case terminalVisibleText = "terminal.visible-text"
     case panelLocalDocumentState = "panel.local-document.state"
     case panelBrowserState = "panel.browser.state"
+    case panelScratchpadLookup = "panel.scratchpad.lookup"
     case panelScratchpadState = "panel.scratchpad.state"
 
     static func resolve(_ rawValue: String) -> Self? {
@@ -392,6 +393,8 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return ["panel.markdown.state"]
         case .panelScratchpadState:
             return ["panel.scratchpadState"]
+        case .panelScratchpadLookup:
+            return ["panel.scratchpadLookup"]
         default:
             return []
         }
@@ -409,6 +412,15 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
             return .init(id: rawValue, kind: .query, summary: "Return local-document panel state.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         case .panelBrowserState:
             return .init(id: rawValue, kind: .query, summary: "Return browser panel state.", selectors: [.windowID, .workspaceID, .panelID])
+        case .panelScratchpadLookup:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return metadata for the Scratchpad linked to an active session without exporting content.",
+                selectors: [],
+                parameters: [.sessionID(required: true)],
+                aliases: aliases
+            )
         case .panelScratchpadState:
             return .init(id: rawValue, kind: .query, summary: "Return Scratchpad panel state.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         }

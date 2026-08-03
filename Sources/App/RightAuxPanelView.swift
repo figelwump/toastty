@@ -83,7 +83,15 @@ struct RightAuxPanelView: View {
             RightAuxPanelEmptyStateView(
                 openLocalFileSearch: { openLocalFileSearch(windowID) },
                 createBlankScratchpad: { createBlankScratchpad(workspace.id) },
-                openBrowser: { openBrowser(windowID) }
+                openBrowser: { openBrowser(windowID) },
+                recentItems: store.recentRightPanelItems,
+                openRecentItem: { item in
+                    _ = store.openRecentRightPanelItem(
+                        item,
+                        workspaceID: workspace.id,
+                        documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+                    )
+                }
             )
         } else if let tab = Self.mountedContentTab(in: workspaceTab.rightAuxPanel) {
             rightAuxPanelCard(for: tab)
@@ -127,6 +135,8 @@ struct RightAuxPanelEmptyStateView: View {
     let openLocalFileSearch: @MainActor () -> Void
     let createBlankScratchpad: @MainActor () -> Void
     let openBrowser: @MainActor () -> Void
+    let recentItems: [RecentRightPanelItem]
+    let openRecentItem: @MainActor (RecentRightPanelItem) -> Void
 
     private static let dailyHeadlines = [
         "A fresh slice on the side",
@@ -139,6 +149,10 @@ struct RightAuxPanelEmptyStateView: View {
         let dayOrdinal = calendar.ordinality(of: .day, in: .era, for: date) ?? 1
         let index = (max(dayOrdinal, 1) - 1) % dailyHeadlines.count
         return dailyHeadlines[index]
+    }
+
+    nonisolated static func showsRecentlyOpenedAction(recentItemCount: Int) -> Bool {
+        recentItemCount > 0
     }
 
     var body: some View {
@@ -189,6 +203,14 @@ struct RightAuxPanelEmptyStateView: View {
                     action: openBrowser
                 )
                 .accessibilityIdentifier("right-panel.empty.open-browser")
+
+                if Self.showsRecentlyOpenedAction(recentItemCount: recentItems.count) {
+                    RightAuxPanelEmptyStateRecentMenu(
+                        recentItems: recentItems,
+                        openRecentItem: openRecentItem
+                    )
+                    .accessibilityIdentifier("right-panel.empty.recently-opened")
+                }
             }
             .padding(.horizontal, 18)
             .frame(maxWidth: 340)
@@ -198,6 +220,71 @@ struct RightAuxPanelEmptyStateView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ToastyTheme.surfaceBackground)
         .accessibilityIdentifier("right-panel.empty")
+    }
+}
+
+private struct RightAuxPanelEmptyStateRecentMenu: View {
+    let recentItems: [RecentRightPanelItem]
+    let openRecentItem: @MainActor (RecentRightPanelItem) -> Void
+
+    @State private var isHovered = false
+
+    private var displayedItems: [RecentRightPanelItem] {
+        Array(recentItems.prefix(RightPanelRecentItemsStore.defaultMenuItemLimit))
+    }
+
+    var body: some View {
+        Menu {
+            ForEach(displayedItems) { item in
+                Button {
+                    openRecentItem(item)
+                } label: {
+                    Label(item.menuTitle, systemImage: item.systemImageName)
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isHovered ? ToastyTheme.accent : ToastyTheme.inactiveText)
+                    .frame(width: 18, height: 18)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Recently opened")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.primaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Text("Reopen a file, Scratchpad, or browser page.")
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isHovered ? ToastyTheme.elevatedBackground : ToastyTheme.chromeBackground)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isHovered ? ToastyTheme.subtleBorder : ToastyTheme.hairline, lineWidth: 1)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel("Recently opened")
     }
 }
 
@@ -407,6 +494,26 @@ struct RightAuxPanelTabStrip: View {
                 Label("Open Browser", systemImage: "globe")
             }
             .accessibilityIdentifier("right-panel.tabs.add.open-browser")
+
+            Divider()
+
+            Menu {
+                if recentItemsForMenu.isEmpty {
+                    Button("No Recent Items") {}
+                        .disabled(true)
+                } else {
+                    ForEach(recentItemsForMenu) { item in
+                        Button {
+                            openRecentItem(item)
+                        } label: {
+                            Label(item.menuTitle, systemImage: item.systemImageName)
+                        }
+                    }
+                }
+            } label: {
+                Label("Recently Opened", systemImage: "clock.arrow.circlepath")
+            }
+            .accessibilityIdentifier("right-panel.tabs.add.recently-opened")
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 5)
@@ -426,6 +533,18 @@ struct RightAuxPanelTabStrip: View {
         .help("Add to Right Panel")
         .accessibilityLabel("Add to Right Panel")
         .accessibilityIdentifier("right-panel.tabs.add")
+    }
+
+    private var recentItemsForMenu: [RecentRightPanelItem] {
+        Array(store.recentRightPanelItems.prefix(RightPanelRecentItemsStore.defaultMenuItemLimit))
+    }
+
+    private func openRecentItem(_ item: RecentRightPanelItem) {
+        _ = store.openRecentRightPanelItem(
+            item,
+            workspaceID: workspaceID,
+            documentStore: webPanelRuntimeRegistry.scratchpadDocumentStore
+        )
     }
 
     private func tabButton(_ tab: RightAuxPanelTabState) -> some View {

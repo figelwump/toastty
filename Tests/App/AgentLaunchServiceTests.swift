@@ -405,6 +405,43 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func profileNotFoundErrorListsAvailableProfiles() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let agentCatalogProvider = TestAgentCatalogProvider(
+            profiles: [
+                AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"]),
+                AgentProfile(id: "claude", displayName: "Claude Code", argv: ["claude"]),
+                AgentProfile(id: "pi", displayName: "Pi", argv: ["pi"]),
+            ]
+        )
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
+        )
+
+        do {
+            _ = try service.launch(profileID: "missing")
+            Issue.record("Expected profileNotFound")
+        } catch let error as AgentLaunchError {
+            #expect(
+                error.errorDescription ==
+                    "Toastty could not find an agent profile named 'missing' in ~/.toastty/agents.toml. Available profiles: codex, claude, pi."
+            )
+        } catch {
+            Issue.record("Expected AgentLaunchError, got \(error)")
+        }
+    }
+
+    @Test
     func launchCancelsNativeSessionObservationWhenSendTextFails() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -522,6 +559,44 @@ struct AgentLaunchServiceTests {
         #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=") == false)
         #expect(injectedCommand.contains("'/Applications/Claude Code.app/Contents/MacOS/cc' --settings "))
         #expect(injectedCommand.contains("'--append-system-prompt=review only'"))
+    }
+
+    @Test
+    func launchThreadsParentSessionIDIntoStartedSession() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let workspace = try #require(store.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        let windowID = try #require(store.state.windows.first?.id)
+        let parentSessionID = "parent-live"
+        sessionRuntimeStore.startSession(
+            sessionID: parentSessionID,
+            agent: .claude,
+            panelID: panelID,
+            windowID: windowID,
+            workspaceID: workspace.id,
+            cwd: "/tmp/repo",
+            repoRoot: "/tmp/repo",
+            at: Date(timeIntervalSince1970: 1_000)
+        )
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let result = try service.launch(
+            profileID: "codex",
+            parentSessionID: parentSessionID
+        )
+
+        #expect(sessionRuntimeStore.sessionRegistry.sessionsByID[result.sessionID]?.parentSessionID == parentSessionID)
     }
 
     @Test

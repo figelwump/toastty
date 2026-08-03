@@ -46,13 +46,35 @@ Use this workflow when the current thread should continue in a fresh git worktre
    - If there are no explicit setup commands, skip this step.
    - If setup came from repo instructions, mention the source path in the handoff.
    - If setup came from the user, preserve the user-specified command text in the handoff.
-8. Persist the handoff inside the new worktree before launching the next session.
+8. Detect and export any Scratchpad linked to the current managed agent session before writing the handoff.
+   - Use detection first; do not use export failure as the signal for absence.
+   - If `TOASTTY_SESSION_ID` is present, run the session-scoped lookup query:
+
+```bash
+"$TOASTTY_CLI_PATH" --json query run panel.scratchpad.lookup \
+  "sessionID=${TOASTTY_SESSION_ID}"
+```
+
+   - Parse the lookup result's `linked` boolean.
+   - If `linked` is `false`, treat that as "no linked Scratchpad" and continue without adding a Scratchpad section.
+   - If `linked` is `true`, run the export action for the same session and use the returned absolute `filePath` in `WORKTREE_HANDOFF.md`:
+
+```bash
+"$TOASTTY_CLI_PATH" --json action run panel.scratchpad.export \
+  "sessionID=${TOASTTY_SESSION_ID}"
+```
+
+   - Do not scan the workspace or guess from focused/right-panel state when the session lookup finds no linked Scratchpad.
+   - If lookup fails, surface the failure instead of silently omitting Scratchpad context.
+   - If lookup succeeds but export fails, retry once. If export still fails, do not pretend there was no Scratchpad; include the lookup metadata and export failure in the handoff and final status. Continue unless the Scratchpad was the explicit source of truth for the delegated task.
+9. Persist the handoff inside the new worktree before launching the next session.
    - Write `WORKTREE_HANDOFF.md` in the new worktree root.
+   - If a linked Scratchpad was exported, include a `Linked Scratchpad` section with the exported HTML path, title, panel ID, document ID, and revision.
    - If the current thread already has a concrete plan/design file in the repo, reference that file explicitly in the handoff.
    - If the current thread already produced a detailed implementation plan in-chat but that plan is not yet persisted in the repo, copy that plan into `WORKTREE_HANDOFF.md` with enough detail for the next session to execute directly.
    - Do not compress an already-settled implementation plan into a lightweight summary just because it is being handed off.
    - If there is no durable plan file yet and no detailed plan exists in-thread, put a concise task-specific plan directly in `WORKTREE_HANDOFF.md`.
-9. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
+10. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
    - The helper creates the workspace in the background without selecting it, opens `WORKTREE_HANDOFF.md` as a local-document panel using Toastty's default markdown placement, and starts the new terminal command in the left terminal pane.
    - For the structured `agent.launch` path, the helper first inspects the current parent session with `session scope show --session "$TOASTTY_SESSION_ID"`. If the parent is unscoped, it runs `session scope set-current --session "$TOASTTY_SESSION_ID"` before workspace creation so the newly created workspace is auto-bound into the parent's effective scope. If the parent is already scoped, the helper preserves that scope and relies on workspace creation to add the new workspace. If the helper scoped an unscoped parent and later fails, it attempts to restore the parent to unrestricted automation before exiting.
    - For the structured `agent.launch` path, the helper immediately scopes the launched child session to the newly created workspace with `session scope set --session <child-session-id> --workspace <new-workspace-id>`. This is a cooperative post-launch scope; treat a scope failure as a launch failure, but report that the workspace/session may already exist.
@@ -69,11 +91,11 @@ Use this workflow when the current thread should continue in a fresh git worktre
   --json
 ```
 
-10. Parse the launch helper output to get `workspace_id`, `panel_id`, `session_id`, `scope_set`, and `parent_scope_status`.
+11. Parse the launch helper output to get `workspace_id`, `panel_id`, `session_id`, `scope_set`, and `parent_scope_status`.
     - `session_id` is present and `scope_set` is `true` for structured managed launches.
     - `parent_scope_status` is `set_current` when the helper scoped an unscoped parent, `already_scoped` when it preserved an existing parent scope, `disabled` when `--no-scope-parent` was used, and `startup_command` for explicit startup-command launches.
     - `session_id` is absent and `scope_set` is `false` only for `--startup-command` or fallback `terminal.send-text` launches; use those paths only for explicit validation or fully custom shell setup.
-11. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, parent scope status, child scope status, handoff file path, and whether setup was skipped or which explicit setup commands ran.
+12. Tell the user the new branch, worktree path, workspace name, workspace ID, panel ID, child session ID when present, parent scope status, child scope status, handoff file path, Scratchpad export path/status, and whether setup was skipped or which explicit setup commands ran.
 
 ## Handoff file contents
 
@@ -88,6 +110,7 @@ Include:
 - the task goal
 - relevant user constraints or preferences from the current thread
 - current status
+- linked Scratchpad exported HTML path and metadata when the current session has one
 - any existing plan/design file paths
 - any settled implementation decisions from the current thread
 - affected files or code areas when known
@@ -112,6 +135,8 @@ When the parent thread already has a full implementation plan, prefer the follow
 - Remote wrappers that bootstrap or generate in disposable remote worktrees do not satisfy a setup requirement for the local worktree.
 - In the Toastty repo, the repo instructions explicitly require `./scripts/dev/bootstrap-worktree.sh` for a fresh worktree; that is discovered from Toastty's `AGENTS.md`, not hard-coded into this skill.
 - The handoff file must exist before launching the new agent session.
+- Scratchpad detection must use `panel.scratchpad.lookup` with `sessionID=$TOASTTY_SESSION_ID` before export, and absence is represented by a successful lookup response with `linked=false`. Export is only for creating the durable readable HTML file path for the next session; it is not the absence check.
+- A session-linked Scratchpad should be represented in `WORKTREE_HANDOFF.md` by the exported absolute HTML file path plus title, panel ID, document ID, and revision. A panel ID or document ID alone is not enough for the child session, because the child will be scoped to the new workspace and should not depend on parent workspace panel access.
 - The default workspace layout is terminal on the left and the handoff markdown file in the right panel.
 - The default launch should use `agent.launch` with structured `cwd`, `initialCommands`, environment, and `initialPrompt` arguments so the new background workspace starts without a separate `terminal.send-text` injection. The launched command still `cd`s into the new worktree, runs any `--initial-command` single-line shell snippets in order with `&&`, and starts the agent CLI with a short prompt that points at `WORKTREE_HANDOFF.md`. The agent CLI is `codex` unless the user explicitly requested a different agent; honor an explicit request with `--agent-command`.
 - Before the default structured launch creates the workspace, scope the parent if needed with `session scope set-current --session "$TOASTTY_SESSION_ID"`. Do not reset an already scoped parent; preserving the existing scope lets `workspace.create` auto-bind the new workspace without dropping prior explicit workspace assignments.
@@ -138,6 +163,7 @@ When the parent thread already has a full implementation plan, prefer the follow
 
 - Confirm the original workspace stayed visible while the new workspace was provisioned.
 - Confirm the handoff document opened in the right panel of the new workspace.
+- If the parent session had a linked Scratchpad, confirm `WORKTREE_HANDOFF.md` includes the exported Scratchpad path and metadata. If lookup found no linked Scratchpad, confirm the workflow did not scan or guess from other Scratchpad panels.
 - Confirm setup was handled according to the current repo's instructions: either explicit setup commands ran successfully, or no clear setup requirement was found and setup was skipped.
 - For validation or debugging, you can override the startup command:
 

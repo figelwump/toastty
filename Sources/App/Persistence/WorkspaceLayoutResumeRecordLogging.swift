@@ -367,6 +367,16 @@ private extension ManagedAgentResumeRecord {
             "native_session_id": nativeSessionID,
             "session_file_basename": (sessionFilePath as NSString).lastPathComponent,
             "cwd": cwd,
+            "workspace_scope": workspaceScopeMetadata(scopedWorkspaceIDs),
         ]
+    }
+
+    private func workspaceScopeMetadata(_ scope: Set<UUID>?) -> String {
+        guard let scope else { return "unrestricted" }
+        if scope.isEmpty { return "own_workspace_only" }
+        return scope
+            .map(\.uuidString)
+            .sorted()
+            .joined(separator: ",")
     }
 }
