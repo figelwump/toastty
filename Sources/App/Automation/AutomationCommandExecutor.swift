@@ -1,0 +1,2595 @@
+import AppKit
+import CoreState
+import CryptoKit
+import Darwin
+import Foundation
+
+final class AutomationCommandExecutor: @unchecked Sendable {
+    private static let recentAutomationRequestLimit = 250
+    private static let auditArgumentKeyAllowlist: Set<String> = [
+        "action",
+        "activate",
+        "agent",
+        "allowUnavailable",
+        "amount",
+        "argv",
+        "background",
+        "contains",
+        "content",
+        "codexHomePath",
+        "createPolicy",
+        "cwd",
+        "detail",
+        "expectedRevision",
+        "filePath",
+        "files",
+        "fixture",
+        "focusUnreadSessionPanel",
+        "hookEventName",
+        "id",
+        "includeRuntime",
+        "index",
+        "initialCommands",
+        "initialPrompt",
+        "kind",
+        "name",
+        "nativeSessionID",
+        "panelID",
+        "patch",
+        "placement",
+        "preflightPolicy",
+        "profileID",
+        "query",
+        "resolvedCodexExecutablePath",
+        "sessionID",
+        "source",
+        "status",
+        "step",
+        "submit",
+        "summary",
+        "tabID",
+        "text",
+        "threadID",
+        "title",
+        "toIndex",
+        "url",
+        "windowID",
+        "workspaceID",
+        "workspaceIDs",
+    ]
+
+    private let store: AppStore
+    private let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+    private let sessionRuntimeStore: SessionRuntimeStore
+    private let focusedPanelCommandController: FocusedPanelCommandController
+    private let agentLaunchService: AgentLaunchService
+    private let reloadConfigurationAction: (@MainActor () -> Void)?
+    private let codexStatusHooksPreflightProvider: CodexStatusHooksPreflightProvider
+    private let codexStatusHooksWarningPresenter: CodexStatusHooksAsyncWarningPresenter
+    private let automationConfig: AutomationConfig?
+    private let startedAt = Date()
+    private let managedLaunchPreflightPollIntervalMilliseconds = 250
+    private let managedLaunchPreflightLifetime: TimeInterval = 10 * 60
+
+    private var stateVersion = 0
+    private var currentFixtureName: String
+    private var notificationStore = NotificationStore()
+    private var sessionUpdateCoalescer = SessionUpdateCoalescer()
+    private var pendingManagedLaunchPreflights: [String: PendingManagedLaunchPreflight] = [:]
+    private var loggedUnrestrictedScopeCallerSessionIDs = Set<String>()
+    private var loggedRefusedResumeRecordHookClaimKeys = Set<String>()
+    private var recentAutomationRequests: [DiagnosticsAutomationRequestEntry] = []
+    @MainActor
+    private lazy var appControlExecutor = AppControlExecutor(
+        store: store,
+        terminalRuntimeRegistry: terminalRuntimeRegistry,
+        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+        sessionRuntimeStore: sessionRuntimeStore,
+        focusedPanelCommandController: focusedPanelCommandController,
+        agentLaunchService: agentLaunchService,
+        reloadConfigurationAction: reloadConfigurationAction
+    )
+
+    init(
+        store: AppStore,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        webPanelRuntimeRegistry: WebPanelRuntimeRegistry,
+        sessionRuntimeStore: SessionRuntimeStore,
+        focusedPanelCommandController: FocusedPanelCommandController,
+        agentLaunchService: AgentLaunchService,
+        reloadConfigurationAction: (@MainActor () -> Void)?,
+        codexStatusHooksPreflightProvider: @escaping CodexStatusHooksPreflightProvider,
+        codexStatusHooksWarningPresenter: @escaping CodexStatusHooksAsyncWarningPresenter,
+        automationConfig: AutomationConfig?
+    ) {
+        self.store = store
+        self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
+        self.sessionRuntimeStore = sessionRuntimeStore
+        self.focusedPanelCommandController = focusedPanelCommandController
+        self.agentLaunchService = agentLaunchService
+        self.reloadConfigurationAction = reloadConfigurationAction
+        self.codexStatusHooksPreflightProvider = codexStatusHooksPreflightProvider
+        self.codexStatusHooksWarningPresenter = codexStatusHooksWarningPresenter
+        self.automationConfig = automationConfig
+        self.currentFixtureName = automationConfig?.fixtureName ?? "default"
+    }
+
+    @MainActor
+    func execute(envelope: AutomationIncomingEnvelope) async -> AutomationResponseEnvelope {
+        let startedAt = Date()
+        let responseRequestID = envelope.requestID ?? UUID().uuidString
+        let response: AutomationResponseEnvelope
+
+        do {
+            let result: [String: AutomationJSONValue]?
+
+            switch envelope {
+            case .request(let request):
+                let context = AutomationRequestContext(
+                    callerSessionID: normalizedOptionalText(request.callerSessionID),
+                    commandName: request.command
+                )
+                result = try await executeCommand(
+                    named: request.command,
+                    payload: request.payload,
+                    context: context
+                )
+            case .event(let event):
+                result = try executeEvent(event)
+            }
+
+            response = AutomationResponseEnvelope(
+                requestID: responseRequestID,
+                ok: true,
+                result: result,
+                error: nil
+            )
+        } catch let socketError as AutomationSocketError {
+            response = AutomationResponseEnvelope(
+                requestID: responseRequestID,
+                ok: false,
+                result: nil,
+                error: socketError.errorBody
+            )
+        } catch let launchError as AgentLaunchError {
+            response = AutomationResponseEnvelope(
+                requestID: responseRequestID,
+                ok: false,
+                result: nil,
+                error: AutomationResponseError(
+                    code: "INVALID_PAYLOAD",
+                    message: launchError.localizedDescription
+                )
+            )
+        } catch {
+            response = AutomationResponseEnvelope(
+                requestID: responseRequestID,
+                ok: false,
+                result: nil,
+                error: AutomationResponseError(
+                    code: "INTERNAL_ERROR",
+                    message: error.localizedDescription
+                )
+            )
+        }
+
+        recordAutomationRequest(
+            envelope: envelope,
+            response: response,
+            startedAt: startedAt
+        )
+        return response
+    }
+
+    @MainActor
+    private func executeCommand(
+        named command: String,
+        payload: [String: AutomationJSONValue],
+        context: AutomationRequestContext
+    ) async throws -> [String: AutomationJSONValue]? {
+        logUnrestrictedUnknownCallerIfNeeded(context)
+
+        switch command {
+        case "agent.prepare_managed_launch":
+            guard let agentRaw = normalizedOptionalText(payload.string("agent")),
+                  let agent = AgentKind(rawValue: agentRaw) else {
+                throw AutomationSocketError.invalidPayload("agent must be a lowercase agent ID")
+            }
+            guard let rawPanelID = normalizedOptionalText(payload.string("panelID")) else {
+                throw AutomationSocketError.invalidPayload("panelID is required")
+            }
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            if let location = locatePanel(panelID) {
+                try enforceWorkspaceAutomationAccess(location.workspaceID, context: context)
+            }
+
+            let argv = payload.stringArray("argv")
+            guard argv.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("argv must be a non-empty string array")
+            }
+            let preflightPolicy = try managedLaunchPreflightPolicy(from: payload)
+            let environment = try managedLaunchEnvironment(from: payload)
+            let request = ManagedAgentLaunchRequest(
+                agent: agent,
+                panelID: panelID,
+                argv: argv,
+                cwd: normalizedOptionalText(payload.string("cwd")),
+                environment: environment,
+                preflightPolicy: preflightPolicy,
+                parentSessionID: parentSessionID(for: context),
+                codexCapabilityHint: normalizedOptionalText(payload.string("resolvedCodexExecutablePath")).map {
+                    ManagedCodexCapabilityHint(
+                        resolvedExecutablePath: $0,
+                        codexHomePath: normalizedOptionalText(payload.string("codexHomePath"))
+                    )
+                }
+            )
+
+            if let preflight = managedLaunchPreflightIfNeeded(for: request) {
+                return try automationObject(ManagedAgentLaunchPreparation(preflight: preflight))
+            }
+
+            let plan = try await agentLaunchService.prepareManagedLaunchAsync(
+                request,
+                inheritedScopedWorkspaceIDs: inheritedWorkspaceScope(for: context)
+            )
+            store.recordSuccessfulAgentLaunch()
+            stateVersion += 1
+            var response = try automationObject(plan)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "agent.managed_launch_preflight_decision":
+            guard let token = normalizedOptionalText(payload.string("token")) else {
+                throw AutomationSocketError.invalidPayload("token is required")
+            }
+            return try automationObject(managedLaunchPreflightDecision(token: token))
+
+        case AutomationSocketProtocol.diagnosticsRecentRequestsCommand:
+            return try automationObject(
+                DiagnosticsAutomationSection(
+                    status: .available,
+                    recentRequests: recentAutomationRequests
+                )
+            )
+
+        case "app_control.list_actions":
+            return try automationObject(
+                AppControlCatalogListing(commands: appControlExecutor.listActionDescriptors())
+            )
+
+        case "app_control.run_action":
+            guard let actionID = payload.string("id"), actionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("id is required")
+            }
+            let outcome = try await appControlExecutor.runActionAsync(
+                id: actionID,
+                args: try parseArgsPayload(payload),
+                context: context
+            )
+            guard outcome.didMutateState || outcome.result != nil else {
+                throw AutomationSocketError.invalidPayload("action could not be applied: \(actionID)")
+            }
+            var response = outcome.result ?? [:]
+            if outcome.didMutateState {
+                stateVersion += 1
+                response["stateVersion"] = .int(stateVersion)
+            }
+            return response
+
+        case "app_control.list_queries":
+            return try automationObject(
+                AppControlCatalogListing(commands: appControlExecutor.listQueryDescriptors())
+            )
+
+        case "app_control.run_query":
+            guard let queryID = payload.string("id"), queryID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("id is required")
+            }
+            return try appControlExecutor.runQuery(
+                id: queryID,
+                args: try parseArgsPayload(payload),
+                context: context
+            )
+
+        case "session.scope.show":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            return try sessionScopeResponse(sessionID: sessionID)
+
+        case "session.scope.set_current":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            if let callerSessionID = context.callerSessionID, callerSessionID != sessionID {
+                throw AutomationSocketError.invalidPayload("session.scope.set_current can only target the caller session")
+            }
+            let panelID = try resolveScopeCommandPanelID(payload: payload)
+            let sessionRecord = try requireActiveScopeCommandSession(sessionID)
+            guard sessionRecord.panelID == panelID else {
+                throw AutomationSocketError.invalidPayload("panelID does not match sessionID")
+            }
+            guard locatePanel(panelID) != nil else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard sessionRuntimeStore.setScope(sessionID: sessionID, workspaceIDs: []) else {
+                return try sessionScopeResponse(sessionID: sessionID)
+            }
+            stateVersion += 1
+            var response = try sessionScopeResponse(sessionID: sessionID)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "session.scope.set":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            let workspaceIDs = try resolveScopeCommandWorkspaceIDs(payload: payload)
+            guard sessionRuntimeStore.setScope(sessionID: sessionID, workspaceIDs: workspaceIDs) else {
+                _ = try requireActiveScopeCommandSession(sessionID)
+                return try sessionScopeResponse(sessionID: sessionID)
+            }
+            stateVersion += 1
+            var response = try sessionScopeResponse(sessionID: sessionID)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "session.scope.add":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            let workspaceIDs = try resolveScopeCommandWorkspaceIDs(payload: payload)
+            guard sessionRuntimeStore.addScope(sessionID: sessionID, workspaceIDs: workspaceIDs) else {
+                _ = try requireActiveScopeCommandSession(sessionID)
+                return try sessionScopeResponse(sessionID: sessionID)
+            }
+            stateVersion += 1
+            var response = try sessionScopeResponse(sessionID: sessionID)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "session.scope.clear":
+            let sessionID = try resolveScopeCommandSessionID(payload: payload, context: context)
+            guard sessionRuntimeStore.clearScope(sessionID: sessionID) else {
+                _ = try requireActiveScopeCommandSession(sessionID)
+                return try sessionScopeResponse(sessionID: sessionID)
+            }
+            stateVersion += 1
+            var response = try sessionScopeResponse(sessionID: sessionID)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "automation.ping":
+            return [
+                "status": .string("ok"),
+                "automationEnabled": .bool(automationConfig != nil),
+                "appUptimeMs": .int(Int(Date().timeIntervalSince(startedAt) * 1000)),
+                "protocolVersion": .string("1.0"),
+            ]
+
+        case "automation.reset":
+            try requireAutomationMode(for: command)
+            store.replaceState(
+                .bootstrap(),
+                source: .automation(command: command)
+            )
+            currentFixtureName = "default"
+            sessionRuntimeStore.reset()
+            notificationStore = NotificationStore()
+            sessionUpdateCoalescer = SessionUpdateCoalescer()
+            stateVersion += 1
+            return [
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "automation.load_fixture":
+            try requireAutomationMode(for: command)
+            guard let fixtureName = payload.string("name"), fixtureName.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("name is required")
+            }
+            let state = try AutomationFixtureLoader.loadRequired(named: fixtureName)
+            store.replaceState(
+                state,
+                source: .automation(command: command, actionID: fixtureName)
+            )
+            currentFixtureName = fixtureName
+            sessionRuntimeStore.reset()
+            stateVersion += 1
+            return [
+                "fixture": .string(fixtureName),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "automation.perform_action":
+            try requireAutomationMode(for: command)
+            guard let actionID = payload.string("action"), actionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("action is required")
+            }
+            let outcome = try await appControlExecutor.runActionAsync(
+                id: actionID,
+                args: try parseArgsPayload(payload),
+                context: context
+            )
+            guard outcome.didMutateState || outcome.result != nil else {
+                throw AutomationSocketError.invalidPayload("action could not be applied: \(actionID)")
+            }
+            stateVersion += 1
+            return [
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "automation.terminal_send_text":
+            try requireAutomationMode(for: command)
+            if payload["waitForSurfaceMs"] != nil {
+                throw AutomationSocketError.invalidPayload("waitForSurfaceMs is deprecated; use allowUnavailable=true with client-side retry")
+            }
+            return try appControlExecutor.runAction(
+                id: AppControlActionID.terminalSendText.rawValue,
+                args: payload,
+                context: context
+            ).result ?? [:]
+
+        case "automation.terminal_drop_image_files":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runAction(
+                id: AppControlActionID.terminalDropImageFiles.rawValue,
+                args: payload,
+                context: context
+            ).result ?? [:]
+
+        case "automation.terminal_visible_text":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.terminalVisibleText.rawValue,
+                args: payload,
+                context: context
+            )
+
+        case "automation.launch_agent":
+            try requireAutomationMode(for: command)
+            var args = payload
+            if args["profileID"] == nil, let legacyAgent = args["agent"] {
+                args["profileID"] = legacyAgent
+            }
+            let result = try await appControlExecutor.runActionAsync(
+                id: AppControlActionID.agentLaunch.rawValue,
+                args: args,
+                context: context
+            )
+            stateVersion += 1
+            var response = result.result ?? [:]
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
+        case "automation.terminal_state":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.terminalState.rawValue,
+                args: payload,
+                context: context
+            )
+
+        case "automation.local_document_panel_state",
+             "automation.markdown_panel_state":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.panelLocalDocumentState.rawValue,
+                args: payload,
+                context: context
+            )
+
+        case "automation.browser_panel_state":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.panelBrowserState.rawValue,
+                args: payload,
+                context: context
+            )
+
+        case "automation.scratchpad_panel_state":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.panelScratchpadState.rawValue,
+                args: payload,
+                context: context
+            )
+
+        case "automation.dump_state":
+            try requireAutomationMode(for: command)
+            flushCoalescedUpdates(at: Date())
+            let includeRuntime = payload.bool("includeRuntime") ?? false
+            let stateData = try encodedStateData(includeRuntime: includeRuntime)
+            let stateHash = SHA256.hash(data: stateData).map { String(format: "%02x", $0) }.joined()
+            let stateDirectory = try ensureStateArtifactDirectory()
+            let outputURL = stateDirectory.appendingPathComponent("state-\(stateVersion).json")
+            try stateData.write(to: outputURL, options: [.atomic])
+            return [
+                "path": .string(outputURL.path),
+                "hash": .string(stateHash),
+            ]
+
+        case "automation.workspace_snapshot":
+            try requireAutomationMode(for: command)
+            return try appControlExecutor.runQuery(
+                id: AppControlQueryID.workspaceSnapshot.rawValue,
+                args: payload,
+                context: context
+            )
+
+        case "automation.workspace_render_snapshot":
+            try requireAutomationMode(for: command)
+            let workspaceID = try resolveWorkspaceID(args: payload)
+            return try workspaceRenderSnapshot(workspaceID: workspaceID)
+
+        case "automation.capture_screenshot":
+            try requireAutomationMode(for: command)
+            guard let step = payload.string("step"), step.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("step is required")
+            }
+            let requestedFixture = payload.string("fixture")
+            if let requestedFixture, requestedFixture != currentFixtureName {
+                throw AutomationSocketError.invalidPayload("fixture does not match currently loaded fixture")
+            }
+            let fixture = requestedFixture ?? currentFixtureName
+            let screenshotURL = try screenshotURL(fixture: fixture, step: step)
+            let screenshotData = try captureScreenshotPNG()
+            try screenshotData.write(to: screenshotURL, options: [.atomic])
+            return [
+                "path": .string(screenshotURL.path),
+            ]
+
+        default:
+            throw AutomationSocketError.unknownCommand
+        }
+    }
+
+    @MainActor
+    private func recordAutomationRequest(
+        envelope: AutomationIncomingEnvelope,
+        response: AutomationResponseEnvelope,
+        startedAt: Date
+    ) {
+        guard shouldAudit(envelope) else { return }
+
+        let entry = automationAuditEntry(
+            envelope: envelope,
+            response: response,
+            startedAt: startedAt
+        )
+        recentAutomationRequests.append(entry)
+        if recentAutomationRequests.count > Self.recentAutomationRequestLimit {
+            recentAutomationRequests.removeFirst(
+                recentAutomationRequests.count - Self.recentAutomationRequestLimit
+            )
+        }
+    }
+
+    private func shouldAudit(_ envelope: AutomationIncomingEnvelope) -> Bool {
+        guard case .request(let request) = envelope else {
+            return true
+        }
+        switch request.command {
+        case "automation.ping", AutomationSocketProtocol.diagnosticsRecentRequestsCommand:
+            return false
+        default:
+            return true
+        }
+    }
+
+    @MainActor
+    private func automationAuditEntry(
+        envelope: AutomationIncomingEnvelope,
+        response: AutomationResponseEnvelope,
+        startedAt: Date
+    ) -> DiagnosticsAutomationRequestEntry {
+        let durationMs = max(0, Int(Date().timeIntervalSince(startedAt) * 1000))
+        switch envelope {
+        case .request(let request):
+            let args = auditArguments(for: request)
+            let sessionID = auditSessionID(for: request, args: args)
+            return DiagnosticsAutomationRequestEntry(
+                timestampMs: Self.millisecondsSinceEpoch(startedAt),
+                kind: "request",
+                requestID: request.requestID,
+                command: request.command,
+                eventType: nil,
+                callerSessionID: normalizedOptionalText(request.callerSessionID),
+                callerAgent: auditAgent(
+                    callerSessionID: normalizedOptionalText(request.callerSessionID),
+                    sessionID: sessionID
+                ),
+                sessionID: sessionID,
+                panelID: auditPanelID(for: request, args: args),
+                actionID: auditActionID(for: request),
+                queryID: auditQueryID(for: request),
+                argumentKeys: auditArgumentKeys(from: args),
+                selectors: auditSelectors(from: args),
+                flags: auditFlags(from: args),
+                ok: response.ok,
+                durationMs: durationMs,
+                errorCode: response.error?.code
+            )
+
+        case .event(let event):
+            return DiagnosticsAutomationRequestEntry(
+                timestampMs: Self.millisecondsSinceEpoch(startedAt),
+                kind: "event",
+                requestID: event.requestID,
+                command: nil,
+                eventType: event.eventType,
+                callerSessionID: nil,
+                callerAgent: auditAgent(callerSessionID: nil, sessionID: normalizedOptionalText(event.sessionID)),
+                sessionID: normalizedOptionalText(event.sessionID),
+                panelID: normalizedOptionalText(event.panelID),
+                actionID: nil,
+                queryID: nil,
+                argumentKeys: auditArgumentKeys(from: event.payload),
+                selectors: auditSelectors(from: event.payload),
+                flags: auditFlags(from: event.payload),
+                ok: response.ok,
+                durationMs: durationMs,
+                errorCode: response.error?.code
+            )
+        }
+    }
+
+    private func auditArguments(for request: AutomationRequestEnvelope) -> [String: AutomationJSONValue] {
+        switch request.command {
+        case "app_control.run_action", "app_control.run_query":
+            return request.payload.object("args") ?? [:]
+        case "automation.perform_action":
+            return request.payload.object("args") ?? request.payload
+        default:
+            return request.payload
+        }
+    }
+
+    private func auditActionID(for request: AutomationRequestEnvelope) -> String? {
+        switch request.command {
+        case "app_control.run_action":
+            return normalizedOptionalText(request.payload.string("id"))
+        case "automation.perform_action":
+            return normalizedOptionalText(request.payload.string("action"))
+        default:
+            return nil
+        }
+    }
+
+    private func auditQueryID(for request: AutomationRequestEnvelope) -> String? {
+        switch request.command {
+        case "app_control.run_query":
+            return normalizedOptionalText(request.payload.string("id"))
+        default:
+            return nil
+        }
+    }
+
+    private func auditSessionID(
+        for request: AutomationRequestEnvelope,
+        args: [String: AutomationJSONValue]
+    ) -> String? {
+        normalizedOptionalText(request.payload.string("sessionID"))
+            ?? normalizedOptionalText(args.string("sessionID"))
+    }
+
+    private func auditPanelID(
+        for request: AutomationRequestEnvelope,
+        args: [String: AutomationJSONValue]
+    ) -> String? {
+        normalizedOptionalText(request.payload.string("panelID"))
+            ?? normalizedOptionalText(args.string("panelID"))
+    }
+
+    @MainActor
+    private func auditAgent(callerSessionID: String?, sessionID: String?) -> String? {
+        for candidate in [callerSessionID, sessionID].compactMap({ $0 }) {
+            if let agent = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: candidate)?.agent {
+                return agent.rawValue
+            }
+        }
+        return nil
+    }
+
+    private func auditArgumentKeys(from args: [String: AutomationJSONValue]) -> [String] {
+        let keys = Set(
+            args.keys.map { key in
+                normalizedAuditArgumentKey(key)
+            }
+        )
+        return keys.sorted()
+    }
+
+    private func normalizedAuditArgumentKey(_ key: String) -> String {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return "other"
+        }
+        if Self.auditArgumentKeyAllowlist.contains(trimmed) {
+            return trimmed
+        }
+        if trimmed.hasPrefix("env.") {
+            return "env.*"
+        }
+        return "other"
+    }
+
+    private func auditSelectors(from args: [String: AutomationJSONValue]) -> [String: AutomationJSONValue] {
+        let allowedKeys: Set<String> = [
+            "windowID",
+            "workspaceID",
+            "panelID",
+            "tabID",
+            "index",
+            "toIndex",
+        ]
+        return auditValues(from: args, allowedKeys: allowedKeys)
+    }
+
+    private func auditFlags(from args: [String: AutomationJSONValue]) -> [String: AutomationJSONValue] {
+        let allowedKeys: Set<String> = [
+            "activate",
+            "allowUnavailable",
+            "background",
+            "focusUnreadSessionPanel",
+            "includeRuntime",
+        ]
+        return auditValues(from: args, allowedKeys: allowedKeys)
+    }
+
+    private func auditValues(
+        from args: [String: AutomationJSONValue],
+        allowedKeys: Set<String>
+    ) -> [String: AutomationJSONValue] {
+        args.reduce(into: [:]) { result, element in
+            guard allowedKeys.contains(element.key),
+                  let value = auditSafeValue(element.value) else {
+                return
+            }
+            result[element.key] = value
+        }
+    }
+
+    private func auditSafeValue(_ value: AutomationJSONValue) -> AutomationJSONValue? {
+        switch value {
+        case .string, .int, .double, .bool:
+            return value
+        case .object, .array, .null:
+            return nil
+        }
+    }
+
+    private static func millisecondsSinceEpoch(_ date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1000).rounded())
+    }
+
+    private func requireAutomationMode(for command: String) throws {
+        guard automationConfig != nil else {
+            throw AutomationSocketError.invalidPayload("\(command) requires automation mode")
+        }
+    }
+
+    @MainActor
+    private func logUnrestrictedUnknownCallerIfNeeded(_ context: AutomationRequestContext) {
+        guard let callerSessionID = context.callerSessionID,
+              sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID) == nil,
+              loggedUnrestrictedScopeCallerSessionIDs.insert(callerSessionID).inserted else {
+            return
+        }
+        ToasttyLog.warning(
+            "Automation request caller session is not active; treating workspace scope as unrestricted",
+            category: .automation,
+            metadata: [
+                "caller_session_id": callerSessionID,
+                "command": context.commandName,
+            ]
+        )
+    }
+
+    @MainActor
+    private func inheritedWorkspaceScope(for context: AutomationRequestContext) -> Set<UUID>? {
+        guard let callerSessionID = context.callerSessionID,
+              sessionRuntimeStore.isWorkspaceScoped(sessionID: callerSessionID) else {
+            return nil
+        }
+        return sessionRuntimeStore.effectiveWorkspaceScope(sessionID: callerSessionID)
+    }
+
+    @MainActor
+    private func parentSessionID(for context: AutomationRequestContext) -> String? {
+        guard let callerSessionID = context.callerSessionID,
+              let caller = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: callerSessionID),
+              caller.agent != .processWatch else {
+            return nil
+        }
+        return caller.sessionID
+    }
+
+    @MainActor
+    private func enforceWorkspaceAutomationAccess(
+        _ workspaceID: UUID,
+        context: AutomationRequestContext
+    ) throws {
+        guard sessionRuntimeStore.allowsWorkspaceAutomation(
+            callerSessionID: context.callerSessionID,
+            of: workspaceID
+        ) else {
+            ToasttyLog.warning(
+                "Denied workspace-scoped automation request",
+                category: .automation,
+                metadata: [
+                    "caller_session_id": context.callerSessionID ?? "none",
+                    "command": context.commandName,
+                    "workspace_id": workspaceID.uuidString,
+                ]
+            )
+            throw AutomationSocketError.scopeDenied(workspaceID: workspaceID)
+        }
+    }
+
+    private func resolveScopeCommandSessionID(
+        payload: [String: AutomationJSONValue],
+        context: AutomationRequestContext
+    ) throws -> String {
+        if let sessionID = normalizedOptionalText(payload.string("sessionID")) {
+            return sessionID
+        }
+        if let callerSessionID = context.callerSessionID {
+            return callerSessionID
+        }
+        throw AutomationSocketError.invalidPayload("--session is required when TOASTTY_SESSION_ID is unavailable")
+    }
+
+    private func resolveScopeCommandWorkspaceIDs(
+        payload: [String: AutomationJSONValue]
+    ) throws -> Set<UUID> {
+        let rawWorkspaceIDs = payload.stringArray("workspaceIDs")
+        guard rawWorkspaceIDs.isEmpty == false else {
+            throw AutomationSocketError.invalidPayload("at least one --workspace is required")
+        }
+        var workspaceIDs = Set<UUID>()
+        for rawWorkspaceID in rawWorkspaceIDs {
+            guard let workspaceID = UUID(uuidString: rawWorkspaceID) else {
+                throw AutomationSocketError.invalidPayload("--workspace values must be UUIDs")
+            }
+            workspaceIDs.insert(workspaceID)
+        }
+        return workspaceIDs
+    }
+
+    private func resolveScopeCommandPanelID(
+        payload: [String: AutomationJSONValue]
+    ) throws -> UUID {
+        guard let panelID = payload.uuid("panelID") else {
+            throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+        }
+        return panelID
+    }
+
+    @MainActor
+    private func requireActiveScopeCommandSession(_ sessionID: String) throws -> SessionRecord {
+        guard let sessionRecord = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            throw AutomationSocketError.invalidPayload("sessionID does not refer to an active session")
+        }
+        return sessionRecord
+    }
+
+    @MainActor
+    private func sessionScopeResponse(sessionID: String) throws -> [String: AutomationJSONValue] {
+        _ = try requireActiveScopeCommandSession(sessionID)
+        let explicitScope = sessionRuntimeStore.scope(ofSessionID: sessionID)
+        let effectiveScope = sessionRuntimeStore.effectiveWorkspaceScope(sessionID: sessionID)
+        return [
+            "sessionID": .string(sessionID),
+            "isScoped": .bool(explicitScope != nil),
+            "workspaceIDs": .array(
+                (explicitScope ?? [])
+                    .map(\.uuidString)
+                    .sorted()
+                    .map(AutomationJSONValue.string)
+            ),
+            "effectiveWorkspaceIDs": effectiveScope.map { scope in
+                .array(scope.map(\.uuidString).sorted().map(AutomationJSONValue.string))
+            } ?? .null,
+        ]
+    }
+
+    @MainActor
+    private func executeEvent(_ event: AutomationEventEnvelope) throws -> [String: AutomationJSONValue]? {
+        let now = event.parsedTimestamp ?? Date()
+        flushCoalescedUpdates(at: now)
+
+        switch event.eventType {
+        case "session.start":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let panelID = try event.requiredPanelID()
+            guard let agentRaw = event.payload.string("agent"),
+                  let agent = AgentKind(rawValue: agentRaw) else {
+                throw AutomationSocketError.invalidPayload("agent must be a lowercase agent ID")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+
+            sessionRuntimeStore.startSession(
+                sessionID: sessionID,
+                agent: agent,
+                panelID: panelID,
+                windowID: location.windowID,
+                workspaceID: location.workspaceID,
+                cwd: event.payload.string("cwd"),
+                repoRoot: event.payload.string("repoRoot"),
+                at: now
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "sessionID": .string(sessionID),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.status":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            guard let kindRaw = event.payload.string("kind"),
+                  let kind = SessionStatusKind(rawValue: kindRaw) else {
+                throw AutomationSocketError.invalidPayload(
+                    "kind must be one of: idle, working, needs_approval, ready, error"
+                )
+            }
+            guard let summary = normalizedOptionalText(event.payload.string("summary")) else {
+                throw AutomationSocketError.invalidPayload("summary is required")
+            }
+            let detail = normalizedOptionalText(event.payload.string("detail"))
+            sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: kind, summary: summary, detail: detail),
+                at: now
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.background_activity":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            guard let phaseRaw = event.payload.string("phase"),
+                  let phase = SessionBackgroundActivityPhase(rawValue: phaseRaw) else {
+                throw AutomationSocketError.invalidPayload("phase must be one of: start, finish, sync")
+            }
+            guard let kindRaw = event.payload.string("kind"),
+                  let kind = SessionBackgroundActivityKind(rawValue: kindRaw) else {
+                throw AutomationSocketError.invalidPayload("kind must be one of: child_agent, subagent")
+            }
+
+            let didMutate: Bool
+            switch phase {
+            case .start:
+                guard let activityID = normalizedOptionalText(event.payload.string("activityID")) else {
+                    throw AutomationSocketError.invalidPayload("activityID is required")
+                }
+                let processID: Int32?
+                if let rawProcessID = event.payload.int("processID") {
+                    guard rawProcessID > 0,
+                          rawProcessID <= Int(Int32.max) else {
+                        throw AutomationSocketError.invalidPayload("processID must be a positive 32-bit integer")
+                    }
+                    processID = Int32(rawProcessID)
+                } else {
+                    processID = nil
+                }
+                let preserveWhenUnlisted = event.payload.bool("preserveWhenUnlisted")
+                if event.payload["preserveWhenUnlisted"] != nil,
+                   preserveWhenUnlisted == nil {
+                    throw AutomationSocketError.invalidPayload("preserveWhenUnlisted must be a boolean")
+                }
+                didMutate = sessionRuntimeStore.updateBackgroundActivity(
+                    sessionID: sessionID,
+                    activity: SessionBackgroundActivity(
+                        id: activityID,
+                        kind: kind,
+                        displayName: event.payload.string("displayName"),
+                        command: event.payload.string("command"),
+                        processID: processID,
+                        preserveWhenUnlisted: preserveWhenUnlisted ?? false,
+                        startedAt: now,
+                        lastUpdatedAt: now
+                    ),
+                    at: now
+                )
+            case .finish:
+                guard let activityID = normalizedOptionalText(event.payload.string("activityID")) else {
+                    throw AutomationSocketError.invalidPayload("activityID is required")
+                }
+                didMutate = sessionRuntimeStore.finishBackgroundActivity(
+                    sessionID: sessionID,
+                    activityID: activityID,
+                    at: now
+                )
+            case .sync:
+                guard kind == .subagent else {
+                    throw AutomationSocketError.invalidPayload("sync kind must be subagent")
+                }
+                guard let pendingCount = event.payload.int("pendingCount"),
+                      pendingCount >= 0 else {
+                    throw AutomationSocketError.invalidPayload("pendingCount must be a non-negative integer")
+                }
+                let preserveUnlistedActivities = event.payload.bool("preserveUnlistedActivities")
+                if event.payload["preserveUnlistedActivities"] != nil,
+                   preserveUnlistedActivities == nil {
+                    throw AutomationSocketError.invalidPayload("preserveUnlistedActivities must be a boolean")
+                }
+                guard case .array(let entryValues)? = event.payload["entries"] else {
+                    throw AutomationSocketError.invalidPayload("entries must be an array")
+                }
+                let entries = try entryValues.map { value -> SessionBackgroundActivity in
+                    guard case .object(let object) = value else {
+                        throw AutomationSocketError.invalidPayload("entries must be an array of objects")
+                    }
+                    guard let id = normalizedOptionalText(object.string("id")) else {
+                        throw AutomationSocketError.invalidPayload("entry id is required")
+                    }
+                    if let displayNameValue = object["displayName"] {
+                        guard case .string(_) = displayNameValue else {
+                            throw AutomationSocketError.invalidPayload("entry displayName must be a string")
+                        }
+                    }
+                    if let commandValue = object["command"] {
+                        guard case .string(_) = commandValue else {
+                            throw AutomationSocketError.invalidPayload("entry command must be a string")
+                        }
+                    }
+                    return SessionBackgroundActivity(
+                        id: id,
+                        kind: kind,
+                        displayName: normalizedOptionalText(object.string("displayName")),
+                        command: normalizedOptionalText(object.string("command")),
+                        startedAt: now,
+                        lastUpdatedAt: now
+                    )
+                }
+                didMutate = sessionRuntimeStore.syncBackgroundActivities(
+                    sessionID: sessionID,
+                    kind: kind,
+                    entries: entries,
+                    pendingBackgroundTaskCount: pendingCount,
+                    preserveUnlistedActivities: preserveUnlistedActivities ?? false,
+                    at: now
+                )
+            }
+            if didMutate {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(didMutate ? "accepted" : "noop"),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.codex_notify_completion":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            let completion = try codexNotifyCompletion(from: event.payload)
+            let accepted = sessionRuntimeStore.handleCodexNotifyCompletion(
+                sessionID: sessionID,
+                completion: completion,
+                at: now
+            )
+            if accepted {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(accepted ? "accepted" : "ignored"),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.codex_hook_event":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let activeSession = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            let hookEvent = try codexHookEvent(from: event.payload)
+            let accepted = sessionRuntimeStore.handleCodexHookEvent(
+                sessionID: sessionID,
+                event: hookEvent,
+                at: now
+            )
+            if accepted {
+                stateVersion += 1
+                if let resumeRecord = codexHookResumeRecord(
+                    from: hookEvent,
+                    activeSession: activeSession,
+                    capturedAt: now
+                ) {
+                    let didMutate = updateManagedAgentResumeRecordFromHook(
+                        sessionID: sessionID,
+                        activeSession: activeSession,
+                        resumeRecord: resumeRecord,
+                        captureSource: "codex_hook_event"
+                    )
+                    if didMutate {
+                        stateVersion += 1
+                    }
+                }
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "status": .string(accepted ? "accepted" : "ignored"),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.update_files":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+
+            let files = event.payload.stringArray("files")
+            guard files.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("files must be a non-empty string array")
+            }
+
+            let normalized = try normalizeFiles(files, cwd: event.payload.string("cwd"))
+            sessionUpdateCoalescer.ingest(
+                SessionFileUpdate(
+                    sessionID: sessionID,
+                    files: normalized,
+                    cwd: event.payload.string("cwd"),
+                    repoRoot: event.payload.string("repoRoot")
+                ),
+                at: now
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "queuedFiles": .int(normalized.count),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.update_resume_record":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try event.requiredPanelID()
+            let activeSession = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
+            guard let agentRaw = normalizedOptionalText(event.payload.string("agent")),
+                  let agent = AgentKind(rawValue: agentRaw) else {
+                throw AutomationSocketError.invalidPayload("agent must be a lowercase agent ID")
+            }
+            guard agent == activeSession.agent else {
+                throw AutomationSocketError.invalidPayload("agent does not match active session")
+            }
+            guard let nativeSessionID = normalizedOptionalText(event.payload.string("nativeSessionID")) else {
+                throw AutomationSocketError.invalidPayload("nativeSessionID is required")
+            }
+            guard let sessionFilePath = normalizedOptionalText(event.payload.string("sessionFilePath")) else {
+                throw AutomationSocketError.invalidPayload("sessionFilePath is required")
+            }
+            guard let cwd = normalizedOptionalText(event.payload.string("cwd"))
+                ?? normalizedOptionalText(activeSession.cwd) else {
+                throw AutomationSocketError.invalidPayload("cwd is required")
+            }
+
+            let didMutate = updateManagedAgentResumeRecordFromHook(
+                sessionID: sessionID,
+                activeSession: activeSession,
+                resumeRecord: ManagedAgentResumeRecord(
+                    agent: agent,
+                    nativeSessionID: nativeSessionID,
+                    sessionFilePath: sessionFilePath,
+                    cwd: cwd,
+                    capturedAt: now
+                ),
+                captureSource: "update_resume_record"
+            )
+            if didMutate {
+                stateVersion += 1
+            }
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.stop":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID,
+                requireLivePanel: false
+            )
+            flushAllCoalescedUpdates()
+            sessionRuntimeStore.stopSession(sessionID: sessionID, at: now)
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "notification.emit":
+            guard let title = event.payload.string("title"), title.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("title is required")
+            }
+            guard let body = event.payload.string("body"), body.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("body is required")
+            }
+
+            let payloadWorkspaceID = event.payload.uuid("workspaceID")
+            let payloadPanelID = event.payload.uuid("panelID")
+
+            let resolvedWorkspaceID: UUID
+            if let payloadWorkspaceID {
+                guard store.state.workspacesByID[payloadWorkspaceID] != nil else {
+                    throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+                }
+                resolvedWorkspaceID = payloadWorkspaceID
+            } else if let payloadPanelID {
+                guard let location = locatePanel(payloadPanelID) else {
+                    throw AutomationSocketError.invalidPayload("panelID does not exist")
+                }
+                resolvedWorkspaceID = location.workspaceID
+            } else {
+                resolvedWorkspaceID = try resolveWorkspaceSelection(args: event.payload).workspaceID
+            }
+
+            let decision = notificationStore.record(
+                workspaceID: resolvedWorkspaceID,
+                panelID: payloadPanelID,
+                title: title,
+                body: body,
+                appIsFocused: NSApplication.shared.isActive,
+                sourcePanelIsFocused: payloadPanelID.map(isPanelFocused) ?? false,
+                at: now
+            )
+            handleNotificationDelivery(
+                decision: decision,
+                title: title,
+                body: body,
+                workspaceID: resolvedWorkspaceID,
+                panelID: payloadPanelID
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "notificationStored": .bool(decision.stored),
+                "sendSystemNotification": .bool(decision.shouldSendSystemNotification),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        default:
+            throw AutomationSocketError.unknownEventType
+        }
+    }
+
+    @MainActor
+    private func performAction(actionID: String, args: [String: AutomationJSONValue]) throws {
+        var resolvedWorkspaceID: UUID?
+        func workspaceID() throws -> UUID {
+            if let resolvedWorkspaceID {
+                return resolvedWorkspaceID
+            }
+            let workspaceID = try resolveWorkspaceID(args: args)
+            resolvedWorkspaceID = workspaceID
+            return workspaceID
+        }
+
+        func profileBinding() throws -> TerminalProfileBinding {
+            guard let profileID = args.string("profileID")?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  profileID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("profileID is required")
+            }
+            return TerminalProfileBinding(profileID: profileID)
+        }
+
+        func webPanelPlacement() throws -> WebPanelPlacement {
+            guard let rawValue = args.string("placement")?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  rawValue.isEmpty == false else {
+                return .rightPanel
+            }
+            guard let placement = WebPanelPlacement(rawValue: rawValue) else {
+                throw AutomationSocketError.invalidPayload("placement must be one of: rightPanel, newTab, splitRight")
+            }
+            return placement
+        }
+
+        let didMutate: Bool
+        switch actionID {
+        case "workspace.tab.new":
+            didMutate = store.send(.createWorkspaceTab(workspaceID: try workspaceID(), seed: nil))
+
+        case "workspace.tab.select":
+            let resolvedWorkspaceID = try workspaceID()
+            let tabID = try resolveWorkspaceTabID(
+                args: args,
+                workspaceID: resolvedWorkspaceID,
+                allowSelectedTabFallback: false
+            )
+            didMutate = store.send(.selectWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
+
+        case "workspace.tab.close":
+            let resolvedWorkspaceID = try workspaceID()
+            let tabID = try resolveWorkspaceTabID(
+                args: args,
+                workspaceID: resolvedWorkspaceID,
+                allowSelectedTabFallback: true
+            )
+            didMutate = store.send(
+                .closeWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID),
+                source: .automation(command: "automation.perform_action", actionID: actionID)
+            )
+
+        case "workspace.reopen-last-closed-panel":
+            didMutate = store.send(.reopenLastClosedPanel(workspaceID: try workspaceID()))
+
+        case "workspace.focus-next-unread-or-active":
+            didMutate = store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: try resolveWindowID(args: args),
+                sessionRuntimeStore: sessionRuntimeStore
+            )
+
+        case "workspace.split.horizontal":
+            didMutate = store.send(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .horizontal))
+
+        case "workspace.split.vertical":
+            didMutate = store.send(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .vertical))
+
+        case "workspace.split.right":
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .right))
+
+        case "workspace.split.down":
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .down))
+
+        case "workspace.split.left":
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .left))
+
+        case "workspace.split.up":
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .up))
+
+        case "workspace.split.right.with-profile":
+            let resolvedWorkspaceID = try workspaceID()
+            didMutate = terminalRuntimeRegistry.splitFocusedSlotInDirectionWithTerminalProfile(
+                workspaceID: resolvedWorkspaceID,
+                direction: .right,
+                profileBinding: try profileBinding()
+            )
+
+        case "workspace.split.down.with-profile":
+            let resolvedWorkspaceID = try workspaceID()
+            didMutate = terminalRuntimeRegistry.splitFocusedSlotInDirectionWithTerminalProfile(
+                workspaceID: resolvedWorkspaceID,
+                direction: .down,
+                profileBinding: try profileBinding()
+            )
+
+        case "workspace.close-focused-panel":
+            didMutate = focusedPanelCommandController.closeFocusedPanel(
+                in: try workspaceID(),
+                source: .automation(command: "automation.perform_action", actionID: actionID)
+            ).didMutateState
+
+        case "workspace.focus-slot.previous":
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .previous))
+
+        case "workspace.focus-slot.next":
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .next))
+
+        case "workspace.focus-slot.left":
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .left))
+
+        case "workspace.focus-slot.right":
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .right))
+
+        case "workspace.focus-slot.up":
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .up))
+
+        case "workspace.focus-slot.down":
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .down))
+
+        case "workspace.focus-panel":
+            guard let panelID = args.uuid("panelID") else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            didMutate = store.send(.focusPanel(workspaceID: try workspaceID(), panelID: panelID))
+
+        case "workspace.resize-split.left":
+            didMutate = store.send(
+                .resizeFocusedSlotSplit(
+                    workspaceID: try workspaceID(),
+                    direction: .left,
+                    amount: max(args.int("amount") ?? 1, 1)
+                )
+            )
+
+        case "workspace.resize-split.right":
+            didMutate = store.send(
+                .resizeFocusedSlotSplit(
+                    workspaceID: try workspaceID(),
+                    direction: .right,
+                    amount: max(args.int("amount") ?? 1, 1)
+                )
+            )
+
+        case "workspace.resize-split.up":
+            didMutate = store.send(
+                .resizeFocusedSlotSplit(
+                    workspaceID: try workspaceID(),
+                    direction: .up,
+                    amount: max(args.int("amount") ?? 1, 1)
+                )
+            )
+
+        case "workspace.resize-split.down":
+            didMutate = store.send(
+                .resizeFocusedSlotSplit(
+                    workspaceID: try workspaceID(),
+                    direction: .down,
+                    amount: max(args.int("amount") ?? 1, 1)
+                )
+            )
+
+        case "workspace.equalize-splits":
+            didMutate = store.send(.equalizeLayoutSplits(workspaceID: try workspaceID()))
+
+        case "panel.create.browser":
+            didMutate = store.createBrowserPanel(
+                workspaceID: try workspaceID(),
+                request: BrowserPanelCreateRequest(
+                    initialURL: args.string("url"),
+                    placementOverride: try webPanelPlacement()
+                )
+            )
+
+        case "panel.create.localDocument",
+             "panel.create.markdown":
+            guard let filePath = normalizedOptionalText(args.string("filePath")) else {
+                throw AutomationSocketError.invalidPayload("filePath is required")
+            }
+            didMutate = store.createLocalDocumentPanel(
+                workspaceID: try workspaceID(),
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: filePath,
+                    placementOverride: try webPanelPlacement()
+                )
+            )
+
+        case "topbar.toggle.focused-panel":
+            didMutate = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: try workspaceID())
+
+        case "app.font.increase":
+            didMutate = store.send(.increaseWindowTerminalFont(windowID: try resolveWindowID(args: args)))
+
+        case "app.font.decrease":
+            didMutate = store.send(.decreaseWindowTerminalFont(windowID: try resolveWindowID(args: args)))
+
+        case "app.font.reset":
+            didMutate = store.send(.resetWindowTerminalFont(windowID: try resolveWindowID(args: args)))
+
+        case "app.markdown_text.increase":
+            didMutate = store.send(.increaseWindowMarkdownTextScale(windowID: try resolveWindowID(args: args)))
+
+        case "app.markdown_text.decrease":
+            didMutate = store.send(.decreaseWindowMarkdownTextScale(windowID: try resolveWindowID(args: args)))
+
+        case "app.markdown_text.reset":
+            didMutate = store.send(.resetWindowMarkdownTextScale(windowID: try resolveWindowID(args: args)))
+
+        case "app.browser_zoom.increase":
+            let target = try resolveBrowserTarget(payload: args)
+            didMutate = store.send(.increaseBrowserPanelPageZoom(panelID: target.panelID))
+
+        case "app.browser_zoom.decrease":
+            let target = try resolveBrowserTarget(payload: args)
+            didMutate = store.send(.decreaseBrowserPanelPageZoom(panelID: target.panelID))
+
+        case "app.browser_zoom.reset":
+            let target = try resolveBrowserTarget(payload: args)
+            didMutate = store.send(.resetBrowserPanelPageZoom(panelID: target.panelID))
+
+        case "sidebar.workspaces.new":
+            let windowID = try resolveWindowID(args: args)
+            let title = args.string("title")
+            didMutate = store.send(.createWorkspace(windowID: windowID, title: title, activate: true))
+
+        case "window.sidebar.toggle":
+            didMutate = store.send(.toggleSidebar(windowID: try resolveWindowID(args: args)))
+
+        default:
+            throw AutomationSocketError.invalidPayload("unsupported action: \(actionID)")
+        }
+
+        guard didMutate else {
+            throw AutomationSocketError.invalidPayload("action could not be applied: \(actionID)")
+        }
+    }
+
+    @MainActor
+    private func resolveWorkspaceSelection(args: [String: AutomationJSONValue]) throws -> WindowWorkspaceSelection {
+        if let rawWorkspaceID = args.string("workspaceID") {
+            guard let workspaceID = UUID(uuidString: rawWorkspaceID) else {
+                throw AutomationSocketError.invalidPayload("workspaceID must be a UUID")
+            }
+            guard let selection = store.state.workspaceSelection(containingWorkspaceID: workspaceID) else {
+                throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+            }
+            if let rawWindowID = args.string("windowID") {
+                guard let windowID = UUID(uuidString: rawWindowID) else {
+                    throw AutomationSocketError.invalidPayload("windowID must be a UUID")
+                }
+                guard selection.windowID == windowID else {
+                    throw AutomationSocketError.invalidPayload("workspaceID does not belong to windowID")
+                }
+            }
+            return selection
+        }
+
+        if let rawWindowID = args.string("windowID") {
+            guard let windowID = UUID(uuidString: rawWindowID) else {
+                throw AutomationSocketError.invalidPayload("windowID must be a UUID")
+            }
+            guard let selection = store.state.workspaceSelection(in: windowID) else {
+                throw AutomationSocketError.invalidPayload("windowID does not exist")
+            }
+            return selection
+        }
+
+        if let selection = store.state.soleWorkspaceSelection() {
+            return selection
+        }
+
+        if store.state.windows.isEmpty {
+            throw AutomationSocketError.invalidPayload("no window is available")
+        }
+
+        throw AutomationSocketError.invalidPayload("workspaceID or windowID is required when multiple windows exist")
+    }
+
+    @MainActor
+    private func resolveWorkspaceID(args: [String: AutomationJSONValue]) throws -> UUID {
+        try resolveWorkspaceSelection(args: args).workspaceID
+    }
+
+    @MainActor
+    private func resolveWorkspaceTabID(
+        args: [String: AutomationJSONValue],
+        workspaceID: UUID,
+        allowSelectedTabFallback: Bool
+    ) throws -> UUID {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        if let rawTabID = args.string("tabID") {
+            guard let tabID = UUID(uuidString: rawTabID) else {
+                throw AutomationSocketError.invalidPayload("tabID must be a UUID")
+            }
+            guard workspace.tabsByID[tabID] != nil else {
+                throw AutomationSocketError.invalidPayload("tabID does not exist")
+            }
+            return tabID
+        }
+
+        if let index = args.int("index") {
+            guard index > 0 else {
+                throw AutomationSocketError.invalidPayload("index must be greater than zero")
+            }
+            guard index <= workspace.tabIDs.count else {
+                throw AutomationSocketError.invalidPayload("index does not exist")
+            }
+            return workspace.tabIDs[index - 1]
+        }
+
+        if allowSelectedTabFallback, let selectedTabID = workspace.resolvedSelectedTabID {
+            return selectedTabID
+        }
+
+        throw AutomationSocketError.invalidPayload("index or tabID is required")
+    }
+
+    @MainActor
+    private func resolveWindowID(args: [String: AutomationJSONValue]) throws -> UUID {
+        if let rawWindowID = args.string("windowID") {
+            guard let windowID = UUID(uuidString: rawWindowID) else {
+                throw AutomationSocketError.invalidPayload("windowID must be a UUID")
+            }
+            guard store.state.window(id: windowID) != nil else {
+                throw AutomationSocketError.invalidPayload("windowID does not exist")
+            }
+            return windowID
+        }
+
+        if store.state.windows.count == 1, let windowID = store.state.windows.first?.id {
+            return windowID
+        }
+
+        if store.state.windows.isEmpty {
+            throw AutomationSocketError.invalidPayload("no window is available")
+        }
+
+        throw AutomationSocketError.invalidPayload("windowID is required when multiple windows exist")
+    }
+
+    @MainActor
+    private func resolveTerminalTarget(payload: [String: AutomationJSONValue]) throws -> (workspaceID: UUID, panelID: UUID) {
+        if let rawPanelID = payload.string("panelID") {
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard let workspace = store.state.workspacesByID[location.workspaceID],
+                  let panelState = workspace.panelState(for: panelID),
+                  case .terminal = panelState else {
+                throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
+            }
+            return (location.workspaceID, panelID)
+        }
+
+        let workspaceID = try resolveWorkspaceID(args: payload)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           let panelState = workspace.panels[focusedPanelID],
+           case .terminal = panelState {
+            return (workspaceID, focusedPanelID)
+        }
+
+        for leaf in workspace.layoutTree.allSlotInfos {
+            let panelID = leaf.panelID
+            if let panelState = workspace.panels[panelID], case .terminal = panelState {
+                return (workspaceID, panelID)
+            }
+        }
+
+        throw AutomationSocketError.invalidPayload("workspace has no terminal panel to target")
+    }
+
+    @MainActor
+    private func resolveLocalDocumentTarget(
+        payload: [String: AutomationJSONValue]
+    ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
+        if let rawPanelID = payload.string("panelID") {
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard let workspace = store.state.workspacesByID[location.workspaceID],
+                  let panelState = workspace.panelState(for: panelID),
+                  case .web(let webState) = panelState,
+                  webState.definition == .localDocument else {
+                throw AutomationSocketError.invalidPayload("panelID is not a local document panel")
+            }
+            return (location.workspaceID, panelID, webState)
+        }
+
+        let workspaceID = try resolveWorkspaceID(args: payload)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           let panelState = workspace.panels[focusedPanelID],
+           case .web(let webState) = panelState,
+           webState.definition == .localDocument {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
+           webState.definition == .localDocument {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .localDocument {
+            return (workspaceID, activePanelID, webState)
+        }
+
+        for leaf in workspace.layoutTree.allSlotInfos {
+            let panelID = leaf.panelID
+            guard let panelState = workspace.panels[panelID],
+                  case .web(let webState) = panelState,
+                  webState.definition == .localDocument else {
+                continue
+            }
+            return (workspaceID, panelID, webState)
+        }
+
+        throw AutomationSocketError.invalidPayload("workspace has no local document panel to target")
+    }
+
+    @MainActor
+    private func resolveBrowserTarget(
+        payload: [String: AutomationJSONValue]
+    ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
+        if let rawPanelID = payload.string("panelID") {
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard let workspace = store.state.workspacesByID[location.workspaceID],
+                  let panelState = workspace.panelState(for: panelID),
+                  case .web(let webState) = panelState,
+                  webState.definition == .browser else {
+                throw AutomationSocketError.invalidPayload("panelID is not a browser panel")
+            }
+            return (location.workspaceID, panelID, webState)
+        }
+
+        let workspaceID = try resolveWorkspaceID(args: payload)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           let panelState = workspace.panels[focusedPanelID],
+           case .web(let webState) = panelState,
+           webState.definition == .browser {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let focusedPanelID = workspace.rightAuxPanel.focusedPanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: focusedPanelID),
+           webState.definition == .browser {
+            return (workspaceID, focusedPanelID, webState)
+        }
+        if let activePanelID = workspace.rightAuxPanel.activePanelID,
+           case .web(let webState)? = workspace.rightAuxPanel.panelState(for: activePanelID),
+           webState.definition == .browser {
+            return (workspaceID, activePanelID, webState)
+        }
+
+        for leaf in workspace.layoutTree.allSlotInfos {
+            let panelID = leaf.panelID
+            guard let panelState = workspace.panels[panelID],
+                  case .web(let webState) = panelState,
+                  webState.definition == .browser else {
+                continue
+            }
+            return (workspaceID, panelID, webState)
+        }
+
+        throw AutomationSocketError.invalidPayload("workspace has no browser panel to target")
+    }
+
+    @MainActor
+    private func encodedStateData(includeRuntime: Bool) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if includeRuntime {
+            flushAllCoalescedUpdates()
+            let snapshot = AutomationRuntimeStateDump(
+                appState: store.state,
+                sessionRegistry: sessionRuntimeStore.sessionRegistry,
+                notifications: notificationStore.notifications
+            )
+            return try encoder.encode(snapshot)
+        }
+        return try encoder.encode(store.state)
+    }
+
+    @MainActor
+    private func terminalStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID
+    ) throws -> [String: AutomationJSONValue] {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+        guard let panelState = workspace.panelState(for: panelID),
+              case .terminal(let terminalState) = panelState else {
+            throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
+        }
+        return [
+            "workspaceID": .string(workspaceID.uuidString),
+            "panelID": .string(panelID.uuidString),
+            "title": .string(currentTerminalTitle(panelID: panelID, terminalState: terminalState)),
+            "cwd": .string(terminalState.cwd),
+            "shell": .string(terminalState.shell),
+            "profileID": terminalState.profileBinding.map { .string($0.profileID) } ?? .null,
+        ]
+    }
+
+    @MainActor
+    private func localDocumentPanelStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState,
+        runtimeState: LocalDocumentPanelRuntimeAutomationState
+    ) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = [
+            "workspaceID": .string(workspaceID.uuidString),
+            "panelID": .string(panelID.uuidString),
+            "stateTitle": .string(webState.title),
+            "stateFilePath": webState.filePath.map { .string($0) } ?? .null,
+            "stateFormat": webState.localDocument.map { .string($0.format.rawValue) } ?? .null,
+            "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
+            "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
+            "currentTheme": .string(runtimeState.currentTheme.rawValue),
+            "hasCurrentBootstrap": .bool(runtimeState.currentBootstrap != nil),
+            "pendingBootstrapScript": .bool(runtimeState.hasPendingBootstrapScript),
+            "currentAssetPath": runtimeState.currentAssetPath.map { .string($0) } ?? .null,
+        ]
+
+        if let bootstrap = runtimeState.currentBootstrap {
+            result["bootstrapContractVersion"] = .int(bootstrap.contractVersion)
+            result["bootstrapFilePath"] = bootstrap.filePath.map { .string($0) } ?? .null
+            result["bootstrapDisplayName"] = .string(bootstrap.displayName)
+            result["bootstrapFormat"] = .string(bootstrap.format.rawValue)
+            result["bootstrapShouldHighlight"] = .bool(bootstrap.shouldHighlight)
+            result["bootstrapContentRevision"] = .int(bootstrap.contentRevision)
+            result["bootstrapIsEditing"] = .bool(bootstrap.isEditing)
+            result["bootstrapIsDirty"] = .bool(bootstrap.isDirty)
+            result["bootstrapHasExternalConflict"] = .bool(bootstrap.hasExternalConflict)
+            result["bootstrapIsSaving"] = .bool(bootstrap.isSaving)
+            result["bootstrapSaveErrorMessage"] = bootstrap.saveErrorMessage.map { .string($0) } ?? .null
+            result["bootstrapTheme"] = .string(bootstrap.theme.rawValue)
+            result["bootstrapTextScale"] = .double(bootstrap.textScale)
+            result["bootstrapContentLength"] = .int(bootstrap.content.utf8.count)
+            result["bootstrapContentSHA256"] = .string(Self.sha256Hex(bootstrap.content))
+        } else {
+            result["bootstrapContractVersion"] = .null
+            result["bootstrapFilePath"] = .null
+            result["bootstrapDisplayName"] = .null
+            result["bootstrapFormat"] = .null
+            result["bootstrapShouldHighlight"] = .null
+            result["bootstrapContentRevision"] = .null
+            result["bootstrapIsEditing"] = .null
+            result["bootstrapIsDirty"] = .null
+            result["bootstrapHasExternalConflict"] = .null
+            result["bootstrapIsSaving"] = .null
+            result["bootstrapSaveErrorMessage"] = .null
+            result["bootstrapTheme"] = .null
+            result["bootstrapTextScale"] = .null
+            result["bootstrapContentLength"] = .null
+            result["bootstrapContentSHA256"] = .null
+        }
+
+        return result
+    }
+
+    @MainActor
+    private func browserPanelStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState,
+        runtimeState: BrowserPanelRuntimeAutomationState
+    ) -> [String: AutomationJSONValue] {
+        [
+            "workspaceID": .string(workspaceID.uuidString),
+            "panelID": .string(panelID.uuidString),
+            "stateTitle": .string(webState.title),
+            "stateRestorableURL": webState.restorableURL.map { .string($0) } ?? .null,
+            "statePageZoom": .double(webState.effectiveBrowserPageZoom),
+            "statePageZoomOverride": webState.browserPageZoom.map { .double($0) } ?? .null,
+            "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
+            "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
+            "runtimePageZoom": .double(runtimeState.pageZoom),
+        ]
+    }
+
+    @MainActor
+    private func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        let slotInfos = workspace.layoutTree.allSlotInfos
+        let tabIDs = workspace.tabIDs.map { AutomationJSONValue.string($0.uuidString) }
+        let slotIDs = slotInfos.map { AutomationJSONValue.string($0.slotID.uuidString) }
+        let slotPanelIDs = slotInfos.map { AutomationJSONValue.string($0.panelID.uuidString) }
+        let slotMappings = slotInfos.map { slotInfo in
+            AutomationJSONValue.object([
+                "slotID": .string(slotInfo.slotID.uuidString),
+                "panelID": .string(slotInfo.panelID.uuidString),
+            ])
+        }
+        let selectedTabID = workspace.resolvedSelectedTabID
+        let selectedTabIndex: Int? = selectedTabID.flatMap { tabID in
+            workspace.tabIDs.firstIndex(of: tabID).map { $0 + 1 }
+        }
+        let rightPanelTabIDs = workspace.rightAuxPanel.tabIDs.map { AutomationJSONValue.string($0.uuidString) }
+        let rightPanelPanelIDs = workspace.rightAuxPanel.orderedTabs.map { AutomationJSONValue.string($0.panelID.uuidString) }
+        let rightPanelTabs = workspace.rightAuxPanel.orderedTabs.map { tab -> AutomationJSONValue in
+            let panelKind: String
+            let webDefinition: AutomationJSONValue
+            let panelTitle: String
+            switch tab.panelState {
+            case .terminal(let terminalState):
+                panelKind = "terminal"
+                webDefinition = .null
+                panelTitle = currentTerminalTitle(panelID: tab.panelID, terminalState: terminalState)
+            case .web(let webState):
+                panelKind = "web"
+                webDefinition = .string(webState.definition.rawValue)
+                panelTitle = webState.title
+            }
+            return .object([
+                "tabID": .string(tab.id.uuidString),
+                "panelID": .string(tab.panelID.uuidString),
+                "panelKind": .string(panelKind),
+                "webDefinition": webDefinition,
+                "title": .string(panelTitle),
+            ])
+        }
+        let rightPanel: AutomationJSONValue = .object([
+            "isVisible": .bool(workspace.rightAuxPanel.isVisible),
+            "width": .double(workspace.rightAuxPanel.width),
+            "hasCustomWidth": .bool(workspace.rightAuxPanel.hasCustomWidth),
+            "tabCount": .int(workspace.rightAuxPanel.tabIDs.count),
+            "activeTabID": workspace.rightAuxPanel.activeTabID.map { .string($0.uuidString) } ?? .null,
+            "activePanelID": workspace.rightAuxPanel.activePanelID.map { .string($0.uuidString) } ?? .null,
+            "focusedPanelID": workspace.rightAuxPanel.focusedPanelID.map { .string($0.uuidString) } ?? .null,
+            "tabIDs": .array(rightPanelTabIDs),
+            "panelIDs": .array(rightPanelPanelIDs),
+            "tabs": .array(rightPanelTabs),
+        ])
+        let rootSplitRatio: AutomationJSONValue
+        switch workspace.layoutTree {
+        case .split(_, _, let ratio, _, _):
+            rootSplitRatio = .double(ratio)
+        case .slot:
+            rootSplitRatio = .null
+        }
+
+        return [
+            "workspaceID": .string(workspaceID.uuidString),
+            "tabCount": .int(workspace.tabIDs.count),
+            "selectedTabID": selectedTabID.map { .string($0.uuidString) } ?? .null,
+            "selectedTabIndex": selectedTabIndex.map { .int($0) } ?? .null,
+            "tabIDs": .array(tabIDs),
+            "slotCount": .int(slotInfos.count),
+            "layoutPanelCount": .int(workspace.panels.count),
+            "panelCount": .int(workspace.allPanelsByID.count),
+            "focusedPanelID": workspace.focusedPanelID.map { .string($0.uuidString) } ?? .null,
+            "rightPanel": rightPanel,
+            "rootSplitRatio": rootSplitRatio,
+            "slotIDs": .array(slotIDs),
+            "slotPanelIDs": .array(slotPanelIDs),
+            "slotMappings": .array(slotMappings),
+            "layoutSignature": .string(layoutSignature(for: workspace)),
+        ]
+    }
+
+    @MainActor
+    private func workspaceRenderSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        let terminalPanelIDs: [UUID] = workspace.layoutTree.allSlotInfos.compactMap { slotInfo in
+            let panelID = slotInfo.panelID
+            guard let panelState = workspace.panels[panelID] else {
+                return nil
+            }
+            if case .terminal = panelState {
+                return panelID
+            }
+            return nil
+        }
+
+        var allRenderable = true
+        let panelRenderStates: [AutomationJSONValue] = terminalPanelIDs.map { panelID in
+            let snapshot = terminalRuntimeRegistry.automationRenderSnapshot(panelID: panelID)
+            allRenderable = allRenderable && snapshot.isRenderable
+            return .object([
+                "panelID": .string(snapshot.panelID.uuidString),
+                "controllerExists": .bool(snapshot.controllerExists),
+                "hostHasSuperview": .bool(snapshot.hostHasSuperview),
+                "hostAttachedToWindow": .bool(snapshot.hostAttachedToWindow),
+                "sourceContainerExists": .bool(snapshot.sourceContainerExists),
+                "sourceContainerAttachedToWindow": .bool(snapshot.sourceContainerAttachedToWindow),
+                "hostSuperviewMatchesSourceContainer": .bool(snapshot.hostSuperviewMatchesSourceContainer),
+                "hostLifecycleState": .string(snapshot.lifecycleState.automationLabel),
+                "hostAttachmentID": snapshot.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
+                "ghosttySurfaceAvailable": .bool(snapshot.ghosttySurfaceAvailable),
+                "isRenderable": .bool(snapshot.isRenderable),
+            ])
+        }
+
+        return [
+            "workspaceID": .string(workspaceID.uuidString),
+            "terminalPanelCount": .int(terminalPanelIDs.count),
+            "allRenderable": .bool(allRenderable),
+            "panels": .array(panelRenderStates),
+        ]
+    }
+
+    private func ensureStateArtifactDirectory() throws -> URL {
+        let directory = try ensureRunArtifactDirectory().appendingPathComponent("state", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func layoutSignature(for workspace: WorkspaceState) -> String {
+        let slotSignature = workspace.layoutTree.allSlotInfos
+            .map { "\($0.slotID.uuidString):\($0.panelID.uuidString)" }
+            .joined(separator: ",")
+        let focusSignature = workspace.focusedPanelID?.uuidString ?? "nil"
+        let rootSignature: String
+        switch workspace.layoutTree {
+        case .split(_, _, let ratio, _, _):
+            rootSignature = String(format: "%.6f", ratio)
+        case .slot:
+            rootSignature = "slot"
+        }
+        return "focus=\(focusSignature);root=\(rootSignature);slots=\(slotSignature)"
+    }
+
+    private func screenshotURL(fixture: String, step: String) throws -> URL {
+        let fixtureComponent = sanitizedPathComponent(fixture)
+        let stepComponent = sanitizedPathComponent(step)
+        let directory = try ensureRunArtifactDirectory().appendingPathComponent(fixtureComponent, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("\(stepComponent).png")
+    }
+
+    private func ensureRunArtifactDirectory() throws -> URL {
+        guard let automationConfig else {
+            throw AutomationSocketError.invalidPayload("artifacts require automation mode")
+        }
+
+        let rootDirectory = URL(
+            fileURLWithPath: automationConfig.artifactsDirectory ?? FileManager.default.temporaryDirectory.path,
+            isDirectory: true
+        )
+            .appendingPathComponent("ui", isDirectory: true)
+            .appendingPathComponent(sanitizedPathComponent(automationConfig.runID), isDirectory: true)
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        return rootDirectory
+    }
+
+    @MainActor
+    private func captureScreenshotPNG() throws -> Data {
+        guard let window = NSApplication.shared.windows.first(where: { $0.isVisible }) else {
+            throw AutomationSocketError.internalError("no visible app window")
+        }
+        window.displayIfNeeded()
+
+        guard let contentView = window.contentView else {
+            throw AutomationSocketError.internalError("window has no content view")
+        }
+        let bounds = contentView.bounds.integral
+        guard bounds.width > 0, bounds.height > 0 else {
+            throw AutomationSocketError.internalError("window content bounds are empty")
+        }
+
+        guard let imageRep = contentView.bitmapImageRepForCachingDisplay(in: bounds) else {
+            throw AutomationSocketError.internalError("failed to create image representation")
+        }
+        contentView.cacheDisplay(in: bounds, to: imageRep)
+        guard let data = imageRep.representation(using: .png, properties: [:]) else {
+            throw AutomationSocketError.internalError("failed to encode png")
+        }
+        return data
+    }
+
+    private func sanitizedPathComponent(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        let transformed = value.unicodeScalars.map { scalar -> String in
+            allowed.contains(scalar) ? String(scalar) : "-"
+        }.joined()
+        return transformed.isEmpty ? "value" : transformed
+    }
+
+    private func normalizedOptionalText(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func normalizedOptionalText(_ value: String?, limit: Int) -> String? {
+        normalizedOptionalText(value).map { String($0.prefix(limit)) }
+    }
+
+    private func codexNotifyCompletion(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> CodexNotifyCompletion {
+        guard let notificationType = normalizedOptionalText(payload.string("type")) else {
+            throw AutomationSocketError.invalidPayload("type is required")
+        }
+        guard let detail = normalizedOptionalText(payload.string("detail")) else {
+            throw AutomationSocketError.invalidPayload("detail is required")
+        }
+        return CodexNotifyCompletion(
+            notificationType: notificationType,
+            threadID: normalizedOptionalText(payload.string("threadID")),
+            turnID: normalizedOptionalText(payload.string("turnID")),
+            lastInputMessageFingerprint: normalizedOptionalText(payload.string("lastInputMessageFingerprint")),
+            inputMessageCount: payload.int("inputMessageCount") ?? 0,
+            detail: detail
+        )
+    }
+
+    @MainActor
+    private func updateManagedAgentResumeRecordFromHook(
+        sessionID: String,
+        activeSession: SessionRecord,
+        resumeRecord: ManagedAgentResumeRecord,
+        captureSource: String
+    ) -> Bool {
+        guard shouldAcceptManagedAgentResumeRecordHookClaim(
+            sessionID: sessionID,
+            activeSession: activeSession,
+            resumeRecord: resumeRecord,
+            captureSource: captureSource
+        ) else {
+            return false
+        }
+
+        // The hook event names this pane's native session directly, so the
+        // file-scanning observation is no longer needed after the claim is
+        // accepted.
+        agentLaunchService.cancelNativeSessionObservation(sessionID: sessionID)
+        var scopedResumeRecord = resumeRecord
+        scopedResumeRecord.scopedWorkspaceIDs = activeSession.scopedWorkspaceIDs
+        let didMutate = store.send(.updateTerminalPanelResumeRecord(
+            panelID: activeSession.panelID,
+            resumeRecord: scopedResumeRecord
+        ))
+        ToasttyLog.info(
+            "Captured managed agent resume record from hook event",
+            category: .terminal,
+            metadata: [
+                "session_id": sessionID,
+                "agent": resumeRecord.agent.rawValue,
+                "panel_id": activeSession.panelID.uuidString,
+                "native_session_id": resumeRecord.nativeSessionID,
+                "session_file_basename": (resumeRecord.sessionFilePath as NSString).lastPathComponent,
+                "cwd": resumeRecord.cwd,
+                "capture_source": captureSource,
+                "workspace_scope": workspaceScopeMetadata(activeSession.scopedWorkspaceIDs),
+                "did_mutate": String(didMutate),
+            ]
+        )
+        return didMutate
+    }
+
+    @MainActor
+    private func shouldAcceptManagedAgentResumeRecordHookClaim(
+        sessionID: String,
+        activeSession: SessionRecord,
+        resumeRecord: ManagedAgentResumeRecord,
+        captureSource: String
+    ) -> Bool {
+        guard let ownerPanelID = store.state.panelIDOwningManagedAgentResumeRecord(
+            agent: resumeRecord.agent,
+            nativeSessionID: resumeRecord.nativeSessionID
+        ),
+            ownerPanelID != activeSession.panelID,
+            let ownerSession = sessionRuntimeStore.sessionRegistry.activeSession(for: ownerPanelID),
+            ownerSession.agent == resumeRecord.agent else {
+            return true
+        }
+
+        let claimKey = [
+            sessionID,
+            activeSession.panelID.uuidString,
+            ownerPanelID.uuidString,
+            resumeRecord.agent.rawValue,
+            resumeRecord.nativeSessionID,
+            captureSource,
+        ].joined(separator: "\u{0}")
+        if loggedRefusedResumeRecordHookClaimKeys.insert(claimKey).inserted {
+            ToasttyLog.info(
+                "Refused managed agent resume record hook claim because native session is owned by an active panel",
+                category: .terminal,
+                metadata: [
+                    "session_id": sessionID,
+                    "agent": resumeRecord.agent.rawValue,
+                    "panel_id": activeSession.panelID.uuidString,
+                    "owner_panel_id": ownerPanelID.uuidString,
+                    "owner_session_id": ownerSession.sessionID,
+                    "native_session_id": resumeRecord.nativeSessionID,
+                    "session_file_basename": (resumeRecord.sessionFilePath as NSString).lastPathComponent,
+                    "cwd": resumeRecord.cwd,
+                    "capture_source": captureSource,
+                    "workspace_scope": workspaceScopeMetadata(activeSession.scopedWorkspaceIDs),
+                    "owner_workspace_scope": workspaceScopeMetadata(ownerSession.scopedWorkspaceIDs),
+                ]
+            )
+        }
+        return false
+    }
+
+    private func workspaceScopeMetadata(_ scope: Set<UUID>?) -> String {
+        guard let scope else { return "unrestricted" }
+        if scope.isEmpty { return "own_workspace_only" }
+        return scope
+            .map(\.uuidString)
+            .sorted()
+            .joined(separator: ",")
+    }
+
+    private func codexHookEvent(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> CodexHookEvent {
+        try CodexHookEventPayloadDecoder.decode(payload)
+    }
+
+    private func codexHookResumeRecord(
+        from event: CodexHookEvent,
+        activeSession: SessionRecord,
+        capturedAt: Date
+    ) -> ManagedAgentResumeRecord? {
+        guard event.hookEventName == "SessionStart",
+              activeSession.agent == .codex,
+              let nativeSessionID = normalizedOptionalText(event.nativeSessionID)
+                ?? normalizedOptionalText(event.threadID),
+              let sessionFilePath = normalizedOptionalText(event.sessionFilePath),
+              let cwd = normalizedOptionalText(event.cwd) else {
+            return nil
+        }
+
+        return ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: nativeSessionID,
+            sessionFilePath: sessionFilePath,
+            cwd: cwd,
+            capturedAt: capturedAt
+        )
+    }
+
+    private func parseArgsPayload(_ payload: [String: AutomationJSONValue]) throws -> [String: AutomationJSONValue] {
+        if let args = payload.object("args") {
+            return args
+        }
+        if payload["args"] != nil {
+            throw AutomationSocketError.invalidPayload("args must be an object")
+        }
+        return [:]
+    }
+
+    private func managedLaunchPreflightPolicy(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> ManagedAgentLaunchPreflightPolicy {
+        guard let rawPolicy = normalizedOptionalText(payload.string("preflightPolicy")) else {
+            return .skip
+        }
+        guard let policy = ManagedAgentLaunchPreflightPolicy(rawValue: rawPolicy) else {
+            throw AutomationSocketError.invalidPayload("preflightPolicy must be one of: skip, interactive")
+        }
+        return policy
+    }
+
+    private func managedLaunchEnvironment(
+        from payload: [String: AutomationJSONValue]
+    ) throws -> [String: String] {
+        guard let rawEnvironment = payload.object("environment") ?? payload.object("env") else {
+            return [:]
+        }
+        return try rawEnvironment.reduce(into: [String: String]()) { result, entry in
+            guard case .string(let value) = entry.value else {
+                throw AutomationSocketError.invalidPayload("environment values must be strings")
+            }
+            result[entry.key] = value
+        }
+    }
+
+    @MainActor
+    private func managedLaunchPreflightIfNeeded(
+        for request: ManagedAgentLaunchRequest
+    ) -> ManagedAgentLaunchPreflight? {
+        cleanupExpiredManagedLaunchPreflights()
+        guard request.preflightPolicy == .interactive,
+              request.agent == .codex,
+              let location = locatePanel(request.panelID) else {
+            return nil
+        }
+
+        let state = codexStatusHooksPreflightProvider(request.agent.rawValue)
+        guard state != .ready else { return nil }
+
+        let token = UUID().uuidString
+        pendingManagedLaunchPreflights[token] = PendingManagedLaunchPreflight(
+            createdAt: Date(),
+            decision: ManagedAgentLaunchPreflightDecision(kind: .pending)
+        )
+
+        codexStatusHooksWarningPresenter(state, location.windowID) { [weak self] choice in
+            self?.completeManagedLaunchPreflight(token: token, choice: choice)
+        }
+
+        return ManagedAgentLaunchPreflight(
+            token: token,
+            agent: request.agent,
+            panelID: request.panelID,
+            windowID: location.windowID,
+            title: AgentLaunchUI.codexStatusHooksWarningTitle(for: state),
+            message: AgentLaunchUI.codexStatusHooksWarningDetail(for: state),
+            canOpenSetup: true,
+            pollIntervalMilliseconds: managedLaunchPreflightPollIntervalMilliseconds
+        )
+    }
+
+    @MainActor
+    private func managedLaunchPreflightDecision(
+        token: String
+    ) -> ManagedAgentLaunchPreflightDecision {
+        cleanupExpiredManagedLaunchPreflights()
+        guard let pending = pendingManagedLaunchPreflights[token] else {
+            return ManagedAgentLaunchPreflightDecision(
+                kind: .notFound,
+                message: "Managed launch preflight was not found."
+            )
+        }
+
+        guard Date().timeIntervalSince(pending.createdAt) < managedLaunchPreflightLifetime else {
+            pendingManagedLaunchPreflights.removeValue(forKey: token)
+            return ManagedAgentLaunchPreflightDecision(
+                kind: .expired,
+                message: "Managed launch preflight expired."
+            )
+        }
+
+        guard pending.decision.kind != .pending else {
+            return pending.decision
+        }
+
+        pendingManagedLaunchPreflights.removeValue(forKey: token)
+        return pending.decision
+    }
+
+    @MainActor
+    private func completeManagedLaunchPreflight(
+        token: String,
+        choice: CodexStatusHookWarningChoice
+    ) {
+        guard var pending = pendingManagedLaunchPreflights[token] else { return }
+        switch choice {
+        case .setUpHooks:
+            pending.decision = ManagedAgentLaunchPreflightDecision(
+                kind: .setUpHooks,
+                message: "Toastty opened Codex status hook setup."
+            )
+        case .runAnyway:
+            pending.decision = ManagedAgentLaunchPreflightDecision(kind: .runAnyway)
+        case .cancel:
+            pending.decision = ManagedAgentLaunchPreflightDecision(
+                kind: .cancel,
+                message: "Codex launch cancelled."
+            )
+        }
+        pendingManagedLaunchPreflights[token] = pending
+    }
+
+    @MainActor
+    private func cleanupExpiredManagedLaunchPreflights() {
+        let now = Date()
+        pendingManagedLaunchPreflights = pendingManagedLaunchPreflights.filter { _, pending in
+            now.timeIntervalSince(pending.createdAt) < managedLaunchPreflightLifetime
+        }
+    }
+
+    private static func sha256Hex(_ string: String) -> String {
+        SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func automationObject<T: Encodable>(_ value: T) throws -> [String: AutomationJSONValue] {
+        let data = try JSONEncoder().encode(value)
+        return try JSONDecoder().decode([String: AutomationJSONValue].self, from: data)
+    }
+
+    @MainActor
+    private func currentTerminalTitle(panelID: UUID, terminalState: TerminalPanelState) -> String {
+        terminalRuntimeRegistry.terminalLiveTitleStore.title(for: panelID) ?? terminalState.title
+    }
+
+    @MainActor
+    private func locatePanel(_ panelID: UUID) -> (windowID: UUID, workspaceID: UUID)? {
+        guard let selection = store.state.workspaceSelection(containingPanelID: panelID) else {
+            return nil
+        }
+        return (selection.windowID, selection.workspaceID)
+    }
+
+    @MainActor
+    private func isPanelFocused(_ panelID: UUID) -> Bool {
+        guard let selection = store.state.selectedWorkspaceSelection() else {
+            return false
+        }
+        guard selection.workspace.focusedPanelID == panelID else {
+            return false
+        }
+        return selection.workspace.layoutTree.slotContaining(panelID: panelID) != nil
+    }
+
+    @MainActor
+    private func handleNotificationDelivery(
+        decision: NotificationDecision,
+        title: String,
+        body: String,
+        workspaceID: UUID,
+        panelID: UUID?
+    ) {
+        guard decision.stored else {
+            return
+        }
+
+        _ = store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
+
+        guard decision.shouldSendSystemNotification else {
+            return
+        }
+
+        let notificationContext = desktopNotificationContext(workspaceID: workspaceID, panelID: panelID)
+
+        Task {
+            await SystemNotificationSender.send(
+                title: title,
+                body: body,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                context: notificationContext
+            )
+        }
+    }
+
+    @MainActor
+    private func desktopNotificationContext(workspaceID: UUID, panelID: UUID?) -> DesktopNotificationContext {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            return DesktopNotificationContext()
+        }
+        let panelLabel = panelID.flatMap { workspace.panelState(for: $0)?.notificationLabel }
+        return DesktopNotificationContext(workspaceTitle: workspace.title, panelLabel: panelLabel)
+    }
+
+    private func normalizeFiles(_ files: [String], cwd: String?) throws -> [String] {
+        do {
+            return try SocketEventNormalizer.normalizeFiles(files, cwd: cwd)
+        } catch let error as SocketEventNormalizationError {
+            switch error {
+            case .missingCWDForRelativePath:
+                throw AutomationSocketError.invalidPayload("cwd is required when files include relative paths")
+            }
+        } catch {
+            throw AutomationSocketError.internalError("file normalization failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func flushCoalescedUpdates(at now: Date) {
+        let updates = sessionUpdateCoalescer.flushReady(at: now)
+        for update in updates {
+            sessionRuntimeStore.updateFiles(
+                sessionID: update.sessionID,
+                files: update.files,
+                cwd: update.cwd,
+                repoRoot: update.repoRoot,
+                at: now
+            )
+        }
+    }
+
+    @MainActor
+    private func flushAllCoalescedUpdates() {
+        let now = Date()
+        let updates = sessionUpdateCoalescer.flushAll()
+        for update in updates {
+            sessionRuntimeStore.updateFiles(
+                sessionID: update.sessionID,
+                files: update.files,
+                cwd: update.cwd,
+                repoRoot: update.repoRoot,
+                at: now
+            )
+        }
+    }
+
+    @MainActor
+    private func resolveActiveSession(
+        sessionID: String,
+        rawPanelID: String?,
+        requireLivePanel: Bool = true
+    ) throws -> SessionRecord {
+        let parsedPanelID = rawPanelID.flatMap(UUID.init(uuidString:))
+        guard let record = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            ToasttyLog.warning(
+                "Rejected session event for inactive session",
+                category: .automation,
+                metadata: [
+                    "session_id": sessionID,
+                    "raw_panel_id": rawPanelID ?? "none",
+                    "parsed_panel_id": parsedPanelID?.uuidString ?? "none",
+                    "active_session_for_panel": parsedPanelID
+                        .flatMap { sessionRuntimeStore.sessionRegistry.activeSession(for: $0)?.sessionID }
+                        ?? "none",
+                    "require_live_panel": requireLivePanel ? "true" : "false",
+                ]
+            )
+            throw AutomationSocketError.invalidPayload("sessionID does not identify an active session")
+        }
+
+        if let panelID = try parsePanelID(rawPanelID) {
+            guard panelID == record.panelID else {
+                ToasttyLog.warning(
+                    "Rejected session event with mismatched panel",
+                    category: .automation,
+                    metadata: [
+                        "session_id": sessionID,
+                        "agent": record.agent.rawValue,
+                        "expected_panel_id": record.panelID.uuidString,
+                        "provided_panel_id": panelID.uuidString,
+                        "workspace_id": record.workspaceID.uuidString,
+                    ]
+                )
+                throw AutomationSocketError.invalidPayload("panelID does not match active session")
+            }
+        }
+
+        if requireLivePanel {
+            guard locatePanel(record.panelID) != nil else {
+                ToasttyLog.warning(
+                    "Rejected session event for missing panel",
+                    category: .automation,
+                    metadata: [
+                        "session_id": sessionID,
+                        "agent": record.agent.rawValue,
+                        "panel_id": record.panelID.uuidString,
+                        "workspace_id": record.workspaceID.uuidString,
+                    ]
+                )
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+        }
+
+        return record
+    }
+}
+private struct PendingManagedLaunchPreflight {
+    let createdAt: Date
+    var decision: ManagedAgentLaunchPreflightDecision
+}
+
+private extension AutomationEventEnvelope {
+    func requiredPanelID() throws -> UUID {
+        guard let panelID,
+              let uuid = UUID(uuidString: panelID) else {
+            throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+        }
+        return uuid
+    }
+}
+
+private func parsePanelID(_ panelID: String?) throws -> UUID? {
+    guard let panelID else { return nil }
+    guard let uuid = UUID(uuidString: panelID) else {
+        throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+    }
+    return uuid
+}
+
+private struct AutomationRuntimeStateDump: Encodable, Sendable {
+    let appState: AppState
+    let sessionRegistry: SessionRegistry
+    let notifications: [ToasttyNotification]
+}

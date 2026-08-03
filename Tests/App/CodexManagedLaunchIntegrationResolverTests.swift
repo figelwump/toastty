@@ -24,6 +24,7 @@ final class CodexManagedLaunchIntegrationResolverTests: XCTestCase {
         )
 
         XCTAssertNotNil(decision.configuration)
+        XCTAssertEqual(decision.statusTrackingSource, .hooks)
         XCTAssertEqual(fixture.transport.invocations.first?.executableURL, fixture.executable)
     }
 

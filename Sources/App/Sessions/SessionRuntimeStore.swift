@@ -1,7 +1,14 @@
 import AppKit
+import CodexReconciliation
 import CoreState
 import Darwin
 import Foundation
+
+enum CodexSubagentRolloutObservation: Equatable, Sendable {
+    case started(CodexSessionBackgroundActivity)
+    case finished(CodexSessionBackgroundActivity)
+    case streamReset
+}
 
 @MainActor
 final class SessionRuntimeStore: ObservableObject {
@@ -19,7 +26,7 @@ final class SessionRuntimeStore: ObservableObject {
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
-    private var codexNotifyStateBySessionID: [String: CodexNotifySessionState] = [:]
+    private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
     private var pendingCodexHookApprovalBySessionID: [String: PendingCodexHookApproval] = [:]
     private var pendingCodexHookApprovalTaskBySessionID: [String: Task<Void, Never>] = [:]
@@ -33,9 +40,7 @@ final class SessionRuntimeStore: ObservableObject {
     private var resumeGraceRepublishTask: Task<Void, Never>?
     private var resumeGraceRepublishExpiry: Date?
     private var backgroundActivityFinishTombstonesBySessionID: [String: [String: Date]] = [:]
-    private var codexSubagentMetadataStateBySessionID: [String: CodexSubagentMetadataState] = [:]
-    private static let maximumAutoReviewedCodexPermissionTurnIDs = 16
-    private static let maximumPendingCodexSubagentMetadataEntries = 64
+    private var codexSubagentReconcilerBySessionID: [String: CodexSubagentReconciler] = [:]
     private static let backgroundActivityFinishTombstoneTTL: TimeInterval = 120
     private static let pendingPanelParentSessionIDTTL: TimeInterval = 120
     private static let maximumPidlessSubagentBackgroundActivityAge: TimeInterval = 30 * 60
@@ -43,48 +48,6 @@ final class SessionRuntimeStore: ObservableObject {
     private struct PendingPanelParentSessionID: Equatable {
         let sessionID: String
         let recordedAt: Date
-    }
-
-    private struct CodexSubagentMetadata: Equatable {
-        var displayName: String? = nil
-        var command: String? = nil
-
-        var isEmpty: Bool {
-            displayName == nil && command == nil
-        }
-
-        func mergingFallback(_ fallback: CodexSubagentMetadata) -> CodexSubagentMetadata {
-            CodexSubagentMetadata(
-                displayName: displayName ?? fallback.displayName,
-                command: command ?? fallback.command
-            )
-        }
-    }
-
-    private struct PendingCodexSpawnCorrelation: Equatable {
-        var hookMetadata: CodexSubagentMetadata? = nil
-        var rolloutDisplayName: String? = nil
-        var childAgentID: String? = nil
-
-        var resolvedMetadata: CodexSubagentMetadata {
-            (hookMetadata ?? CodexSubagentMetadata())
-                .mergingFallback(CodexSubagentMetadata(displayName: rolloutDisplayName))
-        }
-
-        var isComplete: Bool {
-            hookMetadata != nil && childAgentID != nil
-        }
-    }
-
-    private struct CodexSubagentMetadataState: Equatable {
-        var correlationsByToolUseID: [String: PendingCodexSpawnCorrelation] = [:]
-        var orderedToolUseIDs: [String] = []
-        var resolvedMetadataByAgentID: [String: CodexSubagentMetadata] = [:]
-        var orderedAgentIDs: [String] = []
-
-        var isEmpty: Bool {
-            correlationsByToolUseID.isEmpty && resolvedMetadataByAgentID.isEmpty
-        }
     }
 
     private struct WorkspaceStatusDiagnosticRow: Equatable {
@@ -164,10 +127,10 @@ final class SessionRuntimeStore: ObservableObject {
     func reset() {
         sessionRegistry = SessionRegistry()
         suppressedCodexVisibleErrorDetailBySessionID = [:]
-        codexNotifyStateBySessionID = [:]
+        codexSessionReconciliationBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
         backgroundActivityFinishTombstonesBySessionID = [:]
-        codexSubagentMetadataStateBySessionID = [:]
+        codexSubagentReconcilerBySessionID = [:]
         pendingPanelParentSessionIDs = [:]
         removeAllPendingCodexHookApprovals()
         backgroundActivityReaperTask?.cancel()
@@ -175,6 +138,22 @@ final class SessionRuntimeStore: ObservableObject {
         resumeGraceRepublishTask?.cancel()
         resumeGraceRepublishTask = nil
         resumeGraceRepublishExpiry = nil
+    }
+
+    var codexReconciliationRuntimeSessionIDsForTesting: Set<String> {
+        Set(codexSessionReconciliationBySessionID.keys)
+    }
+
+    func codexRootTurnSnapshotForTesting(sessionID: String) -> CodexRootTurnSnapshot? {
+        codexSessionReconciliationBySessionID[sessionID]?.rootTurn.snapshot
+    }
+
+    func codexAutoReviewedPermissionTurnIDsForTesting(sessionID: String) -> [String] {
+        codexSessionReconciliationBySessionID[sessionID]?.approval.snapshot.autoReviewedTurnIDs ?? []
+    }
+
+    func hasPendingCodexHookApprovalForTesting(sessionID: String) -> Bool {
+        pendingCodexHookApprovalBySessionID[sessionID] != nil
     }
 
     func startSession(
@@ -193,14 +172,25 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) {
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
-        codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
-        codexSubagentMetadataStateBySessionID.removeValue(forKey: sessionID)
+        codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
-        if agent == .codex, let codexStatusTrackingSource {
-            codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
+        if agent == .codex {
+            if let codexStatusTrackingSource {
+                codexStatusTrackingSourceBySessionID[sessionID] = codexStatusTrackingSource
+            } else {
+                codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+            }
+            codexSubagentReconcilerBySessionID[sessionID] = CodexSubagentReconciler(
+                // Nil source temporarily preserves the legacy permissive path:
+                // hooks retain lifecycle authority while rollout events project
+                // through the compatibility adapter below.
+                authority: codexStatusTrackingSource.map { codexSubagentAuthority(for: $0) } ?? .hooks
+            )
         } else {
             codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
+            codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         }
         var nextRegistry = sessionRegistry
         nextRegistry.startSession(
@@ -520,64 +510,28 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
         let resolvedApprovalPolicyField = approvalPolicyField
             ?? approvalPolicy.map(CodexSessionLogContextField.string)
             ?? .unspecified
         let resolvedApprovalsReviewerField = approvalsReviewerField
             ?? approvalsReviewer.map(CodexSessionLogContextField.string)
             ?? .unspecified
-        let hasExplicitApprovalContext = resolvedApprovalPolicyField.isSpecified ||
-            resolvedApprovalsReviewerField.isSpecified
-        state.pendingRootInputFingerprint = fingerprint
-        if let threadID {
-            let previousRootThreadID = state.rootThreadID
-            state.rootThreadID = threadID
-            if let previousRootThreadID,
-               previousRootThreadID != threadID {
-                state.rootTurnID = nil
-                state.rootTurnInputFingerprint = nil
-                state.rootTurnAwaitingSessionLogContext = false
-                state.pendingRootApprovalContext = nil
-                state.activeTurnApprovalContext = nil
-                state.autoReviewedPermissionTurnIDs.removeAll()
-                applyCodexApprovalContext(nil, to: &state)
-            }
-        }
-
-        let nextApprovalContext = codexApprovalContext(
-            approvalPolicy: resolvedApprovalPolicyField,
-            approvalsReviewer: resolvedApprovalsReviewerField,
-            activeTurnContext: state.activeTurnApprovalContext
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .launchLogRootInput(
+                fingerprint: fingerprint,
+                threadID: threadID,
+                turnID: turnID,
+                context: CodexRootTurnApprovalContext(
+                    approvalPolicy: resolvedApprovalPolicyField.rootTurnContextField,
+                    approvalsReviewer: resolvedApprovalsReviewerField.rootTurnContextField
+                )
+            )
         )
-        if let turnID {
-            state.rootTurnID = turnID
-            state.rootTurnInputFingerprint = fingerprint
-            state.rootTurnAwaitingSessionLogContext = false
-            state.pendingRootApprovalContext = nil
-            applyCodexApprovalContext(nextApprovalContext, to: &state)
-        } else if fingerprint != nil {
-            if fingerprint == state.rootTurnInputFingerprint,
-               state.rootTurnID != nil,
-               state.rootTurnAwaitingSessionLogContext {
-                state.rootTurnAwaitingSessionLogContext = false
-                state.pendingRootApprovalContext = nil
-                applyCodexApprovalContext(nextApprovalContext, to: &state)
-            } else {
-                state.rootTurnID = nil
-                state.rootTurnInputFingerprint = nil
-                state.rootTurnAwaitingSessionLogContext = false
-                state.pendingRootApprovalContext = nextApprovalContext
-                applyCodexApprovalContext(nil, to: &state)
-            }
-        } else if hasExplicitApprovalContext {
-            state.rootTurnID = nil
-            state.rootTurnInputFingerprint = nil
-            state.rootTurnAwaitingSessionLogContext = false
-            state.pendingRootApprovalContext = nil
-            applyCodexApprovalContext(nil, to: &state)
-        }
-        codexNotifyStateBySessionID[sessionID] = state
+        let state = codexLegacyPolicySnapshot(
+            root: reduction.snapshot,
+            sessionID: sessionID
+        )
 
         ToasttyLog.debug(
             "Recorded Codex root turn input fingerprint",
@@ -617,40 +571,19 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-        state.activeTurnApprovalContext = codexApprovalContext(
-            applyingApprovalPolicy: approvalPolicy,
-            approvalsReviewer: approvalsReviewer,
-            to: state.activeTurnApprovalContext
-        )
-        if let pendingRootApprovalContext = state.pendingRootApprovalContext {
-            state.pendingRootApprovalContext = codexApprovalContext(
-                currentContext: pendingRootApprovalContext,
-                applyingApprovalPolicy: approvalPolicy,
-                approvalsReviewer: approvalsReviewer,
-                activeTurnContext: state.activeTurnApprovalContext
-            )
-        }
-        if state.rootTurnID != nil {
-            let currentContext = state.approvalContextKnown
-                ? CodexApprovalContext(
-                    approvalPolicy: state.approvalPolicy,
-                    approvalsReviewer: state.approvalsReviewer
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .launchLogOverrideContext(
+                CodexRootTurnApprovalContext(
+                    approvalPolicy: approvalPolicy.rootTurnContextField,
+                    approvalsReviewer: approvalsReviewer.rootTurnContextField
                 )
-                : nil
-            let nextCurrentContext = codexApprovalContext(
-                currentContext: currentContext,
-                applyingApprovalPolicy: approvalPolicy,
-                approvalsReviewer: approvalsReviewer,
-                activeTurnContext: state.activeTurnApprovalContext
             )
-            if state.rootTurnAwaitingSessionLogContext {
-                state.rootTurnAwaitingSessionLogContext = false
-            }
-            state.pendingRootApprovalContext = nil
-            applyCodexApprovalContext(nextCurrentContext, to: &state)
-        }
-        codexNotifyStateBySessionID[sessionID] = state
+        )
+        let state = codexLegacyPolicySnapshot(
+            root: reduction.snapshot,
+            sessionID: sessionID
+        )
 
         ToasttyLog.debug(
             "Recorded Codex override turn context",
@@ -695,7 +628,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
                 record: nil,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 completion: completion,
                 decision: "accepted",
                 reason: "missing_session_record"
@@ -711,7 +644,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
                 record: record,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 completion: completion,
                 decision: "accepted",
                 reason: "non_codex_session"
@@ -727,7 +660,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
                 record: record,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 completion: completion,
                 decision: "accepted",
                 reason: "status_notifications_disabled"
@@ -740,7 +673,7 @@ final class SessionRuntimeStore: ObservableObject {
             return true
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        var state = codexLegacyPolicySnapshot(sessionID: sessionID)
         guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
             logCodexNotifyCompletionDecision(
                 sessionID: sessionID,
@@ -755,52 +688,37 @@ final class SessionRuntimeStore: ObservableObject {
 
         var acceptedReason = "unknown"
         if let threadID = completion.threadID {
-            if let rootThreadID = state.rootThreadID {
-                guard threadID == rootThreadID else {
-                    codexNotifyStateBySessionID[sessionID] = state
-                    logCodexNotifyCompletionDecision(
-                        sessionID: sessionID,
-                        record: record,
-                        state: state,
-                        completion: completion,
-                        decision: "ignored",
-                        reason: "thread_mismatch"
+            let reduction = reduceCodexRootTurnObservation(
+                sessionID: sessionID,
+                observation: .fallbackNotifyThreadCandidate(
+                    threadID: threadID,
+                    inputFingerprint: completion.lastInputMessageFingerprint
+                )
+            )
+            state = codexLegacyPolicySnapshot(
+                root: reduction.snapshot,
+                sessionID: sessionID
+            )
+            switch reduction.qualification {
+            case .proceed:
+                if reduction.reason == .fallbackNotifyThreadLatched {
+                    acceptedReason = "latched_root_thread_from_input_fingerprint"
+                    ToasttyLog.debug(
+                        "Latched Codex root notify thread",
+                        category: .terminal,
+                        metadata: codexNotifyMetadata(
+                            sessionID: sessionID,
+                            record: record,
+                            state: state,
+                            completion: completion
+                        )
                     )
-                    return false
+                } else {
+                    acceptedReason = "thread_match"
                 }
-                acceptedReason = "thread_match"
-            } else if let notifyFingerprint = completion.lastInputMessageFingerprint,
-                      let pendingFingerprint = state.pendingRootInputFingerprint,
-                      notifyFingerprint == pendingFingerprint {
-                state.rootThreadID = threadID
-                codexNotifyStateBySessionID[sessionID] = state
-                acceptedReason = "latched_root_thread_from_input_fingerprint"
-                ToasttyLog.debug(
-                    "Latched Codex root notify thread",
-                    category: .terminal,
-                    metadata: codexNotifyMetadata(
-                        sessionID: sessionID,
-                        record: record,
-                        state: state,
-                        completion: completion
-                    )
-                )
-            } else if state.pendingRootInputFingerprint == nil {
-                codexNotifyStateBySessionID[sessionID] = state
-                logCodexNotifyCompletionDecision(
-                    sessionID: sessionID,
-                    record: record,
-                    state: state,
-                    completion: completion,
-                    decision: "ignored",
-                    reason: "missing_root_input_fingerprint"
-                )
-                return false
-            } else {
-                codexNotifyStateBySessionID[sessionID] = state
-                let reason = completion.lastInputMessageFingerprint == nil
-                    ? "missing_notify_input_fingerprint"
-                    : "input_fingerprint_mismatch"
+
+            case .rejectEvent:
+                let reason = codexNotifyRejectionReason(reduction.reason)
                 logCodexNotifyCompletionDecision(
                     sessionID: sessionID,
                     record: record,
@@ -812,7 +730,6 @@ final class SessionRuntimeStore: ObservableObject {
                 return false
             }
         } else {
-            codexNotifyStateBySessionID[sessionID] = state
             acceptedReason = "unthreaded_completion"
         }
 
@@ -846,7 +763,7 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogCompletionDecision(
                 sessionID: sessionID,
                 record: sessionRegistry.sessionsByID[sessionID],
-                state: codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState(),
+                state: codexLegacyPolicySnapshot(sessionID: sessionID),
                 threadID: threadID,
                 turnID: turnID,
                 decision: "ignored",
@@ -855,7 +772,7 @@ final class SessionRuntimeStore: ObservableObject {
             return false
         }
 
-        let state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
+        let state = codexLegacyPolicySnapshot(sessionID: sessionID)
         guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
             logCodexSessionLogCompletionDecision(
                 sessionID: sessionID,
@@ -970,6 +887,8 @@ final class SessionRuntimeStore: ObservableObject {
         detail: String,
         threadID: String?,
         turnID: String?,
+        callID: String?,
+        approvalID: String?,
         at now: Date
     ) -> Bool {
         guard let record = sessionRegistry.sessionsByID[sessionID],
@@ -978,32 +897,23 @@ final class SessionRuntimeStore: ObservableObject {
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: sessionRegistry.sessionsByID[sessionID],
-                state: codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState(),
+                state: codexLegacyPolicySnapshot(sessionID: sessionID),
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "ignored",
                 reason: "session_not_tracking_codex_status"
             )
             return false
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-        guard codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID) else {
-            logCodexSessionLogApprovalDecision(
-                sessionID: sessionID,
-                record: record,
-                state: state,
-                threadID: threadID,
-                turnID: turnID,
-                decision: "ignored",
-                reason: "status_source_hooks"
-            )
-            return false
-        }
-
+        var state = codexLegacyPolicySnapshot(sessionID: sessionID)
         let status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: detail)
         let event = CodexHookEvent(
             hookEventName: "PermissionRequest",
+            callID: callID,
+            approvalID: approvalID,
             threadID: threadID ?? state.rootThreadID,
             turnID: turnID ?? state.rootTurnID,
             promptFingerprint: nil,
@@ -1012,8 +922,19 @@ final class SessionRuntimeStore: ObservableObject {
             sessionFilePath: nil,
             cwd: nil
         )
+        let reduction = reduceCodexApproval(
+            sessionID: sessionID,
+            request: CodexApprovalRequest(
+                source: .sessionLog,
+                threadID: event.threadID,
+                turnID: event.turnID,
+                turnProvenance: turnID == nil ? .rootFallback : .sourceObserved
+            ),
+            root: state.root
+        )
+        state = codexLegacyPolicySnapshot(root: state.root, sessionID: sessionID)
 
-        switch codexHookApprovalDecision(event: event, state: state) {
+        switch reduction.decision {
         case .accept(let reason):
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
@@ -1021,37 +942,39 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "accepted",
-                reason: reason
+                reason: codexApprovalReason(reason, source: .sessionLog)
             )
             updateStatus(sessionID: sessionID, status: status, at: now)
             return true
 
         case .suppress(let reason):
-            if turnID != nil {
-                markAutoReviewedCodexPermissionTurnIfNeeded(event: event, state: &state)
-            }
-            codexNotifyStateBySessionID[sessionID] = state
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "suppressed",
-                reason: reason
+                reason: codexApprovalReason(reason, source: .sessionLog)
             )
             return false
 
-        case .ignore(let reason), .waitForContext(let reason):
+        case .ignore(let reason), .deferForContext(let reason):
             logCodexSessionLogApprovalDecision(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 threadID: threadID,
                 turnID: turnID,
+                callID: callID,
+                approvalID: approvalID,
                 decision: "ignored",
-                reason: reason
+                reason: codexApprovalReason(reason, source: .sessionLog)
             )
             return false
         }
@@ -1067,7 +990,7 @@ final class SessionRuntimeStore: ObservableObject {
             logIgnoredCodexHookCompletionIfNeeded(
                 sessionID: sessionID,
                 record: nil,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 event: event,
                 reason: "missing_session_record"
             )
@@ -1077,7 +1000,7 @@ final class SessionRuntimeStore: ObservableObject {
             logIgnoredCodexHookCompletionIfNeeded(
                 sessionID: sessionID,
                 record: record,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 event: event,
                 reason: "non_codex_session"
             )
@@ -1087,187 +1010,98 @@ final class SessionRuntimeStore: ObservableObject {
             logIgnoredCodexHookCompletionIfNeeded(
                 sessionID: sessionID,
                 record: record,
-                state: CodexNotifySessionState(),
+                state: .empty,
                 event: event,
                 reason: "status_notifications_disabled"
             )
             return false
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-        guard codexStatusTrackingSourceAllowsHookEvents(sessionID: sessionID) else {
+        let previousState = codexLegacyPolicySnapshot(sessionID: sessionID)
+        let reduction = reduceCodexRootTurnObservation(
+            sessionID: sessionID,
+            observation: .hook(
+                kind: codexRootTurnHookKind(event),
+                threadID: event.threadID,
+                turnID: event.turnID,
+                promptFingerprint: event.promptFingerprint
+            )
+        )
+        var state = codexLegacyPolicySnapshot(
+            root: reduction.snapshot,
+            sessionID: sessionID
+        )
+        var stateChanged = previousState != state
+
+        guard reduction.qualification == .proceed else {
             logCodexHookEventDecision(
                 sessionID: sessionID,
                 record: record,
                 state: state,
                 event: event,
                 decision: "ignored",
-                reason: "status_source_session_log_fallback"
+                reason: codexHookRejectionReason(reduction.reason)
             )
             return false
         }
 
-        var stateChanged = false
-        if event.isClearSessionStart,
-           !state.autoReviewedPermissionTurnIDs.isEmpty {
-            state.autoReviewedPermissionTurnIDs.removeAll()
-            stateChanged = true
-        }
-
-        if let threadID = event.threadID {
-            if let rootThreadID = state.rootThreadID {
-                if threadID != rootThreadID {
-                    guard event.isClearSessionStart else {
-                        codexNotifyStateBySessionID[sessionID] = state
-                        logCodexHookEventDecision(
-                            sessionID: sessionID,
-                            record: record,
-                            state: state,
-                            event: event,
-                            decision: "ignored",
-                            reason: "thread_mismatch"
-                        )
-                        return false
-                    }
-                    state.rootThreadID = threadID
-                    state.rootTurnID = nil
-                    state.rootTurnInputFingerprint = nil
-                    state.rootTurnAwaitingSessionLogContext = false
-                    state.pendingRootInputFingerprint = nil
-                    state.pendingRootApprovalContext = nil
-                    state.activeTurnApprovalContext = nil
-                    state.autoReviewedPermissionTurnIDs.removeAll()
-                    applyCodexApprovalContext(nil, to: &state)
-                    stateChanged = true
-                    ToasttyLog.debug(
-                        "Reset Codex root hook thread after clear",
-                        category: .terminal,
-                        metadata: codexHookMetadata(
-                            sessionID: sessionID,
-                            record: record,
-                            state: state,
-                            event: event
-                        )
-                    )
-                }
-            } else if event.canLatchRootHookThread {
-                state.rootThreadID = threadID
-                stateChanged = true
-                ToasttyLog.debug(
-                    "Latched Codex root hook thread",
-                    category: .terminal,
-                    metadata: codexHookMetadata(
-                        sessionID: sessionID,
-                        record: record,
-                        state: state,
-                        event: event
-                    )
-                )
-            } else if event.isStop,
-                      state.rootTurnID == nil || event.turnID != state.rootTurnID {
-                codexNotifyStateBySessionID[sessionID] = state
-                logCodexHookEventDecision(
+        if previousState.rootThreadID == nil,
+           state.rootThreadID != nil,
+           event.canLatchRootHookThread {
+            ToasttyLog.debug(
+                "Latched Codex root hook thread",
+                category: .terminal,
+                metadata: codexHookMetadata(
                     sessionID: sessionID,
                     record: record,
                     state: state,
-                    event: event,
-                    decision: "ignored",
-                    reason: "missing_root_thread"
+                    event: event
                 )
-                return false
-            }
-        }
-
-        if event.isStop,
-           event.threadID == nil,
-           let turnID = event.turnID,
-           let rootTurnID = state.rootTurnID,
-           turnID != rootTurnID {
-            codexNotifyStateBySessionID[sessionID] = state
-            logCodexHookEventDecision(
-                sessionID: sessionID,
-                record: record,
-                state: state,
-                event: event,
-                decision: "ignored",
-                reason: "turn_mismatch"
             )
-            return false
+        } else if event.isClearSessionStart,
+                  previousState.rootThreadID != state.rootThreadID,
+                  previousState.rootThreadID != nil {
+            ToasttyLog.debug(
+                "Reset Codex root hook thread after clear",
+                category: .terminal,
+                metadata: codexHookMetadata(
+                    sessionID: sessionID,
+                    record: record,
+                    state: state,
+                    event: event
+                )
+            )
         }
 
-        if event.isUserPromptSubmit,
-           state.rootTurnID != event.turnID {
-            let pendingRootInputFingerprint = state.pendingRootInputFingerprint
-            let matchedPendingRootContext = event.promptFingerprint != nil &&
-                event.promptFingerprint == pendingRootInputFingerprint &&
-                state.pendingRootApprovalContext != nil
-            let shouldAwaitSessionLogContext = event.promptFingerprint != nil && !matchedPendingRootContext
-            state.rootTurnID = event.turnID
-            state.rootTurnInputFingerprint = event.promptFingerprint
-            if matchedPendingRootContext,
-               let pendingRootApprovalContext = state.pendingRootApprovalContext {
-                applyCodexApprovalContext(pendingRootApprovalContext, to: &state)
-            } else if !shouldAwaitSessionLogContext,
-                      let activeTurnApprovalContext = state.activeTurnApprovalContext {
-                applyCodexApprovalContext(activeTurnApprovalContext, to: &state)
-            } else {
-                applyCodexApprovalContext(nil, to: &state)
-            }
-            state.pendingRootApprovalContext = nil
-            state.rootTurnAwaitingSessionLogContext = shouldAwaitSessionLogContext
-            stateChanged = true
-        }
-
-        if let promptFingerprint = event.promptFingerprint,
-           state.pendingRootInputFingerprint != promptFingerprint {
-            state.pendingRootInputFingerprint = promptFingerprint
-            stateChanged = true
-        }
-
-        codexNotifyStateBySessionID[sessionID] = state
-
-        if let spawnMetadata = event.spawnMetadata {
-            stateChanged = recordCodexSubagentHookMetadata(
+        if let spawnMetadata = event.spawnMetadata,
+           let spawnObservation = codexSubagentHookSpawnObservation(spawnMetadata) {
+            stateChanged = reduceCodexSubagentObservation(
                 sessionID: sessionID,
-                spawnMetadata: spawnMetadata,
+                observation: spawnObservation,
                 at: now
             ) || stateChanged
         }
 
         if event.isSubagentStart,
-           let subagentID = event.subagentID {
-            // The generic placeholder is creation-only: a repeated Start for a
-            // still-live row must not replace a correlated task name, because
-            // spawn metadata is consumed one-shot and cannot re-enrich the row.
-            let existingDisplayName = sessionRegistry
-                .activeSession(sessionID: sessionID)?
-                .backgroundActivitiesByID[subagentID]?
-                .displayName
-            let didMutate = reopenBackgroundActivity(
+           let rawSubagentID = event.subagentID,
+           let subagentID = ProviderAgentID(rawSubagentID) {
+            let didMutate = reduceCodexSubagentObservation(
                 sessionID: sessionID,
-                activity: SessionBackgroundActivity(
-                    id: subagentID,
-                    kind: .subagent,
-                    displayName: event.meaningfulSubagentType ?? existingDisplayName ?? "Sub-agent",
-                    startedAt: now,
-                    lastUpdatedAt: now
+                observation: .hookStart(
+                    agentID: subagentID,
+                    subagentType: event.meaningfulSubagentType
                 ),
                 at: now
             )
-            let didEnrich = consumeResolvedCodexSubagentMetadata(
-                sessionID: sessionID,
-                agentID: subagentID,
-                at: now
-            )
-            return stateChanged || didMutate || didEnrich
+            return stateChanged || didMutate
         }
 
         if event.isSubagentStop,
-           let subagentID = event.subagentID {
-            clearCodexSubagentMetadata(sessionID: sessionID, agentID: subagentID)
-            let didMutate = finishBackgroundActivity(
+           let rawSubagentID = event.subagentID,
+           let subagentID = ProviderAgentID(rawSubagentID) {
+            let didMutate = reduceCodexSubagentObservation(
                 sessionID: sessionID,
-                activityID: subagentID,
+                observation: .hookFinish(agentID: subagentID),
                 at: now
             )
             return stateChanged || didMutate
@@ -1279,10 +1113,14 @@ final class SessionRuntimeStore: ObservableObject {
 
         if event.isPermissionRequest,
            status.kind == .needsApproval {
-            switch codexHookApprovalDecision(event: event, state: state) {
+            let approvalReduction = reduceCodexApproval(
+                sessionID: sessionID,
+                request: codexHookApprovalRequest(event),
+                root: state.root
+            )
+            state = codexLegacyPolicySnapshot(root: state.root, sessionID: sessionID)
+            switch approvalReduction.decision {
             case .suppress(let reason):
-                markAutoReviewedCodexPermissionTurnIfNeeded(event: event, state: &state)
-                codexNotifyStateBySessionID[sessionID] = state
                 removePendingCodexHookApproval(sessionID: sessionID)
                 logCodexHookEventDecision(
                     sessionID: sessionID,
@@ -1290,17 +1128,17 @@ final class SessionRuntimeStore: ObservableObject {
                     state: state,
                     event: event,
                     decision: "suppressed",
-                    reason: reason
+                    reason: codexApprovalReason(reason, source: .hook)
                 )
                 return stateChanged
 
-            case .waitForContext(let reason):
+            case .deferForContext(let reason):
                 deferCodexHookApproval(
                     sessionID: sessionID,
                     record: record,
                     state: state,
                     event: event,
-                    reason: reason
+                    reason: codexApprovalReason(reason, source: .hook)
                 )
                 return stateChanged
 
@@ -1312,7 +1150,7 @@ final class SessionRuntimeStore: ObservableObject {
                     state: state,
                     event: event,
                     decision: "ignored",
-                    reason: reason
+                    reason: codexApprovalReason(reason, source: .hook)
                 )
                 return stateChanged
 
@@ -1324,7 +1162,7 @@ final class SessionRuntimeStore: ObservableObject {
                     state: state,
                     event: event,
                     decision: "accepted",
-                    reason: reason
+                    reason: codexApprovalReason(reason, source: .hook)
                 )
             }
         } else if status.kind != .needsApproval {
@@ -1344,67 +1182,144 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 event: event,
                 decision: "accepted",
-                reason: codexHookCompletionAcceptedReason(event: event, state: state)
+                reason: codexHookCompletionAcceptedReason(
+                    event: event,
+                    state: state
+                )
             )
         }
+
+        if event.isRootProgressWorking,
+           status.kind == .working {
+            guard record.isActive else {
+                return stateChanged
+            }
+            if codexStatusTrackingSourceBySessionID[sessionID] != nil {
+                let didProject = applyCodexRootProgressObservation(
+                    sessionID: sessionID,
+                    observation: .hookWorking(summary: status.summary, detail: status.detail),
+                    at: now
+                )
+                return stateChanged || didProject
+            }
+        }
+
         updateStatus(sessionID: sessionID, status: status, at: now)
         return true
     }
 
     @discardableResult
-    func recordCodexSubagentRolloutMetadata(
+    func handleCodexSubagentRolloutObservation(
         sessionID: String,
-        toolUseID: String,
-        agentID: String,
-        displayName: String?,
+        observation: CodexSubagentRolloutObservation,
         at now: Date
     ) -> Bool {
         guard let record = sessionRegistry.activeSession(sessionID: sessionID),
               record.agent == .codex,
               record.usesSessionStatusNotifications,
-              codexStatusTrackingSourceAllowsHookEvents(sessionID: sessionID),
-              let normalizedToolUseID = normalizedNonEmpty(toolUseID),
-              let normalizedAgentID = normalizedNonEmpty(agentID) else {
+              codexSubagentReconcilerBySessionID[sessionID] != nil else {
             return false
         }
 
-        if isBackgroundActivityFinishTombstoned(
-            sessionID: sessionID,
-            activityID: normalizedAgentID,
-            at: now
-        ) {
-            removeCodexSpawnCorrelation(
+        if codexStatusTrackingSourceBySessionID[sessionID] == nil {
+            return applyLegacyNilSourceCodexSubagentRolloutObservation(
                 sessionID: sessionID,
-                toolUseID: normalizedToolUseID
+                observation: observation,
+                at: now
             )
-            return false
         }
 
-        var state = codexSubagentMetadataStateBySessionID[sessionID]
-            ?? CodexSubagentMetadataState()
-        let previousState = state
-        var correlation = state.correlationsByToolUseID[normalizedToolUseID]
-            ?? PendingCodexSpawnCorrelation()
-        correlation.childAgentID = normalizedAgentID
-        correlation.rolloutDisplayName = meaningfulCodexSubagentMetadataText(displayName)
-        upsertCodexSpawnCorrelation(
-            correlation,
-            toolUseID: normalizedToolUseID,
-            state: &state
-        )
-        let didMutateActivity = resolveCodexSpawnCorrelation(
+        let reducerObservation: CodexSubagentObservation
+        switch observation {
+        case .started(let activity):
+            guard activity.kind == .subagent,
+                  let activityID = ActivityID(activity.activityID) else {
+                return false
+            }
+            reducerObservation = .rolloutStart(
+                activityID: activityID,
+                spawnCallID: activity.spawnToolUseID.flatMap { SpawnCallID($0) },
+                providerAgentID: activity.hookActivityID.flatMap { ProviderAgentID($0) },
+                displayName: activity.displayName,
+                command: activity.command
+            )
+
+        case .finished(let activity):
+            guard activity.kind == .subagent,
+                  let activityID = ActivityID(activity.activityID) else {
+                return false
+            }
+            reducerObservation = .rolloutFinish(activityID: activityID)
+
+        case .streamReset:
+            reducerObservation = .streamReset
+        }
+
+        return reduceCodexSubagentObservation(
             sessionID: sessionID,
-            toolUseID: normalizedToolUseID,
-            state: &state,
+            observation: reducerObservation,
             at: now
         )
-        let didMutateState = state != previousState
-        storeCodexSubagentMetadataState(state, sessionID: sessionID)
-        return didMutateActivity || didMutateState
     }
 
-    func codexSessionLogFallbackEventsAreEnabled(sessionID: String) -> Bool {
-        codexStatusTrackingSourceAllowsFallbackEvents(sessionID: sessionID)
+    @discardableResult
+    func handleCodexSessionLogRootProgressObservation(
+        sessionID: String,
+        observation: CodexRootProgressObservation,
+        at now: Date
+    ) -> Bool {
+        applyCodexRootProgressObservation(
+            sessionID: sessionID,
+            observation: observation,
+            at: now
+        )
+    }
+
+    /// Temporary compatibility for callers that predate fixed Codex status
+    /// authority. Historically nil source admitted hooks in the Store while the
+    /// planner also projected rollout activity through its fallback path.
+    private func applyLegacyNilSourceCodexSubagentRolloutObservation(
+        sessionID: String,
+        observation: CodexSubagentRolloutObservation,
+        at now: Date
+    ) -> Bool {
+        switch observation {
+        case .started(let activity):
+            guard activity.kind == .subagent else {
+                return false
+            }
+            return updateBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: activity.activityID,
+                    kind: .subagent,
+                    displayName: activity.displayName,
+                    command: activity.command,
+                    startedAt: now,
+                    lastUpdatedAt: now
+                ),
+                at: now
+            )
+
+        case .finished(let activity):
+            guard activity.kind == .subagent else {
+                return false
+            }
+            return finishBackgroundActivity(
+                sessionID: sessionID,
+                activityID: activity.activityID,
+                at: now
+            )
+
+        case .streamReset:
+            return syncBackgroundActivities(
+                sessionID: sessionID,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 0,
+                at: now
+            )
+        }
     }
 
     func stopSession(
@@ -1417,10 +1332,10 @@ final class SessionRuntimeStore: ObservableObject {
             logSessionStop(record, reason: reason, at: now)
         }
         suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
-        codexNotifyStateBySessionID.removeValue(forKey: sessionID)
+        codexSessionReconciliationBySessionID.removeValue(forKey: sessionID)
         codexStatusTrackingSourceBySessionID.removeValue(forKey: sessionID)
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
-        codexSubagentMetadataStateBySessionID.removeValue(forKey: sessionID)
+        codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
         removePendingPanelParentSessionIDs(parentSessionID: sessionID)
         var nextRegistry = sessionRegistry
@@ -1444,10 +1359,10 @@ final class SessionRuntimeStore: ObservableObject {
         if let record = activeRecord {
             logSessionStop(record, reason: reason, at: now)
             suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
-            codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
+            codexSessionReconciliationBySessionID.removeValue(forKey: record.sessionID)
             codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
             backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
-            codexSubagentMetadataStateBySessionID.removeValue(forKey: record.sessionID)
+            codexSubagentReconcilerBySessionID.removeValue(forKey: record.sessionID)
             removePendingCodexHookApproval(sessionID: record.sessionID)
             removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
         }
@@ -1629,10 +1544,10 @@ final class SessionRuntimeStore: ObservableObject {
             guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
                 logSessionStop(record, reason: .panelRemovedFromAppState, at: now)
                 suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
-                codexNotifyStateBySessionID.removeValue(forKey: record.sessionID)
+                codexSessionReconciliationBySessionID.removeValue(forKey: record.sessionID)
                 codexStatusTrackingSourceBySessionID.removeValue(forKey: record.sessionID)
                 backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: record.sessionID)
-                codexSubagentMetadataStateBySessionID.removeValue(forKey: record.sessionID)
+                codexSubagentReconcilerBySessionID.removeValue(forKey: record.sessionID)
                 removePendingCodexHookApproval(sessionID: record.sessionID)
                 if record.agent == .processWatch {
                     nextRegistry.removeSession(sessionID: record.sessionID)
@@ -1709,227 +1624,229 @@ final class SessionRuntimeStore: ObservableObject {
         )
     }
 
-    private func recordCodexSubagentHookMetadata(
+    private func codexSubagentHookSpawnObservation(
+        _ spawnMetadata: CodexSpawnHookMetadata
+    ) -> CodexSubagentObservation? {
+        guard let rawCallID = normalizedNonEmpty(spawnMetadata.toolUseID),
+              let callID = SpawnCallID(rawCallID) else {
+            return nil
+        }
+        let taskName = meaningfulCodexSubagentMetadataText(spawnMetadata.taskName, limit: 80)
+        let command = normalizedCodexSubagentMetadataText(spawnMetadata.message, limit: 512)
+        guard taskName != nil || command != nil else {
+            return nil
+        }
+        return .hookSpawn(callID: callID, taskName: taskName, command: command)
+    }
+
+    private func codexSubagentAuthority(
+        for source: CodexStatusTrackingSource
+    ) -> CodexSubagentAuthority {
+        switch source {
+        case .hooks:
+            return .hooks
+        case .sessionLogFallback:
+            return .rolloutFallback
+        }
+    }
+
+    @discardableResult
+    private func reduceCodexSubagentObservation(
         sessionID: String,
-        spawnMetadata: CodexSpawnHookMetadata,
+        observation: CodexSubagentObservation,
         at now: Date
     ) -> Bool {
-        guard let toolUseID = normalizedNonEmpty(spawnMetadata.toolUseID) else {
+        guard var reconciler = codexSubagentReconcilerBySessionID[sessionID] else {
             return false
         }
-        let metadata = CodexSubagentMetadata(
-            displayName: meaningfulCodexSubagentMetadataText(spawnMetadata.taskName, limit: 80),
-            command: normalizedCodexSubagentMetadataText(spawnMetadata.message, limit: 512)
+
+        let previousReconciler = reconciler
+        let reduction = reconciler.reduce(
+            observation,
+            projection: codexSubagentProjectionSnapshot(sessionID: sessionID),
+            now: now
         )
-        guard metadata.isEmpty == false else {
-            return false
-        }
-
-        var state = codexSubagentMetadataStateBySessionID[sessionID]
-            ?? CodexSubagentMetadataState()
-        let previousState = state
-        var correlation = state.correlationsByToolUseID[toolUseID]
-            ?? PendingCodexSpawnCorrelation()
-        correlation.hookMetadata = metadata
-        upsertCodexSpawnCorrelation(
-            correlation,
-            toolUseID: toolUseID,
-            state: &state
+        codexSubagentReconcilerBySessionID[sessionID] = reconciler
+        logCodexSubagentDiagnostics(
+            reduction.diagnostics,
+            sessionID: sessionID,
+            authority: reconciler.authority
         )
-        let didMutateActivity = resolveCodexSpawnCorrelation(
-            sessionID: sessionID,
-            toolUseID: toolUseID,
-            state: &state,
-            at: now
-        )
-        let didMutateState = state != previousState
-        storeCodexSubagentMetadataState(state, sessionID: sessionID)
-        return didMutateActivity || didMutateState
+
+        var didMutateProjection = false
+        for decision in reduction.decisions {
+            didMutateProjection = applyCodexSubagentProjectionDecision(
+                decision,
+                sessionID: sessionID,
+                at: now
+            ) || didMutateProjection
+        }
+        return reconciler != previousReconciler || didMutateProjection
     }
 
-    private func resolveCodexSpawnCorrelation(
-        sessionID: String,
-        toolUseID: String,
-        state: inout CodexSubagentMetadataState,
-        at now: Date
-    ) -> Bool {
-        guard let correlation = state.correlationsByToolUseID[toolUseID],
-              let agentID = correlation.childAgentID else {
-            return false
-        }
-
-        if isBackgroundActivityFinishTombstoned(
-            sessionID: sessionID,
-            activityID: agentID,
-            at: now
-        ) {
-            removeCodexSpawnCorrelation(toolUseID: toolUseID, state: &state)
-            removeResolvedCodexSubagentMetadata(agentID: agentID, state: &state)
-            return false
-        }
-
-        let metadata = correlation.resolvedMetadata
-        var didMutateActivity = false
-        if metadata.isEmpty == false {
-            if sessionRegistry.activeSession(sessionID: sessionID)?
-                .backgroundActivitiesByID[agentID] != nil {
-                didMutateActivity = applyCodexSubagentMetadata(
-                    metadata,
-                    sessionID: sessionID,
-                    agentID: agentID,
-                    at: now
-                )
-            } else {
-                upsertResolvedCodexSubagentMetadata(
-                    metadata,
-                    agentID: agentID,
-                    state: &state
-                )
-            }
-        }
-
-        if correlation.isComplete {
-            removeCodexSpawnCorrelation(toolUseID: toolUseID, state: &state)
-        }
-        return didMutateActivity
-    }
-
-    private func consumeResolvedCodexSubagentMetadata(
-        sessionID: String,
-        agentID: String,
-        at now: Date
-    ) -> Bool {
-        guard var state = codexSubagentMetadataStateBySessionID[sessionID],
-              let metadata = state.resolvedMetadataByAgentID[agentID] else {
-            return false
-        }
-        removeResolvedCodexSubagentMetadata(agentID: agentID, state: &state)
-        storeCodexSubagentMetadataState(state, sessionID: sessionID)
-        return applyCodexSubagentMetadata(
-            metadata,
-            sessionID: sessionID,
-            agentID: agentID,
-            at: now
-        )
-    }
-
-    private func applyCodexSubagentMetadata(
-        _ metadata: CodexSubagentMetadata,
-        sessionID: String,
-        agentID: String,
-        at now: Date
-    ) -> Bool {
-        guard isBackgroundActivityFinishTombstoned(
-            sessionID: sessionID,
-            activityID: agentID,
-            at: now
-        ) == false,
-              let existingActivity = sessionRegistry
-                .activeSession(sessionID: sessionID)?
-                .backgroundActivitiesByID[agentID],
-              existingActivity.kind == .subagent else {
-            return false
-        }
-        return updateBackgroundActivity(
-            sessionID: sessionID,
-            activity: SessionBackgroundActivity(
-                id: existingActivity.id,
-                kind: existingActivity.kind,
-                displayName: metadata.displayName,
-                command: metadata.command,
-                processID: existingActivity.processID,
-                preserveWhenUnlisted: existingActivity.preserveWhenUnlisted,
-                startedAt: existingActivity.startedAt,
-                lastUpdatedAt: now
-            ),
-            at: now
-        )
-    }
-
-    private func upsertCodexSpawnCorrelation(
-        _ correlation: PendingCodexSpawnCorrelation,
-        toolUseID: String,
-        state: inout CodexSubagentMetadataState
-    ) {
-        if state.correlationsByToolUseID[toolUseID] == nil {
-            state.orderedToolUseIDs.append(toolUseID)
-        }
-        state.correlationsByToolUseID[toolUseID] = correlation
-        while state.orderedToolUseIDs.count > Self.maximumPendingCodexSubagentMetadataEntries {
-            let evictedToolUseID = state.orderedToolUseIDs.removeFirst()
-            state.correlationsByToolUseID.removeValue(forKey: evictedToolUseID)
-        }
-    }
-
-    private func upsertResolvedCodexSubagentMetadata(
-        _ metadata: CodexSubagentMetadata,
-        agentID: String,
-        state: inout CodexSubagentMetadataState
-    ) {
-        if let existingMetadata = state.resolvedMetadataByAgentID[agentID] {
-            state.resolvedMetadataByAgentID[agentID] = metadata.mergingFallback(existingMetadata)
-            return
-        }
-        state.resolvedMetadataByAgentID[agentID] = metadata
-        state.orderedAgentIDs.append(agentID)
-        while state.orderedAgentIDs.count > Self.maximumPendingCodexSubagentMetadataEntries {
-            let evictedAgentID = state.orderedAgentIDs.removeFirst()
-            state.resolvedMetadataByAgentID.removeValue(forKey: evictedAgentID)
-        }
-    }
-
-    private func removeCodexSpawnCorrelation(
-        sessionID: String,
-        toolUseID: String
-    ) {
-        guard var state = codexSubagentMetadataStateBySessionID[sessionID] else {
-            return
-        }
-        removeCodexSpawnCorrelation(toolUseID: toolUseID, state: &state)
-        storeCodexSubagentMetadataState(state, sessionID: sessionID)
-    }
-
-    private func removeCodexSpawnCorrelation(
-        toolUseID: String,
-        state: inout CodexSubagentMetadataState
-    ) {
-        state.correlationsByToolUseID.removeValue(forKey: toolUseID)
-        state.orderedToolUseIDs.removeAll { $0 == toolUseID }
-    }
-
-    private func removeResolvedCodexSubagentMetadata(
-        agentID: String,
-        state: inout CodexSubagentMetadataState
-    ) {
-        state.resolvedMetadataByAgentID.removeValue(forKey: agentID)
-        state.orderedAgentIDs.removeAll { $0 == agentID }
-    }
-
-    private func clearCodexSubagentMetadata(
-        sessionID: String,
-        agentID: String
-    ) {
-        guard var state = codexSubagentMetadataStateBySessionID[sessionID] else {
-            return
-        }
-        removeResolvedCodexSubagentMetadata(agentID: agentID, state: &state)
-        let matchingToolUseIDs = state.correlationsByToolUseID.compactMap { toolUseID, correlation in
-            correlation.childAgentID == agentID ? toolUseID : nil
-        }
-        for toolUseID in matchingToolUseIDs {
-            removeCodexSpawnCorrelation(toolUseID: toolUseID, state: &state)
-        }
-        storeCodexSubagentMetadataState(state, sessionID: sessionID)
-    }
-
-    private func storeCodexSubagentMetadataState(
-        _ state: CodexSubagentMetadataState,
+    private func codexSubagentProjectionSnapshot(
         sessionID: String
+    ) -> CodexSubagentProjectionSnapshot {
+        let activeProviderAgentIDs = sessionRegistry
+            .activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID
+            .values
+            .compactMap { activity -> ProviderAgentID? in
+                guard activity.kind == .subagent else { return nil }
+                return ProviderAgentID(activity.id)
+            } ?? []
+        return CodexSubagentProjectionSnapshot(
+            activeProviderAgentIDs: Set(activeProviderAgentIDs)
+        )
+    }
+
+    private func applyCodexSubagentProjectionDecision(
+        _ decision: CodexSubagentProjectionDecision,
+        sessionID: String,
+        at now: Date
+    ) -> Bool {
+        switch decision {
+        case .fallbackUpsert(let activityID, let metadata):
+            return updateBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: activityID.rawValue,
+                    kind: .subagent,
+                    displayName: metadata.displayName,
+                    command: metadata.command,
+                    startedAt: now,
+                    lastUpdatedAt: now
+                ),
+                at: now
+            )
+
+        case .authoritativeHookReopen(let providerAgentID, let display):
+            let existingActivity = sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID[providerAgentID.rawValue]
+            let displayName: String
+            switch display {
+            case .replace(let replacement):
+                displayName = replacement
+            case .preserveExisting(let defaultValue):
+                displayName = existingActivity?.displayName ?? defaultValue
+            }
+            return reopenBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: providerAgentID.rawValue,
+                    kind: .subagent,
+                    displayName: displayName,
+                    command: existingActivity?.command,
+                    processID: existingActivity?.processID,
+                    preserveWhenUnlisted: existingActivity?.preserveWhenUnlisted ?? false,
+                    startedAt: existingActivity?.startedAt ?? now,
+                    lastUpdatedAt: now
+                ),
+                at: now
+            )
+
+        case .enrichExisting(let providerAgentID, let metadata):
+            guard let existingActivity = sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .backgroundActivitiesByID[providerAgentID.rawValue],
+                  existingActivity.kind == .subagent else {
+                return false
+            }
+            return updateBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: existingActivity.id,
+                    kind: existingActivity.kind,
+                    displayName: metadata.displayName,
+                    command: metadata.command,
+                    processID: existingActivity.processID,
+                    preserveWhenUnlisted: existingActivity.preserveWhenUnlisted,
+                    startedAt: existingActivity.startedAt,
+                    lastUpdatedAt: now
+                ),
+                at: now
+            )
+
+        case .finish(let activityID):
+            let rawActivityID: String
+            switch activityID {
+            case .providerAgent(let providerAgentID):
+                rawActivityID = providerAgentID.rawValue
+            case .rolloutActivity(let rolloutActivityID):
+                rawActivityID = rolloutActivityID.rawValue
+            }
+            return finishBackgroundActivity(
+                sessionID: sessionID,
+                activityID: rawActivityID,
+                at: now
+            )
+
+        case .clearRolloutProjectedActivities:
+            return syncBackgroundActivities(
+                sessionID: sessionID,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 0,
+                at: now
+            )
+        }
+    }
+
+    private func logCodexSubagentDiagnostics(
+        _ diagnostics: [CodexSubagentDiagnostic],
+        sessionID: String,
+        authority: CodexSubagentAuthority
     ) {
-        if state.isEmpty {
-            codexSubagentMetadataStateBySessionID.removeValue(forKey: sessionID)
-        } else {
-            codexSubagentMetadataStateBySessionID[sessionID] = state
+        for diagnostic in diagnostics {
+            var metadata = [
+                "session_id": sessionID,
+                "authority": codexSubagentAuthorityCode(authority),
+            ]
+            switch diagnostic {
+            case .ignored(let observation, let reason):
+                metadata["diagnostic"] = "ignored"
+                metadata["observation"] = codexSubagentObservationCode(observation)
+                metadata["reason"] = codexSubagentIgnoredReasonCode(reason)
+            case .evictedPendingCorrelation(let callID):
+                metadata["diagnostic"] = "evicted_pending_correlation"
+                metadata["call_id"] = callID.rawValue
+            case .evictedResolvedMetadata(let providerAgentID):
+                metadata["diagnostic"] = "evicted_resolved_metadata"
+                metadata["provider_agent_id"] = providerAgentID.rawValue
+            }
+            ToasttyLog.debug(
+                "Codex subagent reconciliation diagnostic",
+                category: .terminal,
+                metadata: metadata
+            )
+        }
+    }
+
+    private func codexSubagentAuthorityCode(_ authority: CodexSubagentAuthority) -> String {
+        switch authority {
+        case .hooks: "hooks"
+        case .rolloutFallback: "rollout_fallback"
+        }
+    }
+
+    private func codexSubagentObservationCode(_ observation: CodexSubagentObservationKind) -> String {
+        switch observation {
+        case .hookSpawn: "hook_spawn"
+        case .hookStart: "hook_start"
+        case .hookFinish: "hook_finish"
+        case .rolloutStart: "rollout_start"
+        case .rolloutFinish: "rollout_finish"
+        case .streamReset: "stream_reset"
+        case .stop: "stop"
+        }
+    }
+
+    private func codexSubagentIgnoredReasonCode(_ reason: CodexSubagentIgnoredReason) -> String {
+        switch reason {
+        case .incompatibleWithAuthority: "incompatible_with_authority"
+        case .missingExactCorrelationIdentifiers: "missing_exact_correlation_identifiers"
+        case .activeFinishTombstone: "active_finish_tombstone"
         }
     }
 
@@ -2404,7 +2321,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logCodexNotifyCompletionDecision(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         completion: CodexNotifyCompletion,
         decision: String,
         reason: String
@@ -2432,7 +2349,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logIgnoredCodexHookCompletionIfNeeded(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         reason: String
     ) {
@@ -2452,7 +2369,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logCodexHookEventDecision(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         decision: String,
         reason: String
@@ -2480,7 +2397,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func logCodexSessionLogCompletionDecision(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         threadID: String?,
         turnID: String?,
         decision: String,
@@ -2510,14 +2427,18 @@ final class SessionRuntimeStore: ObservableObject {
     private func logCodexSessionLogApprovalDecision(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         threadID: String?,
         turnID: String?,
+        callID: String?,
+        approvalID: String?,
         decision: String,
         reason: String
     ) {
         let event = CodexHookEvent(
             hookEventName: "PermissionRequest",
+            callID: callID,
+            approvalID: approvalID,
             threadID: threadID,
             turnID: turnID,
             promptFingerprint: nil,
@@ -2558,184 +2479,263 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
-    private func codexStatusTrackingSourceAllowsHookEvents(sessionID: String) -> Bool {
-        guard let source = codexStatusTrackingSourceBySessionID[sessionID] else {
-            return true
-        }
-        switch source {
-        case .hooks:
-            return true
-        case .sessionLogFallback:
-            return false
-        }
-    }
-
     private func codexStatusTrackingSourceMetadata(sessionID: String) -> String {
         codexStatusTrackingSourceBySessionID[sessionID]?.code ?? "unspecified"
     }
 
-    private func codexApprovalContext(
-        approvalPolicy: CodexSessionLogContextField,
-        approvalsReviewer: CodexSessionLogContextField,
-        activeTurnContext: CodexApprovalContext?
-    ) -> CodexApprovalContext? {
-        guard approvalPolicy.isSpecified ||
-            approvalsReviewer.isSpecified ||
-            activeTurnContext != nil else {
-            return nil
-        }
-
-        return codexApprovalContext(
-            applyingApprovalPolicy: approvalPolicy,
-            approvalsReviewer: approvalsReviewer,
-            to: activeTurnContext
-        )
-    }
-
-    private func codexApprovalContext(
-        applyingApprovalPolicy approvalPolicy: CodexSessionLogContextField,
-        approvalsReviewer: CodexSessionLogContextField,
-        to currentContext: CodexApprovalContext?
-    ) -> CodexApprovalContext {
-        var nextContext = currentContext ?? CodexApprovalContext()
-        if approvalPolicy.isSpecified {
-            nextContext.approvalPolicy = approvalPolicy
-        }
-        if approvalsReviewer.isSpecified {
-            nextContext.approvalsReviewer = approvalsReviewer
-        }
-        return nextContext
-    }
-
-    private func codexApprovalContext(
-        currentContext: CodexApprovalContext?,
-        applyingApprovalPolicy approvalPolicy: CodexSessionLogContextField,
-        approvalsReviewer: CodexSessionLogContextField,
-        activeTurnContext: CodexApprovalContext?
-    ) -> CodexApprovalContext {
-        let patchedContext = codexApprovalContext(
-            applyingApprovalPolicy: approvalPolicy,
-            approvalsReviewer: approvalsReviewer,
-            to: currentContext
-        )
-        return CodexApprovalContext(
-            approvalPolicy: patchedContext.approvalPolicy.isSpecified
-                ? patchedContext.approvalPolicy
-                : activeTurnContext?.approvalPolicy ?? .unspecified,
-            approvalsReviewer: patchedContext.approvalsReviewer.isSpecified
-                ? patchedContext.approvalsReviewer
-                : activeTurnContext?.approvalsReviewer ?? .unspecified
-        )
-    }
-
-    private func markAutoReviewedCodexPermissionTurnIfNeeded(
-        event: CodexHookEvent,
-        state: inout CodexNotifySessionState
-    ) {
-        guard event.isPermissionRequest,
-              let turnID = normalizedNonEmpty(event.turnID),
-              !state.autoReviewedPermissionTurnIDs.contains(turnID) else {
-            return
-        }
-
-        state.autoReviewedPermissionTurnIDs.append(turnID)
-        let overflow = state.autoReviewedPermissionTurnIDs.count - Self.maximumAutoReviewedCodexPermissionTurnIDs
-        if overflow > 0 {
-            state.autoReviewedPermissionTurnIDs.removeFirst(overflow)
-        }
-    }
-
-    private func applyCodexApprovalContext(
-        _ approvalContext: CodexApprovalContext?,
-        to state: inout CodexNotifySessionState
-    ) {
-        state.approvalContextKnown = approvalContext != nil
-        state.approvalPolicy = approvalContext?.approvalPolicy ?? .unspecified
-        state.approvalsReviewer = approvalContext?.approvalsReviewer ?? .unspecified
-    }
-
-    private func codexHookApprovalDecision(
-        event: CodexHookEvent,
-        state: CodexNotifySessionState
-    ) -> CodexHookApprovalDecision {
-        guard event.isPermissionRequest,
-              event.status?.kind == .needsApproval else {
-            return .accept(reason: "not_permission_request")
-        }
-        guard let hookThreadID = event.threadID else {
-            return .suppress(reason: "missing_hook_thread")
-        }
-        guard let rootThreadID = state.rootThreadID else {
-            return .waitForContext(reason: "missing_root_thread")
-        }
-        guard hookThreadID == rootThreadID else {
-            return .ignore(reason: "thread_mismatch")
-        }
-        guard let hookTurnID = event.turnID else {
-            return .suppress(reason: "missing_hook_turn")
-        }
-        guard let rootTurnID = state.rootTurnID else {
-            guard state.pendingRootInputFingerprint != nil else {
-                return .suppress(reason: "missing_root_turn")
-            }
-            return .waitForContext(reason: "missing_root_turn")
-        }
-        if hookTurnID != rootTurnID,
-           state.autoReviewedPermissionTurnIDs.contains(hookTurnID) {
-            return .ignore(reason: "auto_reviewed_stale_turn")
-        }
-        if hookTurnID != rootTurnID,
-           codexApprovalContextHasReviewer(state) {
-            return .suppress(reason: "auto_review_context_turn_mismatch")
-        }
-        guard hookTurnID == rootTurnID else {
-            return .ignore(reason: "turn_mismatch")
-        }
-        guard state.rootTurnAwaitingSessionLogContext == false else {
-            return .waitForContext(reason: "awaiting_root_turn_context")
-        }
-
-        let approvalPolicy = normalizedNonEmpty(state.approvalPolicy.stringValue)
-        let approvalsReviewer = normalizedNonEmpty(state.approvalsReviewer.stringValue)
-        guard approvalPolicy != nil || approvalsReviewer != nil || state.approvalContextKnown else {
-            return .waitForContext(reason: "missing_approval_context")
-        }
-        guard approvalsReviewer != nil else {
-            guard state.approvalsReviewer.isSpecified else {
-                // In resumed Codex sessions this field can be omitted while
-                // the auto-reviewer is still handling the request. Omission
-                // is not positive evidence that a human approval is waiting.
-                return .waitForContext(reason: "unknown_approvals_reviewer")
-            }
-            guard codexApprovalPolicyRequiresHumanApproval(approvalPolicy) else {
-                return .suppress(reason: "missing_human_approval_policy")
-            }
-            return .accept(reason: "missing_approvals_reviewer")
-        }
-        return .suppress(reason: "auto_review_approval")
-    }
-
-    private func codexApprovalPolicyRequiresHumanApproval(_ approvalPolicy: String?) -> Bool {
-        guard let approvalPolicy = normalizedNonEmpty(approvalPolicy)?.lowercased() else {
+    @discardableResult
+    private func applyCodexRootProgressObservation(
+        sessionID: String,
+        observation: CodexRootProgressObservation,
+        at now: Date
+    ) -> Bool {
+        guard let source = codexStatusTrackingSourceBySessionID[sessionID],
+              let record = sessionRegistry.activeSession(sessionID: sessionID),
+              record.agent == .codex,
+              record.usesSessionStatusNotifications else {
             return false
         }
-        return approvalPolicy != "never"
-    }
 
-    private func codexApprovalContextHasReviewer(_ state: CodexNotifySessionState) -> Bool {
-        if normalizedNonEmpty(state.approvalsReviewer.stringValue) != nil {
+        let decision = CodexRootProgressEvaluator.evaluate(
+            authority: codexRootProgressAuthority(for: source),
+            currentRegistryKind: codexRootProgressRegistryKind(for: record.status?.kind),
+            observation: observation
+        )
+        switch decision {
+        case .projectWorking(let summary, let detail):
+            updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .working, summary: summary, detail: detail),
+                at: now
+            )
             return true
-        }
-        guard state.rootTurnAwaitingSessionLogContext else {
+
+        case .projectIdle(let detail):
+            updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: .idle, summary: "Waiting", detail: detail),
+                at: now
+            )
+            return true
+
+        case .ignored:
             return false
         }
-        return normalizedNonEmpty(state.activeTurnApprovalContext?.approvalsReviewer.stringValue) != nil
+    }
+
+    private func codexRootProgressAuthority(
+        for source: CodexStatusTrackingSource
+    ) -> CodexRootProgressAuthority {
+        switch source {
+        case .hooks:
+            return .hooks
+        case .sessionLogFallback:
+            return .sessionLogFallback
+        }
+    }
+
+    private func codexRootProgressRegistryKind(
+        for kind: SessionStatusKind?
+    ) -> CodexRootProgressRegistryKind {
+        switch kind {
+        case nil:
+            return .none
+        case .idle:
+            return .idle
+        case .working:
+            return .working
+        case .needsApproval:
+            return .needsApproval
+        case .ready:
+            return .ready
+        case .error:
+            return .error
+        }
+    }
+
+    private func codexSessionReconciliationRuntime(
+        sessionID: String
+    ) -> CodexSessionReconciliationRuntime {
+        if let runtime = codexSessionReconciliationBySessionID[sessionID] {
+            return runtime
+        }
+        let rootTurnAuthority: CodexRootTurnAuthority
+        let approvalAuthority: CodexApprovalAuthority
+        switch codexStatusTrackingSourceBySessionID[sessionID] {
+        case .hooks:
+            rootTurnAuthority = .hooks
+            approvalAuthority = .hooks
+        case .sessionLogFallback:
+            rootTurnAuthority = .sessionLogFallback
+            approvalAuthority = .sessionLogFallback
+        case nil:
+            rootTurnAuthority = .legacyPermissive
+            approvalAuthority = .legacyPermissive
+        }
+        return CodexSessionReconciliationRuntime(
+            rootTurn: CodexRootTurnReconciler(authority: rootTurnAuthority),
+            approval: CodexApprovalReconciler(authority: approvalAuthority)
+        )
+    }
+
+    private func codexLegacyPolicySnapshot(
+        sessionID: String
+    ) -> CodexLegacyPolicySnapshot {
+        guard let runtime = codexSessionReconciliationBySessionID[sessionID] else {
+            return .empty
+        }
+        return runtime.legacyPolicySnapshot
+    }
+
+    private func codexLegacyPolicySnapshot(
+        root: CodexRootTurnSnapshot,
+        sessionID: String
+    ) -> CodexLegacyPolicySnapshot {
+        CodexLegacyPolicySnapshot(
+            root: root,
+            autoReviewedPermissionTurnIDs: codexSessionReconciliationBySessionID[sessionID]?
+                .approval.snapshot.autoReviewedTurnIDs ?? []
+        )
+    }
+
+    private func reduceCodexRootTurnObservation(
+        sessionID: String,
+        observation: CodexRootTurnObservation
+    ) -> CodexRootTurnReduction {
+        var runtime = codexSessionReconciliationRuntime(sessionID: sessionID)
+        let reduction = runtime.rootTurn.reduce(observation)
+        guard reduction.qualification == .proceed else {
+            return reduction
+        }
+        if reduction.shouldResetApprovalHistory {
+            runtime.approval.resetTurnHistory()
+        }
+        codexSessionReconciliationBySessionID[sessionID] = runtime
+        return reduction
+    }
+
+    private func reduceCodexApproval(
+        sessionID: String,
+        request: CodexApprovalRequest,
+        root: CodexRootTurnSnapshot
+    ) -> CodexApprovalReduction {
+        var runtime = codexSessionReconciliationRuntime(sessionID: sessionID)
+        let reduction = runtime.approval.reduce(request, root: root)
+        if reduction.didMutateHistory {
+            codexSessionReconciliationBySessionID[sessionID] = runtime
+        }
+        return reduction
+    }
+
+    private func codexHookApprovalRequest(
+        _ event: CodexHookEvent
+    ) -> CodexApprovalRequest {
+        CodexApprovalRequest(
+            source: .hook,
+            threadID: event.threadID,
+            turnID: event.turnID,
+            turnProvenance: .sourceObserved
+        )
+    }
+
+    private func codexRootTurnHookKind(
+        _ event: CodexHookEvent
+    ) -> CodexRootTurnHookKind {
+        if event.hookEventName == "SessionStart" {
+            return .sessionStart(isClear: event.isClearSessionStart)
+        }
+        if event.isUserPromptSubmit {
+            return .userPromptSubmit
+        }
+        if event.isStop {
+            return .stop
+        }
+        return .other
+    }
+
+    private func codexHookRejectionReason(
+        _ reason: CodexRootTurnReductionReason
+    ) -> String {
+        switch reason {
+        case .incompatibleWithAuthority:
+            return "status_source_session_log_fallback"
+        case .threadMismatch:
+            return "thread_mismatch"
+        case .missingRootThread:
+            return "missing_root_thread"
+        case .turnMismatch:
+            return "turn_mismatch"
+        default:
+            return "root_turn_\(String(describing: reason))"
+        }
+    }
+
+    private func codexNotifyRejectionReason(
+        _ reason: CodexRootTurnReductionReason
+    ) -> String {
+        switch reason {
+        case .threadMismatch:
+            return "thread_mismatch"
+        case .missingRootInputFingerprint:
+            return "missing_root_input_fingerprint"
+        case .missingNotifyInputFingerprint:
+            return "missing_notify_input_fingerprint"
+        case .inputFingerprintMismatch:
+            return "input_fingerprint_mismatch"
+        case .incompatibleWithAuthority:
+            return "status_source_hooks"
+        default:
+            return "root_turn_\(String(describing: reason))"
+        }
+    }
+
+    private func codexApprovalReason(
+        _ reason: CodexApprovalReason,
+        source: CodexApprovalSource
+    ) -> String {
+        switch reason {
+        case .incompatibleWithAuthority:
+            switch source {
+            case .hook:
+                return "status_source_session_log_fallback"
+            case .sessionLog:
+                return "status_source_hooks"
+            }
+        case .missingRequestThread:
+            return "missing_hook_thread"
+        case .missingRootThread:
+            return "missing_root_thread"
+        case .threadMismatch:
+            return "thread_mismatch"
+        case .missingRequestTurn:
+            return "missing_hook_turn"
+        case .missingRootTurn:
+            return "missing_root_turn"
+        case .autoReviewedStaleTurn:
+            return "auto_reviewed_stale_turn"
+        case .autoReviewContextTurnMismatch:
+            return "auto_review_context_turn_mismatch"
+        case .turnMismatch:
+            return "turn_mismatch"
+        case .awaitingRootTurnContext:
+            return "awaiting_root_turn_context"
+        case .missingApprovalContext:
+            return "missing_approval_context"
+        case .unknownApprovalsReviewer:
+            return "unknown_approvals_reviewer"
+        case .missingHumanApprovalPolicy:
+            return "missing_human_approval_policy"
+        case .missingApprovalsReviewer:
+            return "missing_approvals_reviewer"
+        case .autoReviewApproval:
+            return "auto_review_approval"
+        }
     }
 
     private func deferCodexHookApproval(
         sessionID: String,
         record: SessionRecord,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         reason: String
     ) {
@@ -2774,11 +2774,15 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
 
-        var state = codexNotifyStateBySessionID[sessionID] ?? CodexNotifySessionState()
-        switch codexHookApprovalDecision(event: pending.event, state: state) {
+        var state = codexLegacyPolicySnapshot(sessionID: sessionID)
+        let reduction = reduceCodexApproval(
+            sessionID: sessionID,
+            request: codexHookApprovalRequest(pending.event),
+            root: state.root
+        )
+        state = codexLegacyPolicySnapshot(root: state.root, sessionID: sessionID)
+        switch reduction.decision {
         case .suppress(let reason):
-            markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &state)
-            codexNotifyStateBySessionID[sessionID] = state
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -2786,7 +2790,7 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 event: pending.event,
                 decision: "suppressed",
-                reason: reason
+                reason: codexApprovalReason(reason, source: .hook)
             )
 
         case .ignore(let reason):
@@ -2797,7 +2801,7 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 event: pending.event,
                 decision: "ignored",
-                reason: reason
+                reason: codexApprovalReason(reason, source: .hook)
             )
 
         case .accept(let reason):
@@ -2808,11 +2812,11 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 event: pending.event,
                 decision: "accepted",
-                reason: reason
+                reason: codexApprovalReason(reason, source: .hook)
             )
             updateStatus(sessionID: sessionID, status: status, at: Date())
 
-        case .waitForContext(let reason):
+        case .deferForContext(let reason):
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -2820,7 +2824,7 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 event: pending.event,
                 decision: "ignored",
-                reason: "context_timeout_\(reason)"
+                reason: "context_timeout_\(codexApprovalReason(reason, source: .hook))"
             )
         }
     }
@@ -2828,7 +2832,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func resolvePendingCodexHookApprovalIfPossible(
         sessionID: String,
         record: SessionRecord,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         reasonPrefix: String
     ) {
         guard let pending = pendingCodexHookApprovalBySessionID[sessionID],
@@ -2837,13 +2841,17 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         var state = state
-        switch codexHookApprovalDecision(event: pending.event, state: state) {
-        case .waitForContext:
+        let reduction = reduceCodexApproval(
+            sessionID: sessionID,
+            request: codexHookApprovalRequest(pending.event),
+            root: state.root
+        )
+        state = codexLegacyPolicySnapshot(root: state.root, sessionID: sessionID)
+        switch reduction.decision {
+        case .deferForContext:
             return
 
         case .suppress(let reason):
-            markAutoReviewedCodexPermissionTurnIfNeeded(event: pending.event, state: &state)
-            codexNotifyStateBySessionID[sessionID] = state
             removePendingCodexHookApproval(sessionID: sessionID)
             logCodexHookEventDecision(
                 sessionID: sessionID,
@@ -2851,7 +2859,7 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 event: pending.event,
                 decision: "suppressed",
-                reason: reason
+                reason: codexApprovalReason(reason, source: .hook)
             )
 
         case .ignore(let reason):
@@ -2862,7 +2870,7 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 event: pending.event,
                 decision: "ignored",
-                reason: "\(reasonPrefix)_\(reason)"
+                reason: "\(reasonPrefix)_\(codexApprovalReason(reason, source: .hook))"
             )
 
         case .accept(let reason):
@@ -2873,7 +2881,7 @@ final class SessionRuntimeStore: ObservableObject {
                 state: state,
                 event: pending.event,
                 decision: "accepted",
-                reason: "\(reasonPrefix)_\(reason)"
+                reason: "\(reasonPrefix)_\(codexApprovalReason(reason, source: .hook))"
             )
             updateStatus(sessionID: sessionID, status: status, at: Date())
         }
@@ -2882,12 +2890,21 @@ final class SessionRuntimeStore: ObservableObject {
     private func removePendingCodexHookApprovalIfSuperseded(
         sessionID: String,
         record: SessionRecord,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         status: SessionStatus
     ) {
         guard let pending = pendingCodexHookApprovalBySessionID[sessionID],
-              codexHookEvent(event, supersedesPendingApproval: pending.event) else {
+              CodexApprovalSupersession.shouldSupersede(
+                  pending: CodexApprovalCorrelation(
+                      threadID: pending.event.threadID,
+                      turnID: pending.event.turnID
+                  ),
+                  incoming: CodexApprovalCorrelation(
+                      threadID: event.threadID,
+                      turnID: event.turnID
+                  )
+              ) else {
             return
         }
         removePendingCodexHookApproval(sessionID: sessionID)
@@ -2899,26 +2916,6 @@ final class SessionRuntimeStore: ObservableObject {
             decision: "ignored",
             reason: "superseded_by_\(status.kind.rawValue)"
         )
-    }
-
-    private func codexHookEvent(
-        _ event: CodexHookEvent,
-        supersedesPendingApproval pendingEvent: CodexHookEvent
-    ) -> Bool {
-        var threadMatches = false
-        if let eventThreadID = event.threadID,
-           let pendingThreadID = pendingEvent.threadID {
-            guard eventThreadID == pendingThreadID else { return false }
-            threadMatches = true
-        }
-        if let eventTurnID = event.turnID,
-           let pendingTurnID = pendingEvent.turnID {
-            if eventTurnID == pendingTurnID {
-                return true
-            }
-            return threadMatches
-        }
-        return threadMatches
     }
 
     private func removePendingCodexHookApproval(sessionID: String) {
@@ -2936,7 +2933,7 @@ final class SessionRuntimeStore: ObservableObject {
 
     private func codexHookCompletionAcceptedReason(
         event: CodexHookEvent,
-        state: CodexNotifySessionState
+        state: CodexLegacyPolicySnapshot
     ) -> String {
         if let threadID = event.threadID,
            let rootThreadID = state.rootThreadID,
@@ -2983,7 +2980,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func codexHookMetadata(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         event: CodexHookEvent,
         additional: [String: String] = [:]
     ) -> [String: String] {
@@ -3013,6 +3010,9 @@ final class SessionRuntimeStore: ObservableObject {
             "hook_thread_id": event.threadID ?? "none",
             "hook_turn_id": event.turnID ?? "none",
             "hook_permission_mode": event.permissionMode ?? "none",
+            "hook_tool_use_id": event.toolUseID ?? "none",
+            "hook_call_id": event.callID ?? "none",
+            "hook_approval_id": event.approvalID ?? "none",
             "has_thread_id": boolMetadata(event.threadID != nil),
             "has_turn_id": boolMetadata(event.turnID != nil),
             "root_thread_known": boolMetadata(state.rootThreadID != nil),
@@ -3041,7 +3041,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func codexSessionLogCompletionMetadata(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         threadID: String?,
         turnID: String?,
         additional: [String: String] = [:]
@@ -3088,7 +3088,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func codexNotifyMetadata(
         sessionID: String,
         record: SessionRecord?,
-        state: CodexNotifySessionState,
+        state: CodexLegacyPolicySnapshot,
         completion: CodexNotifyCompletion? = nil,
         additional: [String: String] = [:]
     ) -> [String: String] {
@@ -3544,35 +3544,83 @@ final class SessionRuntimeStore: ObservableObject {
     }
 }
 
-private struct CodexNotifySessionState {
-    var rootThreadID: String?
-    var rootTurnID: String?
-    var rootTurnInputFingerprint: String?
-    var rootTurnAwaitingSessionLogContext = false
-    var pendingRootInputFingerprint: String?
-    var pendingRootApprovalContext: CodexApprovalContext?
-    var activeTurnApprovalContext: CodexApprovalContext?
-    var autoReviewedPermissionTurnIDs: [String] = []
-    var approvalContextKnown = false
-    var approvalPolicy: CodexSessionLogContextField = .unspecified
-    var approvalsReviewer: CodexSessionLogContextField = .unspecified
+private struct CodexSessionReconciliationRuntime {
+    var rootTurn: CodexRootTurnReconciler
+    var approval: CodexApprovalReconciler
+
+    var legacyPolicySnapshot: CodexLegacyPolicySnapshot {
+        CodexLegacyPolicySnapshot(
+            root: rootTurn.snapshot,
+            autoReviewedPermissionTurnIDs: approval.snapshot.autoReviewedTurnIDs
+        )
+    }
 }
 
-private struct CodexApprovalContext {
-    var approvalPolicy: CodexSessionLogContextField = .unspecified
-    var approvalsReviewer: CodexSessionLogContextField = .unspecified
+private struct CodexLegacyPolicySnapshot: Equatable {
+    let root: CodexRootTurnSnapshot
+    let autoReviewedPermissionTurnIDs: [String]
+
+    static let empty = CodexLegacyPolicySnapshot(
+        root: .empty,
+        autoReviewedPermissionTurnIDs: []
+    )
+
+    var rootThreadID: String? { root.rootThreadID }
+    var rootTurnID: String? { root.rootTurnID }
+    var rootTurnInputFingerprint: String? { root.rootTurnInputFingerprint }
+    var rootTurnAwaitingSessionLogContext: Bool { root.isAwaitingSessionLogContext }
+    var pendingRootInputFingerprint: String? { root.pendingRootInputFingerprint }
+    var pendingRootApprovalContext: CodexRootTurnApprovalContext? { root.pendingApprovalContext }
+    var activeTurnApprovalContext: CodexRootTurnApprovalContext? { root.activeApprovalContext }
+    var approvalContextKnown: Bool { root.currentApprovalContext != nil }
+    var approvalPolicy: CodexSessionLogContextField {
+        root.currentApprovalContext?.approvalPolicy.sessionLogContextField ?? .unspecified
+    }
+    var approvalsReviewer: CodexSessionLogContextField {
+        root.currentApprovalContext?.approvalsReviewer.sessionLogContextField ?? .unspecified
+    }
+}
+
+private extension CodexSessionLogContextField {
+    var rootTurnContextField: CodexRootTurnContextField {
+        switch self {
+        case .unspecified:
+            return .unspecified
+        case .null:
+            return .null
+        case .string(let value):
+            return .string(value)
+        }
+    }
+}
+
+private extension CodexRootTurnContextField {
+    var sessionLogContextField: CodexSessionLogContextField {
+        switch self {
+        case .unspecified:
+            return .unspecified
+        case .null:
+            return .null
+        case .string(let value):
+            return .string(value)
+        }
+    }
+
+    var metadataValue: String {
+        switch self {
+        case .unspecified:
+            return "unknown"
+        case .null:
+            return "none"
+        case .string(let value):
+            return value
+        }
+    }
 }
 
 private struct PendingCodexHookApproval {
     let event: CodexHookEvent
     let token: UUID
-}
-
-private enum CodexHookApprovalDecision {
-    case accept(reason: String)
-    case waitForContext(reason: String)
-    case ignore(reason: String)
-    case suppress(reason: String)
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
@@ -3623,6 +3671,17 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
+        if codexStatusTrackingSourceBySessionID[record.sessionID] != nil {
+            guard let detail = nextStatus.detail else {
+                return false
+            }
+            return applyCodexRootProgressObservation(
+                sessionID: record.sessionID,
+                observation: .visibleTextWorking(detail: detail),
+                at: now
+            )
+        }
+
         updateStatus(sessionID: record.sessionID, status: nextStatus, at: now)
         return true
     }
@@ -3654,6 +3713,21 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
               let currentStatus = record.status,
               currentStatus.kind == .working || currentStatus.kind == .needsApproval else {
             return false
+        }
+
+        if record.agent == .codex,
+           codexStatusTrackingSourceBySessionID[record.sessionID] != nil {
+            let interrupt: CodexRootProgressInterrupt = switch kind {
+            case .escape:
+                .escape
+            case .controlC:
+                .controlC
+            }
+            return applyCodexRootProgressObservation(
+                sessionID: record.sessionID,
+                observation: .localInterrupt(interrupt),
+                at: now
+            )
         }
 
         if kind == .escape,
@@ -3756,6 +3830,10 @@ private extension CodexHookEvent {
 
     var isUserPromptSubmit: Bool {
         hookEventName == "UserPromptSubmit"
+    }
+
+    var isRootProgressWorking: Bool {
+        hookEventName == "UserPromptSubmit" || hookEventName == "PreToolUse"
     }
 
     var isPermissionRequest: Bool {

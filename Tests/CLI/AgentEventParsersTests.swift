@@ -732,6 +732,41 @@ struct AgentEventParsersTests {
                 )
             ),
         ])
+
+        guard case .sessionCodexHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Codex hook event")
+            return
+        }
+        // Codex's current PermissionRequest hook payload normally omits all
+        // operation identifiers. Preserve that absence rather than deriving one.
+        #expect(event.toolUseID == nil)
+        #expect(event.callID == nil)
+        #expect(event.approvalID == nil)
+    }
+
+    @Test
+    func codexHookPreservesIndependentOperationIdentifiersInEnvelope() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"PermissionRequest","session_id":"thread-root","tool_use_id":" tool-1 ","call_id":" call-1 ","approval_id":" approval-1 "}"#.utf8
+            )
+        )
+
+        guard case .sessionCodexHookEvent(_, _, let event) = try #require(commands.first) else {
+            Issue.record("Expected Codex hook event")
+            return
+        }
+        #expect(event.toolUseID == "tool-1")
+        #expect(event.callID == "call-1")
+        #expect(event.approvalID == "approval-1")
+
+        let envelope = try #require(commands.first?.makeEventEnvelope())
+        #expect(envelope.payload.string("toolUseID") == "tool-1")
+        #expect(envelope.payload.string("callID") == "call-1")
+        #expect(envelope.payload.string("approvalID") == "approval-1")
     }
 
     @Test
@@ -783,8 +818,10 @@ struct AgentEventParsersTests {
             taskName: "security_privacy",
             message: "Review the security and privacy implications"
         ))
+        #expect(event.toolUseID == "call-spawn")
 
         let envelope = try #require(commands.first?.makeEventEnvelope())
+        #expect(envelope.payload.string("toolUseID") == "call-spawn")
         #expect(envelope.payload.string("spawnToolUseID") == "call-spawn")
         #expect(envelope.payload.string("spawnTaskName") == "security_privacy")
         #expect(envelope.payload.string("spawnMessage") == "Review the security and privacy implications")

@@ -270,6 +270,15 @@ enum CLICommand: Equatable {
             if let permissionMode = event.permissionMode {
                 payload["permissionMode"] = .string(permissionMode)
             }
+            if let toolUseID = event.toolUseID {
+                payload["toolUseID"] = .string(toolUseID)
+            }
+            if let callID = event.callID {
+                payload["callID"] = .string(callID)
+            }
+            if let approvalID = event.approvalID {
+                payload["approvalID"] = .string(approvalID)
+            }
             if let threadID = event.threadID {
                 payload["threadID"] = .string(threadID)
             }

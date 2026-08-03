@@ -79,11 +79,19 @@ Toastty is designed to run locally on your machine. The app itself does not send
   requested through `CODEX_TUI_SESSION_LOG_PATH` for root-turn and approval
   context. After Codex identifies its native session file, Toastty also watches
   that rollout JSONL for collaboration-agent lifecycle and identity mapping.
-  Toastty derives bounded child-agent IDs, task/display names, and available
-  plaintext descriptions for the live sidebar; opaque encrypted descriptions
-  are discarded. Derived collaboration state is kept in memory for the active
-  session, while child-agent display names can appear in Toastty's structured
-  local logs. Toastty does not modify the Codex rollout file.
+  Toastty derives child-agent IDs, task/display names, and available plaintext
+  descriptions for the live sidebar; task names are limited to 80 characters,
+  descriptions to 512 characters, and opaque encrypted descriptions are
+  discarded. Per managed session, Toastty retains at most 64 pending and 64
+  resolved subagent metadata correlations and 16 recent auto-reviewed turn IDs.
+  Active collaboration rows and 120-second finish tombstones are not
+  cardinality-capped. The launch-log watcher retains at most 65,536 compact
+  deduplication fingerprints per stream; after that ceiling, it preserves
+  existing duplicate protection but processes new observations without
+  retaining additional fingerprints and records a local warning. This
+  reconciliation state is memory-only and discarded with its owning session or
+  watcher. Child-agent display names can appear in Toastty's structured local
+  logs. Toastty does not modify the Codex rollout file.
 - During Codex integration setup and launch assessment, Toastty invokes the
   resolved local Codex app-server with the effective `CODEX_HOME` to list plugin
   skills and hook metadata. Toastty uses skill names, enabled state, hook source,

@@ -19,6 +19,7 @@
 ## Build And Generate
 
 - Source of truth: `Project.swift`. Never hand-edit generated Xcode project/workspace files.
+- Web-panel bundles under `Sources/App/Resources/WebPanels/` are generated artifacts. For local-document behavior, inspect and edit `WebPanels/LocalDocumentApp/src/` rather than loading or modifying the generated `local-document-panel` bundle; use the bundle only when validating generated output.
 - Install packages with `tuist install` after cloning and whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes. Repo scripts do this automatically where needed.
 - For a fresh worktree, run `./scripts/dev/bootstrap-worktree.sh`. It links local Ghostty artifacts when needed, then runs `tuist install` and `tuist generate --no-open`.
 - Regenerate with `tuist generate` after project/dependency/build-setting changes, source file adds/renames/deletes, or branch switches. Generated `.xcodeproj` and `.xcworkspace` files are gitignored and can otherwise keep stale references.
