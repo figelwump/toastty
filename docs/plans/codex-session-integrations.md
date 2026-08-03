@@ -279,11 +279,17 @@ safely. Existing temporary `--settings` hook merging remains unchanged.
 
 ## Hook boundary and branch cleanup
 
-Restore the current `main` behavior for Codex hooks while retaining only
-skill-related pieces from this branch:
+Preserve the merged `main` behavior for Codex hooks and reconciliation while
+retaining only skill-related pieces from this branch:
 
-- Restore pure hook files such as `CodexStatusHookInstaller.swift` and their
-  tests directly from `main`; do not manually reconstruct them.
+- Treat the merged implementations in `Sources/CodexReconciliation/`,
+  `CodexHookEventPayloadDecoder.swift`, `CodexSessionLogWatcher.swift`,
+  `ManagedAgentNativeSessionObserver.swift`, and the reconciliation portions of
+  `SessionRuntimeStore.swift` as the baseline. Skills work must not alter their
+  status, approval, root-turn, or subagent authority.
+- For pure hook files such as `CodexStatusHookInstaller.swift`, compare against
+  current `main` and remove only branch-introduced session-hook changes. Do not
+  overwrite newer `main` behavior or manually reconstruct the files.
 - `CodexStatusHookInstaller` continues installing and maintaining Toastty's
   owned global hook entries and stable forwarder.
 - Existing hook setup/preflight UI remains `Set Up Agent Status Hooks…`.
@@ -299,7 +305,13 @@ Mixed files must be edited selectively rather than reverted wholesale so the
 skill activation and resolved-Codex executable plumbing remain available. For
 each mixed hunk, record whether it belongs to hooks or skills during review.
 Add an architecture test that the skills manager cannot import or reference
-hook paths, installer types, or hook assessment APIs.
+hook paths, installer types, hook assessment APIs, or Codex reconciliation
+types.
+
+Active managed-session detection for update deferral may read
+`SessionRuntimeStore.sessionRegistry`, but it belongs in an isolated skills
+coordinator/service and must not write through or become part of Codex status
+reconciliation.
 
 ## Legacy skill cleanup
 
@@ -347,8 +359,15 @@ Codex/Claude provisioning and launch:
 - `Sources/App/Agents/ManagedAgentLaunchPlanner.swift`
 - `Sources/App/Agents/AgentLaunchService.swift`
 - `Sources/Core/Sessions/ToasttyLaunchContextEnvironment.swift`
-- the existing shim/socket/app-control request bridge where the resolved Codex
-  hint already passes through
+- `Sources/App/Automation/AutomationCommandExecutor.swift`, where the socket and
+  app-control managed-launch requests now pass the resolved Codex hint
+- the existing shim and CLI request bridges
+
+Keep `Sources/App/Automation/AutomationSocketServer.swift` transport-only. It
+should not gain skills provisioning behavior. Likewise, avoid changes to
+`Sources/CodexReconciliation/**` and the reconciliation paths in
+`Sources/App/Sessions/SessionRuntimeStore.swift`; they are regression surfaces,
+not skills integration points.
 
 Hooks and UI cleanup/additions:
 
@@ -365,6 +384,8 @@ Hooks and UI cleanup/additions:
 Update the corresponding tests plus `README.md`, `docs/running-agents.md`,
 `docs/privacy-and-local-data.md`, `docs/cli-reference.md`, and
 `docs/socket-protocol.md` to remove the superseded setup/session-hook claims.
+Edit `docs/privacy-and-local-data.md` surgically so the merged reconciliation
+retention limits and local-data disclosures remain intact.
 
 ## Implementation sequence
 
@@ -377,8 +398,10 @@ Update the corresponding tests plus `README.md`, `docs/running-agents.md`,
    preserve Codex/Claude provider continuity.
 3. Implement immutable Claude bundle staging and additive `--plugin-dir`
    injection alongside existing Claude hook settings.
-4. Restore the `main` hook installer, preflight, UI wording, tests, and docs;
-   strip hook behavior out of the new skills integration types.
+4. Reconcile the branch against the merged `main` hook and Codex reconciliation
+   baseline: preserve its installer, preflight, payload decoding, status
+   authority, UI wording, tests, and docs while stripping branch-introduced
+   session-hook behavior out of the skills integration types.
 5. Implement the async Codex skills manager, CLI-backed install/reinstall,
    disabled-first ordering, legacy-skill migration, rollback, idempotent
    verification, and active-session update deferral.
@@ -420,6 +443,10 @@ Add focused tests for:
   duplicate-name collision behavior, immutable old/new versions, and failure
   fallback;
 - unchanged global hook install/preflight/telemetry tests from `main`;
+- the `CodexReconciliationTests` target and the root-progress, session-behavior,
+  and subagent-reconciliation characterization tests remaining unchanged;
+- `AutomationSocketServerManagedLaunchTests` covering Codex capability-hint and
+  preflight routing through `AutomationCommandExecutor`;
 - an already trusted global Codex hook remaining trusted after skills install,
   update, repair, managed launch, and uninstall;
 - deterministic content digests, normalized helper modes, and quarantine-free
@@ -432,7 +459,8 @@ tests. Never mutate the developer's actual Codex, Claude, or Toastty state.
 Validation after implementation:
 
 1. Run plugin/skill validators and focused unit/script tests after each slice.
-2. Regenerate the Tuist project and build the app.
+2. Regenerate the Tuist project, build the app, and run the dedicated
+   `CodexReconciliationTests` target plus the merged characterization tests.
 3. Use `.agents/skills/toastty-verify/SKILL.md` for the full local/remote gate
    and its QA decision.
 4. Against isolated state, prove ordinary Codex lists all four skills disabled,
