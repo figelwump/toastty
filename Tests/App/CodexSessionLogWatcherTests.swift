@@ -5,6 +5,157 @@ import XCTest
 
 @MainActor
 final class CodexSessionLogWatcherTests: XCTestCase {
+    func testWatcherTracksExactCapacityWithoutDegrading() async throws {
+        XCTAssertEqual(CodexSessionLogWatcher.maximumTrackedSeenKeyCount, 65_536)
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let eventsExpectation = expectation(description: "Events through exact capacity arrive")
+        eventsExpectation.expectedFulfillmentCount = 2
+        let capacityExpectation = expectation(description: "Exact capacity does not degrade")
+        capacityExpectation.isInverted = true
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState,
+            seenKeyCapacity: 2,
+            onSeenKeyCapacityExceeded: { _ in capacityExpectation.fulfill() }
+        ) { _ in
+            eventsExpectation.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-1","msg":{"type":"user_message","message":"One"}}}
+            {"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-2","msg":{"type":"user_message","message":"Two"}}}
+            """ + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [eventsExpectation], timeout: 1)
+        await fulfillment(of: [capacityExpectation], timeout: 0.1)
+        await watcher.stop()
+
+        XCTAssertEqual(cursorState.trackedSeenKeyCountForTesting, 2)
+    }
+
+    func testWatcherBoundsSeenKeysAndFailsOpenAfterCapacity() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let eventCount = 128
+        let eventsExpectation = expectation(description: "Unique events and untracked duplicate arrive")
+        eventsExpectation.expectedFulfillmentCount = eventCount + 1
+        eventsExpectation.assertForOverFulfill = true
+        let capacityExpectation = expectation(description: "Capacity diagnostic arrives once")
+        capacityExpectation.assertForOverFulfill = true
+        let cursorState = CodexSessionLogCursorState()
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState,
+            seenKeyCapacity: 8,
+            onSeenKeyCapacityExceeded: { capacity in
+                XCTAssertEqual(capacity, 8)
+                capacityExpectation.fulfill()
+            }
+        ) { event in
+            await recorder.append(event)
+            eventsExpectation.fulfill()
+        }
+
+        let lines = (0 ..< eventCount).map { index in
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-\#(index)","msg":{"type":"user_message","message":"Prompt \#(index)"}}}"#
+        }
+
+        watcher.start()
+        try append((lines + [lines[0], lines[eventCount - 1]]).joined(separator: "\n") + "\n", to: logURL)
+        await fulfillment(of: [eventsExpectation, capacityExpectation], timeout: 2)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events.count, eventCount + 1)
+        XCTAssertEqual(events.filter { $0.detail == "Prompt 0" }.count, 1)
+        XCTAssertEqual(events.filter { $0.detail == "Prompt 127" }.count, 2)
+        XCTAssertEqual(cursorState.trackedSeenKeyCountForTesting, 8)
+    }
+
+    func testWatcherRetainsOneShotCapacityStateAcrossCursorResume() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let capacityExpectation = expectation(description: "Capacity diagnostic remains one-shot")
+        capacityExpectation.assertForOverFulfill = true
+        let firstEvents = expectation(description: "First watcher consumes tracked and overflow events")
+        firstEvents.expectedFulfillmentCount = 2
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState,
+            seenKeyCapacity: 1,
+            onSeenKeyCapacityExceeded: { _ in capacityExpectation.fulfill() }
+        ) { _ in
+            firstEvents.fulfill()
+        }
+
+        let trackedLine = #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-tracked","msg":{"type":"user_message","message":"Tracked"}}}"#
+        firstWatcher.start()
+        try append(
+            trackedLine + "\n" +
+                #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-overflow-1","msg":{"type":"user_message","message":"Overflow one"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [firstEvents, capacityExpectation], timeout: 1)
+        await firstWatcher.stop()
+
+        let resumedEvents = expectation(description: "Resumed watcher processes only the untracked key")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState,
+            seenKeyCapacity: 1,
+            onSeenKeyCapacityExceeded: { _ in capacityExpectation.fulfill() }
+        ) { _ in
+            resumedEvents.fulfill()
+        }
+        secondWatcher.start()
+        try append(
+            trackedLine + "\n" +
+                #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-overflow-2","msg":{"type":"user_message","message":"Overflow two"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [resumedEvents], timeout: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await secondWatcher.stop()
+
+        XCTAssertEqual(cursorState.trackedSeenKeyCountForTesting, 1)
+    }
+
+    func testReleasingWatcherAndCursorStateReleasesSeenKeyStorage() async throws {
+        let logURL = try makeLogURL()
+        var cursorState: CodexSessionLogCursorState? = CodexSessionLogCursorState()
+        let eventExpectation = expectation(description: "Watcher stores a checkpoint")
+        var watcher: CodexSessionLogWatcher? = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: try XCTUnwrap(cursorState)
+        ) { _ in
+            eventExpectation.fulfill()
+        }
+
+        watcher?.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-release","msg":{"type":"user_message","message":"Release state"}}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [eventExpectation], timeout: 1)
+        await watcher?.stop()
+
+        let seenKeysBox = WeakObjectBox(cursorState?.seenKeysObjectForTesting)
+        XCTAssertNotNil(seenKeysBox.value)
+        watcher = nil
+        cursorState = nil
+        XCTAssertNil(seenKeysBox.value)
+    }
+
     func testWatcherDeduplicatesRepeatedExecCommandEvents() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
@@ -1836,5 +1987,13 @@ private actor EventRecorder {
 
     func snapshot() -> [CodexSessionLogEvent] {
         events
+    }
+}
+
+private final class WeakObjectBox {
+    weak var value: AnyObject?
+
+    init(_ value: AnyObject?) {
+        self.value = value
     }
 }

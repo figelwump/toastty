@@ -77,11 +77,14 @@ Toastty is designed to run locally on your machine. The app itself does not send
   descriptions to 512 characters, and opaque encrypted descriptions are
   discarded. Per managed session, Toastty retains at most 64 pending and 64
   resolved subagent metadata correlations and 16 recent auto-reviewed turn IDs.
-  Those capacity limits do not cover active collaboration rows, 120-second
-  finish tombstones, or the launch-log watcher's session-lifetime deduplication
-  keys. This reconciliation state is memory-only and discarded with its owning
-  session or watcher. Child-agent display names can appear in Toastty's
-  structured local logs. Toastty does not modify the Codex rollout file.
+  Active collaboration rows and 120-second finish tombstones are not
+  cardinality-capped. The launch-log watcher retains at most 65,536 compact
+  deduplication fingerprints per stream; after that ceiling, it preserves
+  existing duplicate protection but processes new observations without
+  retaining additional fingerprints and records a local warning. This
+  reconciliation state is memory-only and discarded with its owning session or
+  watcher. Child-agent display names can appear in Toastty's structured local
+  logs. Toastty does not modify the Codex rollout file.
 
 ## What Toastty creates temporarily
 
