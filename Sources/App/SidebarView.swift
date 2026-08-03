@@ -1877,7 +1877,7 @@ struct SidebarView: View {
                     .font(ToastyTheme.fontWorkspaceSessionChildName)
                     .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .truncationMode(.tail)
 
                 if let context = child.context {
                     Text(context)

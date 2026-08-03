@@ -781,6 +781,85 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testLongSessionChildNameDoesNotExpandSidebarWorkspaceRows() throws {
+        let state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let now = Date()
+        let sessionID = "long-child-name-parent"
+
+        sessionRuntimeStore.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: panelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            cwd: "/repo/sidebar",
+            repoRoot: "/repo",
+            at: now
+        )
+        sessionRuntimeStore.updateBackgroundActivity(
+            sessionID: sessionID,
+            activity: SessionBackgroundActivity(
+                id: "long-child-name",
+                kind: .subagent,
+                displayName: "primary_object_consistency_audit_with_an_intentionally_long_name",
+                startedAt: now.addingTimeInterval(-40_000),
+                lastUpdatedAt: now
+            ),
+            at: now
+        )
+
+        defer { sessionRuntimeStore.reset() }
+
+        let workspaceListHorizontalPadding: CGFloat = 8
+        for sidebarWidth in [CGFloat(WindowState.minSidebarWidth), 291] {
+            var workspaceRowFramesByID: [UUID: CGRect] = [:]
+            let sidebarView = SidebarView(
+                windowID: windowID,
+                store: store,
+                terminalRuntimeRegistry: registry,
+                sessionRuntimeStore: sessionRuntimeStore,
+                terminalRuntimeContext: runtimeContext,
+                workspaceRowFrameObserver: { workspaceRowFramesByID = $0 }
+            )
+            let hostingView = NSHostingView(rootView: sidebarView.frame(width: sidebarWidth))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: sidebarWidth, height: 600),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            window.contentView = hostingView
+            window.makeKeyAndOrderFront(nil)
+
+            let deadline = Date().addingTimeInterval(1)
+            while workspaceRowFramesByID[workspaceID] == nil, Date() < deadline {
+                pumpMainRunLoop(duration: 0.05)
+                hostingView.layoutSubtreeIfNeeded()
+            }
+
+            let workspaceRowFrame = try XCTUnwrap(workspaceRowFramesByID[workspaceID])
+            XCTAssertGreaterThanOrEqual(
+                workspaceRowFrame.minX,
+                workspaceListHorizontalPadding - 0.5,
+                "Expanded child rows must not shift the sidebar contents past its leading padding"
+            )
+            XCTAssertLessThanOrEqual(
+                workspaceRowFrame.maxX,
+                sidebarWidth - workspaceListHorizontalPadding + 0.5,
+                "Expanded child rows must truncate within the sidebar instead of widening its contents"
+            )
+            window.orderOut(nil)
+        }
+    }
+
     func testWorkspaceHeaderPaddingClickSelectsWorkspace() throws {
         let workspaces = (1...2).map { WorkspaceState.bootstrap(title: "Workspace \($0)") }
         let windowID = UUID()
