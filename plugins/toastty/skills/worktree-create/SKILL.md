@@ -146,7 +146,6 @@ When the parent thread already has a full implementation plan, prefer the follow
 - Setup/bootstrap is not assumed. Run setup only when the user specified it or when the current repo's instructions clearly say to run it for new worktrees or local development.
 - When setup is required by repo instructions, treat it as a local worktree requirement, not just a remote-build requirement.
 - Remote wrappers that bootstrap or generate in disposable remote worktrees do not satisfy a setup requirement for the local worktree.
-- In the Toastty repo, the repo instructions explicitly require `./scripts/dev/bootstrap-worktree.sh` for a fresh worktree; that is discovered from Toastty's `AGENTS.md`, not hard-coded into this skill.
 - The handoff file must exist before launching the new agent session.
 - Scratchpad detection must use `panel.scratchpad.lookup` with `sessionID=$TOASTTY_SESSION_ID` before export, and absence is represented by a successful lookup response with `linked=false`. Export is only for creating the durable readable HTML file path for the next session; it is not the absence check.
 - A session-linked Scratchpad should be represented in `WORKTREE_HANDOFF.md` by the exported absolute HTML file path plus title, panel ID, document ID, and revision. A panel ID or document ID alone is not enough for the child session, because the child will be scoped to the new workspace and should not depend on parent workspace panel access.

@@ -163,16 +163,13 @@ build_initial_prompt() {
 }
 
 build_default_startup_command() {
-  local quoted_worktree quoted_prompt quoted_derived quoted_agent initial_prompt
+  local quoted_worktree quoted_prompt quoted_agent initial_prompt
   quoted_worktree="$(shell_quote "$worktree_path")"
-  quoted_derived="$(shell_quote "$worktree_path/artifacts/dev-runs/manual/Derived")"
   quoted_agent="$(shell_quote "$agent_command")"
   initial_prompt="$(build_initial_prompt)"
   quoted_prompt="$(shell_quote "$initial_prompt")"
-  printf "cd %s && export TOASTTY_DEV_WORKTREE_ROOT=%s TOASTTY_DERIVED_PATH=%s && %s %s" \
+  printf "cd %s && %s %s" \
     "$quoted_worktree" \
-    "$quoted_worktree" \
-    "$quoted_derived" \
     "$quoted_agent" \
     "$quoted_prompt"
 }
@@ -380,8 +377,6 @@ if [[ -z "$startup_command" ]]; then
     --workspace "$workspace_id"
     "profileID=$agent_command"
     "cwd=$worktree_path"
-    "env.TOASTTY_DEV_WORKTREE_ROOT=$worktree_path"
-    "env.TOASTTY_DERIVED_PATH=$worktree_path/artifacts/dev-runs/manual/Derived"
   )
   if [[ "${#initial_commands[@]}" -gt 0 ]]; then
     for initial_command in "${initial_commands[@]}"; do
