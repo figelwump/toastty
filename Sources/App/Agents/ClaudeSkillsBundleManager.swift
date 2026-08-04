@@ -9,6 +9,12 @@ struct ClaudeSkillsLaunchConfiguration: Equatable, Sendable {
     let contentDigest: String
 }
 
+enum ClaudeSkillsDeliveryStatus: Equatable, Sendable {
+    case providedAtLaunch(ClaudeSkillsLaunchConfiguration)
+    case stagesOnNextLaunch(version: String)
+    case unavailable(detail: String)
+}
+
 protocol ClaudeSkillsBundleManaging: AnyObject, Sendable {
     func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration?
     func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration?
@@ -49,6 +55,21 @@ final class ClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Se
         }
     }
 
+    func deliveryStatus() async -> ClaudeSkillsDeliveryStatus {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                let status: ClaudeSkillsDeliveryStatus
+                do {
+                    status = try deliveryStatusThrowing()
+                } catch {
+                    logFailure(error)
+                    status = .unavailable(detail: error.localizedDescription)
+                }
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
     func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration? {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
@@ -75,6 +96,23 @@ final class ClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Se
 }
 
 private extension ClaudeSkillsBundleManager {
+    func deliveryStatusThrowing() throws -> ClaudeSkillsDeliveryStatus {
+        guard let sourceURL = sourcePluginURLProvider() else {
+            throw ClaudeSkillsBundleManagerError.bundledPluginUnavailable
+        }
+        let source = try ToasttyAgentPluginBundle.read(
+            pluginRootURL: sourceURL,
+            fileManager: fileManager
+        )
+        let destination = destinationPluginURL(for: source)
+        guard fileManager.fileExists(atPath: destination.path) else {
+            return .stagesOnNextLaunch(version: source.version)
+        }
+        return .providedAtLaunch(
+            try verifiedConfiguration(at: destination, expected: source)
+        )
+    }
+
     func prepareForManagedLaunchThrowing() throws -> ClaudeSkillsLaunchConfiguration {
         guard let sourceURL = sourcePluginURLProvider() else {
             throw ClaudeSkillsBundleManagerError.bundledPluginUnavailable

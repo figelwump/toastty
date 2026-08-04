@@ -77,6 +77,33 @@ final class CodexSkillsManagementModel: ObservableObject {
     }
 }
 
+@MainActor
+final class ClaudeSkillsManagementModel: ObservableObject {
+    @Published private(set) var status: ClaudeSkillsDeliveryStatus?
+    @Published private(set) var isWorking = false
+
+    private let statusProvider: @Sendable () async -> ClaudeSkillsDeliveryStatus
+
+    init(
+        statusProvider: @escaping @Sendable () async -> ClaudeSkillsDeliveryStatus = {
+            await ClaudeSkillsBundleManager().deliveryStatus()
+        }
+    ) {
+        self.statusProvider = statusProvider
+    }
+
+    func refresh() {
+        guard isWorking == false else { return }
+        isWorking = true
+        Task { [weak self, statusProvider] in
+            let status = await statusProvider()
+            guard let self else { return }
+            self.status = status
+            isWorking = false
+        }
+    }
+}
+
 private extension CodexSkillsManagementModel {
     typealias Operation = @Sendable (
         CodexSkillsManager,
@@ -139,6 +166,7 @@ private extension CodexSkillsManagementModel {
 struct CodexSkillsManagementSheet: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @StateObject private var model: CodexSkillsManagementModel
+    @StateObject private var claudeModel: ClaudeSkillsManagementModel
     @State private var showsUninstallConfirmation = false
     @State private var detailsExpanded = false
     @Environment(\.dismiss) private var dismiss
@@ -147,7 +175,8 @@ struct CodexSkillsManagementSheet: View {
         sessionRuntimeStore: SessionRuntimeStore,
         processPathProvider: @escaping @Sendable () -> String? = { nil },
         processPathRefreshProvider: (@Sendable () -> String?)? = nil,
-        model: CodexSkillsManagementModel? = nil
+        model: CodexSkillsManagementModel? = nil,
+        claudeModel: ClaudeSkillsManagementModel? = nil
     ) {
         self.sessionRuntimeStore = sessionRuntimeStore
         _model = StateObject(
@@ -156,13 +185,15 @@ struct CodexSkillsManagementSheet: View {
                 processPathRefreshProvider: processPathRefreshProvider
             )
         )
+        _claudeModel = StateObject(
+            wrappedValue: claudeModel ?? ClaudeSkillsManagementModel()
+        )
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
-            statusCard
-            hostDetails
+            statusCards
             skillsList
             details
             Spacer(minLength: 0)
@@ -191,6 +222,7 @@ struct CodexSkillsManagementSheet: View {
         }
         .onAppear {
             model.refresh(hasActiveManagedCodexSession: hasActiveManagedCodexSession)
+            claudeModel.refresh()
         }
         .onChange(of: activeManagedCodexSessionCount) { _, _ in
             guard model.isWorking == false else { return }
@@ -215,16 +247,21 @@ struct CodexSkillsManagementSheet: View {
         }
     }
 
-    private var statusCard: some View {
+    private var statusCards: some View {
+        VStack(spacing: 12) {
+            codexStatusCard
+            claudeStatusCard
+        }
+    }
+
+    private var codexStatusCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: statusSymbolName)
                     .foregroundStyle(statusColor)
-                Text(statusTitle)
+                Text("Codex")
                     .font(.system(size: 13, weight: .semibold))
-                Text("Codex plugin")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ToastyTheme.inactiveText)
+                statusPill(statusTitle, color: statusColor)
                 Spacer()
                 if model.isWorking {
                     ProgressView()
@@ -283,13 +320,37 @@ struct CodexSkillsManagementSheet: View {
         .accessibilityIdentifier("sheet.codex-skills.status")
     }
 
-    private var hostDetails: some View {
+    private var claudeStatusCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Codex: installed as a plugin and enabled only for managed sessions.", systemImage: "terminal")
-            Label("Claude Code: staged by Toastty and passed only to the managed session.", systemImage: "terminal.fill")
+            HStack(spacing: 8) {
+                Image(systemName: claudeStatusSymbolName)
+                    .foregroundStyle(claudeStatusColor)
+                Text("Claude Code")
+                    .font(.system(size: 13, weight: .semibold))
+                statusPill(claudeStatusTitle, color: claudeStatusColor)
+                Spacer()
+                if claudeModel.isWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            Text(claudeStatusDetail)
+                .font(.system(size: 12))
+                .foregroundStyle(
+                    claudeStatusIsUnavailable
+                        ? ToastyTheme.sessionErrorText
+                        : ToastyTheme.mutedText
+                )
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.system(size: 12))
-        .foregroundStyle(ToastyTheme.mutedText)
+        .padding(14)
+        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(ToastyTheme.hairline, lineWidth: 1)
+        }
+        .accessibilityIdentifier("sheet.claude-skills.status")
     }
 
     private var skillsList: some View {
@@ -317,7 +378,7 @@ struct CodexSkillsManagementSheet: View {
     }
 
     private var details: some View {
-        DisclosureGroup("Details", isExpanded: $detailsExpanded) {
+        DisclosureGroup("Codex plugin details", isExpanded: $detailsExpanded) {
             VStack(alignment: .leading, spacing: 8) {
                 if let status = model.status {
                     technicalRow("Marketplace", value: status.marketplacePath)
@@ -346,11 +407,16 @@ struct CodexSkillsManagementSheet: View {
 
     private var actionBar: some View {
         HStack {
-            if hasActiveManagedCodexSession {
-                Text("Uninstall is available after managed Codex sessions stop. Repair applies immediately; running sessions pick up changes after restart.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Codex plugin maintenance")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.mutedText)
+                if hasActiveManagedCodexSession {
+                    Text("Uninstall is available after managed Codex sessions stop. Running sessions pick up repairs after restart.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
             Button("Repair") {
@@ -369,6 +435,20 @@ struct CodexSkillsManagementSheet: View {
             )
             .accessibilityIdentifier("sheet.codex-skills.uninstall")
         }
+    }
+
+    @ViewBuilder
+    private func statusPill(_ title: String, color: Color) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.13), in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(color.opacity(0.3), lineWidth: 1)
+            }
     }
 
     @ViewBuilder
@@ -430,6 +510,63 @@ struct CodexSkillsManagementSheet: View {
             if model.codexNotFoundMessage != nil { return ToastyTheme.inactiveText }
             return model.errorMessage == nil ? ToastyTheme.inactiveText : ToastyTheme.sessionErrorText
         }
+    }
+
+    private var claudeStatusTitle: String {
+        switch claudeModel.status {
+        case .providedAtLaunch:
+            return "Provided at launch"
+        case .stagesOnNextLaunch:
+            return "Stages on next launch"
+        case .unavailable:
+            return "Needs attention"
+        case nil:
+            return "Checking"
+        }
+    }
+
+    private var claudeStatusDetail: String {
+        switch claudeModel.status {
+        case .providedAtLaunch(let configuration):
+            return "Toastty passes version \(configuration.version) only to managed Claude Code launches."
+        case .stagesOnNextLaunch(let version):
+            return "Toastty will stage version \(version) when the next managed Claude Code session launches."
+        case .unavailable(let detail):
+            return detail
+        case nil:
+            return "Checking Toastty's bundled Claude Code skills."
+        }
+    }
+
+    private var claudeStatusSymbolName: String {
+        switch claudeModel.status {
+        case .providedAtLaunch:
+            return "checkmark.circle.fill"
+        case .stagesOnNextLaunch:
+            return "arrow.right.circle.fill"
+        case .unavailable:
+            return "xmark.circle.fill"
+        case nil:
+            return "ellipsis.circle"
+        }
+    }
+
+    private var claudeStatusColor: Color {
+        switch claudeModel.status {
+        case .providedAtLaunch:
+            return ToastyTheme.sessionReadyText
+        case .stagesOnNextLaunch:
+            return ToastyTheme.accent
+        case .unavailable:
+            return ToastyTheme.sessionErrorText
+        case nil:
+            return ToastyTheme.inactiveText
+        }
+    }
+
+    private var claudeStatusIsUnavailable: Bool {
+        guard case .unavailable = claudeModel.status else { return false }
+        return true
     }
 }
 

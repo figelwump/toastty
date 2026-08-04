@@ -43,6 +43,15 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.reloadConfiguration.id, "app.reload-configuration")
     }
 
+    func testSharedSkillsCommandKeepsStableIDAndNamesBothAgentSearchPaths() {
+        let command = ToasttyBuiltInCommand.manageCodexSkills
+
+        XCTAssertEqual(command.id, "agent.codex-skills.manage")
+        XCTAssertEqual(command.title, "Manage Toastty Skills")
+        XCTAssertTrue(command.keywords.contains("codex"))
+        XCTAssertTrue(command.keywords.contains("claude"))
+    }
+
     func testStaticCatalogExposesExpectedBuiltInsInStableOrder() {
         let commands = makeCommands()
 

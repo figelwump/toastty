@@ -381,7 +381,7 @@ struct ToasttyCommandMenus: Commands {
             }
             Divider()
 
-            Button("Manage Codex Skills…") {
+            Button("\(ToasttyBuiltInCommand.manageCodexSkills.title)…") {
                 showCodexSkillsManagement()
             }
             .disabled(agentGetStartedTargetWindowID == nil)

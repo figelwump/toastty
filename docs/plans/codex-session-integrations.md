@@ -34,8 +34,9 @@ Codex banner. A persisted per-agent flag prevents it from being shown again:
 > Toastty enabled four skills for managed Codex sessions. Your global and
 > project skill folders were not changed. View Skills…
 
-`Toastty > Manage Codex Skills…` opens a sheet with status, the installed
-plugin version, any pending update or repair issue, and these visible rows:
+`Toastty > Manage Toastty Skills…` opens a sheet with separate Codex and Claude
+Code delivery statuses, the installed Codex plugin version, any pending Codex
+update or repair issue, and these visible rows:
 
 | Skill | Summary |
 | --- | --- |

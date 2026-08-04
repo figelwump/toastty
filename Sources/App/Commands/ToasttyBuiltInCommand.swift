@@ -243,7 +243,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .manageAgents:
             return "Manage Agents"
         case .manageCodexSkills:
-            return "Manage Codex Skills"
+            return "Manage Toastty Skills"
         case .setUpAgentStatusHooks:
             return "Set Up Agent Status Hooks"
         case .copyDiagnosticsSnippet:
@@ -440,7 +440,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .manageAgents:
             return ["manage", "open", "agents", "agent", "profiles", "config", "toml"]
         case .manageCodexSkills:
-            return ["manage", "codex", "skills", "plugin", "repair", "uninstall"]
+            return ["manage", "toastty", "codex", "claude", "skills", "plugin", "repair", "uninstall"]
         case .setUpAgentStatusHooks:
             return ["agent", "status", "hooks", "setup", "codex", "claude", "telemetry"]
         case .copyDiagnosticsSnippet:

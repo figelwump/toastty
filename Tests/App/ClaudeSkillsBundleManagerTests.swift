@@ -26,6 +26,8 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
             manager.existingVerifiedConfiguration(),
             first
         )
+        let deliveryStatus = await manager.deliveryStatus()
+        XCTAssertEqual(deliveryStatus, .providedAtLaunch(first))
         let scriptPath = URL(fileURLWithPath: first.skillsRootPath)
             .appendingPathComponent("toastty-open-markdown/scripts/open.sh")
             .path
@@ -66,6 +68,51 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
         let result = await manager.prepareForManagedLaunch()
         XCTAssertNil(result)
         XCTAssertNil(manager.existingVerifiedConfiguration())
+        let deliveryStatus = await manager.deliveryStatus()
+        guard case .unavailable = deliveryStatus else {
+            return XCTFail("Expected unavailable delivery status")
+        }
+    }
+
+    func testDeliveryStatusDoesNotStagePluginBeforeManagedLaunch() async throws {
+        let rootURL = temporaryDirectory(named: "status-without-staging")
+        let sourceURL = rootURL.appendingPathComponent("source/toastty", isDirectory: true)
+        let stagingURL = rootURL.appendingPathComponent("staged", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try makePlugin(at: sourceURL, version: "1.2.3")
+        let manager = ClaudeSkillsBundleManager(
+            sourcePluginURLProvider: { sourceURL },
+            stagingRootURL: stagingURL
+        )
+
+        let deliveryStatus = await manager.deliveryStatus()
+        XCTAssertEqual(deliveryStatus, .stagesOnNextLaunch(version: "1.2.3"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stagingURL.path))
+    }
+
+    func testDeliveryStatusReportsInvalidStagedPlugin() async throws {
+        let rootURL = temporaryDirectory(named: "invalid-status")
+        let sourceURL = rootURL.appendingPathComponent("source/toastty", isDirectory: true)
+        let stagingURL = rootURL.appendingPathComponent("staged", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try makePlugin(at: sourceURL, version: "1.2.3")
+        let manager = ClaudeSkillsBundleManager(
+            sourcePluginURLProvider: { sourceURL },
+            stagingRootURL: stagingURL
+        )
+        let preparedConfiguration = await manager.prepareForManagedLaunch()
+        let configuration = try XCTUnwrap(preparedConfiguration)
+        try "invalid".write(
+            to: URL(fileURLWithPath: configuration.skillsRootPath)
+                .appendingPathComponent("worktree-create/SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let deliveryStatus = await manager.deliveryStatus()
+        guard case .unavailable = deliveryStatus else {
+            return XCTFail("Expected invalid staged plugin to need attention")
+        }
     }
 
     func testRestoredLaunchStagesChangedBundleBeforeResume() throws {
