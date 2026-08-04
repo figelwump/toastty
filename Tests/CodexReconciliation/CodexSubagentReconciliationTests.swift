@@ -321,6 +321,76 @@ struct CodexSubagentReconciliationTests {
     }
 
     @Test
+    func correlatedRolloutTurnLifecycleControlsHookAuthoritativeProviderActivity() {
+        var reconciler = CodexSubagentReconciler(authority: .hooks)
+        let activityID = activity("/root/teller_schema_contract")
+        let providerAgentID = agent("thread-teller")
+
+        #expect(reconciler.reduce(
+            .rolloutTurnDeactivated(
+                activityID: activityID,
+                providerAgentID: providerAgentID
+            ),
+            projection: snapshot(active: ["thread-teller"]),
+            now: epoch
+        ).decisions == [.finish(.providerAgent(providerAgentID))])
+
+        #expect(reconciler.reduce(
+            .rolloutTurnActivated(
+                activityID: activityID,
+                providerAgentID: providerAgentID,
+                displayName: "teller_schema_contract"
+            ),
+            projection: .empty,
+            now: epoch.addingTimeInterval(1)
+        ).decisions == [
+            .authoritativeHookReopen(
+                providerAgentID: providerAgentID,
+                display: .replace("teller_schema_contract")
+            ),
+        ])
+
+        #expect(reconciler.reduce(
+            .rolloutTurnDeactivated(
+                activityID: activityID,
+                providerAgentID: providerAgentID
+            ),
+            projection: snapshot(active: ["thread-teller"]),
+            now: epoch.addingTimeInterval(2)
+        ).decisions == [.finish(.providerAgent(providerAgentID))])
+    }
+
+    @Test
+    func correlatedRolloutFollowUpReopensFallbackActivityBeforeTombstoneExpiry() {
+        var reconciler = CodexSubagentReconciler(authority: .rolloutFallback)
+        let activityID = activity("/root/reusable")
+
+        _ = reconciler.reduce(
+            .rolloutTurnDeactivated(
+                activityID: activityID,
+                providerAgentID: nil
+            ),
+            projection: .empty,
+            now: epoch
+        )
+
+        #expect(reconciler.reduce(
+            .rolloutTurnActivated(
+                activityID: activityID,
+                providerAgentID: nil,
+                displayName: "reusable"
+            ),
+            projection: .empty,
+            now: epoch.addingTimeInterval(1)
+        ).decisions == [
+            .fallbackReopen(
+                activityID: activityID,
+                metadata: .init(displayName: "reusable")
+            ),
+        ])
+    }
+
+    @Test
     func fallbackFinishBlocksRestartUntilExactReceiveTimeTTLBoundary() {
         var reconciler = CodexSubagentReconciler(authority: .rolloutFallback)
         let activity = activity("rollout-1")
@@ -562,6 +632,20 @@ struct CodexSubagentReconciliationTests {
             now: epoch
         ).diagnostics == [
             .ignored(observation: .rolloutFinish, reason: .incompatibleWithAuthority),
+        ])
+        #expect(hooks.reduce(
+            .rolloutTurnActivated(
+                activityID: activity("activity"),
+                providerAgentID: nil,
+                displayName: "worker"
+            ),
+            projection: .empty,
+            now: epoch
+        ).diagnostics == [
+            .ignored(
+                observation: .rolloutTurnActivated,
+                reason: .missingExactCorrelationIdentifiers
+            ),
         ])
 
         var fallback = CodexSubagentReconciler(authority: .rolloutFallback)

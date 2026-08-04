@@ -143,12 +143,18 @@ struct CodexSessionLogEvent: Equatable, Sendable {
 }
 
 struct CodexSessionBackgroundActivity: Equatable, Sendable {
+    enum TurnTransition: Equatable, Sendable {
+        case activated
+        case deactivated
+    }
+
     let activityID: String
     let hookActivityID: String?
     let spawnToolUseID: String?
     let kind: SessionBackgroundActivityKind
     let displayName: String?
     let command: String?
+    let turnTransition: TurnTransition?
 
     init(
         activityID: String,
@@ -156,7 +162,8 @@ struct CodexSessionBackgroundActivity: Equatable, Sendable {
         spawnToolUseID: String? = nil,
         kind: SessionBackgroundActivityKind,
         displayName: String? = nil,
-        command: String? = nil
+        command: String? = nil,
+        turnTransition: TurnTransition? = nil
     ) {
         self.activityID = activityID
         self.hookActivityID = hookActivityID
@@ -164,6 +171,7 @@ struct CodexSessionBackgroundActivity: Equatable, Sendable {
         self.kind = kind
         self.displayName = displayName
         self.command = command
+        self.turnTransition = turnTransition
     }
 }
 
@@ -175,14 +183,19 @@ private struct CodexMultiAgentPendingCall: Sendable {
 private struct CodexMultiAgentPendingCalls: Sendable {
     private var callsByID: [String: CodexMultiAgentPendingCall] = [:]
     private var orderedCallIDs: [String] = []
+    private var recentlyResolvedCallsByID: [String: CodexMultiAgentPendingCall] = [:]
+    private var orderedResolvedCallIDs: [String] = []
 
     mutating func store(callID: String, call: CodexMultiAgentPendingCall) {
         if callsByID[callID] != nil {
             orderedCallIDs.removeAll { $0 == callID }
         }
+        if recentlyResolvedCallsByID.removeValue(forKey: callID) != nil {
+            orderedResolvedCallIDs.removeAll { $0 == callID }
+        }
         callsByID[callID] = call
         orderedCallIDs.append(callID)
-        trimToLimit()
+        trimPendingCallsToLimit()
     }
 
     mutating func resolve(callID: String) -> CodexMultiAgentPendingCall? {
@@ -190,17 +203,28 @@ private struct CodexMultiAgentPendingCalls: Sendable {
             return nil
         }
         orderedCallIDs.removeAll { $0 == callID }
+        recentlyResolvedCallsByID[callID] = call
+        orderedResolvedCallIDs.append(callID)
+        trimResolvedCallsToLimit()
         return call
     }
 
     func peek(callID: String) -> CodexMultiAgentPendingCall? {
-        callsByID[callID]
+        callsByID[callID] ?? recentlyResolvedCallsByID[callID]
     }
 
-    private mutating func trimToLimit() {
+    private mutating func trimPendingCallsToLimit() {
         while callsByID.count > Self.limit, let oldestCallID = orderedCallIDs.first {
             orderedCallIDs.removeFirst()
             callsByID.removeValue(forKey: oldestCallID)
+        }
+    }
+
+    private mutating func trimResolvedCallsToLimit() {
+        while recentlyResolvedCallsByID.count > Self.limit,
+              let oldestCallID = orderedResolvedCallIDs.first {
+            orderedResolvedCallIDs.removeFirst()
+            recentlyResolvedCallsByID.removeValue(forKey: oldestCallID)
         }
     }
 
@@ -941,10 +965,29 @@ private extension CodexSessionLogWatcher {
                 )]
 
             case "interrupted":
-                return [collaborationFinishedEvent(activityID: agentPath)]
+                let pendingCall = pendingCalls.peek(callID: eventID)
+                guard pendingCall?.toolName == "interrupt_agent" else {
+                    return [collaborationFinishedEvent(activityID: agentPath)]
+                }
+                return [collaborationFinishedEvent(
+                    activityID: agentPath,
+                    hookActivityID: nonEmptyString(payload["agent_thread_id"]),
+                    turnTransition: .deactivated
+                )]
+
+            case "interacted":
+                let pendingCall = pendingCalls.peek(callID: eventID)
+                guard pendingCall?.toolName == "followup_task" else {
+                    // Plain message delivery does not start a new agent turn.
+                    return []
+                }
+                return [collaborationStartedEvent(
+                    activityID: agentPath,
+                    hookActivityID: nonEmptyString(payload["agent_thread_id"]),
+                    turnTransition: .activated
+                )]
 
             default:
-                // "interacted" records message delivery, not a lifecycle transition.
                 return []
             }
 
@@ -1024,7 +1067,8 @@ private extension CodexSessionLogWatcher {
         hookActivityID: String? = nil,
         spawnToolUseID: String? = nil,
         displayName: String? = nil,
-        command: String? = nil
+        command: String? = nil,
+        turnTransition: CodexSessionBackgroundActivity.TurnTransition? = nil
     ) -> CodexSessionLogEvent {
         let resolvedDisplayName = displayName ?? collaborationAgentDisplayName(from: activityID)
         return CodexSessionLogEvent(
@@ -1036,7 +1080,8 @@ private extension CodexSessionLogWatcher {
                 spawnToolUseID: spawnToolUseID,
                 kind: .subagent,
                 displayName: resolvedDisplayName,
-                command: command
+                command: command,
+                turnTransition: turnTransition
             )
         )
     }
@@ -1058,13 +1103,19 @@ private extension CodexSessionLogWatcher {
         return nil
     }
 
-    static func collaborationFinishedEvent(activityID: String) -> CodexSessionLogEvent {
+    static func collaborationFinishedEvent(
+        activityID: String,
+        hookActivityID: String? = nil,
+        turnTransition: CodexSessionBackgroundActivity.TurnTransition? = nil
+    ) -> CodexSessionLogEvent {
         CodexSessionLogEvent(
             kind: .backgroundActivityFinished,
             detail: "Finished sub-agent",
             backgroundActivity: CodexSessionBackgroundActivity(
                 activityID: activityID,
-                kind: .subagent
+                hookActivityID: hookActivityID,
+                kind: .subagent,
+                turnTransition: turnTransition
             )
         )
     }
@@ -1209,7 +1260,7 @@ private extension CodexSessionLogWatcher {
         case "multi_agent_v1":
             return strippedMultiAgentToolName(rawName) ?? rawName
         case "collaboration":
-            return rawName == "spawn_agent" ? rawName : nil
+            return shouldTrackCollaborationTool(named: rawName) ? rawName : nil
         case nil:
             if rawName == "spawn_agent" {
                 return rawName
@@ -1231,7 +1282,16 @@ private extension CodexSessionLogWatcher {
 
     static func shouldTrackMultiAgentTool(named toolName: String) -> Bool {
         switch toolName {
-        case "spawn_agent", "wait_agent", "close_agent":
+        case "spawn_agent", "wait_agent", "close_agent", "interrupt_agent", "followup_task":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func shouldTrackCollaborationTool(named toolName: String) -> Bool {
+        switch toolName {
+        case "spawn_agent", "interrupt_agent", "followup_task":
             return true
         default:
             return false

@@ -377,8 +377,8 @@ final class SessionRuntimeStore: ObservableObject {
         activity: SessionBackgroundActivity,
         at now: Date
     ) -> Bool {
-        // Codex SubagentStart is source-authoritative and can represent a new
-        // turn for an agent ID that completed moments earlier.
+        // An authoritative lifecycle start can represent a new turn for an
+        // activity ID that completed moments earlier.
         clearBackgroundActivityFinishTombstone(
             sessionID: sessionID,
             activityID: activity.id
@@ -1236,20 +1236,41 @@ final class SessionRuntimeStore: ObservableObject {
                   let activityID = ActivityID(activity.activityID) else {
                 return false
             }
-            reducerObservation = .rolloutStart(
-                activityID: activityID,
-                spawnCallID: activity.spawnToolUseID.flatMap { SpawnCallID($0) },
-                providerAgentID: activity.hookActivityID.flatMap { ProviderAgentID($0) },
-                displayName: activity.displayName,
-                command: activity.command
-            )
+            switch activity.turnTransition {
+            case .activated:
+                reducerObservation = .rolloutTurnActivated(
+                    activityID: activityID,
+                    providerAgentID: activity.hookActivityID.flatMap { ProviderAgentID($0) },
+                    displayName: activity.displayName
+                )
+            case .deactivated:
+                return false
+            case nil:
+                reducerObservation = .rolloutStart(
+                    activityID: activityID,
+                    spawnCallID: activity.spawnToolUseID.flatMap { SpawnCallID($0) },
+                    providerAgentID: activity.hookActivityID.flatMap { ProviderAgentID($0) },
+                    displayName: activity.displayName,
+                    command: activity.command
+                )
+            }
 
         case .finished(let activity):
             guard activity.kind == .subagent,
                   let activityID = ActivityID(activity.activityID) else {
                 return false
             }
-            reducerObservation = .rolloutFinish(activityID: activityID)
+            switch activity.turnTransition {
+            case .deactivated:
+                reducerObservation = .rolloutTurnDeactivated(
+                    activityID: activityID,
+                    providerAgentID: activity.hookActivityID.flatMap { ProviderAgentID($0) }
+                )
+            case .activated:
+                return false
+            case nil:
+                reducerObservation = .rolloutFinish(activityID: activityID)
+            }
 
         case .streamReset:
             reducerObservation = .streamReset
@@ -1720,6 +1741,20 @@ final class SessionRuntimeStore: ObservableObject {
                 at: now
             )
 
+        case .fallbackReopen(let activityID, let metadata):
+            return reopenBackgroundActivity(
+                sessionID: sessionID,
+                activity: SessionBackgroundActivity(
+                    id: activityID.rawValue,
+                    kind: .subagent,
+                    displayName: metadata.displayName,
+                    command: metadata.command,
+                    startedAt: now,
+                    lastUpdatedAt: now
+                ),
+                at: now
+            )
+
         case .authoritativeHookReopen(let providerAgentID, let display):
             let existingActivity = sessionRegistry
                 .activeSession(sessionID: sessionID)?
@@ -1837,6 +1872,8 @@ final class SessionRuntimeStore: ObservableObject {
         case .hookFinish: "hook_finish"
         case .rolloutStart: "rollout_start"
         case .rolloutFinish: "rollout_finish"
+        case .rolloutTurnActivated: "rollout_turn_activated"
+        case .rolloutTurnDeactivated: "rollout_turn_deactivated"
         case .streamReset: "stream_reset"
         case .stop: "stop"
         }
