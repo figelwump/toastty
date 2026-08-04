@@ -224,7 +224,8 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 codexCapabilityHint: normalizedOptionalText(payload.string("resolvedCodexExecutablePath")).map {
                     ManagedCodexCapabilityHint(
                         resolvedExecutablePath: $0,
-                        codexHomePath: normalizedOptionalText(payload.string("codexHomePath"))
+                        codexHomePath: normalizedOptionalText(payload.string("codexHomePath")),
+                        processPath: normalizedOptionalText(payload.string("codexProcessPath"))
                     )
                 }
             )

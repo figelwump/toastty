@@ -37,10 +37,48 @@ enum CodexAppServerClientError: LocalizedError, Equatable {
 
 struct CodexAppServerInvocation: Equatable, Sendable {
     let executableURL: URL
-    let codexHomeURL: URL
+    let processEnvironment: CodexProcessEnvironment
     let workingDirectoryURL: URL
     let configOverrides: [String]
     let timeout: TimeInterval
+
+    init(
+        executableURL: URL,
+        processEnvironment: CodexProcessEnvironment,
+        workingDirectoryURL: URL,
+        configOverrides: [String],
+        timeout: TimeInterval
+    ) {
+        self.executableURL = executableURL
+        self.processEnvironment = processEnvironment
+        self.workingDirectoryURL = workingDirectoryURL
+        self.configOverrides = configOverrides
+        self.timeout = timeout
+    }
+
+    init(
+        executableURL: URL,
+        codexHomeURL: URL,
+        processPath: String? = nil,
+        workingDirectoryURL: URL,
+        configOverrides: [String],
+        timeout: TimeInterval
+    ) {
+        self.init(
+            executableURL: executableURL,
+            processEnvironment: CodexProcessEnvironment(
+                codexHomeURL: codexHomeURL,
+                path: processPath
+            ),
+            workingDirectoryURL: workingDirectoryURL,
+            configOverrides: configOverrides,
+            timeout: timeout
+        )
+    }
+
+    var codexHomeURL: URL {
+        processEnvironment.codexHomeURL
+    }
 }
 
 struct CodexSkillState: Equatable, Sendable {
@@ -173,9 +211,7 @@ struct CodexAppServerProcessTransport: CodexAppServerRPCTransporting, @unchecked
         process.arguments = invocation.configOverrides.flatMap { ["-c", $0] }
             + ["app-server", "--listen", "stdio://"]
         process.currentDirectoryURL = invocation.workingDirectoryURL
-        var environment = baseEnvironment()
-        environment["CODEX_HOME"] = invocation.codexHomeURL.path
-        process.environment = environment
+        process.environment = invocation.processEnvironment.applying(to: baseEnvironment())
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()

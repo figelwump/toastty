@@ -19,6 +19,121 @@ final class CodexPluginCLIClientTests: XCTestCase {
         XCTAssertEqual(data.count, 200_000)
     }
 
+    func testProcessExecutorAppliesManagedPathAndCodexHomeWithoutDroppingInheritedValues() throws {
+        let runtime = CodexIntegrationRuntime(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            codexHomeURL: URL(fileURLWithPath: "/tmp/managed-codex-home", isDirectory: true),
+            processPath: "/custom/node/bin:/usr/bin:/bin",
+            workingDirectoryURL: FileManager.default.temporaryDirectory
+        )
+        let executor = CodexPluginCLIProcessExecutor(baseEnvironment: {
+            ["PATH": "/gui-only", "TOASTTY_TEST_MARKER": "preserved"]
+        })
+
+        let data = try executor.execute(
+            runtime: runtime,
+            arguments: ["-c", "printf '%s|%s|%s' \"$PATH\" \"$CODEX_HOME\" \"$TOASTTY_TEST_MARKER\""],
+            deadline: Date().addingTimeInterval(2)
+        )
+
+        XCTAssertEqual(
+            String(decoding: data, as: UTF8.self),
+            "/custom/node/bin:/usr/bin:/bin|/tmp/managed-codex-home|preserved"
+        )
+    }
+
+    func testProcessEnvironmentKeepsInheritedPathWhenManagedPathIsNil() {
+        let processEnvironment = CodexProcessEnvironment(
+            codexHomeURL: URL(fileURLWithPath: "/tmp/managed-codex-home", isDirectory: true),
+            path: nil
+        )
+
+        XCTAssertEqual(
+            processEnvironment.applying(to: ["PATH": "/inherited/bin", "MARKER": "preserved"]),
+            [
+                "PATH": "/inherited/bin",
+                "CODEX_HOME": "/tmp/managed-codex-home",
+                "MARKER": "preserved",
+            ]
+        )
+    }
+
+    func testRuntimeUnavailableRequiresAnExecutableLaunchFailureMessage() {
+        XCTAssertTrue(
+            CodexPluginCLIError.commandFailed(
+                "plugin list --json",
+                127,
+                "env: node: No such file or directory"
+            ).isRuntimeUnavailable
+        )
+        XCTAssertTrue(
+            CodexPluginCLIError.commandFailed(
+                "plugin list --json",
+                126,
+                "bad interpreter: Permission denied"
+            ).isRuntimeUnavailable
+        )
+        XCTAssertFalse(
+            CodexPluginCLIError.commandFailed(
+                "plugin list --json",
+                127,
+                "plugin registry command returned no result"
+            ).isRuntimeUnavailable
+        )
+        XCTAssertFalse(
+            CodexPluginCLIError.commandFailed(
+                "plugin list --json",
+                1,
+                "env: node: No such file or directory"
+            ).isRuntimeUnavailable
+        )
+    }
+
+    func testRuntimeLocatorUsesPreferredShellPathAndMergesGUIFallback() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-runtime-locator-\(UUID().uuidString)", isDirectory: true)
+        let binURL = rootURL.appendingPathComponent("bin", isDirectory: true)
+        let executableURL = binURL.appendingPathComponent("codex", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try FileManager.default.createDirectory(at: binURL, withIntermediateDirectories: true)
+        try "#!/bin/sh\nexit 0\n".write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executableURL.path
+        )
+
+        let runtime = try CodexIntegrationRuntimeLocator.resolve(
+            environment: ["PATH": "/usr/bin:/bin", "CODEX_HOME": "/tmp/codex-home"],
+            preferredProcessPath: "relative:\(binURL.path):/usr/bin"
+        )
+
+        XCTAssertEqual(runtime.executableURL.path, executableURL.path)
+        XCTAssertEqual(runtime.processEnvironment.path, "\(binURL.path):/usr/bin:/bin")
+        XCTAssertEqual(runtime.codexHomeURL.path, "/tmp/codex-home")
+    }
+
+    func testRuntimeLocatorFallsBackToSupportedCdxExecutable() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cdx-runtime-locator-\(UUID().uuidString)", isDirectory: true)
+        let binURL = rootURL.appendingPathComponent("bin", isDirectory: true)
+        let executableURL = binURL.appendingPathComponent("cdx", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try FileManager.default.createDirectory(at: binURL, withIntermediateDirectories: true)
+        try "#!/bin/sh\nexit 0\n".write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executableURL.path
+        )
+
+        let runtime = try CodexIntegrationRuntimeLocator.resolve(
+            environment: ["PATH": "/usr/bin:/bin"],
+            preferredProcessPath: binURL.path
+        )
+
+        XCTAssertEqual(runtime.executableURL.path, executableURL.path)
+        XCTAssertEqual(runtime.processEnvironment.path, "\(binURL.path):/usr/bin:/bin")
+    }
+
     func testDecodesMarketplaceAndInstalledPluginJSON() throws {
         let executor = RecordingPluginCLIExecutor(responses: [
             ["plugin", "marketplace", "list", "--json"]: #"{"marketplaces":[{"name":"toastty","root":"/tmp/market","marketplaceSource":{"sourceType":"path","source":"/tmp/market"}}]}"#,

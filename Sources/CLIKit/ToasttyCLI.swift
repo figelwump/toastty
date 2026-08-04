@@ -648,7 +648,7 @@ public enum ToasttyCLI {
     Usage:
       toastty [--json] [--socket-path <path>] action list
       toastty [--json] [--socket-path <path>] action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
-      toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive] [--resolved-codex-executable <path>] [--codex-home <path>]
+      toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive] [--resolved-codex-executable <path>] [--codex-home <path>] [--codex-process-path <path>]
       toastty [--json] [--socket-path <path>] agent managed-launch-preflight-decision --token <id>
       toastty [--json] [--socket-path <path>] doctor
       toastty [--socket-path <path>] diagnostics collect [--shell-probe <file>] [--note <text>] [--out <file>]
@@ -861,7 +861,7 @@ public enum ToasttyCLI {
                 remainingArguments,
                 valueOptions: [
                     "--agent", "--panel", "--cwd", "--arg", "--preflight-policy",
-                    "--resolved-codex-executable", "--codex-home",
+                    "--resolved-codex-executable", "--codex-home", "--codex-process-path",
                 ]
             )
 
@@ -909,7 +909,8 @@ public enum ToasttyCLI {
                     codexCapabilityHint: parsed.singleValue("--resolved-codex-executable").map {
                         ManagedCodexCapabilityHint(
                             resolvedExecutablePath: $0,
-                            codexHomePath: parsed.singleValue("--codex-home")
+                            codexHomePath: parsed.singleValue("--codex-home"),
+                            processPath: parsed.singleValue("--codex-process-path")
                         )
                     }
                 )

@@ -99,6 +99,9 @@ enum ManagedAgentLaunchSocketClient {
             if let codexHomePath = hint.codexHomePath {
                 payload["codexHomePath"] = .string(codexHomePath)
             }
+            if let processPath = hint.processPath {
+                payload["codexProcessPath"] = .string(processPath)
+            }
         }
         return payload
     }

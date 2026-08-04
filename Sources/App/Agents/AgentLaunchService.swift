@@ -108,6 +108,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private let agentCatalogProvider: any AgentCatalogProviding
     private let fileManager: FileManager
     private let managedLaunchPlanner: any ManagedAgentLaunchPlanning
+    private let codexProcessPathProvider: @Sendable () -> String?
+    private let codexProcessPathRefreshProvider: @Sendable () -> String?
 
     init(
         store: AppStore,
@@ -120,12 +122,21 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         socketPathProvider: @escaping @Sendable () -> String = AgentLaunchService.defaultSocketPath,
         codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = ManagedAgentLaunchPlanner.defaultCodexStatusTrackingSource,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
-        codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil
+        codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
+        codexProcessPathProvider: @escaping @Sendable () -> String? = { nil },
+        codexProcessPathRefreshProvider: @escaping @Sendable () -> String? = { nil }
     ) {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
         self.agentCatalogProvider = agentCatalogProvider
         self.fileManager = fileManager
+        self.codexProcessPathProvider = codexProcessPathProvider
+        self.codexProcessPathRefreshProvider = codexProcessPathRefreshProvider
+        let resolvedCodexSkillsResolver = codexSkillsResolver
+            ?? CodexManagedLaunchSkillsResolver(
+                fileManager: fileManager,
+                processPathProvider: codexProcessPathProvider
+            )
         managedLaunchPlanner = ManagedAgentLaunchPlanner(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -141,8 +152,16 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 terminalCommandRouter?.promptState(panelID: panelID) ?? .unavailable
             },
             nativeSessionObserverRegistry: nativeSessionObserverRegistry,
-            codexSkillsResolver: codexSkillsResolver
+            codexSkillsResolver: resolvedCodexSkillsResolver
         )
+    }
+
+    var codexProcessPathSnapshotProvider: @Sendable () -> String? {
+        codexProcessPathProvider
+    }
+
+    var codexProcessPathRefresher: @Sendable () -> String? {
+        codexProcessPathRefreshProvider
     }
 
     func canLaunchAgent(profileID: String? = nil, workspaceID: UUID? = nil, panelID: UUID? = nil) -> Bool {

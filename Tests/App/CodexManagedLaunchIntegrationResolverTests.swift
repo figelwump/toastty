@@ -26,6 +26,10 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
         let invocation = try XCTUnwrap(fixture.skillClient.invocations.first)
         XCTAssertEqual(invocation.executableURL, fixture.executableURL)
         XCTAssertEqual(invocation.codexHomeURL, customHome)
+        XCTAssertEqual(
+            invocation.processEnvironment.path,
+            "\(fixture.executableURL.deletingLastPathComponent().path):/usr/bin:/bin"
+        )
     }
 
     func testOpaqueWrapperIsNeverProbed() async throws {
@@ -104,6 +108,68 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
         XCTAssertNil(decision.status)
         XCTAssertEqual(fixture.skillClient.invocations.count, 1)
     }
+
+    func testTypedCodexPathOverridesTheSharedLoginShellPath() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let request = ManagedAgentLaunchRequest(
+            agent: .codex,
+            panelID: UUID(),
+            argv: ["codex"],
+            cwd: fixture.rootURL.path,
+            codexCapabilityHint: ManagedCodexCapabilityHint(
+                resolvedExecutablePath: fixture.executableURL.path,
+                processPath: "/typed/node/bin:/usr/bin:/bin"
+            )
+        )
+
+        _ = await fixture.resolver.resolveForManagedLaunch(
+            request: request,
+            workingDirectory: fixture.rootURL.path
+        )
+
+        XCTAssertEqual(
+            fixture.skillClient.invocations.first?.processEnvironment.path,
+            "/typed/node/bin:/usr/bin:/bin"
+        )
+    }
+
+    func testLegacyRequestWithoutShimMetadataFallsBackToSharedPath() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let request = ManagedAgentLaunchRequest(
+            agent: .codex,
+            panelID: UUID(),
+            argv: [fixture.executableURL.path],
+            cwd: fixture.rootURL.path,
+            environment: ["PATH": "/untrusted/stale-shim:/usr/bin"]
+        )
+
+        _ = await fixture.resolver.resolveForManagedLaunch(
+            request: request,
+            workingDirectory: fixture.rootURL.path
+        )
+
+        XCTAssertEqual(
+            fixture.skillClient.invocations.first?.processEnvironment.path,
+            "\(fixture.executableURL.deletingLastPathComponent().path):/usr/bin:/bin"
+        )
+    }
+
+    func testProcessPathStoreRefreshesItsCachedValue() {
+        let store = CodexProcessPathStore(path: "/old/bin", refreshPath: { "/new/bin" })
+
+        XCTAssertEqual(store.currentPath(), "/old/bin")
+        XCTAssertEqual(store.refresh(), "/new/bin")
+        XCTAssertEqual(store.currentPath(), "/new/bin")
+    }
+
+    func testProcessPathStoreKeepsCachedValueWhenRefreshFails() {
+        let store = CodexProcessPathStore(path: "/known-good/bin", refreshPath: { nil })
+
+        XCTAssertEqual(store.refresh(), "/known-good/bin")
+        XCTAssertEqual(store.currentPath(), "/known-good/bin")
+    }
 }
 
 private extension CodexManagedLaunchSkillsResolverTests {
@@ -151,8 +217,9 @@ private extension CodexManagedLaunchSkillsResolverTests {
             resolver = CodexManagedLaunchSkillsResolver(
                 homeDirectoryURL: homeURL,
                 manager: manager,
-                processEnvironment: { [executableURL] in
-                    ["PATH": executableURL.deletingLastPathComponent().path]
+                processEnvironment: { ["PATH": "/usr/bin:/bin"] },
+                processPathProvider: { [executableURL] in
+                    executableURL.deletingLastPathComponent().path
                 }
             )
         }

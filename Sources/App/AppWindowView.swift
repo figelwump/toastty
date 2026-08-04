@@ -149,7 +149,11 @@ struct AppWindowView: View {
             agentGetStartedSheet
         }
         .sheet(isPresented: $showsCodexSkillsManagementSheet) {
-            CodexSkillsManagementSheet(sessionRuntimeStore: sessionRuntimeStore)
+            CodexSkillsManagementSheet(
+                sessionRuntimeStore: sessionRuntimeStore,
+                processPathProvider: agentLaunchService.codexProcessPathSnapshotProvider,
+                processPathRefreshProvider: agentLaunchService.codexProcessPathRefresher
+            )
         }
         .onAppear {
             appIsActive = NSApplication.shared.isActive

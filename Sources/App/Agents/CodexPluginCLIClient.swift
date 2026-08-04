@@ -252,9 +252,7 @@ struct CodexPluginCLIProcessExecutor: CodexPluginCLIExecuting, @unchecked Sendab
         process.executableURL = runtime.executableURL
         process.arguments = arguments
         process.currentDirectoryURL = runtime.workingDirectoryURL
-        var environment = baseEnvironment()
-        environment["CODEX_HOME"] = runtime.codexHomeURL.path
-        process.environment = environment
+        process.environment = runtime.processEnvironment.applying(to: baseEnvironment())
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         let output = CodexPluginCLIProcessOutput()
@@ -364,5 +362,17 @@ enum CodexPluginCLIError: LocalizedError, Equatable {
         let normalized = message.lowercased()
         return normalized.contains("unrecognized subcommand")
             || normalized.contains("unexpected argument 'plugin'")
+    }
+
+    var isRuntimeUnavailable: Bool {
+        guard case .commandFailed(_, let status, let message) = self,
+              status == 126 || status == 127 else {
+            return false
+        }
+        let normalized = message.lowercased()
+        return normalized.contains("no such file or directory")
+            || normalized.contains("permission denied")
+            || normalized.contains("bad interpreter")
+            || normalized.contains("exec format error")
     }
 }

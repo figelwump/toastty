@@ -47,6 +47,31 @@ public enum ManagedAgentPathResolver {
         return nil
     }
 
+    /// Builds a subprocess-safe PATH from an agent's preferred shell PATH and the
+    /// app's inherited fallback. Relative and explicitly excluded directories are
+    /// omitted so a private management process cannot resolve Toastty's command
+    /// shims or executables relative to its working directory.
+    public static func sanitizedMergedPath(
+        preferredPath: String?,
+        fallbackPath: String?,
+        excludedDirectoryPaths: Set<String> = []
+    ) -> String? {
+        let excludedPaths = Set(excludedDirectoryPaths.compactMap(canonicalAbsolutePath))
+        var seenPaths = Set<String>()
+        var entries: [String] = []
+
+        for entry in mergedPathComponents(currentPath: preferredPath, basePath: fallbackPath) {
+            guard let canonicalPath = canonicalAbsolutePath(entry),
+                  excludedPaths.contains(canonicalPath) == false,
+                  seenPaths.insert(canonicalPath).inserted else {
+                continue
+            }
+            entries.append(standardizedAbsolutePath(entry))
+        }
+        guard entries.isEmpty == false else { return nil }
+        return entries.joined(separator: ":")
+    }
+
     private static func mergedPathComponents(
         currentPath: String?,
         basePath: String?
@@ -83,5 +108,17 @@ public enum ManagedAgentPathResolver {
             return nil
         }
         return standardizedPath
+    }
+
+    private static func standardizedAbsolutePath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+    }
+
+    private static func canonicalAbsolutePath(_ path: String) -> String? {
+        guard path.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
     }
 }

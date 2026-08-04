@@ -19,6 +19,9 @@ struct AgentShimExecutableTests {
         #expect(cliLog.contains("--preflight-policy interactive"))
         #expect(cliLog.contains("agent managed-launch-preflight-decision --token preflight-token"))
         #expect(cliLog.contains("--preflight-policy skip"))
+        #expect(cliLog.contains("--resolved-codex-executable \(fixture.realCodexURL.path)"))
+        #expect(cliLog.contains("--codex-process-path \(fixture.expectedCodexProcessPath)"))
+        #expect(cliLog.contains(fixture.shimDirectoryURL.path + ":") == false)
         #expect(cliLog.contains("session stop --session sess-preflight --reason process_exit"))
 
         let agentLog = try fixture.agentLogContents()
@@ -102,6 +105,18 @@ private struct AgentShimExecutableFixture {
     private let agentLogURL: URL
     private let realBinURL: URL
 
+    var shimDirectoryURL: URL {
+        shimLinkURL.deletingLastPathComponent()
+    }
+
+    var realCodexURL: URL {
+        realBinURL.appendingPathComponent("cdx", isDirectory: false)
+    }
+
+    var expectedCodexProcessPath: String {
+        [realBinURL.path, "/usr/bin", "/bin"].joined(separator: ":")
+    }
+
     static func make(
         shimCommandName: String = "cdx",
         realBinaryName: String? = nil
@@ -166,6 +181,7 @@ private struct AgentShimExecutableFixture {
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.sessionIDKey] = inheritedSessionID
         environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = nil
+        environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryURL.path
         environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = nil
         environment["TOASTTY_LOG_DISABLE"] = "1"
         environment["TOASTTY_FAKE_CLI_LOG"] = cliLogURL.path

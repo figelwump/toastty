@@ -32,17 +32,28 @@ final class CodexSkillsManagementModel: ObservableObject {
     @Published private(set) var status: CodexSkillsStatus?
     @Published private(set) var isWorking = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var codexNotFoundMessage: String?
 
     private let manager: CodexSkillsManager
+    private let processPathProvider: @Sendable () -> String?
+    private let processPathRefreshProvider: @Sendable () -> String?
     private var task: Task<Void, Never>?
 
-    init(manager: CodexSkillsManager = CodexSkillsManager()) {
+    init(
+        manager: CodexSkillsManager = CodexSkillsManager(),
+        processPathProvider: @escaping @Sendable () -> String? = { nil },
+        processPathRefreshProvider: (@Sendable () -> String?)? = nil
+    ) {
         self.manager = manager
+        self.processPathProvider = processPathProvider
+        self.processPathRefreshProvider = processPathRefreshProvider ?? processPathProvider
     }
 
-    func refresh(hasActiveManagedCodexSession: Bool) {
-        runOperation { manager in
-            let runtime = try CodexIntegrationRuntimeLocator.resolve()
+    func refresh(
+        hasActiveManagedCodexSession: Bool,
+        refreshProcessPath: Bool = false
+    ) {
+        runOperation(refreshProcessPath: refreshProcessPath) { manager, runtime in
             return manager.status(
                 runtime: runtime,
                 hasActiveManagedCodexSession: hasActiveManagedCodexSession
@@ -51,15 +62,13 @@ final class CodexSkillsManagementModel: ObservableObject {
     }
 
     func repair() {
-        runOperation { manager in
-            let runtime = try CodexIntegrationRuntimeLocator.resolve()
+        runOperation(refreshProcessPath: true) { manager, runtime in
             return try manager.repair(runtime: runtime)
         }
     }
 
     func uninstall(hasActiveManagedCodexSession: Bool) {
-        runOperation { manager in
-            let runtime = try CodexIntegrationRuntimeLocator.resolve()
+        runOperation(refreshProcessPath: true) { manager, runtime in
             return try manager.uninstall(
                 runtime: runtime,
                 hasActiveManagedCodexSession: hasActiveManagedCodexSession
@@ -69,20 +78,46 @@ final class CodexSkillsManagementModel: ObservableObject {
 }
 
 private extension CodexSkillsManagementModel {
-    typealias Operation = @Sendable (CodexSkillsManager) throws -> CodexSkillsStatus
+    typealias Operation = @Sendable (
+        CodexSkillsManager,
+        CodexIntegrationRuntime
+    ) throws -> CodexSkillsStatus
 
-    func runOperation(_ operation: @escaping Operation) {
+    enum OperationResult: Sendable {
+        case success(CodexSkillsStatus)
+        case codexNotFound(String)
+        case failure(String)
+    }
+
+    func runOperation(
+        refreshProcessPath: Bool = false,
+        _ operation: @escaping Operation
+    ) {
         task?.cancel()
         isWorking = true
         errorMessage = nil
+        codexNotFoundMessage = nil
+        let selectedProcessPathProvider = refreshProcessPath
+            ? processPathRefreshProvider
+            : processPathProvider
         task = Task { [manager] in
-            let result: Result<CodexSkillsStatus, AgentGetStartedActionError> = await Task.detached(
+            let result: OperationResult = await Task.detached(
                 priority: .userInitiated
             ) {
                 do {
-                    return .success(try operation(manager))
+                    let runtime = try CodexIntegrationRuntimeLocator.resolve(
+                        preferredProcessPath: selectedProcessPathProvider()
+                    )
+                    return OperationResult.success(try operation(manager, runtime))
+                } catch let error as CodexPluginCLIError {
+                    if case .executableUnavailable = error {
+                        return .codexNotFound(
+                            "Toastty couldn't find Codex in your login-shell or app PATH. Install Codex or reload configuration after updating your shell."
+                        )
+                    }
+                    return .failure(error.localizedDescription)
                 } catch {
-                    return .failure(AgentGetStartedActionError(message: error.localizedDescription))
+                    return .failure(error.localizedDescription)
                 }
             }.value
             guard Task.isCancelled == false else { return }
@@ -90,8 +125,12 @@ private extension CodexSkillsManagementModel {
             switch result {
             case .success(let status):
                 self.status = status
-            case .failure(let error):
-                errorMessage = error.localizedDescription
+            case .codexNotFound(let message):
+                status = nil
+                codexNotFoundMessage = message
+            case .failure(let message):
+                status = nil
+                errorMessage = message
             }
         }
     }
@@ -106,10 +145,17 @@ struct CodexSkillsManagementSheet: View {
 
     init(
         sessionRuntimeStore: SessionRuntimeStore,
-        model: @autoclosure @escaping () -> CodexSkillsManagementModel = CodexSkillsManagementModel()
+        processPathProvider: @escaping @Sendable () -> String? = { nil },
+        processPathRefreshProvider: (@Sendable () -> String?)? = nil,
+        model: CodexSkillsManagementModel? = nil
     ) {
         self.sessionRuntimeStore = sessionRuntimeStore
-        _model = StateObject(wrappedValue: model())
+        _model = StateObject(
+            wrappedValue: model ?? CodexSkillsManagementModel(
+                processPathProvider: processPathProvider,
+                processPathRefreshProvider: processPathRefreshProvider
+            )
+        )
     }
 
     var body: some View {
@@ -183,6 +229,19 @@ struct CodexSkillsManagementSheet: View {
                 if model.isWorking {
                     ProgressView()
                         .controlSize(.small)
+                } else {
+                    Button {
+                        model.refresh(
+                            hasActiveManagedCodexSession: hasActiveManagedCodexSession,
+                            refreshProcessPath: true
+                        )
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .help("Recheck Codex skills status")
+                    .accessibilityLabel("Recheck Codex skills status")
                 }
             }
 
@@ -199,6 +258,13 @@ struct CodexSkillsManagementSheet: View {
                 Text("Checking the managed Codex plugin.")
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
+            }
+
+            if let codexNotFoundMessage = model.codexNotFoundMessage {
+                Text(codexNotFoundMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let errorMessage = model.errorMessage {
@@ -264,6 +330,9 @@ struct CodexSkillsManagementSheet: View {
                             value: status.disabledNameTombstones.joined(separator: ", ")
                         )
                     }
+                } else if model.codexNotFoundMessage != nil {
+                    Text("Codex paths are unavailable because Toastty could not find a supported codex or cdx executable.")
+                        .foregroundStyle(ToastyTheme.mutedText)
                 } else {
                     Text("Details are available after the status check completes.")
                         .foregroundStyle(ToastyTheme.mutedText)
@@ -328,9 +397,12 @@ struct CodexSkillsManagementSheet: View {
         switch model.status?.availability {
         case .ready: return model.status?.updatePending == true ? "Update pending" : "Ready"
         case .notInstalled: return "Not installed"
+        case .unrunnable: return "Codex can't run"
         case .failed: return "Needs attention"
         case .unsupported: return "Unsupported Codex version"
-        case nil: return model.errorMessage == nil ? "Checking status" : "Status unavailable"
+        case nil:
+            if model.codexNotFoundMessage != nil { return "Codex not found" }
+            return model.errorMessage == nil ? "Checking status" : "Status unavailable"
         }
     }
 
@@ -338,8 +410,11 @@ struct CodexSkillsManagementSheet: View {
         switch model.status?.availability {
         case .ready: return model.status?.updatePending == true ? "clock.badge.exclamationmark" : "checkmark.circle.fill"
         case .notInstalled: return "arrow.down.circle"
-        case .failed, .unsupported: return "exclamationmark.triangle.fill"
-        case nil: return model.errorMessage == nil ? "ellipsis.circle" : "xmark.circle.fill"
+        case .unrunnable, .unsupported: return "exclamationmark.triangle.fill"
+        case .failed: return "xmark.circle.fill"
+        case nil:
+            if model.codexNotFoundMessage != nil { return "questionmark.circle" }
+            return model.errorMessage == nil ? "ellipsis.circle" : "xmark.circle.fill"
         }
     }
 
@@ -349,8 +424,11 @@ struct CodexSkillsManagementSheet: View {
             ? ToastyTheme.sessionNeedsApprovalText
             : ToastyTheme.sessionReadyText
         case .notInstalled: return ToastyTheme.inactiveText
-        case .failed, .unsupported: return ToastyTheme.sessionErrorText
-        case nil: return model.errorMessage == nil ? ToastyTheme.inactiveText : ToastyTheme.sessionErrorText
+        case .unrunnable, .unsupported: return ToastyTheme.sessionNeedsApprovalText
+        case .failed: return ToastyTheme.sessionErrorText
+        case nil:
+            if model.codexNotFoundMessage != nil { return ToastyTheme.inactiveText }
+            return model.errorMessage == nil ? ToastyTheme.inactiveText : ToastyTheme.sessionErrorText
         }
     }
 }
@@ -361,40 +439,86 @@ struct ManagedAgentSkillsProvisionedBanner: View {
     let dismiss: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "wand.and.stars")
-                .foregroundStyle(ToastyTheme.accent)
-            Text(message)
-                .font(.system(size: 12))
-            Spacer(minLength: 8)
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(ToastyTheme.accent.opacity(0.18))
+                    .frame(width: 38, height: 38)
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.accent)
+                    .accessibilityHidden(true)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
             Button("View Skills…", action: manage)
-                .buttonStyle(.borderless)
+                .buttonStyle(.borderedProminent)
+                .tint(ToastyTheme.accent)
+                .foregroundStyle(ToastyTheme.accentDark)
+                .controlSize(.small)
+
             Button(action: dismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
+            .foregroundStyle(ToastyTheme.inactiveText)
             .accessibilityLabel("Dismiss")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(ToastyTheme.hairline, lineWidth: 1)
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
+        .padding(.vertical, 14)
+        .background {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(ToastyTheme.elevatedBackground)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(ToastyTheme.sessionReadyBackground)
+                }
         }
-        .shadow(color: .black.opacity(0.28), radius: 12, y: 5)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(ToastyTheme.accent.opacity(0.55), lineWidth: 1)
+        }
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(ToastyTheme.accent)
+                .frame(width: 4)
+                .padding(.vertical, 9)
+        }
+        .shadow(color: .black.opacity(0.48), radius: 18, y: 8)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("banner.managed-agent-skills-provisioned")
+    }
+
+    private var title: String {
+        switch agent {
+        case .codex: "Codex skills are ready"
+        case .claude: "Claude Code skills are ready"
+        default: "Toastty skills are ready"
+        }
     }
 
     private var message: String {
         switch agent {
         case .codex:
-            "Toastty enabled four skills for managed Codex sessions. Your global and project skill folders were not changed."
+            "Four Toastty skills are enabled for managed sessions. Global and project skill folders were not changed."
         case .claude:
-            "Toastty enabled four session-only skills for managed Claude Code sessions. Your global and project skill folders were not changed."
+            "Four Toastty skills are enabled for this managed session. Global and project skill folders were not changed."
         default:
-            "Toastty enabled four skills for this managed session. Your global and project skill folders were not changed."
+            "Four Toastty skills are enabled for this managed session. Global and project skill folders were not changed."
         }
     }
 }

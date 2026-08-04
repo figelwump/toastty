@@ -77,6 +77,48 @@ final class CodexAppServerClientTests: XCTestCase {
             )
         }
     }
+
+    func testProcessTransportAppliesManagedEnvironmentToAppServer() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-app-server-environment-\(UUID().uuidString)", isDirectory: true)
+        let executableURL = rootURL.appendingPathComponent("codex", isDirectory: false)
+        let captureURL = rootURL.appendingPathComponent("environment.txt", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        let script = """
+        #!/bin/sh
+        printf '%s|%s|%s' "$PATH" "$CODEX_HOME" "$TOASTTY_TEST_MARKER" > '\(captureURL.path)'
+        exit 42
+        """
+        try script.write(to: executableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executableURL.path
+        )
+        let transport = CodexAppServerProcessTransport(baseEnvironment: {
+            ["PATH": "/gui-only", "TOASTTY_TEST_MARKER": "preserved"]
+        })
+        let invocation = CodexAppServerInvocation(
+            executableURL: executableURL,
+            codexHomeURL: URL(fileURLWithPath: "/tmp/managed-codex-home"),
+            processPath: "/custom/node/bin:/usr/bin:/bin",
+            workingDirectoryURL: rootURL,
+            configOverrides: [],
+            timeout: 1
+        )
+
+        XCTAssertThrowsError(
+            try transport.perform(
+                invocation: invocation,
+                requests: [CodexAppServerRPCRequest(method: "skills/list", params: [:])]
+            )
+        )
+
+        XCTAssertEqual(
+            try String(contentsOf: captureURL, encoding: .utf8),
+            "/custom/node/bin:/usr/bin:/bin|/tmp/managed-codex-home|preserved"
+        )
+    }
 }
 
 private extension CodexAppServerClientTests {

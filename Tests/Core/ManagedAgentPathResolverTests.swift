@@ -38,4 +38,49 @@ struct ManagedAgentPathResolverTests {
 
         #expect(resolvedPath == executableURL.path)
     }
+
+    @Test
+    func sanitizedMergedPathDropsRelativeEmptyDuplicateAndExcludedEntries() {
+        let path = ManagedAgentPathResolver.sanitizedMergedPath(
+            preferredPath: "/tmp/toastty-shims:relative:/Users/test/.nvm/bin:/usr/bin::/usr/bin",
+            fallbackPath: "/bin:/Users/test/.nvm/bin:.",
+            excludedDirectoryPaths: ["/tmp/toastty-shims"]
+        )
+
+        #expect(path == "/Users/test/.nvm/bin:/usr/bin:/bin")
+    }
+
+    @Test
+    func sanitizedMergedPathReturnsNilRatherThanReplacingAnInheritedPathWithEmptyText() {
+        let path = ManagedAgentPathResolver.sanitizedMergedPath(
+            preferredPath: "relative:.",
+            fallbackPath: nil
+        )
+
+        #expect(path == nil)
+    }
+
+    @Test
+    func sanitizedMergedPathExcludesSymlinkAliasesAndCanonicalDuplicates() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("managed-agent-path-\(UUID().uuidString)", isDirectory: true)
+        let shimURL = rootURL.appendingPathComponent("actual-shims", isDirectory: true)
+        let shimAliasURL = rootURL.appendingPathComponent("shim-alias", isDirectory: true)
+        let binURL = rootURL.appendingPathComponent("actual-bin", isDirectory: true)
+        let binAliasURL = rootURL.appendingPathComponent("bin-alias", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        try FileManager.default.createDirectory(at: shimURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: binURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: shimAliasURL, withDestinationURL: shimURL)
+        try FileManager.default.createSymbolicLink(at: binAliasURL, withDestinationURL: binURL)
+
+        let path = ManagedAgentPathResolver.sanitizedMergedPath(
+            preferredPath: "\(shimAliasURL.path):\(binAliasURL.path)",
+            fallbackPath: "\(shimURL.path):\(binURL.path):/usr/bin",
+            excludedDirectoryPaths: [shimURL.path]
+        )
+
+        #expect(path == "\(binAliasURL.path):/usr/bin")
+    }
 }

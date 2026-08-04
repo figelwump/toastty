@@ -1,6 +1,38 @@
 import CoreState
 import Foundation
 
+final class CodexProcessPathStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private let refreshPath: @Sendable () -> String?
+    private var path: String?
+
+    init(
+        path: String? = nil,
+        refreshPath: @escaping @Sendable () -> String? = { nil }
+    ) {
+        self.path = path
+        self.refreshPath = refreshPath
+    }
+
+    func update(_ path: String?) {
+        lock.withLock {
+            self.path = path
+        }
+    }
+
+    func currentPath() -> String? {
+        lock.withLock { path }
+    }
+
+    func refresh() -> String? {
+        guard let refreshedPath = refreshPath() else {
+            return currentPath()
+        }
+        update(refreshedPath)
+        return refreshedPath
+    }
+}
+
 struct CodexManagedLaunchSkillsDecision: Equatable, Sendable {
     let configuration: CodexSkillsLaunchConfiguration?
     let status: CodexSkillsStatus?
@@ -50,6 +82,7 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
     private let fileManager: FileManager
     private let manager: CodexSkillsManager
     private let processEnvironment: @Sendable () -> [String: String]
+    private let processPathProvider: @Sendable () -> String?
     private let unsupportedLock = NSLock()
     private var unsupportedRuntimeKeys = Set<String>()
 
@@ -59,7 +92,8 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
         manager: CodexSkillsManager? = nil,
         processEnvironment: @escaping @Sendable () -> [String: String] = {
             ProcessInfo.processInfo.environment
-        }
+        },
+        processPathProvider: @escaping @Sendable () -> String? = { nil }
     ) {
         self.homeDirectoryURL = homeDirectoryURL
         self.fileManager = fileManager
@@ -68,6 +102,7 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
             fileManager: fileManager
         )
         self.processEnvironment = processEnvironment
+        self.processPathProvider = processPathProvider
     }
 
     func resolve(
@@ -174,7 +209,23 @@ private extension CodexManagedLaunchSkillsResolver {
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?
     ) -> CodexIntegrationRuntime? {
-        let mergedEnvironment = processEnvironment().merging(request.environment) { _, new in new }
+        let inheritedEnvironment = processEnvironment()
+        let requestShimDirectoryPath = normalizedText(
+            request.environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey]
+        )
+        let requestProcessPath = requestShimDirectoryPath == nil
+            ? nil
+            : normalizedText(request.environment["PATH"])
+        let preferredProcessPath = request.codexCapabilityHint?.processPath
+            ?? requestProcessPath
+            ?? processPathProvider()
+        let processPath = ManagedAgentPathResolver.sanitizedMergedPath(
+            preferredPath: preferredProcessPath,
+            fallbackPath: inheritedEnvironment["PATH"],
+            excludedDirectoryPaths: Set(
+                [requestShimDirectoryPath].compactMap { $0 }
+            )
+        )
         let executablePath: String?
         if let hint = request.codexCapabilityHint,
            hint.resolvedExecutablePath.hasPrefix("/"),
@@ -187,7 +238,7 @@ private extension CodexManagedLaunchSkillsResolver {
             executablePath = resolveExecutablePath(
                 argv: request.argv,
                 workingDirectory: workingDirectory,
-                path: mergedEnvironment["PATH"]
+                path: processPath
             )
         }
         guard let executablePath else { return nil }
@@ -207,7 +258,10 @@ private extension CodexManagedLaunchSkillsResolver {
 
         return CodexIntegrationRuntime(
             executableURL: URL(fileURLWithPath: executablePath),
-            codexHomeURL: URL(fileURLWithPath: codexHomePath, isDirectory: true),
+            processEnvironment: CodexProcessEnvironment(
+                codexHomeURL: URL(fileURLWithPath: codexHomePath, isDirectory: true),
+                path: processPath
+            ),
             workingDirectoryURL: cwdURL
         )
     }

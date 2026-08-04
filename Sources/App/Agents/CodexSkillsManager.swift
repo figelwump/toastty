@@ -6,6 +6,7 @@ import Foundation
 enum CodexSkillsAvailability: String, Equatable, Sendable {
     case ready
     case notInstalled
+    case unrunnable
     case failed
     case unsupported
 }
@@ -92,30 +93,81 @@ enum CodexSkillsManagerError: LocalizedError, Equatable {
     }
 }
 
+struct CodexProcessEnvironment: Equatable, Sendable {
+    let codexHomeURL: URL
+    let path: String?
+
+    func applying(to inheritedEnvironment: [String: String]) -> [String: String] {
+        var environment = inheritedEnvironment
+        environment["CODEX_HOME"] = codexHomeURL.path
+        if let path = path?.trimmingCharacters(in: .whitespacesAndNewlines),
+           path.isEmpty == false {
+            environment["PATH"] = path
+        }
+        return environment
+    }
+}
+
 struct CodexIntegrationRuntime: Equatable, Sendable {
     let executableURL: URL
-    let codexHomeURL: URL
+    let processEnvironment: CodexProcessEnvironment
     let workingDirectoryURL: URL
+
+    init(
+        executableURL: URL,
+        processEnvironment: CodexProcessEnvironment,
+        workingDirectoryURL: URL
+    ) {
+        self.executableURL = executableURL
+        self.processEnvironment = processEnvironment
+        self.workingDirectoryURL = workingDirectoryURL
+    }
+
+    init(
+        executableURL: URL,
+        codexHomeURL: URL,
+        processPath: String? = nil,
+        workingDirectoryURL: URL
+    ) {
+        self.init(
+            executableURL: executableURL,
+            processEnvironment: CodexProcessEnvironment(
+                codexHomeURL: codexHomeURL,
+                path: processPath
+            ),
+            workingDirectoryURL: workingDirectoryURL
+        )
+    }
+
+    var codexHomeURL: URL {
+        processEnvironment.codexHomeURL
+    }
 }
 
 enum CodexIntegrationRuntimeLocator {
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        preferredProcessPath: String? = nil,
         homeDirectoryURL: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true),
         fileManager: FileManager = .default
     ) throws -> CodexIntegrationRuntime {
         let cwd = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
-        let candidates = (environment["PATH"] ?? "")
-            .split(separator: ":", omittingEmptySubsequences: false)
+        let processPath = ManagedAgentPathResolver.sanitizedMergedPath(
+            preferredPath: preferredProcessPath,
+            fallbackPath: environment["PATH"]
+        )
+        let searchDirectories = (processPath ?? "")
+            .split(separator: ":")
             .map { component in
-                let directory = component.isEmpty ? cwd.path : String(component)
-                return URL(fileURLWithPath: directory, isDirectory: true)
-                    .appendingPathComponent("codex", isDirectory: false)
+                URL(fileURLWithPath: String(component), isDirectory: true)
             }
-        guard let executable = candidates.first(where: {
-            fileManager.isExecutableFile(atPath: $0.path)
-        }) else {
-            throw CodexPluginCLIError.executableUnavailable("codex (PATH)")
+        let executable = ["codex", "cdx"].lazy.compactMap { commandName in
+            searchDirectories
+                .map { $0.appendingPathComponent(commandName, isDirectory: false) }
+                .first(where: { fileManager.isExecutableFile(atPath: $0.path) })
+        }.first
+        guard let executable else {
+            throw CodexPluginCLIError.executableUnavailable("codex or cdx (PATH)")
         }
         let configuredHome = environment["CODEX_HOME"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -129,7 +181,10 @@ enum CodexIntegrationRuntimeLocator {
         }
         return CodexIntegrationRuntime(
             executableURL: executable,
-            codexHomeURL: codexHome,
+            processEnvironment: CodexProcessEnvironment(
+                codexHomeURL: codexHome,
+                path: processPath
+            ),
             workingDirectoryURL: cwd
         )
     }
@@ -370,6 +425,8 @@ final class CodexSkillsManager: @unchecked Sendable {
             )
         } catch let error as CodexPluginCLIError where error.isUnsupported {
             return unsupportedStatus(runtime: runtime, detail: error.localizedDescription)
+        } catch let error as CodexPluginCLIError where error.isRuntimeUnavailable {
+            return unrunnableStatus(runtime: runtime, detail: error.localizedDescription)
         } catch let error as CodexAppServerClientError where error.isUnsupported {
             return unsupportedStatus(runtime: runtime, detail: error.localizedDescription)
         } catch {
@@ -798,7 +855,7 @@ private extension CodexSkillsManager {
         guard remaining > 0 else { throw CodexSkillsManagerError.operationTimedOut }
         return CodexAppServerInvocation(
             executableURL: runtime.executableURL,
-            codexHomeURL: runtime.codexHomeURL,
+            processEnvironment: runtime.processEnvironment,
             workingDirectoryURL: runtime.workingDirectoryURL,
             configOverrides: [],
             timeout: remaining
@@ -1083,6 +1140,26 @@ private extension CodexSkillsManager {
     ) -> CodexSkillsStatus {
         CodexSkillsStatus(
             availability: .unsupported,
+            detail: detail,
+            bundledVersion: try? bundledDescriptor().version,
+            installedVersion: readOwnershipRecord(runtime)?.installedVersion,
+            bundledDigest: try? bundledDescriptor().contentDigest,
+            installedDigest: readOwnershipRecord(runtime)?.installedDigest,
+            installedPath: readOwnershipRecord(runtime)?.installedPath,
+            marketplacePath: marketplaceURL(for: runtime).path,
+            updatePending: false,
+            repairPending: pendingRepair(for: runtime),
+            hasActiveManagedSession: false,
+            disabledNameTombstones: CodexSkillsContract.retiredQualifiedSkillNames
+        )
+    }
+
+    func unrunnableStatus(
+        runtime: CodexIntegrationRuntime,
+        detail: String
+    ) -> CodexSkillsStatus {
+        CodexSkillsStatus(
+            availability: .unrunnable,
             detail: detail,
             bundledVersion: try? bundledDescriptor().version,
             installedVersion: readOwnershipRecord(runtime)?.installedVersion,

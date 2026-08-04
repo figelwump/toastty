@@ -68,10 +68,16 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
 public struct ManagedCodexCapabilityHint: Codable, Equatable, Sendable {
     public let resolvedExecutablePath: String
     public let codexHomePath: String?
+    public let processPath: String?
 
-    public init(resolvedExecutablePath: String, codexHomePath: String? = nil) {
+    public init(
+        resolvedExecutablePath: String,
+        codexHomePath: String? = nil,
+        processPath: String? = nil
+    ) {
         self.resolvedExecutablePath = resolvedExecutablePath
         self.codexHomePath = codexHomePath
+        self.processPath = processPath
     }
 }
 

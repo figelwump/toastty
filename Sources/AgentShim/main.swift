@@ -137,7 +137,15 @@ private enum AgentCommandShim {
                     && ["codex", "cdx"].contains(commandName.lowercased())
                     ? ManagedCodexCapabilityHint(
                         resolvedExecutablePath: realBinaryPath,
-                        codexHomePath: normalizedNonEmpty(resolvedLaunchEnvironment["CODEX_HOME"])
+                        codexHomePath: normalizedNonEmpty(resolvedLaunchEnvironment["CODEX_HOME"]),
+                        processPath: ManagedAgentPathResolver.sanitizedMergedPath(
+                            preferredPath: resolvedLaunchEnvironment["PATH"],
+                            fallbackPath: resolvedBinaryPath.agentBasePath,
+                            excludedDirectoryPaths: Set(
+                                [environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey]]
+                                    .compactMap(normalizedNonEmpty)
+                            )
+                        )
                     )
                     : nil
             ),
@@ -490,6 +498,10 @@ private enum AgentCommandShim {
             if let codexHomePath = normalizedNonEmpty(hint.codexHomePath) {
                 arguments.append("--codex-home")
                 arguments.append(codexHomePath)
+            }
+            if let processPath = normalizedNonEmpty(hint.processPath) {
+                arguments.append("--codex-process-path")
+                arguments.append(processPath)
             }
         }
         for argument in request.argv {
