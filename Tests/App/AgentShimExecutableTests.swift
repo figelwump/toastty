@@ -91,6 +91,44 @@ struct AgentShimExecutableTests {
         #expect(agentLog.contains("session=sess-parent"))
         #expect(agentLog.contains("panel=\(fixture.panelID.uuidString)"))
     }
+
+    @Test
+    func missingUnderlyingAgentDoesNotResolveShimToItself() throws {
+        let fixture = try AgentShimExecutableFixture.make(
+            shimCommandName: "pi",
+            installRealBinary: false
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-parent"
+        )
+
+        #expect(result.exitStatus == 127)
+        #expect(result.stderr == "pi: command not found\n")
+        #expect(try fixture.cliLogContents().isEmpty)
+        #expect(try fixture.agentLogContents().isEmpty)
+    }
+
+    @Test
+    func loginShellExecutableFallbackLaunchesRealAgentOutsideShimDirectory() throws {
+        let fixture = try AgentShimExecutableFixture.make(
+            shimCommandName: "pi",
+            realBinaryAvailableOnlyToDirectProbe: true
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        let result = try fixture.run(
+            preflightDecision: .runAnyway,
+            inheritedSessionID: "sess-parent"
+        )
+
+        #expect(result.exitStatus == 7)
+        #expect(result.stderr.isEmpty)
+        #expect(try fixture.cliLogContents().contains("session background-activity start"))
+        #expect(try fixture.agentLogContents().contains("agent --typed-in-terminal"))
+    }
 }
 
 private struct AgentShimExecutableFixture {
@@ -101,10 +139,13 @@ private struct AgentShimExecutableFixture {
     private let cliLogURL: URL
     private let agentLogURL: URL
     private let realBinURL: URL
+    private let includeRealBinInInitialPath: Bool
 
     static func make(
         shimCommandName: String = "cdx",
-        realBinaryName: String? = nil
+        realBinaryName: String? = nil,
+        installRealBinary: Bool = true,
+        realBinaryAvailableOnlyToDirectProbe: Bool = false
     ) throws -> Self {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
@@ -130,10 +171,22 @@ private struct AgentShimExecutableFixture {
             at: fakeCLIURL,
             contents: fakeCLIScript()
         )
-        try writeExecutableScript(
-            at: realBinURL.appendingPathComponent(realBinaryName, isDirectory: false),
-            contents: fakeAgentScript()
-        )
+        if installRealBinary {
+            try writeExecutableScript(
+                at: realBinURL.appendingPathComponent(realBinaryName, isDirectory: false),
+                contents: fakeAgentScript()
+            )
+        }
+        if realBinaryAvailableOnlyToDirectProbe {
+            let profileURL = rootURL.appendingPathComponent(".zprofile", isDirectory: false)
+            try """
+            if [[ -e "$ZDOTDIR/.initial-path-probe-complete" ]]; then
+              export PATH="$ZDOTDIR/bin:$PATH"
+            else
+              : > "$ZDOTDIR/.initial-path-probe-complete"
+            fi
+            """.write(to: profileURL, atomically: true, encoding: .utf8)
+        }
 
         return Self(
             rootURL: rootURL,
@@ -142,7 +195,8 @@ private struct AgentShimExecutableFixture {
             fakeCLIURL: fakeCLIURL,
             cliLogURL: cliLogURL,
             agentLogURL: agentLogURL,
-            realBinURL: realBinURL
+            realBinURL: realBinURL,
+            includeRealBinInInitialPath: realBinaryAvailableOnlyToDirectProbe == false
         )
     }
 
@@ -155,18 +209,21 @@ private struct AgentShimExecutableFixture {
         process.arguments = ["--typed-in-terminal"]
 
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = [
+        var pathEntries = [
             shimLinkURL.deletingLastPathComponent().path,
-            realBinURL.path,
-            "/usr/bin",
-            "/bin",
-        ].joined(separator: ":")
+        ]
+        if includeRealBinInInitialPath {
+            pathEntries.append(realBinURL.path)
+        }
+        pathEntries.append(contentsOf: ["/usr/bin", "/bin"])
+        environment["PATH"] = pathEntries.joined(separator: ":")
         environment["PWD"] = "/tmp/repo"
         environment[ToasttyLaunchContextEnvironment.cliPathKey] = fakeCLIURL.path
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.sessionIDKey] = inheritedSessionID
         environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = nil
         environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = nil
+        environment["ZDOTDIR"] = rootURL.path
         environment["TOASTTY_LOG_DISABLE"] = "1"
         environment["TOASTTY_FAKE_CLI_LOG"] = cliLogURL.path
         environment["TOASTTY_FAKE_AGENT_LOG"] = agentLogURL.path
