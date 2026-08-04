@@ -16,33 +16,51 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         XCTAssertTrue(ToasttyAgentPluginBundle.skills.allSatisfy { $0.summary.isEmpty == false })
     }
 
-    func testProvisionedNoticeIsClaimedOnceByItsTargetWindow() throws {
+    func testProvisionedNoticeIsClaimedOncePerAgentByItsTargetWindow() throws {
         let suiteName = "toastty-codex-skills-notice-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let targetWindowID = UUID()
 
-        XCTAssertFalse(
-            CodexSkillsProvisionedNoticeStore.claim(
+        let codexNotice = ManagedAgentSkillsProvisionedNotice(
+            windowID: targetWindowID,
+            agent: .codex
+        )
+        let claudeNotice = ManagedAgentSkillsProvisionedNotice(
+            windowID: targetWindowID,
+            agent: .claude
+        )
+
+        XCTAssertNil(
+            ManagedAgentSkillsProvisionedNoticeStore.claim(
                 for: UUID(),
-                notificationObject: targetWindowID,
+                notificationObject: codexNotice,
                 userDefaults: defaults
             )
         )
-        XCTAssertTrue(
-            CodexSkillsProvisionedNoticeStore.claim(
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedNoticeStore.claim(
                 for: targetWindowID,
-                notificationObject: targetWindowID,
+                notificationObject: codexNotice,
+                userDefaults: defaults
+            ),
+            .codex
+        )
+        XCTAssertNil(
+            ManagedAgentSkillsProvisionedNoticeStore.claim(
+                for: targetWindowID,
+                notificationObject: codexNotice,
                 userDefaults: defaults
             )
         )
-        XCTAssertFalse(
-            CodexSkillsProvisionedNoticeStore.claim(
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedNoticeStore.claim(
                 for: targetWindowID,
-                notificationObject: targetWindowID,
+                notificationObject: claudeNotice,
                 userDefaults: defaults
-            )
+            ),
+            .claude
         )
     }
 }

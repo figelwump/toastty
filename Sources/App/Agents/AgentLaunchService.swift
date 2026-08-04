@@ -340,6 +340,16 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         )
     }
 
+    func prepareRestoredManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
+        try managedLaunchPlanner.prepareRestoredManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+    }
+
     func discardManagedLaunch(sessionID: String) {
         managedLaunchPlanner.discardManagedLaunch(sessionID: sessionID)
     }

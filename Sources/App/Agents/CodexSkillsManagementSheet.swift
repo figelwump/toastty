@@ -2,20 +2,28 @@ import CoreState
 import Foundation
 import SwiftUI
 
-enum CodexSkillsProvisionedNoticeStore {
-    static let didShowKey = "toastty.codexSkillsProvisionedNoticeDidShow"
+struct ManagedAgentSkillsProvisionedNotice: Equatable, Sendable {
+    let windowID: UUID
+    let agent: AgentKind
+}
+
+enum ManagedAgentSkillsProvisionedNoticeStore {
+    static func didShowKey(for agent: AgentKind) -> String {
+        "toastty.\(agent.rawValue)SkillsProvisionedNoticeDidShow"
+    }
 
     static func claim(
         for windowID: UUID,
         notificationObject: Any?,
         userDefaults: UserDefaults = ToasttyAppDefaults.current
-    ) -> Bool {
-        guard notificationObject as? UUID == windowID,
-              userDefaults.bool(forKey: didShowKey) == false else {
-            return false
+    ) -> AgentKind? {
+        guard let notice = notificationObject as? ManagedAgentSkillsProvisionedNotice,
+              notice.windowID == windowID,
+              userDefaults.bool(forKey: didShowKey(for: notice.agent)) == false else {
+            return nil
         }
-        userDefaults.set(true, forKey: didShowKey)
-        return true
+        userDefaults.set(true, forKey: didShowKey(for: notice.agent))
+        return notice.agent
     }
 }
 
@@ -42,22 +50,19 @@ final class CodexSkillsManagementModel: ObservableObject {
         }
     }
 
-    func repair(hasActiveManagedCodexSession: Bool) {
+    func repair() {
         runOperation { manager in
             let runtime = try CodexIntegrationRuntimeLocator.resolve()
-            return try manager.repair(
-                runtime: runtime,
-                hasActiveManagedCodexSession: hasActiveManagedCodexSession
-            )
+            return try manager.repair(runtime: runtime)
         }
     }
 
-    func uninstall() {
+    func uninstall(hasActiveManagedCodexSession: Bool) {
         runOperation { manager in
             let runtime = try CodexIntegrationRuntimeLocator.resolve()
             return try manager.uninstall(
                 runtime: runtime,
-                hasActiveManagedCodexSession: false
+                hasActiveManagedCodexSession: hasActiveManagedCodexSession
             )
         }
     }
@@ -111,6 +116,7 @@ struct CodexSkillsManagementSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             header
             statusCard
+            hostDetails
             skillsList
             details
             Spacer(minLength: 0)
@@ -118,7 +124,7 @@ struct CodexSkillsManagementSheet: View {
         }
         .padding(24)
         .frame(width: 620)
-        .frame(minHeight: 570)
+        .frame(minHeight: 650)
         .background(ToastyTheme.chromeBackground)
         .foregroundStyle(ToastyTheme.primaryText)
         .preferredColorScheme(.dark)
@@ -129,7 +135,9 @@ struct CodexSkillsManagementSheet: View {
             titleVisibility: .visible
         ) {
             Button("Uninstall", role: .destructive) {
-                model.uninstall()
+                model.uninstall(
+                    hasActiveManagedCodexSession: hasActiveManagedCodexSession
+                )
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -147,9 +155,9 @@ struct CodexSkillsManagementSheet: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Codex Skills")
+                Text("Toastty Skills")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Toastty enables these skills only in managed Codex sessions. They remain disabled in ordinary Codex.")
+                Text("Toastty provides the same four namespaced skills to managed Codex and Claude Code sessions.")
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -168,6 +176,9 @@ struct CodexSkillsManagementSheet: View {
                     .foregroundStyle(statusColor)
                 Text(statusTitle)
                     .font(.system(size: 13, weight: .semibold))
+                Text("Codex plugin")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ToastyTheme.inactiveText)
                 Spacer()
                 if model.isWorking {
                     ProgressView()
@@ -206,6 +217,15 @@ struct CodexSkillsManagementSheet: View {
         .accessibilityIdentifier("sheet.codex-skills.status")
     }
 
+    private var hostDetails: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Codex: installed as a plugin and enabled only for managed sessions.", systemImage: "terminal")
+            Label("Claude Code: staged by Toastty and passed only to the managed session.", systemImage: "terminal.fill")
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(ToastyTheme.mutedText)
+    }
+
     private var skillsList: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Skills")
@@ -221,6 +241,12 @@ struct CodexSkillsManagementSheet: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("sheet.codex-skills.skill.\(skill.name)")
             }
+
+            Text("Toastty does not change separately installed global skills. If duplicate, unnamespaced Toastty skills appear, remove those copies manually from ~/.codex/skills, ~/.claude/skills, or ~/.agents/skills.")
+                .font(.system(size: 11))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
         }
     }
 
@@ -238,9 +264,6 @@ struct CodexSkillsManagementSheet: View {
                             value: status.disabledNameTombstones.joined(separator: ", ")
                         )
                     }
-                    ForEach(status.legacySkillConflictPaths, id: \.self) { path in
-                        technicalRow("Preserved legacy skill", value: path)
-                    }
                 } else {
                     Text("Details are available after the status check completes.")
                         .foregroundStyle(ToastyTheme.mutedText)
@@ -255,14 +278,14 @@ struct CodexSkillsManagementSheet: View {
     private var actionBar: some View {
         HStack {
             if hasActiveManagedCodexSession {
-                Text("Repair will be queued; uninstall is available after managed Codex sessions stop.")
+                Text("Uninstall is available after managed Codex sessions stop. Repair applies immediately; running sessions pick up changes after restart.")
                     .font(.system(size: 11))
                     .foregroundStyle(ToastyTheme.inactiveText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Button("Repair") {
-                model.repair(hasActiveManagedCodexSession: hasActiveManagedCodexSession)
+                model.repair()
             }
             .disabled(model.isWorking)
             .accessibilityIdentifier("sheet.codex-skills.repair")
@@ -332,7 +355,8 @@ struct CodexSkillsManagementSheet: View {
     }
 }
 
-struct CodexSkillsProvisionedBanner: View {
+struct ManagedAgentSkillsProvisionedBanner: View {
+    let agent: AgentKind
     let manage: () -> Void
     let dismiss: () -> Void
 
@@ -340,10 +364,10 @@ struct CodexSkillsProvisionedBanner: View {
         HStack(spacing: 12) {
             Image(systemName: "wand.and.stars")
                 .foregroundStyle(ToastyTheme.accent)
-            Text("Toastty added four Codex skills for managed sessions. They remain disabled in ordinary Codex.")
+            Text(message)
                 .font(.system(size: 12))
             Spacer(minLength: 8)
-            Button("Manage…", action: manage)
+            Button("View Skills…", action: manage)
                 .buttonStyle(.borderless)
             Button(action: dismiss) {
                 Image(systemName: "xmark")
@@ -360,6 +384,17 @@ struct CodexSkillsProvisionedBanner: View {
                 .stroke(ToastyTheme.hairline, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.28), radius: 12, y: 5)
-        .accessibilityIdentifier("banner.codex-skills-provisioned")
+        .accessibilityIdentifier("banner.managed-agent-skills-provisioned")
+    }
+
+    private var message: String {
+        switch agent {
+        case .codex:
+            "Toastty enabled four skills for managed Codex sessions. Your global and project skill folders were not changed."
+        case .claude:
+            "Toastty enabled four session-only skills for managed Claude Code sessions. Your global and project skill folders were not changed."
+        default:
+            "Toastty enabled four skills for this managed session. Your global and project skill folders were not changed."
+        }
     }
 }

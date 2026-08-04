@@ -1637,7 +1637,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
         do {
             let restoredScopedWorkspaceIDs = restoredScopedWorkspaceIDs(from: record)
-            let plan = try restoredManagedLaunchPlanner.prepareManagedLaunch(
+            let plan = try restoredManagedLaunchPlanner.prepareRestoredManagedLaunch(
                 ManagedAgentLaunchRequest(
                     agent: record.agent,
                     panelID: panelID,

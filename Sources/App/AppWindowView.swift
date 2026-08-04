@@ -22,7 +22,8 @@ struct AppWindowView: View {
     @State private var showsAgentGetStartedSheet = false
     @State private var agentGetStartedInitialStep: AgentGetStartedStep = .chooser
     @State private var showsCodexSkillsManagementSheet = false
-    @State private var showsCodexSkillsProvisionedNotice = false
+    @State private var skillsProvisionedNoticeAgent: AgentKind?
+    @State private var queuedSkillsProvisionedNoticeAgents: [AgentKind] = []
     @State private var appIsActive = true
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -100,15 +101,16 @@ struct AppWindowView: View {
             // Sidebar toggle button in the title bar area, right of traffic lights
             sidebarToggleButton
 
-            if showsCodexSkillsProvisionedNotice {
-                CodexSkillsProvisionedBanner(
+            if let skillsProvisionedNoticeAgent {
+                ManagedAgentSkillsProvisionedBanner(
+                    agent: skillsProvisionedNoticeAgent,
                     manage: {
-                        showsCodexSkillsProvisionedNotice = false
+                        advanceSkillsProvisionedNotice()
                         showsCodexSkillsManagementSheet = true
                     },
                     dismiss: {
                         withAnimation(.easeOut(duration: 0.15)) {
-                            showsCodexSkillsProvisionedNotice = false
+                            advanceSkillsProvisionedNotice()
                         }
                     }
                 )
@@ -196,13 +198,17 @@ struct AppWindowView: View {
             guard notification.object as? UUID == windowID else { return }
             showsCodexSkillsManagementSheet = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: .toasttyCodexSkillsProvisioned)) { notification in
-            guard CodexSkillsProvisionedNoticeStore.claim(
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsProvisioned)) { notification in
+            guard let agent = ManagedAgentSkillsProvisionedNoticeStore.claim(
                 for: windowID,
                 notificationObject: notification.object
             ) else { return }
             withAnimation(.easeOut(duration: 0.15)) {
-                showsCodexSkillsProvisionedNotice = true
+                if skillsProvisionedNoticeAgent == nil {
+                    skillsProvisionedNoticeAgent = agent
+                } else if queuedSkillsProvisionedNoticeAgents.contains(agent) == false {
+                    queuedSkillsProvisionedNoticeAgents.append(agent)
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -212,6 +218,14 @@ struct AppWindowView: View {
             appIsActive = false
         }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
+    }
+
+    private func advanceSkillsProvisionedNotice() {
+        if queuedSkillsProvisionedNoticeAgents.isEmpty {
+            skillsProvisionedNoticeAgent = nil
+        } else {
+            skillsProvisionedNoticeAgent = queuedSkillsProvisionedNoticeAgents.removeFirst()
+        }
     }
 
     static func effectiveSidebarWidth(

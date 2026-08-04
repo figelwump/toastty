@@ -4,16 +4,13 @@ import Foundation
 struct CodexManagedLaunchSkillsDecision: Equatable, Sendable {
     let configuration: CodexSkillsLaunchConfiguration?
     let status: CodexSkillsStatus?
-    let shouldPresentProvisionedNotice: Bool
 
     init(
         configuration: CodexSkillsLaunchConfiguration?,
-        status: CodexSkillsStatus?,
-        shouldPresentProvisionedNotice: Bool = false
+        status: CodexSkillsStatus?
     ) {
         self.configuration = configuration
         self.status = status
-        self.shouldPresentProvisionedNotice = shouldPresentProvisionedNotice
     }
 }
 
@@ -24,29 +21,27 @@ protocol CodexManagedLaunchSkillsResolving: AnyObject, Sendable {
     ) -> CodexManagedLaunchSkillsDecision
     func resolveForManagedLaunch(
         request: ManagedAgentLaunchRequest,
-        workingDirectory: String?,
-        hasActiveManagedCodexSession: Bool
+        workingDirectory: String?
     ) async -> CodexManagedLaunchSkillsDecision
+    func resolveForRestoredManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?
+    ) -> CodexManagedLaunchSkillsDecision
 }
 
 extension CodexManagedLaunchSkillsResolving {
     func resolveForManagedLaunch(
         request: ManagedAgentLaunchRequest,
-        workingDirectory: String?,
-        hasActiveManagedCodexSession: Bool
+        workingDirectory: String?
     ) async -> CodexManagedLaunchSkillsDecision {
         resolve(request: request, workingDirectory: workingDirectory)
     }
 
-    func resolveForManagedLaunch(
+    func resolveForRestoredManagedLaunch(
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?
-    ) async -> CodexManagedLaunchSkillsDecision {
-        await resolveForManagedLaunch(
-            request: request,
-            workingDirectory: workingDirectory,
-            hasActiveManagedCodexSession: false
-        )
+    ) -> CodexManagedLaunchSkillsDecision {
+        resolve(request: request, workingDirectory: workingDirectory)
     }
 }
 
@@ -91,8 +86,7 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
 
     func resolveForManagedLaunch(
         request: ManagedAgentLaunchRequest,
-        workingDirectory: String?,
-        hasActiveManagedCodexSession: Bool
+        workingDirectory: String?
     ) async -> CodexManagedLaunchSkillsDecision {
         guard request.agent == .codex,
               let runtime = resolveRuntime(request: request, workingDirectory: workingDirectory) else {
@@ -110,14 +104,12 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
             DispatchQueue.global(qos: .userInitiated).async { [self] in
                 do {
                     let preparation = try manager.prepareForManagedLaunch(
-                        runtime: runtime,
-                        hasActiveManagedCodexSession: hasActiveManagedCodexSession
+                        runtime: runtime
                     )
                     continuation.resume(
                         returning: CodexManagedLaunchSkillsDecision(
                             configuration: preparation.configuration,
-                            status: preparation.status,
-                            shouldPresentProvisionedNotice: preparation.firstInstallSucceeded
+                            status: preparation.status
                         )
                     )
                 } catch let error as CodexPluginCLIError {
@@ -144,6 +136,36 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
                 }
             }
         }
+    }
+
+    func resolveForRestoredManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        guard request.agent == .codex,
+              let runtime = resolveRuntime(request: request, workingDirectory: workingDirectory) else {
+            return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+        }
+        let key = runtimeKey(runtime)
+        guard unsupportedLock.withLock({ unsupportedRuntimeKeys.contains(key) }) == false else {
+            return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+        }
+        do {
+            let preparation = try manager.prepareForRestoredManagedLaunch(runtime: runtime)
+            return CodexManagedLaunchSkillsDecision(
+                configuration: preparation.configuration,
+                status: preparation.status
+            )
+        } catch let error as CodexPluginCLIError {
+            if error.isUnsupported { markUnsupported(key) }
+            logFailure(error, runtime: runtime)
+        } catch let error as CodexAppServerClientError {
+            if error.isUnsupported { markUnsupported(key) }
+            logFailure(error, runtime: runtime)
+        } catch {
+            logFailure(error, runtime: runtime)
+        }
+        return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
     }
 }
 

@@ -48,11 +48,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Immutable validated Toastty plugin copies passed only to managed Claude Code processes with `--plugin-dir`. Toastty does not register these copies in Claude's user configuration.
 - `~/.toastty/codex-hooks/` (created by `Toastty > Set Up Agent Status Hooks…`)
   - A stable Codex hook forwarder script plus `telemetry-failures.log` when the forwarder cannot deliver hook events back to Toastty.
-- `~/.toastty/legacy-codex-skills-backup/` (created only when automatic provisioning finds safe legacy global Toastty skills)
-  - Timestamped, uniquely suffixed backups of exact Toastty-owned symlinks or byte-identical legacy skill copies moved out of Codex's global skill roots. Modified or ambiguous directories are preserved in place and reported instead. Uninstall leaves these backups in place.
 - Codex user configuration and plugin storage (updated automatically through Codex on the first supported managed launch and later repair or upgrade)
   - Toastty registers its stable local marketplace, installs or updates the `toastty` plugin, and writes disabled entries for its four namespaced skills plus the retired `toastty:worktree-done` name using Codex's configuration API. Unrelated plugins, skill settings, profiles, hooks, and other Codex configuration are preserved.
   - Uninstall removes only the verified Toastty plugin and marketplace after confirmation. Codex cannot currently delete individual disabled-name entries, so those harmless tombstones remain and are reported by Toastty.
+- Global and repository-local skill directories
+  - Toastty does not inspect, move, remove, or back up entries under `~/.codex/skills`, `~/.claude/skills`, `~/.agents/skills`, or a repository's `.agents/skills`. The skills sheet only provides manual guidance if separately installed copies cause duplicate entries.
 - `~/.codex/hooks.json` (updated by `Toastty > Set Up Agent Status Hooks…`)
   - Toastty adds or updates only its own Codex hook entries while preserving unrelated hooks. Skills provisioning, repair, upgrade, and uninstall do not modify this file.
 - Temporary launch artifact directories under the system temporary directory for managed agent sessions.

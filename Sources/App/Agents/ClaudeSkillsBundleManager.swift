@@ -12,6 +12,13 @@ struct ClaudeSkillsLaunchConfiguration: Equatable, Sendable {
 protocol ClaudeSkillsBundleManaging: AnyObject, Sendable {
     func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration?
     func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration?
+    func prepareForRestoredManagedLaunch() -> ClaudeSkillsLaunchConfiguration?
+}
+
+extension ClaudeSkillsBundleManaging {
+    func prepareForRestoredManagedLaunch() -> ClaudeSkillsLaunchConfiguration? {
+        existingVerifiedConfiguration()
+    }
 }
 
 final class ClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Sendable {
@@ -51,6 +58,17 @@ final class ClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Se
                     logFailure(error)
                     continuation.resume(returning: nil)
                 }
+            }
+        }
+    }
+
+    func prepareForRestoredManagedLaunch() -> ClaudeSkillsLaunchConfiguration? {
+        queue.sync { [self] in
+            do {
+                return try prepareForManagedLaunchThrowing()
+            } catch {
+                logFailure(error)
+                return nil
             }
         }
     }

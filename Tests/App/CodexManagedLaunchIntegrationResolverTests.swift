@@ -91,18 +91,18 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
         XCTAssertEqual(fixture.skillClient.invocations.count, 2)
     }
 
-    func testSynchronousRestorePathNeverStartsProvisioning() throws {
+    func testSynchronousRestorePathRunsBoundedProvisioningAndFailsOpen() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
 
-        let decision = fixture.resolver.resolve(
+        let decision = fixture.resolver.resolveForRestoredManagedLaunch(
             request: fixture.directRequest(),
             workingDirectory: fixture.rootURL.path
         )
 
         XCTAssertNil(decision.configuration)
         XCTAssertNil(decision.status)
-        XCTAssertEqual(fixture.skillClient.invocations.count, 0)
+        XCTAssertEqual(fixture.skillClient.invocations.count, 1)
     }
 }
 

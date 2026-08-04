@@ -4,22 +4,13 @@ import XCTest
 
 @MainActor
 final class ManagedAgentLaunchPlannerTests: XCTestCase {
-    func testAsyncCodexPreparationSeesExistingManagedCodexSession() async throws {
+    func testRestoredCodexPreparationUsesBoundedRestoreProvisioning() throws {
         let resolver = RecordingCodexManagedLaunchSkillsResolver(
             decision: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
         )
         let fixture = try makePlannerFixture(codexSkillsResolver: resolver)
-        let workspaceID = try XCTUnwrap(fixture.store.selectedWorkspace?.id)
-        try startManagedSession(
-            in: fixture.sessionRuntimeStore,
-            sessionID: "existing-codex",
-            panelID: fixture.panelID,
-            store: fixture.store,
-            workspaceID: workspaceID,
-            agent: .codex
-        )
 
-        _ = try await fixture.planner.prepareManagedLaunchAsync(
+        _ = try fixture.planner.prepareRestoredManagedLaunch(
             ManagedAgentLaunchRequest(
                 agent: .codex,
                 panelID: fixture.panelID,
@@ -28,7 +19,8 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(resolver.observedActiveSessionValues, [true])
+        XCTAssertEqual(resolver.restoredResolveCount, 1)
+        XCTAssertEqual(resolver.managedResolveCount, 0)
     }
 
     func testClaudeArtifactsRemainAfterSessionStops() async throws {
@@ -1952,15 +1944,15 @@ private final class TestCodexManagedLaunchSkillsResolver: CodexManagedLaunchSkil
 private final class RecordingCodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
     private let lock = NSLock()
     private let decision: CodexManagedLaunchSkillsDecision
-    private var activeSessionValues: [Bool] = []
+    private var managedCount = 0
+    private var restoredCount = 0
 
     init(decision: CodexManagedLaunchSkillsDecision) {
         self.decision = decision
     }
 
-    var observedActiveSessionValues: [Bool] {
-        lock.withLock { activeSessionValues }
-    }
+    var managedResolveCount: Int { lock.withLock { managedCount } }
+    var restoredResolveCount: Int { lock.withLock { restoredCount } }
 
     func resolve(
         request _: ManagedAgentLaunchRequest,
@@ -1971,10 +1963,17 @@ private final class RecordingCodexManagedLaunchSkillsResolver: CodexManagedLaunc
 
     func resolveForManagedLaunch(
         request _: ManagedAgentLaunchRequest,
-        workingDirectory _: String?,
-        hasActiveManagedCodexSession: Bool
+        workingDirectory _: String?
     ) async -> CodexManagedLaunchSkillsDecision {
-        lock.withLock { activeSessionValues.append(hasActiveManagedCodexSession) }
+        lock.withLock { managedCount += 1 }
+        return decision
+    }
+
+    func resolveForRestoredManagedLaunch(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        lock.withLock { restoredCount += 1 }
         return decision
     }
 }

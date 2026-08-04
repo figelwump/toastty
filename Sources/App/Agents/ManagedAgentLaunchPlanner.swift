@@ -12,6 +12,10 @@ protocol ManagedAgentLaunchPlanning: AnyObject {
         _ request: ManagedAgentLaunchRequest,
         inheritedScopedWorkspaceIDs: Set<UUID>?
     ) async throws -> ManagedAgentLaunchPlan
+    func prepareRestoredManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>?
+    ) throws -> ManagedAgentLaunchPlan
     func discardManagedLaunch(sessionID: String)
     func cancelNativeSessionObservation(sessionID: String)
 }
@@ -25,6 +29,16 @@ extension ManagedAgentLaunchPlanning {
         _ request: ManagedAgentLaunchRequest,
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil
     ) async throws -> ManagedAgentLaunchPlan {
+        try prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+    }
+
+    func prepareRestoredManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
         try prepareManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
@@ -136,30 +150,84 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     ) async throws -> ManagedAgentLaunchPlan {
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
-        let hasActiveManagedCodexSession = sessionRuntimeStore?.sessionRegistry.sessionsByID.values
-            .contains { $0.isActive && $0.agent == .codex } == true
         let codexSkillsDecision = request.agent == .codex
             ? await codexSkillsResolver.resolveForManagedLaunch(
                 request: request,
-                workingDirectory: assessedWorkingDirectory,
-                hasActiveManagedCodexSession: hasActiveManagedCodexSession
+                workingDirectory: assessedWorkingDirectory
             )
             : nil
         let claudeSkillsConfiguration = request.agent == .claude
             ? await claudeSkillsBundleManager.prepareForManagedLaunch()
             : nil
-        if codexSkillsDecision?.shouldPresentProvisionedNotice == true {
-            NotificationCenter.default.post(
-                name: .toasttyCodexSkillsProvisioned,
-                object: target.windowID
-            )
-        }
-        return try prepareManagedLaunch(
+        let plan = try prepareManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             codexSkillsDecision: codexSkillsDecision,
             claudeSkillsConfiguration: claudeSkillsConfiguration,
             assessedWorkingDirectory: assessedWorkingDirectory
+        )
+        postSkillsProvisionedNoticeIfNeeded(
+            request: request,
+            windowID: target.windowID,
+            codexSkillsDecision: codexSkillsDecision,
+            claudeSkillsConfiguration: claudeSkillsConfiguration
+        )
+        return plan
+    }
+
+    func prepareRestoredManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
+        let target = try resolveManagedLaunchTarget(panelID: request.panelID)
+        let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
+        let codexSkillsDecision = request.agent == .codex
+            ? codexSkillsResolver.resolveForRestoredManagedLaunch(
+                request: request,
+                workingDirectory: assessedWorkingDirectory
+            )
+            : nil
+        let claudeSkillsConfiguration = request.agent == .claude
+            ? claudeSkillsBundleManager.prepareForRestoredManagedLaunch()
+            : nil
+        let plan = try prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
+            codexSkillsDecision: codexSkillsDecision,
+            claudeSkillsConfiguration: claudeSkillsConfiguration,
+            assessedWorkingDirectory: assessedWorkingDirectory
+        )
+        postSkillsProvisionedNoticeIfNeeded(
+            request: request,
+            windowID: target.windowID,
+            codexSkillsDecision: codexSkillsDecision,
+            claudeSkillsConfiguration: claudeSkillsConfiguration
+        )
+        return plan
+    }
+
+    private func postSkillsProvisionedNoticeIfNeeded(
+        request: ManagedAgentLaunchRequest,
+        windowID: UUID,
+        codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
+        claudeSkillsConfiguration: ClaudeSkillsLaunchConfiguration?
+    ) {
+        let isAvailable: Bool
+        if request.agent == .codex {
+            isAvailable = codexSkillsDecision?.configuration != nil
+                && codexSkillsDecision?.status?.isReady == true
+        } else if request.agent == .claude {
+            isAvailable = claudeSkillsConfiguration != nil
+        } else {
+            isAvailable = false
+        }
+        guard isAvailable else { return }
+        NotificationCenter.default.post(
+            name: .toasttyManagedAgentSkillsProvisioned,
+            object: ManagedAgentSkillsProvisionedNotice(
+                windowID: windowID,
+                agent: request.agent
+            )
         )
     }
 

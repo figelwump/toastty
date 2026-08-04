@@ -7,10 +7,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
 
-        let preparation = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
 
         XCTAssertEqual(preparation.configuration?.qualifiedSkillNames, fixture.expectedQualifiedNames)
         XCTAssertEqual(preparation.status.availability, .ready)
@@ -35,46 +32,24 @@ final class CodexSkillsManagerTests: XCTestCase {
     func testVerifiedSecondLaunchPerformsNoCLIOrConfigWork() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        _ = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         fixture.recorder.reset()
 
-        let preparation = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
 
         XCTAssertNotNil(preparation.configuration)
         XCTAssertFalse(preparation.installedOrUpdated)
         XCTAssertEqual(fixture.recorder.operations, [])
     }
 
-    func testUpdateIsDeferredWhileSessionIsActiveAndAppliedLater() throws {
+    func testUpdateIsAppliedImmediately() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let first = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let first = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         try fixture.changeBundledPlugin(version: "0.2.1")
         fixture.recorder.reset()
 
-        let deferred = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: true
-        )
-
-        XCTAssertEqual(deferred.configuration?.contentDigest, first.configuration?.contentDigest)
-        XCTAssertTrue(deferred.status.updatePending)
-        XCTAssertFalse(fixture.recorder.operations.contains("plugin.install"))
-
-        fixture.recorder.reset()
-        let updated = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let updated = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
 
         XCTAssertNotEqual(updated.configuration?.contentDigest, first.configuration?.contentDigest)
         XCTAssertEqual(updated.configuration?.version, "0.2.1")
@@ -82,13 +57,95 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertTrue(fixture.recorder.operations.contains("plugin.install"))
     }
 
+    func testRestoredLaunchAfterAppRestartUpdatesBeforeResume() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let first = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+        try fixture.changeBundledPlugin(version: "0.2.1")
+        fixture.recorder.reset()
+        let restartedManager = CodexSkillsManager(
+            homeDirectoryURL: fixture.homeURL,
+            sourcePluginURLProvider: { [sourcePluginURL = fixture.sourcePluginURL] in sourcePluginURL },
+            sourceMarketplaceURLProvider: { [sourceMarketplaceURL = fixture.sourceMarketplaceURL] in
+                sourceMarketplaceURL
+            },
+            pluginClient: fixture.pluginClient,
+            skillClient: fixture.skillClient
+        )
+
+        let updated = try restartedManager.prepareForRestoredManagedLaunch(runtime: fixture.runtime())
+
+        XCTAssertNotEqual(updated.configuration?.contentDigest, first.configuration?.contentDigest)
+        XCTAssertEqual(updated.configuration?.version, "0.2.1")
+        XCTAssertTrue(fixture.recorder.operations.contains("plugin.install"))
+    }
+
+    func testRestoredLaunchAfterAppRestartReusesCurrentInstallWithoutSubprocessWork() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let first = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+        fixture.recorder.reset()
+        let restartedManager = CodexSkillsManager(
+            homeDirectoryURL: fixture.homeURL,
+            sourcePluginURLProvider: { [sourcePluginURL = fixture.sourcePluginURL] in sourcePluginURL },
+            sourceMarketplaceURLProvider: { [sourceMarketplaceURL = fixture.sourceMarketplaceURL] in
+                sourceMarketplaceURL
+            },
+            pluginClient: fixture.pluginClient,
+            skillClient: fixture.skillClient
+        )
+
+        let restored = try restartedManager.prepareForRestoredManagedLaunch(runtime: fixture.runtime())
+
+        XCTAssertEqual(restored.configuration, first.configuration)
+        XCTAssertEqual(fixture.recorder.operations, [])
+    }
+
+    func testRestoredLaunchDoesNotReuseStaleCacheAfterInstalledFilesChange() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let first = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+        let installedPath = try XCTUnwrap(first.status.installedPath)
+        let skillURL = URL(fileURLWithPath: installedPath, isDirectory: true)
+            .appendingPathComponent("skills/toastty-capabilities/SKILL.md")
+        try "\nCorrupted after verification.\n".append(to: skillURL)
+        fixture.recorder.reset()
+
+        let restored = try fixture.manager.prepareForRestoredManagedLaunch(runtime: fixture.runtime())
+
+        XCTAssertEqual(restored.configuration?.contentDigest, first.configuration?.contentDigest)
+        XCTAssertTrue(fixture.recorder.operations.contains("plugin.install"))
+    }
+
+    func testRestoredFileVerificationDoesNotSatisfyLaterFullVerification() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+        let restartedManager = CodexSkillsManager(
+            homeDirectoryURL: fixture.homeURL,
+            sourcePluginURLProvider: { [sourcePluginURL = fixture.sourcePluginURL] in sourcePluginURL },
+            sourceMarketplaceURLProvider: { [sourceMarketplaceURL = fixture.sourceMarketplaceURL] in
+                sourceMarketplaceURL
+            },
+            pluginClient: fixture.pluginClient,
+            skillClient: fixture.skillClient
+        )
+        fixture.recorder.reset()
+        _ = try restartedManager.prepareForRestoredManagedLaunch(runtime: fixture.runtime())
+        XCTAssertEqual(fixture.recorder.operations, [])
+
+        _ = try restartedManager.prepareForManagedLaunch(runtime: fixture.runtime())
+
+        XCTAssertEqual(
+            fixture.recorder.operations,
+            ["marketplace.list", "plugin.list", "skills.list"]
+        )
+    }
+
     func testFailedUpdateKeepsUsingPreviousVerifiedVersion() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let first = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let first = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         try fixture.changeBundledPlugin(version: "0.2.1")
         fixture.pluginClient.installError = CodexPluginCLIError.commandFailed(
             "plugin add",
@@ -96,10 +153,7 @@ final class CodexSkillsManagerTests: XCTestCase {
             "fixture update failure"
         )
 
-        let fallback = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let fallback = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
 
         XCTAssertEqual(fallback.configuration, first.configuration)
         XCTAssertEqual(fallback.status.availability, .failed)
@@ -110,10 +164,7 @@ final class CodexSkillsManagerTests: XCTestCase {
     func testFailedUpdateLaunchesWithoutSkillsWhenPreviousVersionCannotBeReverified() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        _ = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         try fixture.changeBundledPlugin(version: "0.2.1")
         fixture.pluginClient.installErrorAfterMutation = CodexPluginCLIError.commandFailed(
             "plugin add",
@@ -122,10 +173,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         )
 
         XCTAssertThrowsError(
-            try fixture.manager.prepareForManagedLaunch(
-                runtime: fixture.runtime(),
-                hasActiveManagedCodexSession: false
-            )
+            try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         ) { error in
             guard case .rollbackUnverified = error as? CodexSkillsManagerError else {
                 return XCTFail("Expected rollbackUnverified, got \(error)")
@@ -134,18 +182,15 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertNil(fixture.manager.cachedLaunchConfiguration(runtime: fixture.runtime()))
     }
 
-    func testUnprovisionedLaunchDefersInstallWhileAnotherSessionIsActive() throws {
+    func testUnprovisionedLaunchInstallsImmediately() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
 
-        let preparation = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: true
-        )
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
 
-        XCTAssertNil(preparation.configuration)
-        XCTAssertEqual(preparation.status.availability, .notInstalled)
-        XCTAssertFalse(fixture.recorder.operations.contains("plugin.install"))
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(preparation.status.availability, .ready)
+        XCTAssertTrue(fixture.recorder.operations.contains("plugin.install"))
     }
 
     func testTwoIdenticalFailuresPauseAutomaticRetriesUntilRepair() throws {
@@ -159,18 +204,12 @@ final class CodexSkillsManagerTests: XCTestCase {
 
         for _ in 0..<2 {
             XCTAssertThrowsError(
-                try fixture.manager.prepareForManagedLaunch(
-                    runtime: fixture.runtime(),
-                    hasActiveManagedCodexSession: false
-                )
+                try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
             )
         }
         fixture.recorder.reset()
 
-        let paused = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let paused = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
 
         XCTAssertNil(paused.configuration)
         XCTAssertEqual(paused.status.availability, .failed)
@@ -178,14 +217,32 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.operations, [])
 
         fixture.pluginClient.installError = nil
-        let repaired = try fixture.manager.repair(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let repaired = try fixture.manager.repair(runtime: fixture.runtime())
         XCTAssertEqual(repaired.availability, .ready)
     }
 
-    func testLegacyOwnedSkillIsBackedUpAndModifiedSkillIsPreserved() throws {
+    func testPausedAutomaticUpdateDoesNotReturnCachedPreviousConfiguration() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+        try fixture.changeBundledPlugin(version: "0.2.1")
+        fixture.pluginClient.installError = CodexPluginCLIError.commandFailed(
+            "plugin add",
+            1,
+            "fixture update failure"
+        )
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+        fixture.recorder.reset()
+
+        let paused = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+
+        XCTAssertNil(paused.configuration)
+        XCTAssertEqual(paused.status.availability, .failed)
+        XCTAssertEqual(fixture.recorder.operations, [])
+    }
+
+    func testGlobalSkillsAreNeverModified() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let skillsRoot = fixture.runtime().codexHomeURL.appendingPathComponent("skills", isDirectory: true)
@@ -201,29 +258,18 @@ final class CodexSkillsManagerTests: XCTestCase {
         try "---\nname: toastty-scratchpad\ndescription: User modified.\n---\n"
             .write(to: modified.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
-        let preparation = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: owned.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: modified.path))
-        XCTAssertEqual(preparation.status.legacySkillConflictPaths, [modified.path])
         let backupRoot = fixture.homeURL.appendingPathComponent(".toastty/legacy-codex-skills-backup")
-        let backups = try FileManager.default.contentsOfDirectory(at: backupRoot, includingPropertiesForKeys: nil)
-        XCTAssertEqual(backups.count, 1)
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: backups[0].appendingPathComponent("codex-home/toastty-capabilities").path
-        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backupRoot.path))
     }
 
     func testUninstallRemovesOnlyOwnedSkillsStateAndLeavesHooksUntouched() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let preparation = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         let hooksURL = fixture.runtime().codexHomeURL.appendingPathComponent("hooks.json")
         let hooksData = Data(#"{"hooks":{"Stop":[{"command":"/usr/bin/true"}]}}"#.utf8)
         try hooksData.write(to: hooksURL)
@@ -242,13 +288,28 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertEqual(status.disabledNameTombstones, ["toastty:worktree-done"])
     }
 
+    func testUninstallRejectsActiveManagedCodexSession() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
+        fixture.recorder.reset()
+
+        XCTAssertThrowsError(
+            try fixture.manager.uninstall(
+                runtime: fixture.runtime(),
+                hasActiveManagedCodexSession: true
+            )
+        ) { error in
+            XCTAssertEqual(error as? CodexSkillsManagerError, .activeSessions)
+        }
+        XCTAssertEqual(fixture.recorder.operations, [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preparation.status.marketplacePath))
+    }
+
     func testUninstallPreservesInstalledPluginWhoseDigestNoLongerMatchesOwnershipRecord() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let preparation = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         let installedPath = try XCTUnwrap(preparation.status.installedPath)
         let skillURL = URL(fileURLWithPath: installedPath, isDirectory: true)
             .appendingPathComponent("skills/toastty-capabilities/SKILL.md")
@@ -276,14 +337,8 @@ final class CodexSkillsManagerTests: XCTestCase {
         let firstRuntime = fixture.runtime(name: "codex-one")
         let secondRuntime = fixture.runtime(name: "codex-two")
 
-        let first = try fixture.manager.prepareForManagedLaunch(
-            runtime: firstRuntime,
-            hasActiveManagedCodexSession: false
-        )
-        let second = try fixture.manager.prepareForManagedLaunch(
-            runtime: secondRuntime,
-            hasActiveManagedCodexSession: false
-        )
+        let first = try fixture.manager.prepareForManagedLaunch(runtime: firstRuntime)
+        let second = try fixture.manager.prepareForManagedLaunch(runtime: secondRuntime)
 
         XCTAssertNotEqual(first.status.marketplacePath, second.status.marketplacePath)
         XCTAssertTrue(FileManager.default.fileExists(atPath: first.status.marketplacePath))
@@ -308,10 +363,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         try "preserve me".write(to: marker, atomically: true, encoding: .utf8)
 
         XCTAssertThrowsError(
-            try fixture.manager.prepareForManagedLaunch(
-                runtime: fixture.runtime(),
-                hasActiveManagedCodexSession: false
-            )
+            try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         ) { error in
             XCTAssertEqual(
                 error as? CodexSkillsManagerError,
@@ -332,10 +384,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         )
 
         XCTAssertThrowsError(
-            try fixture.manager.prepareForManagedLaunch(
-                runtime: fixture.runtime(),
-                hasActiveManagedCodexSession: false
-            )
+            try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         ) { error in
             XCTAssertEqual(
                 error as? CodexSkillsManagerError,
@@ -362,10 +411,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         )
 
         XCTAssertThrowsError(
-            try fixture.manager.prepareForManagedLaunch(
-                runtime: fixture.runtime(),
-                hasActiveManagedCodexSession: false
-            )
+            try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         ) { error in
             XCTAssertEqual(
                 error as? CodexSkillsManagerError,
@@ -379,10 +425,7 @@ final class CodexSkillsManagerTests: XCTestCase {
     func testRepairAndUninstallPreserveMarketplaceWhoseOwnedLayoutWasReplaced() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let installed = try fixture.manager.prepareForManagedLaunch(
-            runtime: fixture.runtime(),
-            hasActiveManagedCodexSession: false
-        )
+        let installed = try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         let marketplaceURL = URL(
             fileURLWithPath: installed.status.marketplacePath,
             isDirectory: true
@@ -394,10 +437,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         try fixture.changeBundledPlugin(version: "0.2.1")
 
         XCTAssertThrowsError(
-            try fixture.manager.prepareForManagedLaunch(
-                runtime: fixture.runtime(),
-                hasActiveManagedCodexSession: false
-            )
+            try fixture.manager.prepareForManagedLaunch(runtime: fixture.runtime())
         )
         XCTAssertEqual(try Data(contentsOf: manifest), foreignData)
         fixture.recorder.reset()
@@ -488,8 +528,7 @@ private extension CodexSkillsManagerTests {
                 sourcePluginURLProvider: { [sourcePluginURL] in sourcePluginURL },
                 sourceMarketplaceURLProvider: { [sourceMarketplaceURL] in sourceMarketplaceURL },
                 pluginClient: pluginClient,
-                skillClient: skillClient,
-                nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) }
+                skillClient: skillClient
             )
         }
 

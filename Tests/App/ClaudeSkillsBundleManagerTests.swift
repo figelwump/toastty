@@ -67,6 +67,26 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
         XCTAssertNil(result)
         XCTAssertNil(manager.existingVerifiedConfiguration())
     }
+
+    func testRestoredLaunchStagesChangedBundleBeforeResume() throws {
+        let rootURL = temporaryDirectory(named: "restored-upgrade")
+        let sourceURL = rootURL.appendingPathComponent("source/toastty", isDirectory: true)
+        let stagingURL = rootURL.appendingPathComponent("staged", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try makePlugin(at: sourceURL, version: "1.0.0")
+        let manager = ClaudeSkillsBundleManager(
+            sourcePluginURLProvider: { sourceURL },
+            stagingRootURL: stagingURL
+        )
+        let first = try XCTUnwrap(manager.prepareForRestoredManagedLaunch())
+        try makeManifest(at: sourceURL, version: "1.1.0")
+
+        let updated = try XCTUnwrap(manager.prepareForRestoredManagedLaunch())
+
+        XCTAssertNotEqual(updated.pluginRootPath, first.pluginRootPath)
+        XCTAssertEqual(updated.version, "1.1.0")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: updated.pluginRootPath))
+    }
 }
 
 private extension ClaudeSkillsBundleManagerTests {

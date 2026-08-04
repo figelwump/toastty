@@ -20,19 +20,19 @@ On the first managed Codex launch, Toastty attempts to provision its bundled
 skills-only plugin before starting Codex. There is no setup sheet and no
 `/hooks` step for skills.
 
-- Provisioning is bounded and runs off the main actor.
+- New launches provision off the main actor. Restored sessions perform the same
+  bounded preparation before their resume command is submitted.
 - Success enables the four Toastty skills for that managed process only.
 - Failure or timeout never blocks launch; Codex starts without the new skills.
 - A later managed launch retries automatically.
 - A verified, current installation is read-only on later launches: Toastty
   does not rewrite config, reinstall the plugin, or touch the marketplace.
 
-After the first successful automatic install, show one dismissible,
-non-blocking window banner. A single persisted Boolean prevents it from ever
-being shown again:
+After the first successful managed use, show one dismissible, non-blocking
+Codex banner. A persisted per-agent flag prevents it from being shown again:
 
-> Toastty added four Codex skills for managed sessions. They remain disabled
-> in ordinary Codex. Manage…
+> Toastty enabled four skills for managed Codex sessions. Your global and
+> project skill folders were not changed. View Skills…
 
 `Toastty > Manage Codex Skills…` opens a sheet with status, the installed
 plugin version, any pending update or repair issue, and these visible rows:
@@ -44,12 +44,13 @@ plugin version, any pending update or repair issue, and these visible rows:
 | `toastty:toastty-scratchpad` | Create and update visual diagrams, mockups, and summaries. |
 | `toastty:worktree-create` | Move work into an isolated Git worktree and Toastty workspace. |
 
-The sheet provides `Repair` and `Uninstall…`. Technical paths, the marketplace
+The sheet also explains the Codex and Claude delivery models and tells users
+that Toastty does not change separately installed global skills. It provides
+`Repair` and `Uninstall…` for the Codex plugin. Technical paths, the marketplace
 registration, and harmless disabled-name tombstones live in a collapsed
-details group. When a managed Codex session is active, Repair records a pending
-request without mutating Codex and explains that it will run before the next
-launch after those sessions stop. Uninstall is disabled because active sessions
-may still be using the installed skill files.
+details group. Repair applies immediately; running Codex sessions pick up the
+result after restart. Uninstall is disabled while a managed Codex session may
+still be using the installed skill files.
 Uninstall removes only the Toastty plugin, Toastty marketplace registration,
 and Toastty's staged plugin files. It does not edit Codex hooks or restore old
 global skill links automatically.
@@ -59,8 +60,13 @@ global skill links automatically.
 Every managed Claude Code launch receives the same four-skill plugin through a
 session-only `--plugin-dir <path>` argument. Toastty does not add a Claude
 marketplace, write `~/.claude/settings.json`, or globally install the plugin.
-There is no Claude setup or management sheet because no persistent Claude
-configuration is being managed.
+There is no Claude setup or install action because no persistent Claude
+configuration is being managed. The first successful managed Claude launch
+shows its own one-time non-blocking banner and links to the shared skill-detail
+sheet:
+
+> Toastty enabled four session-only skills for managed Claude Code sessions.
+> Your global and project skill folders were not changed. View Skills…
 
 If preparing or injecting the Claude plugin fails, launch Claude unchanged
 apart from its existing Toastty status instrumentation.
@@ -209,7 +215,7 @@ No hook definitions are serialized or injected by this path. Existing global
 hook detection still determines whether hook or notify/session-log telemetry
 is authoritative.
 
-### Idempotence and active-session updates
+### Idempotence and updates
 
 Cache the last verified result against the resolved Codex executable identity
 (path, inode, size, and modification time), `CODEX_HOME`, a content hash of
@@ -229,14 +235,19 @@ bundle signatures, park the status at `failed` and launch without skills on
 subsequent attempts. Retry only after a relevant signature changes or the user
 chooses Repair.
 
-When the bundled digest/version differs:
+When the bundled digest/version differs, install it immediately before the new
+managed launch, even when other Codex sessions are active. Existing processes
+keep running with whatever plugin state they already loaded; they may need a
+restart before invoking Toastty skills again. Newly launched processes receive
+the current verified version.
 
-- With no other active managed Codex session, update before the new launch.
-- With any active managed Codex session, do not replace the source or reinstall;
-  mark the update pending and launch the new session with the previously
-  verified version.
-- Apply the pending update before a later launch after all managed Codex
-  sessions have stopped.
+During app restoration, Toastty byte-verifies an unchanged installed bundle
+without starting a subprocess. A missing, changed, or repair-requested bundle
+runs the same four-second provisioning path synchronously before Toastty
+submits the restored agent's resume command. This may delay restored panes once
+after a skill-changing Toastty update, but ensures successfully prepared Codex
+and Claude sessions resume with the current bundled skills. Failure remains
+fail-open and the session resumes without Toastty skills.
 
 Apply updates on any digest difference, including app downgrades; version
 ordering is display information rather than the update decision. The plugin
@@ -308,25 +319,14 @@ Add an architecture test that the skills manager cannot import or reference
 hook paths, installer types, hook assessment APIs, or Codex reconciliation
 types.
 
-Active managed-session detection for update deferral may read
-`SessionRuntimeStore.sessionRegistry`, but it belongs in an isolated skills
-coordinator/service and must not write through or become part of Codex status
-reconciliation.
+## Existing global skills
 
-## Legacy skill cleanup
-
-Automatic provisioning may encounter standalone Toastty skills from the old
-development linker. In `<CODEX_HOME>/skills` and the shared
-`~/.agents/skills` discovery root, move a path to a timestamped backup when it
-is either:
-
-- a symlink into this Toastty skill source; or
-- a byte-identical copy of the matching bundled skill.
-
-Preserve modified, ambiguous, user-authored, and third-party paths in place and
-report them in Manage Codex Skills. Never touch hook files in this migration.
-Do not inspect or remove `~/.claude/skills`; the Claude `--plugin-dir` copy is
-additive and session-only.
+Toastty never inspects, moves, removes, or backs up skills under
+`~/.codex/skills`, `~/.claude/skills`, or `~/.agents/skills`. The one-time
+banner and shared skill-detail sheet explain that separately installed global
+copies were not changed and point users to those discovery roots if duplicate,
+unnamespaced Toastty skills appear. Cleanup remains an explicit user action.
+Repository-local `.agents/skills` are never changed by runtime provisioning.
 
 Update `scripts/agents/link-global-skills.sh` to exclude Codex and to require an
 explicit development target. Repo-local `.agents/skills` remains the normal
@@ -403,14 +403,13 @@ retention limits and local-data disclosures remain intact.
    authority, UI wording, tests, and docs while stripping branch-introduced
    session-hook behavior out of the skills integration types.
 5. Implement the async Codex skills manager, CLI-backed install/reinstall,
-   disabled-first ordering, legacy-skill migration, rollback, idempotent
-   verification, and active-session update deferral.
-6. Wire verified Codex skills into managed create/resume/fork launches. Synchronous
-   workspace restoration performs no persistent writes: it may use an already
-   verified snapshot, otherwise it launches without skills and lets the next
-   normal launch provision them.
-7. Add the Manage Codex Skills sheet and one-time non-blocking notice. Keep the
-   existing Get Started hook flow separate.
+   disabled-first ordering, rollback, idempotent verification, and immediate
+   update behavior.
+6. Wire verified Codex skills into managed create/resume/fork launches. During
+   synchronous workspace restoration, reuse a byte-verified current install or
+   run bounded provisioning before the resume command is submitted.
+7. Add the shared skills sheet and one-time per-agent non-blocking notices. Keep
+   the existing Get Started hook flow separate.
 8. Update docs, run the full verification gate, exercise real isolated Codex
    and Claude launches, review the combined diff, and commit.
 
@@ -427,14 +426,14 @@ Add focused tests for:
 - behavioral ordinary Codex exclusion and failed explicit use of a fixture
   skill, contrasted with successful managed-session discovery/use;
 - no writes when a verified install and all fingerprints are unchanged;
-- update, active-session deferral, later application, rollback, repair, and
-  uninstall without any hook-file access;
+- immediate update with active sessions, restored-session pre-resume update,
+  rollback, repair, and uninstall without any hook-file access;
 - installed-path content mismatch, downgrade-by-digest, failure backoff,
   unsupported-result caching, and tolerant parsing of added/omitted JSON fields;
 - concurrent managed launches producing one serialized provisioning operation;
 - preserved user marketplace registration and ownership-checked uninstall;
-- retirement tombstones and exact-owned legacy skill backup while preserving
-  modified or unrelated skills;
+- retirement tombstones and proof that global and repository-local skills are
+  never modified;
 - install failure, timeout, unsupported Codex, malformed JSON, conflicting
   config, and opaque wrappers all launching without skills;
 - direct Codex/`cdx`, resume, fork, supported wrapper, typed shim, menu,
@@ -451,7 +450,8 @@ Add focused tests for:
   update, repair, managed launch, and uninstall;
 - deterministic content digests, normalized helper modes, and quarantine-free
   Toastty-owned staged copies;
-- Manage sheet status/skills/summaries/actions and one-time notice persistence.
+- shared sheet status/skills/summaries/actions, manual duplicate guidance, and
+  one-time per-agent notice persistence.
 
 Use temporary home and `CODEX_HOME` directories for all real compatibility
 tests. Never mutate the developer's actual Codex, Claude, or Toastty state.
@@ -468,8 +468,8 @@ Validation after implementation:
    reinstall upgrades the cached bytes without changing hooks.
 5. Prove managed Claude lists the same four names from `--plugin-dir` while an
    ordinary Claude launch with clean isolated state does not.
-6. Exercise failure and active-session update scenarios end to end through the
-   real launch surface, not only manager tests.
+6. Exercise failure, active-session update, and app-restart restore scenarios
+   end to end through the real launch surface, not only manager tests.
 7. Run Claude change-set review on the risky provisioning/launch diff and
    address accepted findings before commit.
 
@@ -478,8 +478,9 @@ Validation after implementation:
 - Multiple simultaneous launch requests serialize through the provisioning
   manager; use a cross-process file lock as well if the capability spike shows
   another Toastty/CLI process can mutate the same state concurrently.
-- A first install requested while another unprovisioned Codex session is active
-  is deferred and both sessions launch without the plugin.
+- A first install or update proceeds immediately even when another managed
+  Codex session is active. Existing processes may need restart before invoking
+  Toastty skills again.
 - Custom `CODEX_HOME` values get independent installation/status keys.
 - A Codex downgrade that cannot load the plugin is `unsupported`, not repaired
   in a loop.
@@ -487,9 +488,9 @@ Validation after implementation:
   may coexist with the namespaced plugin skills. Treat that as a documented
   dev-only condition and test that Codex emits no duplicate-name error; do not
   weaken ordinary user-session isolation to hide it.
-- If Claude also discovers a user-installed global skill with the same plain
-  name, preserve it, document host precedence, and verify that the namespaced
-  Toastty plugin remains callable for the managed session.
+- If Codex or Claude also discovers a user-installed global skill with the same
+  plain name, leave it untouched, show manual duplicate guidance, and verify
+  that the namespaced Toastty plugin remains callable for the managed session.
 - Persistent disables always cover the union of old and new Toastty skill
   names before install/update.
 - Do not create a `CODEX_HOME` overlay, named Codex profile, global Claude
