@@ -443,6 +443,10 @@ run_remote_prepare_mode() {
 
   app_server_port="$(pick_unused_port)" || fail "Failed to allocate a free port for codex app-server"
 
+  # The Computer Use helper spawns nested `codex` processes via `env codex`,
+  # which needs the CLI on PATH; the SSH login shell on the remote host does
+  # not provide it, so expose the bundled CLI's directory to the process tree.
+  PATH="$(dirname "$codex_cli"):$PATH" \
   nohup script -q "$app_server_session_log" "$codex_cli" app-server \
     -c "model=\"${CODEX_COMPUTER_USE_MODEL}\"" \
     -c "model_reasoning_effort=\"${CODEX_COMPUTER_USE_REASONING_EFFORT}\"" \
