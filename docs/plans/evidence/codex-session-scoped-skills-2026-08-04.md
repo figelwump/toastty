@@ -59,6 +59,16 @@ conflict (skills must be skipped with a diagnostic because the flag cannot
 repeat). `resume` and `fork` accept the flag, so restore keeps
 current-on-restore semantics through cache refresh.
 
+## Authenticated resume check — 2026-08-05
+
+Against the developer's real Codex home (one throwaway session, deleted
+afterwards): a session created under `--profile toastty-probe` (empty overlay
+file) was found and resumed by `codex exec resume <id>` both with and without
+the profile flag (`thread.started` in both directions), while a nonexistent
+id fails distinctly with `no rollout found`. Sessions are not namespaced by
+profile. The user's main-config MCP servers also loaded under the profile,
+further confirming overlay semantics.
+
 Run the probe again with:
 
 ```bash
