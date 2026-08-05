@@ -648,6 +648,166 @@ final class CodexSkillsManagerTests: XCTestCase {
         )
     }
 
+    // MARK: - Legacy skills.config neutralization
+
+    /// Real-shape fixture from the retired mechanism: five disabled
+    /// `toastty:*` blocks interleaved with an unrelated plugin's block and
+    /// comments. Only the toastty blocks disappear; every other line is
+    /// byte-identical, and the state file being absent proves the standalone
+    /// trigger works without legacy state.
+    static let legacyDisabledSkillsConfig = """
+    # Codex user configuration
+    model = "gpt-5.6-luna"
+
+    [[skills.config]]
+    name = "toastty:toastty-capabilities"
+    enabled = false
+
+    [[skills.config]]
+    name = "toastty:toastty-open-markdown"
+    enabled = false
+
+    [[skills.config]]
+    name = "google-calendar:quick-add"
+    enabled = false
+
+    [[skills.config]]
+    name = "toastty:toastty-scratchpad"
+    enabled = false
+
+    [[skills.config]]
+    name = "toastty:worktree-create"
+    enabled = false
+
+    [[skills.config]]
+    name = "toastty:toastty"
+    enabled = false
+
+    # profiles below
+    [profiles.speed]
+    model = "gpt-5"
+
+    """
+
+    static let expectedNeutralizedSkillsConfig = """
+    # Codex user configuration
+    model = "gpt-5.6-luna"
+
+    [[skills.config]]
+    name = "google-calendar:quick-add"
+    enabled = false
+
+    # profiles below
+    [profiles.speed]
+    model = "gpt-5"
+
+    """
+
+    func testLegacyToasttySkillsConfigBlocksAreRemovedSurgicallyWithBackup() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        try fixture.writeCodexUserConfig(Self.legacyDisabledSkillsConfig, runtime: runtime)
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(
+            try fixture.codexUserConfigContents(runtime: runtime),
+            Self.expectedNeutralizedSkillsConfig
+        )
+        let backups = fixture.configBackups(runtime: runtime)
+        XCTAssertEqual(backups.count, 1)
+        XCTAssertEqual(
+            try String(contentsOf: XCTUnwrap(backups.first), encoding: .utf8),
+            Self.legacyDisabledSkillsConfig
+        )
+
+        // Idempotent: a second locked preparation (fresh manager, no
+        // in-memory cache) finds nothing to remove and writes no second
+        // backup.
+        _ = try fixture.makeRestartedManager().prepareForManagedLaunch(runtime: runtime)
+        XCTAssertEqual(
+            try fixture.codexUserConfigContents(runtime: runtime),
+            Self.expectedNeutralizedSkillsConfig
+        )
+        XCTAssertEqual(fixture.configBackups(runtime: runtime).count, 1)
+    }
+
+    func testLegacySkillsConfigNeutralizationFailsOpenOnOddShapes() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+
+        // CRLF line endings are not understood; the file must stay untouched.
+        let crlfRuntime = fixture.runtime(name: "codex-crlf")
+        let crlfConfig = "[[skills.config]]\r\nname = \"toastty:toastty-capabilities\"\r\nenabled = false\r\n"
+        try fixture.writeCodexUserConfig(crlfConfig, runtime: crlfRuntime)
+        let crlfPreparation = try fixture.manager.prepareForManagedLaunch(runtime: crlfRuntime)
+        XCTAssertNotNil(crlfPreparation.configuration)
+        XCTAssertEqual(try fixture.codexUserConfigContents(runtime: crlfRuntime), crlfConfig)
+        XCTAssertEqual(fixture.configBackups(runtime: crlfRuntime), [])
+
+        // A malformed (unclosed) header is not a well-formed block; nothing
+        // is removed even though a toastty name appears.
+        let malformedRuntime = fixture.runtime(name: "codex-malformed")
+        let malformedConfig = """
+        [[skills.config]
+        name = "toastty:toastty-capabilities"
+        enabled = false
+
+        """
+        try fixture.writeCodexUserConfig(malformedConfig, runtime: malformedRuntime)
+        let malformedPreparation = try fixture.manager.prepareForManagedLaunch(runtime: malformedRuntime)
+        XCTAssertNotNil(malformedPreparation.configuration)
+        XCTAssertEqual(try fixture.codexUserConfigContents(runtime: malformedRuntime), malformedConfig)
+        XCTAssertEqual(fixture.configBackups(runtime: malformedRuntime), [])
+    }
+
+    func testLegacyStateCleanupAlsoNeutralizesSkillsConfigEntries() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.defaultHomeRuntime()
+        try fixture.installLegacyState(
+            runtime: runtime,
+            marketplacePath: fixture.legacyStableMarketplaceURL.path
+        )
+        try fixture.writeCodexUserConfig(Self.legacyDisabledSkillsConfig, runtime: runtime)
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(
+            try fixture.codexUserConfigContents(runtime: runtime),
+            Self.expectedNeutralizedSkillsConfig
+        )
+        XCTAssertEqual(fixture.configBackups(runtime: runtime).count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.legacyStateURL(runtime: runtime).path))
+    }
+
+    func testLegacySkillsConfigNeutralizationHandlesCustomCodexHomesIndependently() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let firstRuntime = fixture.runtime(name: "codex-one")
+        let secondRuntime = fixture.runtime(name: "codex-two")
+        try fixture.writeCodexUserConfig(Self.legacyDisabledSkillsConfig, runtime: firstRuntime)
+        try fixture.writeCodexUserConfig(Self.legacyDisabledSkillsConfig, runtime: secondRuntime)
+
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: firstRuntime)
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: secondRuntime)
+
+        for runtime in [firstRuntime, secondRuntime] {
+            XCTAssertEqual(
+                try fixture.codexUserConfigContents(runtime: runtime),
+                Self.expectedNeutralizedSkillsConfig
+            )
+            XCTAssertEqual(fixture.configBackups(runtime: runtime).count, 1)
+        }
+        XCTAssertNotEqual(
+            fixture.homeStateURL(runtime: firstRuntime).path,
+            fixture.homeStateURL(runtime: secondRuntime).path
+        )
+    }
+
     // MARK: - User plugin delivery
 
     func testDualPopulationDeliversUserPluginWithTwoEntryProfile() throws {
@@ -1439,6 +1599,38 @@ private extension CodexSkillsManagerTests {
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             ).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        }
+
+        func writeCodexUserConfig(
+            _ contents: String,
+            runtime: CodexIntegrationRuntime
+        ) throws {
+            try FileManager.default.createDirectory(
+                at: runtime.codexHomeURL,
+                withIntermediateDirectories: true
+            )
+            try contents.write(
+                to: runtime.codexHomeURL.appendingPathComponent("config.toml"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        func codexUserConfigContents(runtime: CodexIntegrationRuntime) throws -> String {
+            try String(
+                contentsOf: runtime.codexHomeURL.appendingPathComponent("config.toml"),
+                encoding: .utf8
+            )
+        }
+
+        func configBackups(runtime: CodexIntegrationRuntime) -> [URL] {
+            ((try? FileManager.default.contentsOfDirectory(
+                at: homeStateURL(runtime: runtime),
+                includingPropertiesForKeys: nil,
+                options: []
+            )) ?? [])
+                .filter { $0.lastPathComponent.hasPrefix("config-backup-") }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
         }
 
         func installLegacyState(

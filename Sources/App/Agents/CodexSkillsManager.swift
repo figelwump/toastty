@@ -373,6 +373,14 @@ final class CodexSkillsManager: @unchecked Sendable {
         try acquireOperationLock(until: deadline)
         defer { Self.operationLock.unlock() }
 
+        // Standalone guard, independent of the legacy state file: machines
+        // that ran the retired mechanism carry disabled `toastty:*`
+        // `[[skills.config]]` entries in the user's config that silently
+        // suppress the profile-delivered skills. Idempotent and cheap when
+        // the config is clean; the in-memory fast path above skips it, so it
+        // runs at most once per process in the steady state.
+        neutralizeLegacySkillsConfigEntriesIfNeeded(runtime: runtime)
+
         let oldRecord = readReceipt(runtime)
         let oldVerified = try? verifyInstalledFiles(
             runtime: runtime,
@@ -485,6 +493,10 @@ final class CodexSkillsManager: @unchecked Sendable {
         // otherwise a racing uninstall could see its deleted overlay
         // recreated.
         try acquireOperationLock(until: Date().addingTimeInterval(Self.operationTimeout))
+        // Restored launches are typically the first Codex preparation after
+        // startup; neutralize retired skills.config suppressions before the
+        // fast path can hand out a delivery they would silently disable.
+        neutralizeLegacySkillsConfigEntriesIfNeeded(runtime: runtime)
         let fastResult = lockedRestoreFastPath(runtime: runtime, bundled: bundled)
         Self.operationLock.unlock()
         if let fastResult {
@@ -1526,6 +1538,164 @@ private extension CodexSkillsManager {
             return .operationTimedOut
         }
         return .populationFailed(error.localizedDescription)
+    }
+
+    // MARK: - Legacy skills.config neutralization
+
+    /// The retired branch mechanism disable-unioned `[[skills.config]]`
+    /// entries (`name = "toastty:<skill>"`, `enabled = false`) into the
+    /// user's main `config.toml` through the Codex app-server. Main-config
+    /// skill settings apply under profile overlays (see
+    /// docs/plans/evidence/codex-session-scoped-skills-2026-08-04.md), so the
+    /// surviving entries silently suppress the profile-delivered shipped
+    /// skills forever — confirmed live on a legacy machine. This surgical
+    /// direct edit is deliberate: the app-server client was removed and the
+    /// architecture test forbids reintroducing it, `codex plugin remove`
+    /// never touches `skills.config`, and these blocks are Toastty-authored
+    /// artifacts of the removed mechanism — deleting them completes Toastty's
+    /// own uninstall. Whole toastty-named blocks are removed (not flipped to
+    /// `enabled = true`) so no clutter remains; every other line is preserved
+    /// byte-identically. The original file is backed up beside the receipts
+    /// under Toastty's own state directory before the first edit, and the
+    /// replacement is atomic. Fail-open: any anomaly (unreadable config,
+    /// unexpected shape, failed write) leaves the file untouched, logs
+    /// through the legacy-cleanup diagnostic pathway, and never blocks
+    /// provisioning — shipped delivery proceeds exactly as today, with skills
+    /// possibly staying suppressed on that machine until a later repair.
+    func neutralizeLegacySkillsConfigEntriesIfNeeded(runtime: CodexIntegrationRuntime) {
+        let configURL = runtime.codexHomeURL.appendingPathComponent("config.toml", isDirectory: false)
+        guard let originalData = try? Data(contentsOf: configURL) else { return }
+        guard let contents = String(data: originalData, encoding: .utf8) else {
+            logLegacySkillsConfigAnomaly("config.toml is not valid UTF-8", configURL: configURL)
+            return
+        }
+        // Cheap guard: nothing resembling a Toastty skill name means nothing
+        // to do (the common steady state).
+        guard contents.contains("\"toastty:") else { return }
+        guard let edited = Self.removingToasttySkillsConfigBlocks(from: contents) else {
+            logLegacySkillsConfigAnomaly(
+                "toastty skill names present but no removable well-formed [[skills.config]] block",
+                configURL: configURL
+            )
+            return
+        }
+
+        let backupURL = homeStateURL(for: runtime).appendingPathComponent(
+            "config-backup-\(Self.legacyConfigBackupTimestamp()).toml",
+            isDirectory: false
+        )
+        do {
+            try fileManager.createDirectory(
+                at: backupURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try originalData.write(to: backupURL)
+            let permissions = (try? fileManager.attributesOfItem(atPath: configURL.path))?[.posixPermissions]
+            try Data(edited.utf8).write(to: configURL, options: .atomic)
+            if let permissions {
+                try? fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: configURL.path)
+            }
+            ToasttyLog.info(
+                "Removed retired Toastty skills.config entries from the Codex config",
+                category: .automation,
+                metadata: [
+                    "codex_config": configURL.path,
+                    "backup": backupURL.path,
+                ]
+            )
+        } catch {
+            try? fileManager.removeItem(at: backupURL)
+            logLegacySkillsConfigAnomaly(error.localizedDescription, configURL: configURL)
+        }
+    }
+
+    func logLegacySkillsConfigAnomaly(_ detail: String, configURL: URL) {
+        ToasttyLog.warning(
+            "Legacy cleanup could not neutralize retired Toastty skills.config entries; shipped skills may stay suppressed until repair",
+            category: .automation,
+            metadata: [
+                "codex_config": configURL.path,
+                "error": CodexSkillsManagerError.legacyCleanupFailed(detail).localizedDescription,
+            ]
+        )
+    }
+
+    static func legacyConfigBackupTimestamp() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
+    }
+
+    /// Line-based removal (validator-script style, deliberately not a TOML
+    /// parser round-trip, which would normalize the file): drops every whole
+    /// `[[skills.config]]` array-of-table block whose `name` value starts
+    /// with `"toastty:"`, together with the blank separator lines inside and
+    /// immediately after the block, and keeps every other line — comments,
+    /// unrelated `[[skills.config]]` blocks, ordering — byte-identically.
+    /// Returns nil when there is nothing to remove or the shape is not
+    /// understood (CRLF line endings, toastty names outside a well-formed
+    /// block); callers fail open on nil.
+    static func removingToasttySkillsConfigBlocks(from contents: String) -> String? {
+        guard contents.contains("\r") == false else { return nil }
+        let lines = contents.components(separatedBy: "\n")
+        // Preserve the trailing newline: a final empty component stays out of
+        // every block span.
+        let scanCount = lines.last == "" ? lines.count - 1 : lines.count
+
+        var removedIndices = Set<Int>()
+        var index = 0
+        while index < scanCount {
+            guard lines[index].trimmingCharacters(in: .whitespaces) == "[[skills.config]]" else {
+                index += 1
+                continue
+            }
+            var span = [index]
+            var pendingBlanks: [Int] = []
+            var isToasttyBlock = false
+            var cursor = index + 1
+            while cursor < scanCount {
+                let trimmed = lines[cursor].trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty {
+                    pendingBlanks.append(cursor)
+                    cursor += 1
+                    continue
+                }
+                // A header starts the next block; a comment is preserved
+                // (only real key-value lines belong to the removable span).
+                if trimmed.hasPrefix("[") || trimmed.hasPrefix("#") {
+                    break
+                }
+                span.append(contentsOf: pendingBlanks)
+                pendingBlanks = []
+                span.append(cursor)
+                if isToasttySkillNameAssignment(trimmed) {
+                    isToasttyBlock = true
+                }
+                cursor += 1
+            }
+            if isToasttyBlock {
+                removedIndices.formUnion(span)
+                // Trailing blank separators disappear with their block.
+                removedIndices.formUnion(pendingBlanks)
+            }
+            index = cursor
+        }
+        guard removedIndices.isEmpty == false else { return nil }
+        return lines.indices
+            .filter { removedIndices.contains($0) == false }
+            .map { lines[$0] }
+            .joined(separator: "\n")
+    }
+
+    /// `name = "toastty:…` with flexible whitespace around `=`, applied to an
+    /// already-trimmed line.
+    static func isToasttySkillNameAssignment(_ trimmedLine: String) -> Bool {
+        guard trimmedLine.hasPrefix("name") else { return false }
+        var rest = trimmedLine.dropFirst("name".count)
+        rest = rest.drop(while: { $0 == " " || $0 == "\t" })
+        guard rest.first == "=" else { return false }
+        rest = rest.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
+        return rest.hasPrefix("\"toastty:")
     }
 
     // MARK: - Legacy cleanup
