@@ -19,6 +19,8 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let paneJournalDirectoryName = "pane-journals"
     private static let scratchpadDocumentsDirectoryName = "scratchpad-documents"
     private static let managedAgentResumeDirectoryName = "managed-agent-resume"
+    private static let userSkillsDirectoryName = "skills"
+    private static let agentPluginsDirectoryName = "agent-plugins"
     private static let artifactsDirectoryName = "artifacts"
     private static let devRunsDirectoryName = "dev-runs"
     private static let worktreeRuntimePrefix = "worktree-"
@@ -153,6 +155,22 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         )
     }
 
+    /// The user's skill-package source directory.
+    public var userSkillsDirectoryURL: URL {
+        configDirectoryURL.appending(
+            path: Self.userSkillsDirectoryName,
+            directoryHint: .isDirectory
+        )
+    }
+
+    /// Parent of the Toastty-owned per-agent plugin staging/state roots.
+    public var agentPluginsDirectoryURL: URL {
+        configDirectoryURL.appending(
+            path: Self.agentPluginsDirectoryName,
+            directoryHint: .isDirectory
+        )
+    }
+
     public func scratchpadDocumentFileURL(for documentID: UUID) -> URL {
         scratchpadDocumentsDirectoryURL.appending(
             path: "\(documentID.uuidString).json",
@@ -235,6 +253,10 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         )
         try fileManager.createDirectory(
             at: managedAgentResumeDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: userSkillsDirectoryURL,
             withIntermediateDirectories: true
         )
         if let automationSocketFileURL {

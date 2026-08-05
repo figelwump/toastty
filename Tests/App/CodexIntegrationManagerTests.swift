@@ -1,3 +1,4 @@
+import CoreState
 import CryptoKit
 import Foundation
 import XCTest
@@ -603,6 +604,50 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.profileConfigURL(runtime: secondRuntime).path))
     }
 
+    func testRuntimeIsolatedManagerKeepsToasttyStateUnderIsolatedRootOnly() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let isolatedHomeURL = fixture.rootURL.appendingPathComponent("runtime-home", isDirectory: true)
+        let realHomeURL = fixture.rootURL.appendingPathComponent("real-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: realHomeURL, withIntermediateDirectories: true)
+        let manager = CodexSkillsManager(
+            runtimePaths: .resolve(
+                homeDirectoryPath: realHomeURL.path,
+                environment: ["TOASTTY_RUNTIME_HOME": isolatedHomeURL.path]
+            ),
+            homeDirectoryURL: realHomeURL,
+            sourcePluginURLProvider: { [sourcePluginURL = fixture.sourcePluginURL] in sourcePluginURL },
+            sourceMarketplaceURLProvider: { [sourceMarketplaceURL = fixture.sourceMarketplaceURL] in
+                sourceMarketplaceURL
+            },
+            pluginClient: fixture.pluginClient
+        )
+        let runtime = fixture.runtime(name: "isolated-codex-home")
+
+        let preparation = try manager.prepareForManagedLaunch(runtime: runtime)
+
+        XCTAssertNotNil(preparation.configuration)
+        // The receipt sidecar lands under the isolated runtime home.
+        let isolatedStateRootURL = isolatedHomeURL
+            .appendingPathComponent("agent-plugins/codex", isDirectory: true)
+        XCTAssertEqual(manager.stateRootURL.path, isolatedStateRootURL.path)
+        let homeDirectories = try FileManager.default.contentsOfDirectory(
+            at: isolatedStateRootURL.appendingPathComponent("homes", isDirectory: true),
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        XCTAssertEqual(homeDirectories.count, 1)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: homeDirectories[0].appendingPathComponent("receipt.json").path
+            )
+        )
+        // Nothing is ever written into the real home's .toastty.
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: realHomeURL.appendingPathComponent(".toastty").path)
+        )
+    }
+
     func testSkillsManagerHasNoHookAppServerOrReconciliationDependency() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -670,6 +715,7 @@ private extension CodexSkillsManagerTests {
 
             pluginClient = FakeCodexPluginClient(recorder: recorder)
             manager = CodexSkillsManager(
+                runtimePaths: .resolve(homeDirectoryPath: homeURL.path, environment: [:]),
                 homeDirectoryURL: homeURL,
                 sourcePluginURLProvider: { [sourcePluginURL] in sourcePluginURL },
                 sourceMarketplaceURLProvider: { [sourceMarketplaceURL] in sourceMarketplaceURL },
@@ -679,6 +725,7 @@ private extension CodexSkillsManagerTests {
 
         func makeRestartedManager() -> CodexSkillsManager {
             CodexSkillsManager(
+                runtimePaths: .resolve(homeDirectoryPath: homeURL.path, environment: [:]),
                 homeDirectoryURL: homeURL,
                 sourcePluginURLProvider: { [sourcePluginURL] in sourcePluginURL },
                 sourceMarketplaceURLProvider: { [sourceMarketplaceURL] in sourceMarketplaceURL },

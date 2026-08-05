@@ -350,6 +350,15 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = target.panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.socketPathKey] = socketPathProvider()
         environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
+        // Launch-scoped resolution: the request environment may carry runtime
+        // isolation overrides, so isolated instances advertise their isolated
+        // user-skills directory. The directory is only advertised, never
+        // created here.
+        let launchRuntimeEnvironment = ProcessInfo.processInfo.environment
+            .merging(request.environment) { _, new in new }
+        environment[ToasttyLaunchContextEnvironment.userSkillsRootKey] =
+            ToasttyRuntimePaths.resolve(environment: launchRuntimeEnvironment)
+                .userSkillsDirectoryURL.path
         if let resolvedCWD {
             environment[ToasttyLaunchContextEnvironment.cwdKey] = resolvedCWD
         }

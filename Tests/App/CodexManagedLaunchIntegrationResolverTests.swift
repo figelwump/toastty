@@ -207,6 +207,7 @@ private extension CodexManagedLaunchSkillsResolverTests {
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
             let manager = CodexSkillsManager(
+                runtimePaths: .resolve(homeDirectoryPath: homeURL.path, environment: [:]),
                 homeDirectoryURL: homeURL,
                 sourcePluginURLProvider: {
                     repositoryRoot.appendingPathComponent("plugins/toastty", isDirectory: true)

@@ -25,6 +25,8 @@ struct ToasttyRuntimePathsTests {
         #expect(paths.paneJournalDirectoryURL.path == "/tmp/toastty-home/.toastty/history/pane-journals")
         #expect(paths.paneJournalFileURL(for: panelID).path == "/tmp/toastty-home/.toastty/history/pane-journals/11111111-1111-1111-1111-111111111111.journal")
         #expect(paths.scratchpadDocumentsDirectoryURL.path == "/tmp/toastty-home/.toastty/scratchpad-documents")
+        #expect(paths.userSkillsDirectoryURL.path == "/tmp/toastty-home/.toastty/skills")
+        #expect(paths.agentPluginsDirectoryURL.path == "/tmp/toastty-home/.toastty/agent-plugins")
         #expect(paths.defaultLogFileURL.path == "/tmp/toastty-home/Library/Logs/Toastty/toastty.log")
         #expect(paths.automationSocketFileURL == nil)
         #expect(paths.userDefaultsSuiteName == nil)
@@ -57,6 +59,8 @@ struct ToasttyRuntimePathsTests {
         #expect(first.paneJournalDirectoryURL.path == "\(runtimeHomePath)/history/pane-journals")
         #expect(first.paneJournalFileURL(for: panelID).path == "\(runtimeHomePath)/history/pane-journals/22222222-2222-2222-2222-222222222222.journal")
         #expect(first.scratchpadDocumentsDirectoryURL.path == "\(runtimeHomePath)/scratchpad-documents")
+        #expect(first.userSkillsDirectoryURL.path == "\(runtimeHomePath)/skills")
+        #expect(first.agentPluginsDirectoryURL.path == "\(runtimeHomePath)/agent-plugins")
         #expect(first.defaultLogFileURL.path == "\(runtimeHomePath)/logs/toastty.log")
         #expect(first.automationSocketFileURL?.path.hasSuffix("/events-v1.sock") == true)
         #expect(first.automationSocketFileURL?.path.contains("toastty-runtime-") == true)
@@ -105,6 +109,8 @@ struct ToasttyRuntimePathsTests {
         #expect(first.runtimeHomeURL?.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home")
         #expect(first.configFileURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/config")
         #expect(first.agentShimDirectoryURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/bin")
+        #expect(first.userSkillsDirectoryURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/skills")
+        #expect(first.agentPluginsDirectoryURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/agent-plugins")
     }
 
     @Test
@@ -155,6 +161,7 @@ struct ToasttyRuntimePathsTests {
         #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("bin").path))
         #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("history/panes").path))
         #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("history/pane-journals").path))
+        #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("skills").path))
         let versionFileURL = runtimeHomeURL.appendingPathComponent("runtime-version.txt", isDirectory: false)
         let versionContents = try String(contentsOf: versionFileURL, encoding: .utf8)
         #expect(versionContents == "1\n")

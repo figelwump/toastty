@@ -34,12 +34,28 @@ final class ClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Se
     private let fileManager: FileManager
     private let queue = DispatchQueue(label: "dev.toastty.claude-skills-bundle", qos: .userInitiated)
 
+    /// The Toastty-side staging root follows the resolved runtime paths so
+    /// runtime-isolated app instances never write into the real `~/.toastty`.
+    convenience init(
+        sourcePluginURLProvider: @escaping @Sendable () -> URL? = {
+            ToasttyAgentPluginBundle.bundledPluginURL()
+        },
+        runtimePaths: ToasttyRuntimePaths = .resolve(),
+        fileManager: FileManager = .default
+    ) {
+        self.init(
+            sourcePluginURLProvider: sourcePluginURLProvider,
+            stagingRootURL: runtimePaths.agentPluginsDirectoryURL
+                .appendingPathComponent("claude", isDirectory: true),
+            fileManager: fileManager
+        )
+    }
+
     init(
         sourcePluginURLProvider: @escaping @Sendable () -> URL? = {
             ToasttyAgentPluginBundle.bundledPluginURL()
         },
-        stagingRootURL: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-            .appendingPathComponent(".toastty/agent-plugins/claude", isDirectory: true),
+        stagingRootURL: URL,
         fileManager: FileManager = .default
     ) {
         self.sourcePluginURLProvider = sourcePluginURLProvider

@@ -212,6 +212,12 @@ final class CodexSkillsManager: @unchecked Sendable {
     private var failureCounts: [String: Int] = [:]
 
     private let homeDirectoryURL: URL
+    /// Toastty-side storage (receipts, legacy staging) follows the resolved
+    /// runtime paths so runtime-isolated app instances never write into the
+    /// real `~/.toastty`. `homeDirectoryURL` still locates the user's default
+    /// `~/.codex`, which is not Toastty state and is never isolated.
+    private let toasttyConfigDirectoryURL: URL
+    private let agentPluginsDirectoryURL: URL
     private let sourcePluginURLProvider: @Sendable () -> URL?
     private let sourceMarketplaceURLProvider: @Sendable () -> URL?
     private let fileManager: FileManager
@@ -220,6 +226,7 @@ final class CodexSkillsManager: @unchecked Sendable {
     private var cachedConfigurations: [String: CachedConfiguration] = [:]
 
     init(
+        runtimePaths: ToasttyRuntimePaths = .resolve(),
         homeDirectoryURL: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true),
         sourcePluginURLProvider: @escaping @Sendable () -> URL? = {
             ToasttyAgentPluginBundle.bundledPluginURL()
@@ -232,6 +239,8 @@ final class CodexSkillsManager: @unchecked Sendable {
         pluginClient: any CodexPluginCLIManaging = CodexPluginCLIClient()
     ) {
         self.homeDirectoryURL = homeDirectoryURL
+        toasttyConfigDirectoryURL = runtimePaths.configDirectoryURL
+        agentPluginsDirectoryURL = runtimePaths.agentPluginsDirectoryURL
         self.sourcePluginURLProvider = sourcePluginURLProvider
         self.sourceMarketplaceURLProvider = sourceMarketplaceURLProvider
         self.fileManager = fileManager
@@ -239,7 +248,7 @@ final class CodexSkillsManager: @unchecked Sendable {
     }
 
     var stateRootURL: URL {
-        homeDirectoryURL.appendingPathComponent(".toastty/agent-plugins/codex", isDirectory: true)
+        agentPluginsDirectoryURL.appendingPathComponent("codex", isDirectory: true)
     }
 
     func cachedLaunchConfiguration(runtime: CodexIntegrationRuntime) -> CodexSkillsLaunchConfiguration? {
@@ -1056,8 +1065,11 @@ private extension CodexSkillsManager {
         }
     }
 
+    /// Legacy state only ever existed in the real home; resolving through the
+    /// runtime paths keeps isolated runs from touching it (cleanup finds
+    /// nothing there).
     var legacyStableMarketplaceURL: URL {
-        homeDirectoryURL.appendingPathComponent(".toastty/codex-plugin", isDirectory: true)
+        toasttyConfigDirectoryURL.appendingPathComponent("codex-plugin", isDirectory: true)
     }
 
     var legacyVersionsRootURL: URL {

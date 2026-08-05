@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 import XCTest
 @testable import ToasttyApp
@@ -113,6 +114,62 @@ final class ClaudeSkillsBundleManagerTests: XCTestCase {
         guard case .unavailable = deliveryStatus else {
             return XCTFail("Expected invalid staged plugin to need attention")
         }
+    }
+
+    func testRuntimeIsolatedManagerStagesUnderIsolatedRootOnly() async throws {
+        let rootURL = temporaryDirectory(named: "isolated-runtime")
+        let sourceURL = rootURL.appendingPathComponent("source/toastty", isDirectory: true)
+        let isolatedHomeURL = rootURL.appendingPathComponent("runtime-home", isDirectory: true)
+        let realHomeURL = rootURL.appendingPathComponent("real-home", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try FileManager.default.createDirectory(at: realHomeURL, withIntermediateDirectories: true)
+        try makePlugin(at: sourceURL, version: "1.2.3")
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: realHomeURL.path,
+            environment: ["TOASTTY_RUNTIME_HOME": isolatedHomeURL.path]
+        )
+        let manager = ClaudeSkillsBundleManager(
+            sourcePluginURLProvider: { sourceURL },
+            runtimePaths: runtimePaths
+        )
+
+        let preparedConfiguration = await manager.prepareForManagedLaunch()
+        let configuration = try XCTUnwrap(preparedConfiguration)
+
+        let isolatedStagingRootPath = isolatedHomeURL
+            .appendingPathComponent("agent-plugins/claude", isDirectory: true).path
+        XCTAssertTrue(configuration.pluginRootPath.hasPrefix(isolatedStagingRootPath + "/"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: configuration.pluginRootPath))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: realHomeURL.appendingPathComponent(".toastty").path),
+            "Isolated runs must never write into the real home's .toastty"
+        )
+    }
+
+    func testProductionRuntimePathsStageUnderHomeToastty() async throws {
+        let rootURL = temporaryDirectory(named: "production-paths")
+        let sourceURL = rootURL.appendingPathComponent("source/toastty", isDirectory: true)
+        let homeURL = rootURL.appendingPathComponent("home", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try FileManager.default.createDirectory(at: homeURL, withIntermediateDirectories: true)
+        try makePlugin(at: sourceURL, version: "1.2.3")
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeURL.path,
+            environment: [:]
+        )
+        let manager = ClaudeSkillsBundleManager(
+            sourcePluginURLProvider: { sourceURL },
+            runtimePaths: runtimePaths
+        )
+
+        let preparedConfiguration = await manager.prepareForManagedLaunch()
+        let configuration = try XCTUnwrap(preparedConfiguration)
+
+        XCTAssertTrue(
+            configuration.pluginRootPath.hasPrefix(
+                homeURL.appendingPathComponent(".toastty/agent-plugins/claude", isDirectory: true).path + "/"
+            )
+        )
     }
 
     func testRestoredLaunchStagesChangedBundleBeforeResume() throws {

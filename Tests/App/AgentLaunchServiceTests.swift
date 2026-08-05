@@ -893,6 +893,12 @@ struct AgentLaunchServiceTests {
                 environment: ["TOASTTY_SKILLS_ROOT": "/tmp/user-controlled"]
             )
         }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_USER_SKILLS_ROOT' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "codex",
+                environment: ["TOASTTY_USER_SKILLS_ROOT": "/tmp/user-controlled"]
+            )
+        }
         #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_AGENT' is managed by Toastty")) {
             _ = try service.launch(
                 profileID: "codex",

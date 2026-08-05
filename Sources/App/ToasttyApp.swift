@@ -885,8 +885,11 @@ struct ToasttyApp: App {
         )
         // Single app-scoped skills managers, shared between the launch path and
         // the skills-management sheet so both act on the same in-memory state.
-        let codexSkillsManager = CodexSkillsManager()
-        let claudeSkillsBundleManager = ClaudeSkillsBundleManager()
+        // They reuse the app-resolved runtime paths so runtime-isolated
+        // instances keep their Toastty-side skills state inside the isolated
+        // home.
+        let codexSkillsManager = CodexSkillsManager(runtimePaths: runtimePaths)
+        let claudeSkillsBundleManager = ClaudeSkillsBundleManager(runtimePaths: runtimePaths)
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,

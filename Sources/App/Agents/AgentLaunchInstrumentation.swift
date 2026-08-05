@@ -195,7 +195,7 @@ enum AgentLaunchInstrumentation {
             var environment: [String: String] = [:]
             if let skillsIntegration, skillsInsertionIndex != nil {
                 launchArguments += ["--plugin-dir", skillsIntegration.pluginRootPath]
-                environment["TOASTTY_SKILLS_ROOT"] = skillsIntegration.skillsRootPath
+                environment[ToasttyLaunchContextEnvironment.skillsRootKey] = skillsIntegration.skillsRootPath
             }
 
             return PreparedAgentLaunchCommand(
@@ -248,7 +248,7 @@ enum AgentLaunchInstrumentation {
             )
             if skillsPreparation.result == .injected,
                let skillsIntegration {
-                environment["TOASTTY_SKILLS_ROOT"] = skillsIntegration.skillsRootPath
+                environment[ToasttyLaunchContextEnvironment.skillsRootKey] = skillsIntegration.skillsRootPath
             }
 
             var preparedArgv = skillsPreparation.argv

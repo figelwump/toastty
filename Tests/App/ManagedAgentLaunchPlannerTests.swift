@@ -111,6 +111,62 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testManagedLaunchAdvertisesUserSkillsRootForEveryAgentKind() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        defer { AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil }
+        let fixture = try makePlannerFixture()
+        let expectedPath = ToasttyRuntimePaths.resolve().userSkillsDirectoryURL.path
+
+        for (agent, argv) in [
+            (AgentKind.codex, ["codex"]),
+            (.claude, ["claude"]),
+            (.opencode, ["opencode"]),
+            (.mimocode, ["mimocode"]),
+            (.pi, ["pi"]),
+        ] {
+            let plan = try fixture.planner.prepareManagedLaunch(
+                ManagedAgentLaunchRequest(
+                    agent: agent,
+                    panelID: fixture.panelID,
+                    argv: argv,
+                    cwd: "/tmp/repo"
+                )
+            )
+            defer {
+                fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            }
+
+            XCTAssertEqual(
+                plan.environment["TOASTTY_USER_SKILLS_ROOT"],
+                expectedPath,
+                "\(agent.rawValue) launch must advertise the user skills root"
+            )
+        }
+    }
+
+    func testManagedLaunchResolvesUserSkillsRootFromLaunchEnvironment() throws {
+        let fixture = try makePlannerFixture()
+        let isolatedRuntimeHome = "/tmp/toastty-planner-user-skills-tests/runtime-home"
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo",
+                environment: ["TOASTTY_RUNTIME_HOME": isolatedRuntimeHome]
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        }
+
+        XCTAssertEqual(
+            plan.environment["TOASTTY_USER_SKILLS_ROOT"],
+            "\(isolatedRuntimeHome)/skills"
+        )
+    }
+
     func testPendingPanelParentClaimAdoptsLiveParentForManagedLaunch() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_010)
         let fixture = try makePlannerFixture(nowProvider: { now })
