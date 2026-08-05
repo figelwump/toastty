@@ -22,8 +22,8 @@ struct AppWindowView: View {
     @State private var showsAgentGetStartedSheet = false
     @State private var agentGetStartedInitialStep: AgentGetStartedStep = .chooser
     @State private var showsSkillsManagementSheet = false
-    @State private var skillsProvisionedNoticeAgent: AgentKind?
-    @State private var queuedSkillsProvisionedNoticeAgents: [AgentKind] = []
+    @State private var skillsProvisionedNotice: ManagedAgentSkillsProvisionedNotice?
+    @State private var queuedSkillsProvisionedNotices: [ManagedAgentSkillsProvisionedNotice] = []
     @State private var appIsActive = true
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -101,9 +101,9 @@ struct AppWindowView: View {
             // Sidebar toggle button in the title bar area, right of traffic lights
             sidebarToggleButton
 
-            if let skillsProvisionedNoticeAgent {
+            if let skillsProvisionedNotice {
                 ManagedAgentSkillsProvisionedBanner(
-                    agent: skillsProvisionedNoticeAgent,
+                    notice: skillsProvisionedNotice,
                     manage: {
                         advanceSkillsProvisionedNotice()
                         showsSkillsManagementSheet = true
@@ -153,6 +153,7 @@ struct AppWindowView: View {
                 sessionRuntimeStore: sessionRuntimeStore,
                 codexSkillsManager: agentLaunchService.codexSkillsManager,
                 claudeSkillsBundleManager: agentLaunchService.claudeSkillsBundleManager,
+                userSkillCatalog: agentLaunchService.userSkillCatalog,
                 processPathProvider: agentLaunchService.codexProcessPathSnapshotProvider,
                 processPathRefreshProvider: agentLaunchService.codexProcessPathRefresher
             )
@@ -205,15 +206,15 @@ struct AppWindowView: View {
             showsSkillsManagementSheet = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsProvisioned)) { notification in
-            guard let agent = ManagedAgentSkillsProvisionedNoticeStore.claim(
+            guard let notice = ManagedAgentSkillsProvisionedNoticeStore.claim(
                 for: windowID,
                 notificationObject: notification.object
             ) else { return }
             withAnimation(.easeOut(duration: 0.15)) {
-                if skillsProvisionedNoticeAgent == nil {
-                    skillsProvisionedNoticeAgent = agent
-                } else if queuedSkillsProvisionedNoticeAgents.contains(agent) == false {
-                    queuedSkillsProvisionedNoticeAgents.append(agent)
+                if skillsProvisionedNotice == nil {
+                    skillsProvisionedNotice = notice
+                } else if queuedSkillsProvisionedNotices.contains(where: { $0.agent == notice.agent }) == false {
+                    queuedSkillsProvisionedNotices.append(notice)
                 }
             }
         }
@@ -227,10 +228,10 @@ struct AppWindowView: View {
     }
 
     private func advanceSkillsProvisionedNotice() {
-        if queuedSkillsProvisionedNoticeAgents.isEmpty {
-            skillsProvisionedNoticeAgent = nil
+        if queuedSkillsProvisionedNotices.isEmpty {
+            skillsProvisionedNotice = nil
         } else {
-            skillsProvisionedNoticeAgent = queuedSkillsProvisionedNoticeAgents.removeFirst()
+            skillsProvisionedNotice = queuedSkillsProvisionedNotices.removeFirst()
         }
     }
 

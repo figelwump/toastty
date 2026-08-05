@@ -25,11 +25,15 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
         let codexNotice = ManagedAgentSkillsProvisionedNotice(
             windowID: targetWindowID,
-            agent: .codex
+            agent: .codex,
+            shippedSkillCount: 4,
+            deliveredUserSkillCount: 2
         )
         let claudeNotice = ManagedAgentSkillsProvisionedNotice(
             windowID: targetWindowID,
-            agent: .claude
+            agent: .claude,
+            shippedSkillCount: 4,
+            deliveredUserSkillCount: 0
         )
 
         XCTAssertNil(
@@ -45,7 +49,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
                 notificationObject: codexNotice,
                 userDefaults: defaults
             ),
-            .codex
+            codexNotice
         )
         XCTAssertNil(
             ManagedAgentSkillsProvisionedNoticeStore.claim(
@@ -60,7 +64,356 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
                 notificationObject: claudeNotice,
                 userDefaults: defaults
             ),
-            .claude
+            claudeNotice
         )
+    }
+
+    // MARK: - Provisioned banner wording
+
+    func testProvisionedBannerMessageForShippedOnlyLaunch() {
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.message(
+                for: ManagedAgentSkillsProvisionedNotice(
+                    windowID: UUID(),
+                    agent: .codex,
+                    shippedSkillCount: 4,
+                    deliveredUserSkillCount: 0
+                )
+            ),
+            "Toastty enabled 4 skills for managed Codex sessions. Global and project skill folders were not changed."
+        )
+    }
+
+    func testProvisionedBannerMessageIncludesDeliveredUserSkillCount() {
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.message(
+                for: ManagedAgentSkillsProvisionedNotice(
+                    windowID: UUID(),
+                    agent: .codex,
+                    shippedSkillCount: 4,
+                    deliveredUserSkillCount: 2
+                )
+            ),
+            "Toastty enabled 6 skills for managed Codex sessions (including 2 user skills). Global and project skill folders were not changed."
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.message(
+                for: ManagedAgentSkillsProvisionedNotice(
+                    windowID: UUID(),
+                    agent: .claude,
+                    shippedSkillCount: 4,
+                    deliveredUserSkillCount: 1
+                )
+            ),
+            "Toastty enabled 5 skills for managed Claude Code sessions (including 1 user skill). Global and project skill folders were not changed."
+        )
+    }
+
+    @MainActor
+    func testDeliveredUserSkillCountRequiresCodexDeliveredOutcome() {
+        let snapshot = makeSnapshot(packageNames: ["alpha-skill", "beta-skill"])
+
+        XCTAssertEqual(
+            ManagedAgentLaunchPlanner.deliveredUserSkillCount(
+                agent: .codex,
+                codexUserSkills: .delivered(version: "0.1.0-abc", contentDigest: "d"),
+                userSkillSnapshot: snapshot
+            ),
+            2
+        )
+        XCTAssertEqual(
+            ManagedAgentLaunchPlanner.deliveredUserSkillCount(
+                agent: .codex,
+                codexUserSkills: .notDelivered,
+                userSkillSnapshot: snapshot
+            ),
+            0
+        )
+        XCTAssertEqual(
+            ManagedAgentLaunchPlanner.deliveredUserSkillCount(
+                agent: .claude,
+                codexUserSkills: nil,
+                userSkillSnapshot: snapshot
+            ),
+            2
+        )
+        XCTAssertEqual(
+            ManagedAgentLaunchPlanner.deliveredUserSkillCount(
+                agent: .claude,
+                codexUserSkills: nil,
+                userSkillSnapshot: nil
+            ),
+            0
+        )
+    }
+
+    // MARK: - User skills section model
+
+    @MainActor
+    func testUserSkillsModelReflectsAcceptedAndExcludedPackages() async {
+        let state = makeCatalogState(packages: [
+            makePackage(name: "alpha-skill", status: .accepted),
+            makePackage(name: "beta-skill", status: .excluded(.missingSkillFile)),
+            makePackage(name: "gamma-skill", status: .accepted),
+        ])
+        let model = makeModel(scan: { state })
+
+        model.refresh()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(model.catalogState, state)
+        XCTAssertEqual(model.sectionTitle, "User Skills — 2 included")
+        XCTAssertEqual(
+            UserSkillsManagementModel.statusDescription(for: state.packages[0]),
+            "Included"
+        )
+        XCTAssertEqual(
+            UserSkillsManagementModel.statusDescription(for: state.packages[1]),
+            UserSkillDiagnostic.missingSkillFile.displayMessage
+        )
+        XCTAssertNil(model.snapshotDigest)
+        XCTAssertEqual(model.codexDeliveryDetail, "No user skills are staged for delivery.")
+        XCTAssertEqual(model.claudeDeliveryDetail, "No user skills are staged for delivery.")
+        XCTAssertFalse(model.isWorking)
+    }
+
+    @MainActor
+    func testUserSkillsModelEmptyCatalogState() async {
+        let emptyState = makeCatalogState(packages: [])
+        let model = makeModel(scan: { emptyState })
+
+        model.refresh()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(model.sectionTitle, "User Skills")
+        XCTAssertEqual(model.acceptedCount, 0)
+        XCTAssertNil(model.snapshotDigest)
+    }
+
+    @MainActor
+    func testUserSkillsModelDeliveryDetailsFromVerifiedSnapshot() async {
+        let snapshot = makeSnapshot(
+            packageNames: ["alpha-skill"],
+            pluginContentDigest: "abcdef1234567890"
+        )
+        let acceptedState = makeCatalogState(packages: [
+            makePackage(name: "alpha-skill", status: .accepted),
+        ])
+        let model = makeModel(
+            scan: { acceptedState },
+            existingSnapshot: { snapshot }
+        )
+
+        model.refresh()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(model.snapshotDigest, "abcdef1234567890")
+        XCTAssertEqual(model.codexDeliveryDetail, "Ready for next launch — digest abcdef12")
+        XCTAssertEqual(model.claudeDeliveryDetail, "Delivered on next launch")
+    }
+
+    @MainActor
+    func testRescanInvokesRefreshExactlyOnceAndRescans() async {
+        let counter = InvocationCounter()
+        let acceptedState = makeCatalogState(packages: [
+            makePackage(name: "alpha-skill", status: .accepted),
+        ])
+        let model = makeModel(
+            scan: {
+                counter.increment(\.scans)
+                return acceptedState
+            },
+            refresh: {
+                counter.increment(\.refreshes)
+                return nil
+            }
+        )
+
+        model.refresh()
+        await model.waitForPendingWork()
+        let scansBeforeRescan = counter.counts.scans
+        XCTAssertEqual(counter.counts.refreshes, 0)
+
+        model.rescan()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(counter.counts.refreshes, 1)
+        XCTAssertGreaterThan(counter.counts.scans, scansBeforeRescan)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isWorking)
+    }
+
+    @MainActor
+    func testRescanSkipsRefreshWhenNothingAcceptedAndNoSnapshotExists() async {
+        let counter = InvocationCounter()
+        let excludedState = makeCatalogState(packages: [
+            makePackage(name: "beta-skill", status: .excluded(.invalidFrontmatter)),
+        ])
+        let model = makeModel(
+            scan: { excludedState },
+            refresh: {
+                counter.increment(\.refreshes)
+                return nil
+            }
+        )
+
+        model.rescan()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(counter.counts.refreshes, 0)
+    }
+
+    @MainActor
+    func testRescanRefreshesWhenSnapshotExistsEvenWithoutAcceptedPackages() async {
+        let counter = InvocationCounter()
+        let snapshot = makeSnapshot(packageNames: ["alpha-skill"])
+        let emptyState = makeCatalogState(packages: [])
+        let model = makeModel(
+            scan: { emptyState },
+            existingSnapshot: { snapshot },
+            refresh: {
+                counter.increment(\.refreshes)
+                return nil
+            }
+        )
+
+        model.rescan()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(counter.counts.refreshes, 1)
+    }
+
+    @MainActor
+    func testRescanSurfacesRefreshFailureAsErrorMessage() async {
+        let acceptedState = makeCatalogState(packages: [
+            makePackage(name: "alpha-skill", status: .accepted),
+        ])
+        let model = makeModel(
+            scan: { acceptedState },
+            refresh: {
+                throw ToasttyUserSkillCatalogError.snapshotWriteFailed("/tmp/user-skills")
+            }
+        )
+
+        model.rescan()
+        await model.waitForPendingWork()
+
+        XCTAssertEqual(
+            model.errorMessage,
+            ToasttyUserSkillCatalogError.snapshotWriteFailed("/tmp/user-skills").localizedDescription
+        )
+        XCTAssertEqual(model.codexDeliveryDetail, model.errorMessage)
+    }
+
+    @MainActor
+    func testCreateSkillsFolderAffordanceOnlyOfferedWhenDirectoryMissing() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-user-skills-sheet-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        var revealedURLs: [URL] = []
+        let model = makeModel(
+            userSkillsDirectoryURL: directoryURL,
+            revealFolder: { revealedURLs.append($0) }
+        )
+
+        model.refresh()
+        await model.waitForPendingWork()
+        XCTAssertTrue(model.showsCreateFolderAffordance)
+
+        model.createUserSkillsFolder()
+
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory)
+        )
+        XCTAssertTrue(isDirectory.boolValue)
+        XCTAssertFalse(model.showsCreateFolderAffordance)
+        XCTAssertEqual(revealedURLs.map(\.path), [directoryURL.path])
+
+        model.refresh()
+        await model.waitForPendingWork()
+        XCTAssertFalse(model.showsCreateFolderAffordance)
+    }
+
+    // MARK: - Fixtures
+
+    @MainActor
+    private func makeModel(
+        userSkillsDirectoryURL: URL = URL(
+            fileURLWithPath: "/nonexistent/toastty-user-skills-fixture",
+            isDirectory: true
+        ),
+        scan: @escaping @Sendable () -> UserSkillCatalogState = {
+            UserSkillCatalogState(packages: [], globalDiagnostics: [], sourceFingerprint: "fp")
+        },
+        existingSnapshot: @escaping @Sendable () -> UserSkillPluginSnapshot? = { nil },
+        refresh: @escaping @Sendable () throws -> UserSkillPluginSnapshot? = { nil },
+        revealFolder: (@MainActor (URL) -> Void)? = { _ in }
+    ) -> UserSkillsManagementModel {
+        UserSkillsManagementModel(
+            userSkillsDirectoryURL: userSkillsDirectoryURL,
+            scanProvider: scan,
+            existingSnapshotProvider: existingSnapshot,
+            refreshProvider: refresh,
+            revealFolder: revealFolder
+        )
+    }
+
+    private func makeCatalogState(packages: [UserSkillPackage]) -> UserSkillCatalogState {
+        UserSkillCatalogState(
+            packages: packages,
+            globalDiagnostics: [],
+            sourceFingerprint: "fp"
+        )
+    }
+
+    private func makePackage(
+        name: String,
+        status: UserSkillPackage.Status
+    ) -> UserSkillPackage {
+        UserSkillPackage(
+            name: name,
+            sourceURL: URL(fileURLWithPath: "/tmp/user-skills/\(name)", isDirectory: true),
+            status: status
+        )
+    }
+
+    private func makeSnapshot(
+        packageNames: [String],
+        pluginContentDigest: String = "abcdef1234567890"
+    ) -> UserSkillPluginSnapshot {
+        let rootURL = URL(fileURLWithPath: "/tmp/toastty-user-snapshot", isDirectory: true)
+        return UserSkillPluginSnapshot(
+            pluginName: UserSkillPluginSnapshot.pluginName,
+            version: "0.1.0-abcdef123456",
+            sourceDigest: "abcdef123456",
+            pluginContentDigest: pluginContentDigest,
+            pluginRootURL: rootURL,
+            marketplaceRootURL: rootURL,
+            skillsRootURL: rootURL.appendingPathComponent("skills", isDirectory: true),
+            receiptURL: rootURL.appendingPathComponent("receipt.json"),
+            acceptedPackageNames: packageNames
+        )
+    }
+}
+
+/// Thread-safe invocation counter for providers that run off the main actor.
+private final class InvocationCounter: @unchecked Sendable {
+    struct Counts {
+        var scans = 0
+        var refreshes = 0
+    }
+
+    private let lock = NSLock()
+    private var storage = Counts()
+
+    var counts: Counts {
+        lock.withLock { storage }
+    }
+
+    func increment(_ keyPath: WritableKeyPath<Counts, Int>) {
+        lock.withLock {
+            storage[keyPath: keyPath] += 1
+        }
     }
 }

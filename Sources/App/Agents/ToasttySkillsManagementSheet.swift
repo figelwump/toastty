@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import Foundation
 import SwiftUI
@@ -5,6 +6,10 @@ import SwiftUI
 struct ManagedAgentSkillsProvisionedNotice: Equatable, Sendable {
     let windowID: UUID
     let agent: AgentKind
+    let shippedSkillCount: Int
+    /// Number of user skill packages delivered with this launch; 0 when the
+    /// launch went shipped-only.
+    let deliveredUserSkillCount: Int
 }
 
 enum ManagedAgentSkillsProvisionedNoticeStore {
@@ -16,14 +21,14 @@ enum ManagedAgentSkillsProvisionedNoticeStore {
         for windowID: UUID,
         notificationObject: Any?,
         userDefaults: UserDefaults = ToasttyAppDefaults.current
-    ) -> AgentKind? {
+    ) -> ManagedAgentSkillsProvisionedNotice? {
         guard let notice = notificationObject as? ManagedAgentSkillsProvisionedNotice,
               notice.windowID == windowID,
               userDefaults.bool(forKey: didShowKey(for: notice.agent)) == false else {
             return nil
         }
         userDefaults.set(true, forKey: didShowKey(for: notice.agent))
-        return notice.agent
+        return notice
     }
 }
 
@@ -104,6 +109,185 @@ final class ClaudeSkillsManagementModel: ObservableObject {
     }
 }
 
+/// Read-only view model over the user skill catalog. Opening the sheet only
+/// ever runs `scan()` and `existingSnapshot()`; snapshot builds happen solely
+/// through the explicit Rescan action.
+@MainActor
+final class UserSkillsManagementModel: ObservableObject {
+    @Published private(set) var catalogState: UserSkillCatalogState?
+    /// `pluginContentDigest` of the newest verified `toastty-user` snapshot,
+    /// nil when no verified snapshot exists.
+    @Published private(set) var snapshotDigest: String?
+    @Published private(set) var userSkillsDirectoryExists = false
+    @Published private(set) var isWorking = false
+    @Published private(set) var errorMessage: String?
+
+    let userSkillsDirectoryPath: String
+
+    private let scanProvider: @Sendable () -> UserSkillCatalogState
+    private let existingSnapshotProvider: @Sendable () -> UserSkillPluginSnapshot?
+    private let refreshProvider: @Sendable () throws -> UserSkillPluginSnapshot?
+    private let revealFolder: @MainActor (URL) -> Void
+    private let fileManager: FileManager
+    private var task: Task<Void, Never>?
+
+    convenience init(
+        catalog: ToasttyUserSkillCatalog,
+        revealFolder: (@MainActor (URL) -> Void)? = nil
+    ) {
+        self.init(
+            userSkillsDirectoryURL: catalog.userSkillsDirectoryURL,
+            scanProvider: { catalog.scan() },
+            existingSnapshotProvider: { catalog.existingSnapshot() },
+            refreshProvider: { try catalog.refreshUserSkills() },
+            revealFolder: revealFolder
+        )
+    }
+
+    init(
+        userSkillsDirectoryURL: URL,
+        scanProvider: @escaping @Sendable () -> UserSkillCatalogState,
+        existingSnapshotProvider: @escaping @Sendable () -> UserSkillPluginSnapshot?,
+        refreshProvider: @escaping @Sendable () throws -> UserSkillPluginSnapshot?,
+        revealFolder: (@MainActor (URL) -> Void)? = nil,
+        fileManager: FileManager = .default
+    ) {
+        userSkillsDirectoryPath = userSkillsDirectoryURL.path
+        self.scanProvider = scanProvider
+        self.existingSnapshotProvider = existingSnapshotProvider
+        self.refreshProvider = refreshProvider
+        self.revealFolder = revealFolder ?? { url in
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+        self.fileManager = fileManager
+    }
+
+    var acceptedCount: Int {
+        catalogState?.acceptedPackages.count ?? 0
+    }
+
+    var sectionTitle: String {
+        guard let catalogState, catalogState.packages.isEmpty == false else {
+            return "User Skills"
+        }
+        return "User Skills — \(acceptedCount) included"
+    }
+
+    var showsCreateFolderAffordance: Bool {
+        userSkillsDirectoryExists == false
+    }
+
+    var codexDeliveryDetail: String {
+        if let errorMessage { return errorMessage }
+        if let snapshotDigest {
+            return "Ready for next launch — digest \(String(snapshotDigest.prefix(8)))"
+        }
+        return "No user skills are staged for delivery."
+    }
+
+    var claudeDeliveryDetail: String {
+        snapshotDigest == nil
+            ? "No user skills are staged for delivery."
+            : "Delivered on next launch"
+    }
+
+    static func statusDescription(for package: UserSkillPackage) -> String {
+        switch package.status {
+        case .accepted:
+            return "Included"
+        case .excluded(let diagnostic):
+            return diagnostic.displayMessage
+        }
+    }
+
+    /// Read-only pass: scan plus a verified read of the newest snapshot.
+    func refresh() {
+        run(performRefresh: false)
+    }
+
+    /// Rescan action: scans, and rebuilds the snapshot only when the accepted
+    /// set is non-empty or a previously prepared snapshot already exists.
+    func rescan() {
+        run(performRefresh: true)
+    }
+
+    func openUserSkillsFolder() {
+        revealFolder(URL(fileURLWithPath: userSkillsDirectoryPath, isDirectory: true))
+    }
+
+    func createUserSkillsFolder() {
+        let directoryURL = URL(fileURLWithPath: userSkillsDirectoryPath, isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        updateDirectoryExists()
+        guard userSkillsDirectoryExists else { return }
+        revealFolder(directoryURL)
+    }
+
+    /// Awaits the in-flight scan/rescan pass. Test seam.
+    func waitForPendingWork() async {
+        await task?.value
+    }
+}
+
+private extension UserSkillsManagementModel {
+    struct PassOutcome: Sendable {
+        let state: UserSkillCatalogState
+        let snapshotDigest: String?
+        let refreshError: String?
+    }
+
+    func run(performRefresh: Bool) {
+        task?.cancel()
+        isWorking = true
+        if performRefresh {
+            errorMessage = nil
+        }
+        updateDirectoryExists()
+        let scan = scanProvider
+        let existingSnapshot = existingSnapshotProvider
+        let refreshUserSkills = refreshProvider
+        task = Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) { () -> PassOutcome in
+                var refreshError: String?
+                if performRefresh {
+                    let gateState = scan()
+                    if gateState.acceptedPackages.isEmpty == false || existingSnapshot() != nil {
+                        do {
+                            _ = try refreshUserSkills()
+                        } catch {
+                            refreshError = error.localizedDescription
+                        }
+                    }
+                }
+                return PassOutcome(
+                    state: scan(),
+                    snapshotDigest: existingSnapshot()?.pluginContentDigest,
+                    refreshError: refreshError
+                )
+            }.value
+            guard let self, Task.isCancelled == false else { return }
+            catalogState = outcome.state
+            snapshotDigest = outcome.snapshotDigest
+            if performRefresh {
+                errorMessage = outcome.refreshError
+            }
+            isWorking = false
+        }
+    }
+
+    func updateDirectoryExists() {
+        var isDirectory: ObjCBool = false
+        userSkillsDirectoryExists = fileManager.fileExists(
+            atPath: userSkillsDirectoryPath,
+            isDirectory: &isDirectory
+        ) && isDirectory.boolValue
+    }
+}
+
 private extension CodexSkillsManagementModel {
     typealias Operation = @Sendable (
         CodexSkillsManager,
@@ -167,6 +351,7 @@ struct ToasttySkillsManagementSheet: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @StateObject private var model: CodexSkillsManagementModel
     @StateObject private var claudeModel: ClaudeSkillsManagementModel
+    @StateObject private var userSkillsModel: UserSkillsManagementModel
     @State private var showsUninstallConfirmation = false
     @State private var detailsExpanded = false
     @Environment(\.dismiss) private var dismiss
@@ -175,10 +360,12 @@ struct ToasttySkillsManagementSheet: View {
         sessionRuntimeStore: SessionRuntimeStore,
         codexSkillsManager: CodexSkillsManager? = nil,
         claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
+        userSkillCatalog: ToasttyUserSkillCatalog? = nil,
         processPathProvider: @escaping @Sendable () -> String? = { nil },
         processPathRefreshProvider: (@Sendable () -> String?)? = nil,
         model: CodexSkillsManagementModel? = nil,
-        claudeModel: ClaudeSkillsManagementModel? = nil
+        claudeModel: ClaudeSkillsManagementModel? = nil,
+        userSkillsModel: UserSkillsManagementModel? = nil
     ) {
         self.sessionRuntimeStore = sessionRuntimeStore
         _model = StateObject(
@@ -193,6 +380,11 @@ struct ToasttySkillsManagementSheet: View {
                 manager: claudeSkillsBundleManager ?? ClaudeSkillsBundleManager()
             )
         )
+        _userSkillsModel = StateObject(
+            wrappedValue: userSkillsModel ?? UserSkillsManagementModel(
+                catalog: userSkillCatalog ?? ToasttyUserSkillCatalog()
+            )
+        )
     }
 
     var body: some View {
@@ -200,6 +392,7 @@ struct ToasttySkillsManagementSheet: View {
             header
             statusCards
             skillsList
+            userSkillsSection
             details
             Spacer(minLength: 0)
             actionBar
@@ -228,6 +421,7 @@ struct ToasttySkillsManagementSheet: View {
         .onAppear {
             model.refresh(hasActiveManagedCodexSession: hasActiveManagedCodexSession)
             claudeModel.refresh()
+            userSkillsModel.refresh()
         }
         .onChange(of: activeManagedCodexSessionCount) { _, _ in
             guard model.isWorking == false else { return }
@@ -240,7 +434,7 @@ struct ToasttySkillsManagementSheet: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Toastty Skills")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Toastty provides the same four namespaced skills to managed Codex and Claude Code sessions.")
+                Text("Toastty provides its four shipped skills, plus your user-created skills, to managed Codex and Claude Code sessions. Ordinary sessions are unaffected.")
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -360,7 +554,7 @@ struct ToasttySkillsManagementSheet: View {
 
     private var skillsList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Skills")
+            Text("Shipped Skills")
                 .font(.system(size: 13, weight: .semibold))
             ForEach(ToasttyAgentPluginBundle.skills, id: \.name) { skill in
                 VStack(alignment: .leading, spacing: 3) {
@@ -382,6 +576,72 @@ struct ToasttySkillsManagementSheet: View {
         }
     }
 
+    private var userSkillsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(userSkillsModel.sectionTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                if userSkillsModel.isWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Button("Rescan") {
+                    userSkillsModel.rescan()
+                }
+                .disabled(userSkillsModel.isWorking)
+                .accessibilityIdentifier("sheet.toastty-skills.user.rescan")
+                if userSkillsModel.showsCreateFolderAffordance {
+                    Button("Create Skills Folder") {
+                        userSkillsModel.createUserSkillsFolder()
+                    }
+                    .accessibilityIdentifier("sheet.toastty-skills.user.create-folder")
+                } else {
+                    Button("Open User Skills Folder") {
+                        userSkillsModel.openUserSkillsFolder()
+                    }
+                    .accessibilityIdentifier("sheet.toastty-skills.user.open-folder")
+                }
+            }
+
+            if let catalogState = userSkillsModel.catalogState, catalogState.packages.isEmpty == false {
+                ForEach(catalogState.packages, id: \.name) { package in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(package.name)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        Text(UserSkillsManagementModel.statusDescription(for: package))
+                            .font(.system(size: 12))
+                            .foregroundStyle(
+                                package.isAccepted
+                                    ? ToastyTheme.mutedText
+                                    : ToastyTheme.sessionNeedsApprovalText
+                            )
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("sheet.toastty-skills.user.\(package.name)")
+                }
+            } else {
+                Text("No user skills found. Add a skill as \(userSkillsModel.userSkillsDirectoryPath)/<name>/SKILL.md with name and description frontmatter.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Codex: \(userSkillsModel.codexDeliveryDetail)")
+                Text("Claude Code: \(userSkillsModel.claudeDeliveryDetail)")
+                Text("Running sessions keep the skills they launched with; new launches use the current set.")
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(ToastyTheme.inactiveText)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 2)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sheet.toastty-skills.user")
+    }
+
     private var details: some View {
         DisclosureGroup("Codex plugin details", isExpanded: $detailsExpanded) {
             VStack(alignment: .leading, spacing: 8) {
@@ -390,6 +650,10 @@ struct ToasttySkillsManagementSheet: View {
                     technicalRow("Plugin cache", value: status.cachePath ?? "Not installed")
                     technicalRow("Bundled version", value: status.bundledVersion ?? "Unavailable")
                     technicalRow("Bundled digest", value: status.bundledDigest ?? "Unavailable")
+                    technicalRow(
+                        "Effective digest",
+                        value: status.bundledDigest.map { String($0.prefix(8)) } ?? "Unavailable"
+                    )
                 } else if model.codexNotFoundMessage != nil {
                     Text("Codex paths are unavailable because Toastty could not find a supported codex or cdx executable.")
                         .foregroundStyle(ToastyTheme.mutedText)
@@ -570,7 +834,7 @@ struct ToasttySkillsManagementSheet: View {
 }
 
 struct ManagedAgentSkillsProvisionedBanner: View {
-    let agent: AgentKind
+    let notice: ManagedAgentSkillsProvisionedNotice
     let manage: () -> Void
     let dismiss: () -> Void
 
@@ -640,7 +904,7 @@ struct ManagedAgentSkillsProvisionedBanner: View {
     }
 
     private var title: String {
-        switch agent {
+        switch notice.agent {
         case .codex: "Codex skills are ready"
         case .claude: "Claude Code skills are ready"
         default: "Toastty skills are ready"
@@ -648,13 +912,16 @@ struct ManagedAgentSkillsProvisionedBanner: View {
     }
 
     private var message: String {
-        switch agent {
-        case .codex:
-            "Four Toastty skills are enabled for managed sessions. Global and project skill folders were not changed."
-        case .claude:
-            "Four Toastty skills are enabled for this managed session. Global and project skill folders were not changed."
-        default:
-            "Four Toastty skills are enabled for this managed session. Global and project skill folders were not changed."
+        Self.message(for: notice)
+    }
+
+    static func message(for notice: ManagedAgentSkillsProvisionedNotice) -> String {
+        let totalCount = notice.shippedSkillCount + notice.deliveredUserSkillCount
+        var text = "Toastty enabled \(totalCount) skill\(totalCount == 1 ? "" : "s") for managed \(notice.agent.displayName) sessions"
+        if notice.deliveredUserSkillCount > 0 {
+            text += " (including \(notice.deliveredUserSkillCount) user skill\(notice.deliveredUserSkillCount == 1 ? "" : "s"))"
         }
+        text += ". Global and project skill folders were not changed."
+        return text
     }
 }

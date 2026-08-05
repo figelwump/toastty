@@ -198,7 +198,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             request: request,
             windowID: target.windowID,
             codexSkillsDecision: codexSkillsDecision,
-            claudeSkillsConfiguration: claudeSkillsConfiguration
+            claudeSkillsConfiguration: claudeSkillsConfiguration,
+            userSkillSnapshot: userSkillSnapshot
         )
         return plan
     }
@@ -239,7 +240,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             request: request,
             windowID: target.windowID,
             codexSkillsDecision: codexSkillsDecision,
-            claudeSkillsConfiguration: claudeSkillsConfiguration
+            claudeSkillsConfiguration: claudeSkillsConfiguration,
+            userSkillSnapshot: userSkillSnapshot
         )
         return plan
     }
@@ -306,7 +308,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         request: ManagedAgentLaunchRequest,
         windowID: UUID,
         codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
-        claudeSkillsConfiguration: ClaudeSkillsLaunchConfiguration?
+        claudeSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
+        userSkillSnapshot: UserSkillPluginSnapshot?
     ) {
         let isAvailable: Bool
         if request.agent == .codex {
@@ -322,9 +325,35 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             name: .toasttyManagedAgentSkillsProvisioned,
             object: ManagedAgentSkillsProvisionedNotice(
                 windowID: windowID,
-                agent: request.agent
+                agent: request.agent,
+                shippedSkillCount: ToasttyAgentPluginBundle.skills.count,
+                deliveredUserSkillCount: Self.deliveredUserSkillCount(
+                    agent: request.agent,
+                    codexUserSkills: codexSkillsDecision?.userSkills,
+                    userSkillSnapshot: userSkillSnapshot
+                )
             )
         )
+    }
+
+    /// Number of user skill packages actually delivered with this launch.
+    /// Codex requires a `.delivered` user-plugin outcome; Claude delivers the
+    /// snapshot's plugin root directly whenever a snapshot was resolved.
+    static func deliveredUserSkillCount(
+        agent: AgentKind,
+        codexUserSkills: CodexUserSkillsDeliveryState?,
+        userSkillSnapshot: UserSkillPluginSnapshot?
+    ) -> Int {
+        guard let userSkillSnapshot else { return 0 }
+        switch agent {
+        case .codex:
+            guard case .delivered = codexUserSkills else { return 0 }
+            return userSkillSnapshot.acceptedPackageNames.count
+        case .claude:
+            return userSkillSnapshot.acceptedPackageNames.count
+        default:
+            return 0
+        }
     }
 
     private func prepareManagedLaunch(

@@ -57,7 +57,9 @@ protocol ToasttyUserSkillSnapshotProviding: AnyObject, Sendable {
 /// a separate concern; this type never touches launch paths and never reads
 /// `~/.codex`, `~/.claude`, or `~/.agents`.
 final class ToasttyUserSkillCatalog: ToasttyUserSkillSnapshotProviding, @unchecked Sendable {
-    private let userSkillsDirectoryURL: URL
+    /// The user's skill-package source directory, exposed for the management
+    /// UI (empty-state path text and folder reveal/create actions).
+    let userSkillsDirectoryURL: URL
     private let snapshotsRootURL: URL
     private let fileManager: FileManager
     /// Serializes snapshot preparation within this (app-scoped) instance so
