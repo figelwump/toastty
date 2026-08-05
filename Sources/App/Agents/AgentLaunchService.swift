@@ -110,12 +110,21 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private let managedLaunchPlanner: any ManagedAgentLaunchPlanning
     private let codexProcessPathProvider: @Sendable () -> String?
     private let codexProcessPathRefreshProvider: @Sendable () -> String?
+    /// App-scoped skills managers. Production creates exactly one of each in
+    /// `ToasttyApp` and injects them here; the skills-management sheet must use
+    /// these same instances so Repair/Uninstall act on the state the launch
+    /// path reads.
+    let codexSkillsManager: CodexSkillsManager
+    let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
+    let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
 
     init(
         store: AppStore,
         terminalCommandRouter: any TerminalCommandRouting,
         sessionRuntimeStore: SessionRuntimeStore,
         agentCatalogProvider: any AgentCatalogProviding,
+        codexSkillsManager: CodexSkillsManager? = nil,
+        claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
         fileManager: FileManager = .default,
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath,
@@ -132,11 +141,19 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         self.fileManager = fileManager
         self.codexProcessPathProvider = codexProcessPathProvider
         self.codexProcessPathRefreshProvider = codexProcessPathRefreshProvider
+        let resolvedCodexSkillsManager = codexSkillsManager
+            ?? CodexSkillsManager(fileManager: fileManager)
+        self.codexSkillsManager = resolvedCodexSkillsManager
+        let resolvedClaudeSkillsBundleManager = claudeSkillsBundleManager
+            ?? ClaudeSkillsBundleManager(fileManager: fileManager)
+        self.claudeSkillsBundleManager = resolvedClaudeSkillsBundleManager
         let resolvedCodexSkillsResolver = codexSkillsResolver
             ?? CodexManagedLaunchSkillsResolver(
                 fileManager: fileManager,
+                manager: resolvedCodexSkillsManager,
                 processPathProvider: codexProcessPathProvider
             )
+        self.codexSkillsResolver = resolvedCodexSkillsResolver
         managedLaunchPlanner = ManagedAgentLaunchPlanner(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -152,7 +169,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 terminalCommandRouter?.promptState(panelID: panelID) ?? .unavailable
             },
             nativeSessionObserverRegistry: nativeSessionObserverRegistry,
-            codexSkillsResolver: resolvedCodexSkillsResolver
+            codexSkillsResolver: resolvedCodexSkillsResolver,
+            claudeSkillsBundleManager: resolvedClaudeSkillsBundleManager
         )
     }
 

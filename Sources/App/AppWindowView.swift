@@ -21,7 +21,7 @@ struct AppWindowView: View {
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
     @State private var agentGetStartedInitialStep: AgentGetStartedStep = .chooser
-    @State private var showsCodexSkillsManagementSheet = false
+    @State private var showsSkillsManagementSheet = false
     @State private var skillsProvisionedNoticeAgent: AgentKind?
     @State private var queuedSkillsProvisionedNoticeAgents: [AgentKind] = []
     @State private var appIsActive = true
@@ -106,7 +106,7 @@ struct AppWindowView: View {
                     agent: skillsProvisionedNoticeAgent,
                     manage: {
                         advanceSkillsProvisionedNotice()
-                        showsCodexSkillsManagementSheet = true
+                        showsSkillsManagementSheet = true
                     },
                     dismiss: {
                         withAnimation(.easeOut(duration: 0.15)) {
@@ -148,9 +148,11 @@ struct AppWindowView: View {
         .sheet(isPresented: $showsAgentGetStartedSheet) {
             agentGetStartedSheet
         }
-        .sheet(isPresented: $showsCodexSkillsManagementSheet) {
-            CodexSkillsManagementSheet(
+        .sheet(isPresented: $showsSkillsManagementSheet) {
+            ToasttySkillsManagementSheet(
                 sessionRuntimeStore: sessionRuntimeStore,
+                codexSkillsManager: agentLaunchService.codexSkillsManager,
+                claudeSkillsBundleManager: agentLaunchService.claudeSkillsBundleManager,
                 processPathProvider: agentLaunchService.codexProcessPathSnapshotProvider,
                 processPathRefreshProvider: agentLaunchService.codexProcessPathRefresher
             )
@@ -198,9 +200,9 @@ struct AppWindowView: View {
             ) else { return }
             presentAgentGetStartedFlow(initialStep: request.initialStep)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .toasttyShowCodexSkillsManagement)) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyShowSkillsManagement)) { notification in
             guard notification.object as? UUID == windowID else { return }
-            showsCodexSkillsManagementSheet = true
+            showsSkillsManagementSheet = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsProvisioned)) { notification in
             guard let agent = ManagedAgentSkillsProvisionedNoticeStore.claim(

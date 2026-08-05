@@ -84,11 +84,11 @@ final class ClaudeSkillsManagementModel: ObservableObject {
 
     private let statusProvider: @Sendable () async -> ClaudeSkillsDeliveryStatus
 
-    init(
-        statusProvider: @escaping @Sendable () async -> ClaudeSkillsDeliveryStatus = {
-            await ClaudeSkillsBundleManager().deliveryStatus()
-        }
-    ) {
+    init(manager: any ClaudeSkillsBundleManaging = ClaudeSkillsBundleManager()) {
+        statusProvider = { await manager.deliveryStatus() }
+    }
+
+    init(statusProvider: @escaping @Sendable () async -> ClaudeSkillsDeliveryStatus) {
         self.statusProvider = statusProvider
     }
 
@@ -163,7 +163,7 @@ private extension CodexSkillsManagementModel {
     }
 }
 
-struct CodexSkillsManagementSheet: View {
+struct ToasttySkillsManagementSheet: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @StateObject private var model: CodexSkillsManagementModel
     @StateObject private var claudeModel: ClaudeSkillsManagementModel
@@ -173,6 +173,8 @@ struct CodexSkillsManagementSheet: View {
 
     init(
         sessionRuntimeStore: SessionRuntimeStore,
+        codexSkillsManager: CodexSkillsManager? = nil,
+        claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
         processPathProvider: @escaping @Sendable () -> String? = { nil },
         processPathRefreshProvider: (@Sendable () -> String?)? = nil,
         model: CodexSkillsManagementModel? = nil,
@@ -181,12 +183,15 @@ struct CodexSkillsManagementSheet: View {
         self.sessionRuntimeStore = sessionRuntimeStore
         _model = StateObject(
             wrappedValue: model ?? CodexSkillsManagementModel(
+                manager: codexSkillsManager ?? CodexSkillsManager(),
                 processPathProvider: processPathProvider,
                 processPathRefreshProvider: processPathRefreshProvider
             )
         )
         _claudeModel = StateObject(
-            wrappedValue: claudeModel ?? ClaudeSkillsManagementModel()
+            wrappedValue: claudeModel ?? ClaudeSkillsManagementModel(
+                manager: claudeSkillsBundleManager ?? ClaudeSkillsBundleManager()
+            )
         )
     }
 
@@ -317,7 +322,7 @@ struct CodexSkillsManagementSheet: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(ToastyTheme.hairline, lineWidth: 1)
         }
-        .accessibilityIdentifier("sheet.codex-skills.status")
+        .accessibilityIdentifier("sheet.toastty-skills.status")
     }
 
     private var claudeStatusCard: some View {
@@ -366,7 +371,7 @@ struct CodexSkillsManagementSheet: View {
                         .foregroundStyle(ToastyTheme.mutedText)
                 }
                 .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("sheet.codex-skills.skill.\(skill.name)")
+                .accessibilityIdentifier("sheet.toastty-skills.skill.\(skill.name)")
             }
 
             Text("Toastty does not change separately installed global skills. If duplicate, unnamespaced Toastty skills appear, remove those copies manually from ~/.codex/skills, ~/.claude/skills, or ~/.agents/skills.")

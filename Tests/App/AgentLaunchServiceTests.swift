@@ -409,6 +409,44 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func injectedSkillsManagersAreForwardedToLaunchPlannerAndResolver() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let agentCatalogProvider = TestAgentCatalogProvider()
+        let codexSkillsManager = CodexSkillsManager()
+        let claudeSkillsBundleManager = RecordingClaudeSkillsBundleManager()
+
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            codexSkillsManager: codexSkillsManager,
+            claudeSkillsBundleManager: claudeSkillsBundleManager,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
+        )
+
+        // The service exposes the exact injected instances (the skills sheet
+        // is wired from these), and the launch-path resolver wraps the same
+        // Codex manager instance.
+        #expect(service.codexSkillsManager === codexSkillsManager)
+        #expect(service.claudeSkillsBundleManager === claudeSkillsBundleManager)
+        let resolver = try #require(
+            service.codexSkillsResolver as? CodexManagedLaunchSkillsResolver
+        )
+        #expect(resolver.manager === codexSkillsManager)
+
+        // The managed-launch planner consults the injected Claude manager.
+        _ = try service.launch(profileID: "claude")
+        #expect(claudeSkillsBundleManager.existingVerifiedConfigurationCallCount == 1)
+    }
+
+    @Test
     func profileNotFoundErrorListsAvailableProfiles() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -1215,6 +1253,28 @@ private final class ImmediateCodexManagedLaunchSkillsResolver: CodexManagedLaunc
         workingDirectory: String?
     ) -> CodexManagedLaunchSkillsDecision {
         CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+    }
+}
+
+private final class RecordingClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Sendable {
+    private let lock = NSLock()
+    private var existingVerifiedConfigurationCalls = 0
+
+    var existingVerifiedConfigurationCallCount: Int {
+        lock.withLock { existingVerifiedConfigurationCalls }
+    }
+
+    func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration? {
+        lock.withLock { existingVerifiedConfigurationCalls += 1 }
+        return nil
+    }
+
+    func deliveryStatus() async -> ClaudeSkillsDeliveryStatus {
+        .unavailable(detail: "test")
+    }
+
+    func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration? {
+        nil
     }
 }
 

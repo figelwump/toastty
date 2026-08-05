@@ -80,7 +80,7 @@ extension CodexManagedLaunchSkillsResolving {
 final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
     private let homeDirectoryURL: URL
     private let fileManager: FileManager
-    private let manager: CodexSkillsManager
+    let manager: CodexSkillsManager
     private let processEnvironment: @Sendable () -> [String: String]
     private let processPathProvider: @Sendable () -> String?
     private let unsupportedLock = NSLock()

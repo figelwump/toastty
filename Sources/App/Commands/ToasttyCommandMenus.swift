@@ -381,8 +381,8 @@ struct ToasttyCommandMenus: Commands {
             }
             Divider()
 
-            Button("\(ToasttyBuiltInCommand.manageCodexSkills.title)…") {
-                showCodexSkillsManagement()
+            Button("\(ToasttyBuiltInCommand.manageToasttySkills.title)…") {
+                showSkillsManagement()
             }
             .disabled(agentGetStartedTargetWindowID == nil)
 
@@ -902,10 +902,10 @@ struct ToasttyCommandMenus: Commands {
         )
     }
 
-    private func showCodexSkillsManagement() {
+    private func showSkillsManagement() {
         guard let windowID = agentGetStartedTargetWindowID else { return }
         NotificationCenter.default.post(
-            name: .toasttyShowCodexSkillsManagement,
+            name: .toasttyShowSkillsManagement,
             object: windowID
         )
     }

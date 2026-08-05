@@ -17,6 +17,7 @@ enum ClaudeSkillsDeliveryStatus: Equatable, Sendable {
 
 protocol ClaudeSkillsBundleManaging: AnyObject, Sendable {
     func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration?
+    func deliveryStatus() async -> ClaudeSkillsDeliveryStatus
     func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration?
     func prepareForRestoredManagedLaunch() -> ClaudeSkillsLaunchConfiguration?
 }

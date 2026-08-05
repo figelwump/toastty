@@ -1921,6 +1921,13 @@ private final class TestClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @
         configuration
     }
 
+    func deliveryStatus() async -> ClaudeSkillsDeliveryStatus {
+        if let configuration {
+            return .providedAtLaunch(configuration)
+        }
+        return .unavailable(detail: "test")
+    }
+
     func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration? {
         configuration
     }

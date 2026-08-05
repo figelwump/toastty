@@ -206,9 +206,10 @@ enum CodexIntegrationRuntimeLocator {
 final class CodexSkillsManager: @unchecked Sendable {
     static let operationTimeout: TimeInterval = 4
     private static let operationLock = NSLock()
-    private static let sharedStateLock = NSLock()
-    nonisolated(unsafe) private static var pendingRepairHomes = Set<String>()
-    nonisolated(unsafe) private static var failureCounts: [String: Int] = [:]
+
+    private let repairStateLock = NSLock()
+    private var pendingRepairHomes = Set<String>()
+    private var failureCounts: [String: Int] = [:]
 
     private let homeDirectoryURL: URL
     private let sourcePluginURLProvider: @Sendable () -> URL?
@@ -1345,51 +1346,45 @@ private extension CodexSkillsManager {
     }
 
     func pendingRepair(forHomePath path: String) -> Bool {
-        Self.sharedStateLock.lock()
-        defer { Self.sharedStateLock.unlock() }
-        return Self.pendingRepairHomes.contains(path)
+        repairStateLock.lock()
+        defer { repairStateLock.unlock() }
+        return pendingRepairHomes.contains(path)
     }
 
     func markPendingRepair(for runtime: CodexIntegrationRuntime) {
-        Self.sharedStateLock.lock()
-        Self.pendingRepairHomes.insert(runtime.codexHomeURL.path)
-        Self.sharedStateLock.unlock()
+        repairStateLock.lock()
+        pendingRepairHomes.insert(runtime.codexHomeURL.path)
+        repairStateLock.unlock()
     }
 
     func clearPendingRepair(for runtime: CodexIntegrationRuntime) {
-        Self.sharedStateLock.lock()
-        Self.pendingRepairHomes.remove(runtime.codexHomeURL.path)
-        Self.sharedStateLock.unlock()
+        repairStateLock.lock()
+        pendingRepairHomes.remove(runtime.codexHomeURL.path)
+        repairStateLock.unlock()
     }
 
     func failureCount(for signature: String) -> Int {
-        Self.sharedStateLock.lock()
-        defer { Self.sharedStateLock.unlock() }
-        return Self.failureCounts[signature] ?? 0
+        repairStateLock.lock()
+        defer { repairStateLock.unlock() }
+        return failureCounts[signature] ?? 0
     }
 
     func incrementFailure(for signature: String) {
-        Self.sharedStateLock.lock()
-        Self.failureCounts[signature, default: 0] += 1
-        Self.sharedStateLock.unlock()
+        repairStateLock.lock()
+        failureCounts[signature, default: 0] += 1
+        repairStateLock.unlock()
     }
 
     func clearFailure(for signature: String) {
-        Self.sharedStateLock.lock()
-        Self.failureCounts.removeValue(forKey: signature)
-        Self.sharedStateLock.unlock()
+        repairStateLock.lock()
+        failureCounts.removeValue(forKey: signature)
+        repairStateLock.unlock()
     }
 
     func clearFailuresForRuntime(_ runtime: CodexIntegrationRuntime) {
         let prefix = runtimeKey(runtime)
-        Self.sharedStateLock.lock()
-        Self.failureCounts = Self.failureCounts.filter { $0.key.hasPrefix(prefix) == false }
-        Self.sharedStateLock.unlock()
+        repairStateLock.lock()
+        failureCounts = failureCounts.filter { $0.key.hasPrefix(prefix) == false }
+        repairStateLock.unlock()
     }
-}
-
-extension Notification.Name {
-    static let toasttyManagedAgentSkillsProvisioned = Notification.Name(
-        "dev.toastty.managed-agent-skills-provisioned"
-    )
 }

@@ -14,5 +14,8 @@ private struct ToasttyCommandWindowIDKey: FocusedValueKey {
 
 extension Notification.Name {
     static let toasttyShowAgentGetStartedFlow = Notification.Name("ToasttyShowAgentGetStartedFlow")
-    static let toasttyShowCodexSkillsManagement = Notification.Name("ToasttyShowCodexSkillsManagement")
+    static let toasttyShowSkillsManagement = Notification.Name("ToasttyShowSkillsManagement")
+    static let toasttyManagedAgentSkillsProvisioned = Notification.Name(
+        "dev.toastty.managed-agent-skills-provisioned"
+    )
 }
