@@ -138,6 +138,17 @@ repository's instructions and launch tooling.
 > registration on first provisioning. Capability evidence:
 > `docs/plans/evidence/codex-session-scoped-skills-2026-08-04.md`. The
 > "no named Codex profile" non-goal below is superseded accordingly.
+>
+> This replacement covers every subsection through "Idempotence and updates",
+> and the same correction applies wherever the rest of this document mentions
+> marketplace registration, `skills.config` disables, disabled-name tombstones,
+> or a `-c skills.config` managed activation (the user-facing sheet/uninstall
+> descriptions above and the tests/non-goals below): the shipped mechanism
+> writes none of those. Injection skips are typed and fail open — a
+> caller-supplied `--profile`/`-p` flag, an opaque argv shape, or a
+> caller-replaced `CODEX_HOME` launches Codex without Toastty skills.
+> `docs/running-agents.md` and `docs/privacy-and-local-data.md` describe the
+> shipped behavior.
 
 ### Required host-capability spike
 
@@ -516,6 +527,23 @@ Validation after implementation:
   skill editor, hook migration, or hook trust bypass. (The earlier "no named
   Codex profile" non-goal is superseded by profile-based delivery.)
 - Do not add automatic old-Claude-bundle deletion in the first slice.
+
+## User-created skills (added 2026-08-04)
+
+Beyond this plan's shipped four-skill plugin, the branch also delivers
+user-authored skills from `~/.toastty/skills/<name>/SKILL.md` (validated
+name/frontmatter contract, per-package and catalog-wide caps, symlinks and
+special files rejected). Accepted packages are snapshotted into an immutable
+content-addressed `toastty-user` plugin under `~/.toastty/agent-plugins/user/`
+and delivered only to newly launched managed sessions: Codex through the same
+`toastty-managed` profile overlay plus a `$CODEX_HOME/plugins/cache/toastty-user/`
+cache, Claude Code through a second additive `--plugin-dir`. User-plugin
+failures never affect shipped-skill delivery, ordinary sessions see nothing,
+`TOASTTY_USER_SKILLS_ROOT` advertises the source directory to managed
+sessions, and a startup sweeper garbage-collects superseded snapshots. The
+management sheet gained a user section (package statuses, Rescan, open/create
+folder). See `docs/running-agents.md` ("User-created skills") for the shipped
+contract.
 
 ## References
 

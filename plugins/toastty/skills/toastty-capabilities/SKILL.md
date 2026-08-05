@@ -12,7 +12,9 @@ Use this skill to drive Toastty from an agent session. Toastty provides a bundle
 In a Toastty-launched agent terminal, expect:
 
 - `TOASTTY_SKILLS_ROOT`: stable absolute path to the copied Toastty plugin's
-  `skills` directory.
+  `skills` directory. Read-only; never write into it.
+- `TOASTTY_USER_SKILLS_ROOT`: absolute path to the user's Toastty skill-package
+  source directory. It may not exist yet.
 - `TOASTTY_CLI_PATH`: absolute path to the bundled `toastty` CLI.
 - `TOASTTY_PANEL_ID`: current terminal panel ID.
 - `TOASTTY_SESSION_ID`: current managed session ID when the agent was launched by Toastty.
@@ -283,6 +285,26 @@ Use notifications for ready, needs-approval, or error states:
   --workspace "$workspace_id" \
   --panel "$panel_id"
 ```
+
+## Creating User Skills
+
+Toastty delivers user-created skill packages to managed agent sessions. Create
+one only when the user explicitly asks for a new skill; do not author skills
+proactively.
+
+- Write `$TOASTTY_USER_SKILLS_ROOT/<name>/SKILL.md` with YAML frontmatter
+  containing `name` and a non-empty `description`. The directory name must
+  match the frontmatter name exactly: lowercase letters, digits, and hyphens
+  only, at most 64 characters. Supporting files may sit next to `SKILL.md`.
+- Outside a managed session, where `TOASTTY_USER_SKILLS_ROOT` is absent, the
+  production location is `~/.toastty/skills`.
+- Never write into `$TOASTTY_SKILLS_ROOT`; it is the delivered read-only
+  Toastty plugin snapshot.
+- Hidden package directories (names starting with `.`) are ignored, and
+  symlinks are rejected.
+- New or changed skills reach subsequently launched managed sessions, not the
+  current one. Tell the user the skill takes effect on the next managed agent
+  launch and can be inspected under `Toastty > Manage Toastty Skills`.
 
 ## When To Create Another Skill
 

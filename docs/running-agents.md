@@ -5,7 +5,7 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 ## Quick start
 
 1. If you want to type `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
-2. Toastty automatically exposes four session-only skills to supported managed Codex and Claude Code launches; no skills setup is required
+2. Toastty automatically exposes four session-only skills to supported managed Codex and Claude Code launches; no skills setup is required. You can also add your own skills under `~/.toastty/skills` (see [User-created skills](#user-created-skills))
 3. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…` or open `Get Started…` and choose `Set Up Agent Status Hooks`
 4. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
 5. Uncomment or add a profile in `~/.toastty/agents.toml`
@@ -95,7 +95,7 @@ arguments for automation:
   instrumentation keys: `TOASTTY_SESSION_ID`, `TOASTTY_PANEL_ID`,
   `TOASTTY_SOCKET_PATH`, `TOASTTY_CLI_PATH`, `TOASTTY_CWD`,
   `TOASTTY_REPO_ROOT`, `TOASTTY_AGENT`, `TOASTTY_SKILLS_ROOT`,
-  `TOASTTY_MANAGED_AGENT_SHIM_BYPASS`,
+  `TOASTTY_USER_SKILLS_ROOT`, `TOASTTY_MANAGED_AGENT_SHIM_BYPASS`,
   `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT`, `CODEX_TUI_RECORD_SESSION`,
   `CODEX_TUI_SESSION_LOG_PATH`, and `TOASTTY_PI_TELEMETRY_LOG_PATH`.
 - `initialPrompt` appends the first prompt as a trailing argv argument only when
@@ -150,9 +150,9 @@ Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the c
 Built-in Claude, OpenCode, MiMo Code, and Pi instrumentation also works when the configured
 command uses a wrapper or prefix command and the actual agent command still
 appears as its own `argv` element in a recognized launch shape. Codex uses the
-same rule for its existing fallback instrumentation, but injects managed skill
-configuration only when it can prove the exact Codex executable insertion point
-without crossing a `--` boundary. Opaque wrapper or subcommand shapes still
+same rule for its existing fallback instrumentation, but injects its managed
+skills profile flag only when it can prove the exact Codex executable insertion
+point without crossing a `--` boundary. Opaque wrapper or subcommand shapes still
 launch with fallback telemetry and without Toastty skills instead of risking a broken command. For predictable
 manual tracking of those wrapper executables when you type them into a Toastty
 terminal, declare the wrapper basename in `manualCommandNames`. When that field
@@ -222,15 +222,15 @@ argv = ["scodex"]
 
 That launches from the Agent menu because Toastty sends the rendered command to
 your shell. Because Toastty cannot resolve an opaque shell function to a safe
-Codex executable before launch, it skips the managed skill override and keeps
-fallback telemetry. See the manual-command shim section below for the
+Codex executable before launch, it skips the managed skills profile injection
+and keeps fallback telemetry. See the manual-command shim section below for the
 additional limitation on typing shell functions directly.
 
 ### What `codex` enables
 
 When the profile ID is `codex`, Toastty:
 
-1. **Automatically enables four Toastty skills only for the managed process**. On the first supported managed launch, Toastty installs its local plugin through Codex, disables every Toastty skill in ordinary Codex, and enables `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, and `worktree-create` with a process-scoped override. Provisioning is fail-open and capped at four seconds. Later launches verify the installed version and install a changed bundle immediately, even while other Codex sessions run; existing processes pick up the change after restart. Restored sessions prepare the current bundle before their resume command is submitted. `Toastty > Manage Toastty Skills…` shows separate Codex and Claude Code delivery statuses, all four skill summaries, manual duplicate guidance, and Codex repair or uninstall controls.
+1. **Automatically enables four Toastty skills only for the managed process**. Toastty populates a Toastty-owned plugin cache at `$CODEX_HOME/plugins/cache/toastty/toastty/` (installed through the local Codex CLI against a throwaway Codex home, digest-verified, then swapped in atomically), writes a Toastty-owned profile overlay at `$CODEX_HOME/toastty-managed.config.toml` that enables that cached plugin, and injects `--profile toastty-managed` after the resolved Codex executable. This activates `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, and `worktree-create` for exactly the flagged process across direct `codex`/`cdx`, resume, fork, and documented wrapper-prefix launch shapes. The user's `config.toml` is never written, and ordinary Codex sessions see no Toastty skills. Injection fails open with no skills when the caller already passes a `--profile` or `-p` flag, when the argv shape is opaque, or when the launch sets a `CODEX_HOME` different from the one Toastty provisioned. Provisioning is fail-open and capped at four seconds; verified installs are reused on later launches through cheap byte checks against receipts under `~/.toastty/agent-plugins/codex/`. A changed bundled version installs immediately, even while other Codex sessions run; existing processes pick up the change after restart. Restored sessions prepare the current bundle before their resume command is submitted, fall back to an older verified cache (reported as stale) when a refresh fails, and launch without skills when nothing verifies. The first provisioning after updating from an older Toastty also removes the retired marketplace-based install through Codex; stale disabled-name entries in the user's config are intentionally left alone because Codex tolerates them. `Toastty > Manage Toastty Skills…` shows separate Codex and Claude Code delivery statuses, all four skill summaries, your user-created skills, manual duplicate guidance, and Codex repair or uninstall controls.
 2. **Uses installed Codex status hooks when available**. `Toastty > Set Up Agent Status Hooks…` installs a stable Toastty-owned forwarder at `~/.toastty/codex-hooks/forwarder.sh` and adds it to `~/.codex/hooks.json`. Codex may ask you to review and trust that command once; Toastty does not bypass Codex hook trust by default. Skills provisioning never adds, removes, or changes hooks.
 3. **Routes Codex hook JSON** through `toastty session ingest-agent-event --source codex-hooks` for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PreToolUse`, `SubagentStart`, `SubagentStop`, and `Stop`. These events drive **Working**, actionable **Needs approval**, **Ready**, native resume metadata, and Codex collaboration-agent rows for managed Codex sessions. A recognized `PreToolUse` spawn event also captures the delegated task name and any plaintext description Codex exposes. Newer Codex builds leave the task name readable but may provide the message as opaque ciphertext, which Toastty discards. When session recording context shows Codex is using an auto-reviewer through `approvals_reviewer`, Toastty suppresses the matching auto-reviewed approval prompt instead of surfacing it as a user approval. When the reviewer field is omitted in a resumed session, Toastty treats the permission request as ambiguous instead of immediately showing **Needs approval**.
 4. **Creates a notification script when hooks are unavailable** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify` as a compatibility completion path.
@@ -240,11 +240,12 @@ When the profile ID is `codex`, Toastty:
 8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
 9. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
-Uninstall removes only the Toastty Codex plugin registration, marketplace, and
-staged files. It leaves hooks, unrelated Codex state, and all globally or
-repository-locally installed skills untouched. Codex cannot currently remove
-individual disabled-name entries, so the management sheet reports the harmless
-`toastty:worktree-done` tombstone after uninstall.
+Uninstall removes only Toastty-owned state: the plugin cache subtrees under
+`$CODEX_HOME/plugins/cache/toastty/` and `$CODEX_HOME/plugins/cache/toastty-user/`,
+the `toastty-managed.config.toml` overlay (only while it carries Toastty's
+ownership marker), and the receipts under `~/.toastty/agent-plugins/codex/`. It
+leaves hooks, the user's `config.toml`, unrelated Codex state, and all globally
+or repository-locally installed skills untouched.
 
 Toastty shows one nonblocking notice the first time it successfully provides
 skills to each agent. It does not inspect or modify `~/.codex/skills`,
@@ -258,7 +259,7 @@ launches when Toastty's managed command shims are enabled.
 
 When the profile ID is `claude`, Toastty:
 
-1. **Adds the four Toastty skills without installing into Claude's user state**. Toastty stages an immutable validated plugin copy and passes it to supported managed launches with an additive `--plugin-dir`. Existing user `--plugin-dir` arguments remain in place. After an app update, restored sessions stage the current bundle before the resume command is submitted. If staging fails or the launch shape is opaque, Claude still launches without Toastty skills.
+1. **Adds the four Toastty skills without installing into Claude's user state**. Toastty stages an immutable validated plugin copy and passes it to supported managed launches with an additive `--plugin-dir`. When user-created skills are accepted, Toastty passes a second additive `--plugin-dir` pointing at the immutable user-skills snapshot; user-plugin failures never affect the shipped Toastty skills. Existing user `--plugin-dir` arguments remain in place. After an app update, restored sessions stage the current bundle before the resume command is submitted. If staging fails or the launch shape is opaque, Claude still launches without Toastty skills.
 2. **Creates a hook script** that calls `toastty session ingest-agent-event --source claude-hooks`
 3. **Resolves existing Claude settings** — if the profile's `argv` includes `--settings`, Toastty reads and merges with those settings rather than replacing them
 4. **Injects lifecycle hooks** into the merged Claude settings JSON under `hooks`:
@@ -298,6 +299,37 @@ When the profile ID is `pi`, Toastty:
 4. **Reports compact telemetry** through `toastty session ingest-agent-event --source pi-extension`, covering the submitted prompt, final assistant summary, semantic tool-call progress, tool errors, and changed-file paths when Pi exposes them. Successful tool results update changed-file metadata without replacing the sidebar with generic `Finished ...` messages.
 5. **Captures native resume metadata** from Pi's extension context, including the native session ID, session file path, and working directory.
 6. **Avoids prompt and tool-output forwarding**. The extension records bounded metadata only and is a no-op outside Toastty when required `TOASTTY_*` environment variables are absent.
+
+## User-created skills
+
+Alongside the four shipped skills, Toastty delivers your own skills to managed
+Codex and Claude Code sessions.
+
+- **Authoring**: create `~/.toastty/skills/<name>/SKILL.md` with YAML
+  frontmatter containing `name` and a non-empty `description`. The directory
+  name must match the frontmatter name exactly: lowercase letters, digits, and
+  hyphens only, at most 64 characters. A package may contain additional
+  supporting files and folders next to `SKILL.md`.
+- **Validation**: hidden directories (names starting with `.`) are ignored.
+  Symbolic links and special files are rejected. Per-package caps are 5 MB and
+  a folder depth of 8, with `SKILL.md` itself capped at 256 KB. Catalog-wide
+  caps are 32 accepted packages, 10 MB, and 500 files; breaching a catalog-wide
+  cap excludes all user packages until the total shrinks. Excluded packages
+  never affect the shipped Toastty skills.
+- **Delivery**: accepted packages are snapshotted into an immutable,
+  content-addressed `toastty-user` plugin under `~/.toastty/agent-plugins/user/`
+  (version `0.1.0-<hex12>`). Managed Codex launches receive it through the same
+  `toastty-managed` profile overlay and a `$CODEX_HOME/plugins/cache/toastty-user/`
+  cache; managed Claude Code launches receive it through a second additive
+  `--plugin-dir`. New or changed skills appear in subsequently launched managed
+  sessions — running sessions keep the skills they launched with. Ordinary
+  (non-managed) Codex and Claude sessions see nothing.
+- **Management**: the user section of `Toastty > Manage Toastty Skills…` lists
+  each package with its accepted or excluded status, offers `Rescan`, and can
+  open or create the user skills folder.
+- A startup sweeper deletes superseded snapshots under
+  `~/.toastty/agent-plugins/`, keeping the newest snapshot plus one previous
+  verified fallback.
 
 ## Launch flow
 
@@ -430,7 +462,8 @@ Every agent launched through Toastty receives these environment variables, set i
 | `TOASTTY_AGENT` | Managed provider ID. The `worktree-create` skill preserves `codex` or `claude` when it launches the handoff session. |
 | `TOASTTY_CWD` | Resolved launch working directory: explicit automation `cwd` when supplied, otherwise the target or restored panel working directory when available |
 | `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |
-| `TOASTTY_SKILLS_ROOT` | Immutable copied Toastty plugin `skills/` path for supported managed Codex and Claude Code launches; absent when preparation, verification, or safe argument insertion is unavailable |
+| `TOASTTY_SKILLS_ROOT` | Delivered shipped Toastty plugin `skills/` path for supported managed Codex and Claude Code launches (the verified Toastty-owned Codex plugin cache, or the immutable staged Claude plugin copy); absent when preparation, verification, or safe argument insertion is unavailable. Reserved and read-only for agents; never write into it |
+| `TOASTTY_USER_SKILLS_ROOT` | User skill-package source directory (`~/.toastty/skills`, or its runtime-isolated equivalent). Advertised on managed launches so agents can create user skills there on request; the directory is not created automatically |
 
 Agent-specific variables are added on top of these (for example, `CODEX_TUI_RECORD_SESSION` and `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT` for Codex launches).
 

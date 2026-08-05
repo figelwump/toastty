@@ -729,7 +729,9 @@ Launch context environment:
   launch working directory
 - `TOASTTY_AGENT` with the managed provider ID
 - `TOASTTY_SKILLS_ROOT` for supported managed Codex and Claude Code launches,
-  pointing at the immutable copied Toastty plugin's `skills/` directory
+  pointing at the delivered Toastty plugin's `skills/` directory
+- `TOASTTY_USER_SKILLS_ROOT` with the user skill-package source directory
+  (`~/.toastty/skills`, or its runtime-isolated equivalent)
 
 Request payload:
 
