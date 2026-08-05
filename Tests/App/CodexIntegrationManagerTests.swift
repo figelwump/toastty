@@ -951,6 +951,107 @@ final class CodexSkillsManagerTests: XCTestCase {
         )
     }
 
+    /// `.unavailable` (snapshot-prep timeout, build error, unverifiable
+    /// store) must never be conflated with the confirmed-empty resolution:
+    /// previously delivered user state survives untouched and keeps being
+    /// delivered from its verified receipt.
+    func testUnavailableResolutionLeavesDeliveredUserStateUntouchedAndDelivers() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+        fixture.recorder.reset()
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSkills: .unavailable
+        )
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(
+            preparation.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+        // No subprocess work, and nothing is deleted or rewritten.
+        XCTAssertEqual(fixture.recorder.operations, [])
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents(includeUserPlugin: true)
+        )
+
+        // The next completed resolution still delivers normally.
+        let recovered = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSkills: .snapshot(snapshot)
+        )
+        XCTAssertEqual(
+            recovered.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+    }
+
+    func testUnavailableResolutionWithoutPriorStateDeliversShippedOnlyWithoutWrites() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSkills: .unavailable
+        )
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(preparation.userSkills, .notDelivered)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents
+        )
+    }
+
+    func testRestoredLaunchWithEmptyResolutionConvergesToShippedOnly() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+        fixture.recorder.reset()
+        let restartedManager = fixture.makeRestartedManager()
+
+        // The user removed every skill: the confirmed-empty resolution
+        // converges delivered state even on the restored path.
+        let restored = try restartedManager.prepareForRestoredManagedLaunch(
+            runtime: runtime,
+            userSkills: .empty
+        )
+
+        XCTAssertNotNil(restored.configuration)
+        XCTAssertEqual(restored.userSkills, .notDelivered)
+        XCTAssertEqual(fixture.recorder.operations, [])
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents
+        )
+    }
+
     /// A slow user population must not hold the lock shipped preparation
     /// needs: a second manager instance (no in-memory cache, so it takes the
     /// locked shipped path against the shared static locks) completes its

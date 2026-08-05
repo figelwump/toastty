@@ -681,6 +681,83 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
         XCTAssertEqual(state.packages.first?.status, .accepted)
     }
 
+    func testRemovingAllSkillSourcesConvergesSnapshotsAndResolution() throws {
+        let fixture = try makeFixture(named: "converge-empty")
+        defer { fixture.cleanup() }
+        try fixture.writePackage(named: "alpha-skill")
+        let snapshot = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+        // Compare by digest: directory enumeration may standardize /var to
+        // /private/var in the resolved snapshot's URLs.
+        XCTAssertEqual(
+            fixture.catalog.existingSnapshotResolution().snapshot?.sourceDigest,
+            snapshot.sourceDigest
+        )
+
+        // The user deletes everything under the skills directory.
+        try FileManager.default.removeItem(at: fixture.skillsRootURL)
+        try FileManager.default.createDirectory(at: fixture.skillsRootURL, withIntermediateDirectories: true)
+
+        XCTAssertNil(try fixture.catalog.prepareSnapshot())
+        // Removed skills stop being deliverable everywhere: no snapshot
+        // directories remain, and the resolution is the confirmed-empty one.
+        XCTAssertNil(fixture.catalog.existingSnapshot())
+        XCTAssertEqual(fixture.catalog.existingSnapshotResolution(), .empty)
+        let remaining = (try? FileManager.default.contentsOfDirectory(
+            atPath: fixture.snapshotsRootURL.path
+        )) ?? []
+        XCTAssertEqual(remaining.filter { $0.hasPrefix(".") == false }, [])
+    }
+
+    func testUnreadableSourceDirectoryThrowsInsteadOfConverging() throws {
+        let fixture = try makeFixture(named: "unreadable-source")
+        defer { fixture.cleanup() }
+        try fixture.writePackage(named: "alpha-skill")
+        let snapshot = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: fixture.skillsRootURL.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: fixture.skillsRootURL.path
+            )
+        }
+
+        // Unconfirmed emptiness must never converge deliveries: the build
+        // fails with a typed error and the snapshot store stays intact.
+        XCTAssertThrowsError(try fixture.catalog.prepareSnapshot()) { error in
+            XCTAssertEqual(
+                error as? ToasttyUserSkillCatalogError,
+                .sourceUnreadable(fixture.skillsRootURL.path)
+            )
+        }
+        XCTAssertEqual(
+            fixture.catalog.existingSnapshotResolution().snapshot?.sourceDigest,
+            snapshot.sourceDigest
+        )
+    }
+
+    func testExistingSnapshotResolutionDistinguishesUnverifiableFromAbsent() throws {
+        let fixture = try makeFixture(named: "resolution-tri-state")
+        defer { fixture.cleanup() }
+        try fixture.writePackage(named: "alpha-skill")
+        let snapshot = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+        let snapshotRoot = fixture.snapshotsRootURL
+            .appendingPathComponent(snapshot.sourceDigest, isDirectory: true)
+
+        // Structurally broken but present: `.unavailable` (never a
+        // destructive convergence trigger).
+        try FileManager.default.removeItem(
+            at: snapshotRoot.appendingPathComponent("marketplace/plugins/toastty-user/.claude-plugin")
+        )
+        XCTAssertEqual(fixture.catalog.existingSnapshotResolution(), .unavailable)
+
+        // Entirely absent: confirmed `.empty`.
+        try FileManager.default.removeItem(at: snapshotRoot)
+        XCTAssertEqual(fixture.catalog.existingSnapshotResolution(), .empty)
+    }
+
     // MARK: - Live Codex CLI acceptance
 
     /// Verifies that the real Codex CLI accepts the generated marketplace

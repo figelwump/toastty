@@ -494,24 +494,39 @@ final class CodexSkillsManager: @unchecked Sendable {
     }
 
     /// Shipped provisioning followed by the isolated user-plugin phase. The
-    /// snapshot is the launch-scoped resolution from `ToasttyUserSkillCatalog`;
-    /// nil means "the user has no accepted skills" and converges any earlier
-    /// user delivery back to shipped-only. Any user-plugin error leaves the
-    /// shipped result exactly as the snapshot-free overload would have
-    /// produced it, with a typed diagnostic in `userSkills`, and never touches
-    /// the shipped failure circuit breaker.
+    /// resolution provenance decides destructiveness: `.empty` (a completed
+    /// scan confirmed zero accepted skills) converges earlier user delivery
+    /// back to shipped-only; `.unavailable` (timeout, build error,
+    /// unverifiable state) leaves delivered user state completely untouched;
+    /// `.snapshot` delivers. Any user-plugin error leaves the shipped result
+    /// exactly as the resolution-free overload would have produced it, with a
+    /// typed diagnostic in `userSkills`, and never touches the shipped
+    /// failure circuit breaker.
     func prepareForManagedLaunch(
         runtime: CodexIntegrationRuntime,
-        userSnapshot: UserSkillPluginSnapshot?
+        userSkills resolution: UserSkillSnapshotResolution
     ) throws -> CodexSkillsPreparation {
         let shipped = try prepareForManagedLaunch(runtime: runtime)
         let userState = applyUserPluginPhase(
             runtime: runtime,
-            snapshot: userSnapshot,
+            resolution: resolution,
             shippedDelivered: shipped.configuration != nil,
             allowPopulation: true
         )
         return shipped.withUserSkills(userState)
+    }
+
+    /// Convenience mapping kept for callers/tests that resolve the snapshot
+    /// themselves: a snapshot delivers, nil is the confirmed-empty resolution
+    /// (destructive convergence).
+    func prepareForManagedLaunch(
+        runtime: CodexIntegrationRuntime,
+        userSnapshot: UserSkillPluginSnapshot?
+    ) throws -> CodexSkillsPreparation {
+        try prepareForManagedLaunch(
+            runtime: runtime,
+            userSkills: userSnapshot.map { .snapshot($0) } ?? .empty
+        )
     }
 
     /// Restored variant: the user plugin is byte-verified against the
@@ -521,16 +536,27 @@ final class CodexSkillsManager: @unchecked Sendable {
     /// population and never enumerates user source packages.
     func prepareForRestoredManagedLaunch(
         runtime: CodexIntegrationRuntime,
-        userSnapshot: UserSkillPluginSnapshot?
+        userSkills resolution: UserSkillSnapshotResolution
     ) throws -> CodexSkillsPreparation {
         let shipped = try prepareForRestoredManagedLaunch(runtime: runtime)
         let userState = applyUserPluginPhase(
             runtime: runtime,
-            snapshot: userSnapshot,
+            resolution: resolution,
             shippedDelivered: shipped.configuration != nil,
             allowPopulation: false
         )
         return shipped.withUserSkills(userState)
+    }
+
+    /// Convenience mapping; see `prepareForManagedLaunch(runtime:userSnapshot:)`.
+    func prepareForRestoredManagedLaunch(
+        runtime: CodexIntegrationRuntime,
+        userSnapshot: UserSkillPluginSnapshot?
+    ) throws -> CodexSkillsPreparation {
+        try prepareForRestoredManagedLaunch(
+            runtime: runtime,
+            userSkills: userSnapshot.map { .snapshot($0) } ?? .empty
+        )
     }
 
     /// Restore-ladder branch 1, executed under the operation lock. Returns
@@ -1206,7 +1232,7 @@ private extension CodexSkillsManager {
     /// would have been with no user skills.
     func applyUserPluginPhase(
         runtime: CodexIntegrationRuntime,
-        snapshot: UserSkillPluginSnapshot?,
+        resolution: UserSkillSnapshotResolution,
         shippedDelivered: Bool,
         allowPopulation: Bool
     ) -> CodexUserSkillsDeliveryState {
@@ -1223,9 +1249,11 @@ private extension CodexSkillsManager {
         }
         defer { Self.userOperationLock.unlock() }
 
-        guard let snapshot else {
-            // The user has no accepted skills: converge user-had-skills →
-            // user-has-none.
+        let snapshot: UserSkillPluginSnapshot
+        switch resolution {
+        case .empty:
+            // A completed scan confirmed the user has no accepted skills:
+            // converge user-had-skills → user-has-none.
             do {
                 try removeUserPluginState(runtime: runtime)
                 try ensureProfileConfig(runtime: runtime)
@@ -1233,6 +1261,31 @@ private extension CodexSkillsManager {
             } catch {
                 return .failed(.cleanupFailed(error.localizedDescription))
             }
+
+        case .unavailable:
+            // The resolution could not complete (timeout, build error,
+            // unverifiable snapshot store). This must never be conflated with
+            // "the user has no skills": previously delivered state stays
+            // completely untouched. A verified receipt-plus-cache keeps its
+            // profile entry and delivers; otherwise this launch proceeds
+            // shipped-only without deleting anything, and a later definitive
+            // resolution reconciles.
+            guard let record = readUserReceipt(runtime),
+                  (try? verifyUserInstalledFiles(runtime: runtime, record: record)) != nil else {
+                return .notDelivered
+            }
+            do {
+                try ensureProfileConfig(runtime: runtime)
+                return .delivered(
+                    version: record.installedVersion,
+                    contentDigest: record.installedDigest
+                )
+            } catch {
+                return .failed(.profileUnavailable(error.localizedDescription))
+            }
+
+        case .snapshot(let resolved):
+            snapshot = resolved
         }
 
         // Fast path: receipt plus cache bytes already match the snapshot.

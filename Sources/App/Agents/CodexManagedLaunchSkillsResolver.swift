@@ -67,12 +67,12 @@ protocol CodexManagedLaunchSkillsResolving: AnyObject, Sendable {
     func resolveForManagedLaunch(
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?,
-        userSkillSnapshot: UserSkillPluginSnapshot?
+        userSkillResolution: UserSkillSnapshotResolution
     ) async -> CodexManagedLaunchSkillsDecision
     func resolveForRestoredManagedLaunch(
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?,
-        userSkillSnapshot: UserSkillPluginSnapshot?
+        userSkillResolution: UserSkillSnapshotResolution
     ) -> CodexManagedLaunchSkillsDecision
 }
 
@@ -91,12 +91,12 @@ extension CodexManagedLaunchSkillsResolving {
         resolve(request: request, workingDirectory: workingDirectory)
     }
 
-    // Snapshot-parameter defaults forward to the snapshot-free variants so
-    // test doubles that only implement those observe the same calls.
+    // Resolution-parameter defaults forward to the resolution-free variants
+    // so test doubles that only implement those observe the same calls.
     func resolveForManagedLaunch(
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?,
-        userSkillSnapshot _: UserSkillPluginSnapshot?
+        userSkillResolution _: UserSkillSnapshotResolution
     ) async -> CodexManagedLaunchSkillsDecision {
         await resolveForManagedLaunch(request: request, workingDirectory: workingDirectory)
     }
@@ -104,7 +104,7 @@ extension CodexManagedLaunchSkillsResolving {
     func resolveForRestoredManagedLaunch(
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?,
-        userSkillSnapshot _: UserSkillPluginSnapshot?
+        userSkillResolution _: UserSkillSnapshotResolution
     ) -> CodexManagedLaunchSkillsDecision {
         resolveForRestoredManagedLaunch(request: request, workingDirectory: workingDirectory)
     }
@@ -167,13 +167,13 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
     func resolveForManagedLaunch(
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?,
-        userSkillSnapshot: UserSkillPluginSnapshot?
+        userSkillResolution: UserSkillSnapshotResolution
     ) async -> CodexManagedLaunchSkillsDecision {
         await resolveManagedLaunch(
             request: request,
             workingDirectory: workingDirectory
         ) { [manager] runtime in
-            try manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: userSkillSnapshot)
+            try manager.prepareForManagedLaunch(runtime: runtime, userSkills: userSkillResolution)
         }
     }
 
@@ -192,13 +192,13 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
     func resolveForRestoredManagedLaunch(
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?,
-        userSkillSnapshot: UserSkillPluginSnapshot?
+        userSkillResolution: UserSkillSnapshotResolution
     ) -> CodexManagedLaunchSkillsDecision {
         resolveRestoredManagedLaunch(
             request: request,
             workingDirectory: workingDirectory
         ) { [manager] runtime in
-            try manager.prepareForRestoredManagedLaunch(runtime: runtime, userSnapshot: userSkillSnapshot)
+            try manager.prepareForRestoredManagedLaunch(runtime: runtime, userSkills: userSkillResolution)
         }
     }
 }

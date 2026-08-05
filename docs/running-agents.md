@@ -322,8 +322,14 @@ Codex and Claude Code sessions.
   `toastty-managed` profile overlay and a `$CODEX_HOME/plugins/cache/toastty-user/`
   cache; managed Claude Code launches receive it through a second additive
   `--plugin-dir`. New or changed skills appear in subsequently launched managed
-  sessions — running sessions keep the skills they launched with. Ordinary
-  (non-managed) Codex and Claude sessions see nothing.
+  sessions — running sessions keep the skills they launched with. As with the
+  shipped plugin, a changed set installs immediately even while sessions run:
+  the on-disk cache bytes are swapped under a running session, whose
+  already-loaded skill instructions persist in memory while file-backed skill
+  scripts it invokes later may reflect the newer set. Removing every user
+  skill converges the same way — the snapshot is invalidated and subsequently
+  launched managed sessions receive no user skills. Ordinary (non-managed)
+  Codex and Claude sessions see nothing.
 - **Management**: the user section of `Toastty > Manage Toastty Skills…` lists
   each package with its accepted or excluded status, offers `Rescan`, and can
   open or create the user skills folder.

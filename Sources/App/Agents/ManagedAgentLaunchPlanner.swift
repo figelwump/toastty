@@ -143,12 +143,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             ? claudeSkillsBundleManager.existingVerifiedConfiguration()
             : nil
         // Synchronous preparation never builds a snapshot; it reuses the
-        // newest valid on-disk snapshot receipt or launches without user
-        // skills. Codex synchronous launches need no snapshot at all: any
+        // newest valid on-disk snapshot resolution or launches without user
+        // skills. Codex synchronous launches need no resolution at all: any
         // previously delivered user entry already rides in the profile
         // overlay.
-        let userSkillSnapshot = request.agent == .claude
-            ? userSkillSnapshotProvider.existingSnapshot()
+        let userSkillResolution = request.agent == .claude
+            ? userSkillSnapshotProvider.existingSnapshotResolution()
             : nil
         return try prepareManagedLaunch(
             request,
@@ -157,7 +157,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             claudeSkillsConfiguration: claudeSkillsConfiguration,
             claudeUserPluginRootPath: claudeUserPluginRootPath(
                 for: request.agent,
-                snapshot: userSkillSnapshot
+                resolution: userSkillResolution
             ),
             assessedWorkingDirectory: assessedWorkingDirectory
         )
@@ -170,14 +170,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
         // Resolved once per launch preparation and passed to both hosts.
-        let userSkillSnapshot = request.agent == .codex || request.agent == .claude
-            ? await preparedUserSkillSnapshot()
+        let userSkillResolution = request.agent == .codex || request.agent == .claude
+            ? await preparedUserSkillResolution()
             : nil
         let codexSkillsDecision = request.agent == .codex
             ? await codexSkillsResolver.resolveForManagedLaunch(
                 request: request,
                 workingDirectory: assessedWorkingDirectory,
-                userSkillSnapshot: userSkillSnapshot
+                userSkillResolution: userSkillResolution ?? .unavailable
             )
             : nil
         let claudeSkillsConfiguration = request.agent == .claude
@@ -190,7 +190,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             claudeSkillsConfiguration: claudeSkillsConfiguration,
             claudeUserPluginRootPath: claudeUserPluginRootPath(
                 for: request.agent,
-                snapshot: userSkillSnapshot
+                resolution: userSkillResolution
             ),
             assessedWorkingDirectory: assessedWorkingDirectory
         )
@@ -199,7 +199,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             windowID: target.windowID,
             codexSkillsDecision: codexSkillsDecision,
             claudeSkillsConfiguration: claudeSkillsConfiguration,
-            userSkillSnapshot: userSkillSnapshot
+            userSkillSnapshot: userSkillResolution?.snapshot
         )
         return plan
     }
@@ -211,15 +211,15 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
         // Restored preparation reuses the newest existing on-disk snapshot
-        // (receipt/existence checks only) and never builds one.
-        let userSkillSnapshot = request.agent == .codex || request.agent == .claude
-            ? userSkillSnapshotProvider.existingSnapshot()
+        // resolution (receipt/existence checks only) and never builds one.
+        let userSkillResolution = request.agent == .codex || request.agent == .claude
+            ? userSkillSnapshotProvider.existingSnapshotResolution()
             : nil
         let codexSkillsDecision = request.agent == .codex
             ? codexSkillsResolver.resolveForRestoredManagedLaunch(
                 request: request,
                 workingDirectory: assessedWorkingDirectory,
-                userSkillSnapshot: userSkillSnapshot
+                userSkillResolution: userSkillResolution ?? .unavailable
             )
             : nil
         let claudeSkillsConfiguration = request.agent == .claude
@@ -232,7 +232,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             claudeSkillsConfiguration: claudeSkillsConfiguration,
             claudeUserPluginRootPath: claudeUserPluginRootPath(
                 for: request.agent,
-                snapshot: userSkillSnapshot
+                resolution: userSkillResolution
             ),
             assessedWorkingDirectory: assessedWorkingDirectory
         )
@@ -241,34 +241,48 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             windowID: target.windowID,
             codexSkillsDecision: codexSkillsDecision,
             claudeSkillsConfiguration: claudeSkillsConfiguration,
-            userSkillSnapshot: userSkillSnapshot
+            userSkillSnapshot: userSkillResolution?.snapshot
         )
         return plan
     }
 
     private func claudeUserPluginRootPath(
         for agent: AgentKind,
-        snapshot: UserSkillPluginSnapshot?
+        resolution: UserSkillSnapshotResolution?
     ) -> String? {
-        guard agent == .claude else { return nil }
-        return snapshot?.pluginRootURL.path
+        guard agent == .claude, let resolution else { return nil }
+        switch resolution {
+        case .snapshot(let snapshot):
+            return snapshot.pluginRootURL.path
+        case .empty:
+            return nil
+        case .unavailable:
+            // An incomplete resolution (timed-out or failed build) falls back
+            // to the newest snapshot the catalog can verify right now, and
+            // drops the flag when nothing verifies — never a destructive
+            // outcome for Claude either way.
+            return userSkillSnapshotProvider.existingSnapshot()?.pluginRootURL.path
+        }
     }
 
     /// Builds (or reuses) the user skills snapshot off the main actor,
-    /// bounded by `userSkillSnapshotPreparationTimeout`. A snapshot
-    /// preparation failure or timeout carries its typed diagnostic into the
-    /// log and both hosts proceed shipped-only. On timeout the abandoned
-    /// build may finish in the background harmlessly: staging is isolated and
-    /// publication is an atomic rename, so a later launch can reuse it.
-    private func preparedUserSkillSnapshot() async -> UserSkillPluginSnapshot? {
+    /// bounded by `userSkillSnapshotPreparationTimeout`, and reports its
+    /// provenance: `.empty` only when the completed scan confirmed zero
+    /// accepted packages; `.unavailable` for a build failure or timeout so
+    /// delivery never mistakes an incomplete resolution for "the user has no
+    /// skills". On timeout the abandoned build may finish in the background
+    /// harmlessly: staging is isolated and publication is an atomic rename,
+    /// so a later launch can reuse it.
+    private func preparedUserSkillResolution() async -> UserSkillSnapshotResolution {
         let provider = userSkillSnapshotProvider
         let timeout = userSkillSnapshotPreparationTimeout
         return await withCheckedContinuation { continuation in
             let oneShot = OneShotSnapshotContinuation(continuation)
             DispatchQueue.global(qos: .userInitiated).async {
-                let snapshot: UserSkillPluginSnapshot?
+                let resolution: UserSkillSnapshotResolution
                 do {
-                    snapshot = try provider.prepareSnapshot()
+                    resolution = try provider.prepareSnapshot()
+                        .map { .snapshot($0) } ?? .empty
                 } catch {
                     let diagnostic: String
                     switch error as? ToasttyUserSkillCatalogError {
@@ -285,12 +299,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                             "error": error.localizedDescription,
                         ]
                     )
-                    snapshot = nil
+                    resolution = .unavailable
                 }
-                _ = oneShot.resume(returning: snapshot)
+                _ = oneShot.resume(returning: resolution)
             }
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
-                if oneShot.resume(returning: nil) {
+                if oneShot.resume(returning: .unavailable) {
                     ToasttyLog.warning(
                         "User skills snapshot preparation timed out; launching with shipped skills only",
                         category: .automation,
@@ -1325,14 +1339,14 @@ private struct CodexSessionLogCursorStateRegistration {
 /// resuming the continuation twice.
 private final class OneShotSnapshotContinuation: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<UserSkillPluginSnapshot?, Never>?
+    private var continuation: CheckedContinuation<UserSkillSnapshotResolution, Never>?
 
-    init(_ continuation: CheckedContinuation<UserSkillPluginSnapshot?, Never>) {
+    init(_ continuation: CheckedContinuation<UserSkillSnapshotResolution, Never>) {
         self.continuation = continuation
     }
 
     /// Returns true when this call performed the resume.
-    func resume(returning value: UserSkillPluginSnapshot?) -> Bool {
+    func resume(returning value: UserSkillSnapshotResolution) -> Bool {
         lock.lock()
         let pending = continuation
         continuation = nil

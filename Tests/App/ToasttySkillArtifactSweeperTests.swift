@@ -72,6 +72,30 @@ final class ToasttySkillArtifactSweeperTests: XCTestCase {
         )
     }
 
+    func testSweepAfterEmptyConvergenceIsANoOp() throws {
+        let fixture = try makeFixture(named: "user-empty-convergence")
+        defer { fixture.cleanup() }
+        _ = try fixture.makeUserSnapshots(count: 2)
+        // The user removes every skill; the next preparation converges the
+        // snapshot store to empty, so the sweeper has nothing to retain.
+        try FileManager.default.removeItem(at: fixture.skillsSourceRootURL)
+        XCTAssertNil(try fixture.catalog.prepareSnapshot())
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: fixture.userRootURL.path),
+            []
+        )
+
+        fixture.sweeper.sweep()
+
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: fixture.userRootURL.path),
+            [],
+            "Sweep after empty-convergence must be a no-op and resurrect nothing"
+        )
+        XCTAssertNil(fixture.catalog.existingSnapshot())
+        XCTAssertEqual(fixture.catalog.existingSnapshotResolution(), .empty)
+    }
+
     // MARK: - claude/<version>-<digest>/ retention
 
     func testClaudeRetentionKeepsCurrentBundledEvenWhenNotNewestPlusOneVerifiedExtra() throws {

@@ -41,13 +41,46 @@ enum ToasttyUserSkillCatalogError: LocalizedError, Equatable {
     }
 }
 
+/// Launch-scoped resolution of the user skills plugin, distinguishing
+/// provenance so delivery can tell "the user has no skills" apart from "the
+/// resolution could not complete":
+///
+/// - `.empty` is asserted only when a completed source scan confirmed zero
+///   accepted packages (or the converged absence of any snapshot). It is the
+///   destructive-convergence trigger: delivered user state is removed.
+/// - `.unavailable` covers timeouts, build errors, and unverifiable on-disk
+///   state; it must never delete or rewrite previously delivered user state.
+/// - `.snapshot` carries a verified snapshot to deliver.
+enum UserSkillSnapshotResolution: Equatable, Sendable {
+    case empty
+    case unavailable
+    case snapshot(UserSkillPluginSnapshot)
+
+    var snapshot: UserSkillPluginSnapshot? {
+        if case .snapshot(let snapshot) = self { return snapshot }
+        return nil
+    }
+}
+
 /// Launch-preparation seam over the catalog: the planner resolves one
 /// snapshot per launch preparation and passes the same value to both hosts.
-/// `prepareSnapshot()` may build; `existingSnapshot()` is the cheap
-/// no-build reuse used by synchronous and restored preparation.
+/// `prepareSnapshot()` may build; `existingSnapshot()` /
+/// `existingSnapshotResolution()` are the cheap no-build reuse used by
+/// synchronous and restored preparation.
 protocol ToasttyUserSkillSnapshotProviding: AnyObject, Sendable {
     func prepareSnapshot() throws -> UserSkillPluginSnapshot?
     func existingSnapshot() -> UserSkillPluginSnapshot?
+    func existingSnapshotResolution() -> UserSkillSnapshotResolution
+}
+
+extension ToasttyUserSkillSnapshotProviding {
+    /// Default for test doubles without snapshot storage: a snapshot resolves
+    /// as such; absence is treated as `.unavailable` (never destructive).
+    /// `ToasttyUserSkillCatalog` overrides this with a disk-aware version
+    /// that can confirm `.empty`.
+    func existingSnapshotResolution() -> UserSkillSnapshotResolution {
+        existingSnapshot().map { .snapshot($0) } ?? .unavailable
+    }
 }
 
 /// Standalone catalog for user-created skill packages under the runtime
@@ -88,15 +121,23 @@ final class ToasttyUserSkillCatalog: ToasttyUserSkillSnapshotProviding, @uncheck
     }
 
     /// Builds or reuses the immutable snapshot for the currently accepted
-    /// packages. Returns nil (and creates nothing) when no package is
-    /// accepted; the delivery phase interprets nil as "no user plugin".
+    /// packages. Returns nil only when a completed scan confirmed zero
+    /// accepted packages — the confirmed-empty resolution — in which case any
+    /// previously built snapshots are removed so `existingSnapshot()` and the
+    /// sweeper stop treating removed skills as deliverable. An unreadable
+    /// source directory throws instead: unconfirmed emptiness must never
+    /// converge deliveries.
     func prepareSnapshot() throws -> UserSkillPluginSnapshot? {
         preparationLock.lock()
         defer { preparationLock.unlock() }
         cleanupOrphanedStaging()
         let scanResult = validator.scan(userSkillsDirectoryURL: userSkillsDirectoryURL)
         let payloads = scanResult.acceptedPayloads
-        guard payloads.isEmpty == false else { return nil }
+        guard payloads.isEmpty == false else {
+            try confirmSourceEmptinessIsTrustworthy()
+            removeAllSnapshotDirectories()
+            return nil
+        }
 
         let sourceDigest = try Self.sourceDigest(payloads: payloads, fileManager: fileManager)
         let version = Self.version(sourceDigest: sourceDigest)
@@ -200,6 +241,29 @@ final class ToasttyUserSkillCatalog: ToasttyUserSkillSnapshotProviding, @uncheck
             ))
         }
         return newest?.snapshot
+    }
+
+    /// Disk-aware resolution for synchronous and restored launch preparation:
+    /// a verified snapshot resolves as such; an entirely absent snapshot
+    /// store (converged empty or never prepared) is confirmed `.empty`;
+    /// snapshot directories that exist but fail verification are
+    /// `.unavailable` so delivery never destroys state it could not read.
+    func existingSnapshotResolution() -> UserSkillSnapshotResolution {
+        if let snapshot = existingSnapshot() {
+            return .snapshot(snapshot)
+        }
+        guard let children = try? fileManager.contentsOfDirectory(
+            at: snapshotsRootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            // A missing snapshot root has nothing to deliver anywhere.
+            return .empty
+        }
+        let hasSnapshotDirectories = children.contains { child in
+            (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+        }
+        return hasSnapshotDirectories ? .unavailable : .empty
     }
 
     /// Rescan seam for the management UI: rebuilds (or reuses) the snapshot
@@ -534,6 +598,46 @@ private extension ToasttyUserSkillCatalog {
             receiptURL: receiptURL,
             acceptedPackageNames: receipt.acceptedPackageNames
         )
+    }
+
+    // MARK: - Confirmed-empty convergence
+
+    /// An empty accepted set is trusted as "the user has no skills" only when
+    /// the source directory is genuinely absent or listable. A directory that
+    /// exists but cannot be listed (or a non-directory occupying the path)
+    /// throws so the caller resolves `.unavailable` instead of converging.
+    func confirmSourceEmptinessIsTrustworthy() throws {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(
+            atPath: userSkillsDirectoryURL.path,
+            isDirectory: &isDirectory
+        ) else {
+            return
+        }
+        guard isDirectory.boolValue,
+              (try? fileManager.contentsOfDirectory(atPath: userSkillsDirectoryURL.path)) != nil else {
+            throw ToasttyUserSkillCatalogError.sourceUnreadable(userSkillsDirectoryURL.path)
+        }
+    }
+
+    /// Confirmed-empty convergence: with zero accepted packages, previously
+    /// built snapshots must stop being deliverable everywhere —
+    /// `existingSnapshot()` selection, restored Codex verification, and the
+    /// sweeper's retention all assume on-disk snapshots are deliverable. Runs
+    /// under `preparationLock`; fresh `.staging-*` directories (a concurrent
+    /// multi-process build) are left alone.
+    func removeAllSnapshotDirectories() {
+        guard let children = try? fileManager.contentsOfDirectory(
+            at: snapshotsRootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for child in children where
+            (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            try? fileManager.removeItem(at: child)
+        }
     }
 
     // MARK: - Existing-snapshot verification

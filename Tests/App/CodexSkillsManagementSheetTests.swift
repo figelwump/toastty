@@ -213,6 +213,47 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
     }
 
     @MainActor
+    func testUserSkillsModelRescanShowsNoUserSkillsAfterSourcesRemoved() async throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-sheet-user-converge-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let catalog = ToasttyUserSkillCatalog(
+            runtimePaths: .resolve(
+                homeDirectoryPath: rootURL.appendingPathComponent("real-home").path,
+                environment: [
+                    "TOASTTY_RUNTIME_HOME": rootURL.appendingPathComponent("runtime-home").path,
+                ]
+            )
+        )
+        let skillsRootURL = rootURL.appendingPathComponent("runtime-home/skills", isDirectory: true)
+        let packageURL = skillsRootURL.appendingPathComponent("alpha-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+        try "---\nname: alpha-skill\ndescription: Test skill.\n---\n".write(
+            to: packageURL.appendingPathComponent("SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try XCTUnwrap(catalog.prepareSnapshot())
+        let model = UserSkillsManagementModel(catalog: catalog, revealFolder: { _ in })
+
+        model.refresh()
+        await model.waitForPendingWork()
+        XCTAssertNotNil(model.snapshotDigest)
+
+        // The user deletes every skill and hits Rescan: the sheet converges
+        // to the no-user-skills state instead of advertising the removed set.
+        try FileManager.default.removeItem(at: packageURL)
+        model.rescan()
+        await model.waitForPendingWork()
+
+        XCTAssertNil(model.snapshotDigest)
+        XCTAssertEqual(model.acceptedCount, 0)
+        XCTAssertEqual(model.codexDeliveryDetail, "No user skills are staged for delivery.")
+        XCTAssertEqual(model.claudeDeliveryDetail, "No user skills are staged for delivery.")
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
     func testRescanInvokesRefreshExactlyOnceAndRescans() async {
         let counter = InvocationCounter()
         let acceptedState = makeCatalogState(packages: [
