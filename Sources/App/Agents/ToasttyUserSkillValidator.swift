@@ -133,6 +133,10 @@ struct ToasttyUserSkillValidator {
         }
 
         var evaluations: [PackageEvaluation] = []
+        var acceptedCount = 0
+        var acceptedBytes = 0
+        var acceptedFiles = 0
+        var globalCapBreached = false
         for childName in childNames.sorted() {
             guard childName.hasPrefix(".") == false else { continue }
             let childURL = userSkillsDirectoryURL.appendingPathComponent(childName, isDirectory: true)
@@ -148,7 +152,31 @@ struct ToasttyUserSkillValidator {
                     inventory: WalkInventory()
                 ))
             case .typeDirectory:
-                evaluations.append(evaluatePackage(at: childURL))
+                // Once a global cap is breached the outcome is all-excluded;
+                // remaining packages are recorded without walking their
+                // contents so a pathological source tree cannot stretch the
+                // scan unboundedly.
+                if globalCapBreached {
+                    evaluations.append(PackageEvaluation(
+                        name: childName.precomposedStringWithCanonicalMapping,
+                        sourceURL: childURL,
+                        status: .excluded(.globalLimitExceeded),
+                        inventory: WalkInventory()
+                    ))
+                    continue
+                }
+                let evaluation = evaluatePackage(at: childURL)
+                if evaluation.status == .accepted {
+                    acceptedCount += 1
+                    acceptedBytes += evaluation.inventory.totalBytes
+                    acceptedFiles += evaluation.inventory.fileCount
+                    if acceptedCount > Self.maxAcceptedPackages
+                        || acceptedBytes > Self.maxAcceptedTotalBytes
+                        || acceptedFiles > Self.maxAcceptedTotalFiles {
+                        globalCapBreached = true
+                    }
+                }
+                evaluations.append(evaluation)
             default:
                 continue
             }
@@ -171,7 +199,8 @@ struct ToasttyUserSkillValidator {
         let acceptedInventories = evaluations.filter { $0.status == .accepted }.map(\.inventory)
         let totalBytes = acceptedInventories.reduce(0) { $0 + $1.totalBytes }
         let totalFiles = acceptedInventories.reduce(0) { $0 + $1.fileCount }
-        if acceptedPayloads.count > Self.maxAcceptedPackages
+        if globalCapBreached
+            || acceptedPayloads.count > Self.maxAcceptedPackages
             || totalBytes > Self.maxAcceptedTotalBytes
             || totalFiles > Self.maxAcceptedTotalFiles {
             // Deterministic all-or-nothing: a breached global cap excludes
@@ -347,6 +376,11 @@ private extension ToasttyUserSkillValidator {
                 ))
                 inventory.totalBytes += size
                 inventory.fileCount += 1
+                // Abort the walk as soon as the package breaches its byte cap
+                // so an oversized tree cannot stretch scanning unboundedly.
+                if inventory.totalBytes > Self.maxPackageBytes {
+                    return .packageTooLarge
+                }
             default:
                 return .specialFileRejected
             }
@@ -382,14 +416,21 @@ private extension ToasttyUserSkillValidator {
     /// Minimal hand-parse of the simple `key: value` frontmatter shape the
     /// shipped skills use (see scripts/agents/validate-toastty-plugin.py):
     /// a leading `---` line, top-level keys, and a closing `---` line.
+    /// Lines are split on any newline Character — Swift treats CRLF as a
+    /// single grapheme, so splitting on "\n" alone would never split CRLF
+    /// files — and a leading UTF-8 BOM is stripped.
     static func parseFrontmatter(_ contents: String) -> (name: String, description: String)? {
-        let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return nil }
+        var contents = contents
+        if contents.hasPrefix("\u{FEFF}") {
+            contents.removeFirst()
+        }
+        let lines = contents.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        guard lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "---" else { return nil }
         var name: String?
         var description: String?
         var closed = false
         for line in lines.dropFirst() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed == "---" {
                 closed = true
                 break
@@ -401,7 +442,7 @@ private extension ToasttyUserSkillValidator {
             let key = String(line[..<colonIndex])
             let value = unquoted(
                 String(line[line.index(after: colonIndex)...])
-                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
             )
             switch key {
             case "name": name = value

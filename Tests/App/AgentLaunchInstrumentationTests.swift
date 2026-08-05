@@ -110,6 +110,140 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
     }
 
+    func testPrepareClaudeLaunchAddsUserPluginDirAfterShippedPluginDir() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-plugin",
+            skillsRootPath: "/tmp/toastty-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            claudeSkillsIntegration: configuration,
+            claudeUserPluginRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        let pluginDirIndices = preparedLaunch.argv.indices.filter {
+            preparedLaunch.argv[$0] == "--plugin-dir"
+        }
+        XCTAssertEqual(pluginDirIndices.count, 2)
+        // Shipped plugin first, user plugin second.
+        XCTAssertEqual(preparedLaunch.argv[safe: pluginDirIndices[0] + 1], configuration.pluginRootPath)
+        XCTAssertEqual(
+            preparedLaunch.argv[safe: pluginDirIndices[1] + 1],
+            "/tmp/user-plugin-root/toastty-user"
+        )
+        XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPrepareClaudeLaunchInjectsUserPluginDirIndependentlyOfShippedConfiguration() throws {
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            claudeSkillsIntegration: nil,
+            claudeUserPluginRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertEqual(preparedLaunch.argv.filter { $0 == "--plugin-dir" }.count, 1)
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/user-plugin-root/toastty-user"))
+        XCTAssertNil(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"])
+    }
+
+    func testPrepareClaudeLaunchOmitsUserPluginDirWhenNoUserRootProvided() throws {
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            claudeSkillsIntegration: nil,
+            claudeUserPluginRootPath: nil
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertFalse(preparedLaunch.argv.contains("--plugin-dir"))
+    }
+
+    func testPrepareClaudeLaunchUserPluginDirCoexistsWithCallerPluginDirs() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty plugin",
+            skillsRootPath: "/tmp/toastty plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude", "--plugin-dir", "/tmp/caller-one", "--plugin-dir=/tmp/caller-two", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            claudeSkillsIntegration: configuration,
+            claudeUserPluginRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertEqual(preparedLaunch.argv.filter { $0 == "--plugin-dir" }.count, 3)
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/toastty plugin"))
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/user-plugin-root/toastty-user"))
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/caller-one"))
+        XCTAssertTrue(preparedLaunch.argv.contains("--plugin-dir=/tmp/caller-two"))
+    }
+
+    func testPrepareClaudeLaunchOmitsUserPluginDirForOpaqueWrapper() throws {
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["custom-wrapper", "claude", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            claudeSkillsIntegration: nil,
+            claudeUserPluginRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertFalse(preparedLaunch.argv.contains("--plugin-dir"))
+    }
+
+    func testPrepareCodexLaunchGainsOnlyTheProfileFlagForSkills() throws {
+        let configuration = CodexSkillsLaunchConfiguration(
+            profileName: "toastty-managed",
+            codexHomePath: "/tmp/codex-home",
+            skillsRootPath: "/tmp/codex-home/plugins/cache/toastty/toastty/1.0.0/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: ["codex"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            codexStatusTrackingSource: .hooks,
+            codexSkillsIntegration: configuration
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        // The user plugin rides entirely in the profile overlay: the Codex
+        // argv gains only the profile flag, never plugin-dir style arguments.
+        XCTAssertEqual(preparedLaunch.argv, ["codex", "--profile", "toastty-managed"])
+        XCTAssertEqual(preparedLaunch.codexSkillsInjectionResult, .injected)
+    }
+
     func testPrepareClaudeLaunchOmitsToasttyPluginForOpaqueWrapper() throws {
         let configuration = ClaudeSkillsLaunchConfiguration(
             pluginRootPath: "/tmp/toastty-plugin",

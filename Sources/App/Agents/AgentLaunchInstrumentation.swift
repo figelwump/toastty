@@ -87,7 +87,8 @@ enum AgentLaunchInstrumentation {
         launchEnvironment: [String: String] = [:],
         codexStatusTrackingSource: CodexStatusTrackingSource = .sessionLogFallback(reason: "default"),
         codexSkillsIntegration: CodexSkillsLaunchConfiguration? = nil,
-        claudeSkillsIntegration: ClaudeSkillsLaunchConfiguration? = nil
+        claudeSkillsIntegration: ClaudeSkillsLaunchConfiguration? = nil,
+        claudeUserPluginRootPath: String? = nil
     ) throws -> PreparedAgentLaunchCommand {
         if agent == .claude {
             return try prepareClaudeLaunch(
@@ -96,7 +97,8 @@ enum AgentLaunchInstrumentation {
                 sessionID: sessionID,
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
-                skillsIntegration: claudeSkillsIntegration
+                skillsIntegration: claudeSkillsIntegration,
+                userPluginRootPath: claudeUserPluginRootPath
             )
         }
 
@@ -149,7 +151,8 @@ enum AgentLaunchInstrumentation {
         sessionID: String,
         workingDirectory: String?,
         fileManager: FileManager,
-        skillsIntegration: ClaudeSkillsLaunchConfiguration?
+        skillsIntegration: ClaudeSkillsLaunchConfiguration?,
+        userPluginRootPath: String?
     ) throws -> PreparedAgentLaunchCommand {
         let artifactsDirectoryURL = try makeArtifactsDirectory(
             prefix: "toastty-claude-launch",
@@ -196,6 +199,14 @@ enum AgentLaunchInstrumentation {
             if let skillsIntegration, skillsInsertionIndex != nil {
                 launchArguments += ["--plugin-dir", skillsIntegration.pluginRootPath]
                 environment[ToasttyLaunchContextEnvironment.skillsRootKey] = skillsIntegration.skillsRootPath
+            }
+            // The user plugin snapshot is already immutable and
+            // content-addressed, so its root is injected directly (after the
+            // shipped plugin, additive with caller-supplied --plugin-dir
+            // flags) under the same safe-executable-index gating.
+            if let userPluginRootPath = normalizedNonEmptyValue(userPluginRootPath),
+               skillsInsertionIndex != nil {
+                launchArguments += ["--plugin-dir", userPluginRootPath]
             }
 
             return PreparedAgentLaunchCommand(

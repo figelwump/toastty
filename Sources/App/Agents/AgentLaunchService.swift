@@ -117,6 +117,10 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     let codexSkillsManager: CodexSkillsManager
     let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
     let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
+    /// App-scoped user skill catalog, shared with the launch planner. The
+    /// later management UI's Rescan goes through
+    /// `userSkillCatalog.refreshUserSkills()` on this same instance.
+    let userSkillCatalog: ToasttyUserSkillCatalog
 
     init(
         store: AppStore,
@@ -125,6 +129,7 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         agentCatalogProvider: any AgentCatalogProviding,
         codexSkillsManager: CodexSkillsManager? = nil,
         claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
+        userSkillCatalog: ToasttyUserSkillCatalog? = nil,
         fileManager: FileManager = .default,
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath,
@@ -147,6 +152,9 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         let resolvedClaudeSkillsBundleManager = claudeSkillsBundleManager
             ?? ClaudeSkillsBundleManager(fileManager: fileManager)
         self.claudeSkillsBundleManager = resolvedClaudeSkillsBundleManager
+        let resolvedUserSkillCatalog = userSkillCatalog
+            ?? ToasttyUserSkillCatalog(fileManager: fileManager)
+        self.userSkillCatalog = resolvedUserSkillCatalog
         let resolvedCodexSkillsResolver = codexSkillsResolver
             ?? CodexManagedLaunchSkillsResolver(
                 fileManager: fileManager,
@@ -170,7 +178,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             },
             nativeSessionObserverRegistry: nativeSessionObserverRegistry,
             codexSkillsResolver: resolvedCodexSkillsResolver,
-            claudeSkillsBundleManager: resolvedClaudeSkillsBundleManager
+            claudeSkillsBundleManager: resolvedClaudeSkillsBundleManager,
+            userSkillSnapshotProvider: resolvedUserSkillCatalog
         )
     }
 

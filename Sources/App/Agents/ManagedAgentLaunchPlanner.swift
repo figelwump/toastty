@@ -62,6 +62,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let codexResumeResolver: any CodexManagedSessionResolving
     private let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
     private let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
+    private let userSkillSnapshotProvider: any ToasttyUserSkillSnapshotProviding
+    /// Bound on user-snapshot preparation during async launch prep; matches
+    /// the Codex skills operation budget. Settable for tests.
+    var userSkillSnapshotPreparationTimeout: TimeInterval = CodexSkillsManager.operationTimeout
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
     private var codexRolloutWatchersBySessionID: [String: CodexRolloutSessionLogWatcherRegistration] = [:]
@@ -83,7 +87,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
         codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
         codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
-        claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil
+        claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
+        userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -107,6 +112,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             ?? CodexManagedLaunchSkillsResolver(fileManager: fileManager)
         self.claudeSkillsBundleManager = claudeSkillsBundleManager
             ?? ClaudeSkillsBundleManager(fileManager: fileManager)
+        self.userSkillSnapshotProvider = userSkillSnapshotProvider
+            ?? ToasttyUserSkillCatalog(fileManager: fileManager)
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
@@ -135,11 +142,23 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let claudeSkillsConfiguration = request.agent == .claude
             ? claudeSkillsBundleManager.existingVerifiedConfiguration()
             : nil
+        // Synchronous preparation never builds a snapshot; it reuses the
+        // newest valid on-disk snapshot receipt or launches without user
+        // skills. Codex synchronous launches need no snapshot at all: any
+        // previously delivered user entry already rides in the profile
+        // overlay.
+        let userSkillSnapshot = request.agent == .claude
+            ? userSkillSnapshotProvider.existingSnapshot()
+            : nil
         return try prepareManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             codexSkillsDecision: codexSkillsDecision,
             claudeSkillsConfiguration: claudeSkillsConfiguration,
+            claudeUserPluginRootPath: claudeUserPluginRootPath(
+                for: request.agent,
+                snapshot: userSkillSnapshot
+            ),
             assessedWorkingDirectory: assessedWorkingDirectory
         )
     }
@@ -150,10 +169,15 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     ) async throws -> ManagedAgentLaunchPlan {
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
+        // Resolved once per launch preparation and passed to both hosts.
+        let userSkillSnapshot = request.agent == .codex || request.agent == .claude
+            ? await preparedUserSkillSnapshot()
+            : nil
         let codexSkillsDecision = request.agent == .codex
             ? await codexSkillsResolver.resolveForManagedLaunch(
                 request: request,
-                workingDirectory: assessedWorkingDirectory
+                workingDirectory: assessedWorkingDirectory,
+                userSkillSnapshot: userSkillSnapshot
             )
             : nil
         let claudeSkillsConfiguration = request.agent == .claude
@@ -164,6 +188,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             codexSkillsDecision: codexSkillsDecision,
             claudeSkillsConfiguration: claudeSkillsConfiguration,
+            claudeUserPluginRootPath: claudeUserPluginRootPath(
+                for: request.agent,
+                snapshot: userSkillSnapshot
+            ),
             assessedWorkingDirectory: assessedWorkingDirectory
         )
         postSkillsProvisionedNoticeIfNeeded(
@@ -181,10 +209,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     ) throws -> ManagedAgentLaunchPlan {
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
+        // Restored preparation reuses the newest existing on-disk snapshot
+        // (receipt/existence checks only) and never builds one.
+        let userSkillSnapshot = request.agent == .codex || request.agent == .claude
+            ? userSkillSnapshotProvider.existingSnapshot()
+            : nil
         let codexSkillsDecision = request.agent == .codex
             ? codexSkillsResolver.resolveForRestoredManagedLaunch(
                 request: request,
-                workingDirectory: assessedWorkingDirectory
+                workingDirectory: assessedWorkingDirectory,
+                userSkillSnapshot: userSkillSnapshot
             )
             : nil
         let claudeSkillsConfiguration = request.agent == .claude
@@ -195,6 +229,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             codexSkillsDecision: codexSkillsDecision,
             claudeSkillsConfiguration: claudeSkillsConfiguration,
+            claudeUserPluginRootPath: claudeUserPluginRootPath(
+                for: request.agent,
+                snapshot: userSkillSnapshot
+            ),
             assessedWorkingDirectory: assessedWorkingDirectory
         )
         postSkillsProvisionedNoticeIfNeeded(
@@ -204,6 +242,64 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             claudeSkillsConfiguration: claudeSkillsConfiguration
         )
         return plan
+    }
+
+    private func claudeUserPluginRootPath(
+        for agent: AgentKind,
+        snapshot: UserSkillPluginSnapshot?
+    ) -> String? {
+        guard agent == .claude else { return nil }
+        return snapshot?.pluginRootURL.path
+    }
+
+    /// Builds (or reuses) the user skills snapshot off the main actor,
+    /// bounded by `userSkillSnapshotPreparationTimeout`. A snapshot
+    /// preparation failure or timeout carries its typed diagnostic into the
+    /// log and both hosts proceed shipped-only. On timeout the abandoned
+    /// build may finish in the background harmlessly: staging is isolated and
+    /// publication is an atomic rename, so a later launch can reuse it.
+    private func preparedUserSkillSnapshot() async -> UserSkillPluginSnapshot? {
+        let provider = userSkillSnapshotProvider
+        let timeout = userSkillSnapshotPreparationTimeout
+        return await withCheckedContinuation { continuation in
+            let oneShot = OneShotSnapshotContinuation(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let snapshot: UserSkillPluginSnapshot?
+                do {
+                    snapshot = try provider.prepareSnapshot()
+                } catch {
+                    let diagnostic: String
+                    switch error as? ToasttyUserSkillCatalogError {
+                    case .sourceUnreadable: diagnostic = "source_unreadable"
+                    case .snapshotWriteFailed: diagnostic = "snapshot_write_failed"
+                    case .snapshotVerificationFailed: diagnostic = "snapshot_verification_failed"
+                    case nil: diagnostic = "unknown"
+                    }
+                    ToasttyLog.warning(
+                        "User skills snapshot preparation failed; launching with shipped skills only",
+                        category: .automation,
+                        metadata: [
+                            "diagnostic": diagnostic,
+                            "error": error.localizedDescription,
+                        ]
+                    )
+                    snapshot = nil
+                }
+                _ = oneShot.resume(returning: snapshot)
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                if oneShot.resume(returning: nil) {
+                    ToasttyLog.warning(
+                        "User skills snapshot preparation timed out; launching with shipped skills only",
+                        category: .automation,
+                        metadata: [
+                            "diagnostic": "snapshot_preparation_timed_out",
+                            "timeout_seconds": String(timeout),
+                        ]
+                    )
+                }
+            }
+        }
     }
 
     private func postSkillsProvisionedNoticeIfNeeded(
@@ -236,6 +332,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         inheritedScopedWorkspaceIDs: Set<UUID>?,
         codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
         claudeSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
+        claudeUserPluginRootPath: String?,
         assessedWorkingDirectory: String?
     ) throws -> ManagedAgentLaunchPlan {
         guard let sessionRuntimeStore else {
@@ -270,7 +367,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             launchEnvironment: request.environment,
             codexStatusTrackingSource: codexStatusTrackingSource,
             codexSkillsIntegration: effectiveCodexSkillsConfiguration,
-            claudeSkillsIntegration: claudeSkillsConfiguration
+            claudeSkillsIntegration: claudeSkillsConfiguration,
+            claudeUserPluginRootPath: claudeUserPluginRootPath
         )
         let launchStart = nowProvider()
         let parentSessionID = resolvedParentSessionID(
@@ -481,7 +579,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         launchEnvironment: [String: String],
         codexStatusTrackingSource: CodexStatusTrackingSource,
         codexSkillsIntegration: CodexSkillsLaunchConfiguration?,
-        claudeSkillsIntegration: ClaudeSkillsLaunchConfiguration?
+        claudeSkillsIntegration: ClaudeSkillsLaunchConfiguration?,
+        claudeUserPluginRootPath: String? = nil
     ) -> PreparedAgentLaunchCommand {
         do {
             return try AgentLaunchInstrumentation.prepare(
@@ -494,7 +593,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 launchEnvironment: launchEnvironment,
                 codexStatusTrackingSource: codexStatusTrackingSource,
                 codexSkillsIntegration: codexSkillsIntegration,
-                claudeSkillsIntegration: claudeSkillsIntegration
+                claudeSkillsIntegration: claudeSkillsIntegration,
+                claudeUserPluginRootPath: claudeUserPluginRootPath
             )
         } catch {
             ToasttyLog.warning(
@@ -1190,6 +1290,27 @@ private struct CodexSessionLogStreamKey: Hashable {
 private struct CodexSessionLogCursorStateRegistration {
     let standardizedPath: String
     let cursorState: CodexSessionLogCursorState
+}
+
+/// First resume wins: lets the snapshot build race a timeout without ever
+/// resuming the continuation twice.
+private final class OneShotSnapshotContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<UserSkillPluginSnapshot?, Never>?
+
+    init(_ continuation: CheckedContinuation<UserSkillPluginSnapshot?, Never>) {
+        self.continuation = continuation
+    }
+
+    /// Returns true when this call performed the resume.
+    func resume(returning value: UserSkillPluginSnapshot?) -> Bool {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
+        return pending != nil
+    }
 }
 
 private func normalizedNonEmpty(_ value: String?) -> String? {

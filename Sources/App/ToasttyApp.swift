@@ -890,6 +890,7 @@ struct ToasttyApp: App {
         // home.
         let codexSkillsManager = CodexSkillsManager(runtimePaths: runtimePaths)
         let claudeSkillsBundleManager = ClaudeSkillsBundleManager(runtimePaths: runtimePaths)
+        let userSkillCatalog = ToasttyUserSkillCatalog(runtimePaths: runtimePaths)
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
@@ -897,6 +898,7 @@ struct ToasttyApp: App {
             agentCatalogProvider: agentCatalogStore,
             codexSkillsManager: codexSkillsManager,
             claudeSkillsBundleManager: claudeSkillsBundleManager,
+            userSkillCatalog: userSkillCatalog,
             cliExecutablePathProvider: { cliExecutablePath },
             socketPathProvider: { socketPath },
             codexProcessPathProvider: { codexProcessPathStore.currentPath() },

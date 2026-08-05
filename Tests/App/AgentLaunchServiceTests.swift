@@ -418,6 +418,29 @@ struct AgentLaunchServiceTests {
         let agentCatalogProvider = TestAgentCatalogProvider()
         let codexSkillsManager = CodexSkillsManager()
         let claudeSkillsBundleManager = RecordingClaudeSkillsBundleManager()
+        let userSkillsHomeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-service-user-skills-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: userSkillsHomeURL) }
+        let userSkillCatalog = ToasttyUserSkillCatalog(
+            runtimePaths: .resolve(
+                homeDirectoryPath: userSkillsHomeURL.appendingPathComponent("real-home").path,
+                environment: [
+                    "TOASTTY_RUNTIME_HOME": userSkillsHomeURL
+                        .appendingPathComponent("runtime-home").path,
+                ]
+            )
+        )
+        let packageURL = userSkillsHomeURL.appendingPathComponent(
+            "runtime-home/skills/alpha-skill",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+        try "---\nname: alpha-skill\ndescription: Test skill.\n---\n".write(
+            to: packageURL.appendingPathComponent("SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let snapshot = try #require(try userSkillCatalog.refreshUserSkills())
 
         let service = AgentLaunchService(
             store: store,
@@ -426,6 +449,7 @@ struct AgentLaunchServiceTests {
             agentCatalogProvider: agentCatalogProvider,
             codexSkillsManager: codexSkillsManager,
             claudeSkillsBundleManager: claudeSkillsBundleManager,
+            userSkillCatalog: userSkillCatalog,
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-tests.sock" },
             codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
@@ -436,14 +460,22 @@ struct AgentLaunchServiceTests {
         // Codex manager instance.
         #expect(service.codexSkillsManager === codexSkillsManager)
         #expect(service.claudeSkillsBundleManager === claudeSkillsBundleManager)
+        #expect(service.userSkillCatalog === userSkillCatalog)
         let resolver = try #require(
             service.codexSkillsResolver as? CodexManagedLaunchSkillsResolver
         )
         #expect(resolver.manager === codexSkillsManager)
 
-        // The managed-launch planner consults the injected Claude manager.
-        _ = try service.launch(profileID: "claude")
+        // The managed-launch planner consults the injected Claude manager and
+        // the injected user skill catalog: the synchronous launch reuses the
+        // catalog's existing snapshot for the second --plugin-dir.
+        let result = try service.launch(profileID: "claude")
         #expect(claudeSkillsBundleManager.existingVerifiedConfigurationCallCount == 1)
+        // Path form may differ (/var vs /private/var); the content-addressed
+        // segment identifies the shared catalog's snapshot unambiguously.
+        #expect(result.commandLine.contains(
+            "\(snapshot.sourceDigest)/marketplace/plugins/toastty-user"
+        ))
     }
 
     @Test

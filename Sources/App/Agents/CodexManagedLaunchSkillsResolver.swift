@@ -36,13 +36,18 @@ final class CodexProcessPathStore: @unchecked Sendable {
 struct CodexManagedLaunchSkillsDecision: Equatable, Sendable {
     let configuration: CodexSkillsLaunchConfiguration?
     let status: CodexSkillsStatus?
+    /// Typed user-plugin outcome for launches that resolved a user snapshot;
+    /// nil when the launch path never considered user skills.
+    let userSkills: CodexUserSkillsDeliveryState?
 
     init(
         configuration: CodexSkillsLaunchConfiguration?,
-        status: CodexSkillsStatus?
+        status: CodexSkillsStatus?,
+        userSkills: CodexUserSkillsDeliveryState? = nil
     ) {
         self.configuration = configuration
         self.status = status
+        self.userSkills = userSkills
     }
 }
 
@@ -59,6 +64,16 @@ protocol CodexManagedLaunchSkillsResolving: AnyObject, Sendable {
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?
     ) -> CodexManagedLaunchSkillsDecision
+    func resolveForManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?,
+        userSkillSnapshot: UserSkillPluginSnapshot?
+    ) async -> CodexManagedLaunchSkillsDecision
+    func resolveForRestoredManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?,
+        userSkillSnapshot: UserSkillPluginSnapshot?
+    ) -> CodexManagedLaunchSkillsDecision
 }
 
 extension CodexManagedLaunchSkillsResolving {
@@ -74,6 +89,24 @@ extension CodexManagedLaunchSkillsResolving {
         workingDirectory: String?
     ) -> CodexManagedLaunchSkillsDecision {
         resolve(request: request, workingDirectory: workingDirectory)
+    }
+
+    // Snapshot-parameter defaults forward to the snapshot-free variants so
+    // test doubles that only implement those observe the same calls.
+    func resolveForManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?,
+        userSkillSnapshot _: UserSkillPluginSnapshot?
+    ) async -> CodexManagedLaunchSkillsDecision {
+        await resolveForManagedLaunch(request: request, workingDirectory: workingDirectory)
+    }
+
+    func resolveForRestoredManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?,
+        userSkillSnapshot _: UserSkillPluginSnapshot?
+    ) -> CodexManagedLaunchSkillsDecision {
+        resolveForRestoredManagedLaunch(request: request, workingDirectory: workingDirectory)
     }
 }
 
@@ -123,6 +156,59 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
         request: ManagedAgentLaunchRequest,
         workingDirectory: String?
     ) async -> CodexManagedLaunchSkillsDecision {
+        await resolveManagedLaunch(
+            request: request,
+            workingDirectory: workingDirectory
+        ) { [manager] runtime in
+            try manager.prepareForManagedLaunch(runtime: runtime)
+        }
+    }
+
+    func resolveForManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?,
+        userSkillSnapshot: UserSkillPluginSnapshot?
+    ) async -> CodexManagedLaunchSkillsDecision {
+        await resolveManagedLaunch(
+            request: request,
+            workingDirectory: workingDirectory
+        ) { [manager] runtime in
+            try manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: userSkillSnapshot)
+        }
+    }
+
+    func resolveForRestoredManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        resolveRestoredManagedLaunch(
+            request: request,
+            workingDirectory: workingDirectory
+        ) { [manager] runtime in
+            try manager.prepareForRestoredManagedLaunch(runtime: runtime)
+        }
+    }
+
+    func resolveForRestoredManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?,
+        userSkillSnapshot: UserSkillPluginSnapshot?
+    ) -> CodexManagedLaunchSkillsDecision {
+        resolveRestoredManagedLaunch(
+            request: request,
+            workingDirectory: workingDirectory
+        ) { [manager] runtime in
+            try manager.prepareForRestoredManagedLaunch(runtime: runtime, userSnapshot: userSkillSnapshot)
+        }
+    }
+}
+
+private extension CodexManagedLaunchSkillsResolver {
+    func resolveManagedLaunch(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?,
+        prepare: @escaping @Sendable (CodexIntegrationRuntime) throws -> CodexSkillsPreparation
+    ) async -> CodexManagedLaunchSkillsDecision {
         guard request.agent == .codex,
               let runtime = resolveRuntime(request: request, workingDirectory: workingDirectory) else {
             return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
@@ -137,37 +223,21 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
 
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async { [self] in
-                do {
-                    let preparation = try manager.prepareForManagedLaunch(
-                        runtime: runtime
+                continuation.resume(
+                    returning: decision(
+                        preparing: prepare,
+                        runtime: runtime,
+                        unsupportedKey: key
                     )
-                    continuation.resume(
-                        returning: CodexManagedLaunchSkillsDecision(
-                            configuration: preparation.configuration,
-                            status: preparation.status
-                        )
-                    )
-                } catch let error as CodexPluginCLIError {
-                    if error.isUnsupported {
-                        markUnsupported(key)
-                    }
-                    logFailure(error, runtime: runtime)
-                    continuation.resume(
-                        returning: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
-                    )
-                } catch {
-                    logFailure(error, runtime: runtime)
-                    continuation.resume(
-                        returning: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
-                    )
-                }
+                )
             }
         }
     }
 
-    func resolveForRestoredManagedLaunch(
+    func resolveRestoredManagedLaunch(
         request: ManagedAgentLaunchRequest,
-        workingDirectory: String?
+        workingDirectory: String?,
+        prepare: (CodexIntegrationRuntime) throws -> CodexSkillsPreparation
     ) -> CodexManagedLaunchSkillsDecision {
         guard request.agent == .codex,
               let runtime = resolveRuntime(request: request, workingDirectory: workingDirectory) else {
@@ -177,14 +247,25 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
         guard unsupportedLock.withLock({ unsupportedRuntimeKeys.contains(key) }) == false else {
             return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
         }
+        return decision(preparing: prepare, runtime: runtime, unsupportedKey: key)
+    }
+
+    func decision(
+        preparing prepare: (CodexIntegrationRuntime) throws -> CodexSkillsPreparation,
+        runtime: CodexIntegrationRuntime,
+        unsupportedKey key: String
+    ) -> CodexManagedLaunchSkillsDecision {
         do {
-            let preparation = try manager.prepareForRestoredManagedLaunch(runtime: runtime)
+            let preparation = try prepare(runtime)
             return CodexManagedLaunchSkillsDecision(
                 configuration: preparation.configuration,
-                status: preparation.status
+                status: preparation.status,
+                userSkills: preparation.userSkills
             )
         } catch let error as CodexPluginCLIError {
-            if error.isUnsupported { markUnsupported(key) }
+            if error.isUnsupported {
+                markUnsupported(key)
+            }
             logFailure(error, runtime: runtime)
         } catch {
             logFailure(error, runtime: runtime)

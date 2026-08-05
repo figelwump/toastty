@@ -41,16 +41,33 @@ enum ToasttyUserSkillCatalogError: LocalizedError, Equatable {
     }
 }
 
+/// Launch-preparation seam over the catalog: the planner resolves one
+/// snapshot per launch preparation and passes the same value to both hosts.
+/// `prepareSnapshot()` may build; `existingSnapshot()` is the cheap
+/// no-build reuse used by synchronous and restored preparation.
+protocol ToasttyUserSkillSnapshotProviding: AnyObject, Sendable {
+    func prepareSnapshot() throws -> UserSkillPluginSnapshot?
+    func existingSnapshot() -> UserSkillPluginSnapshot?
+}
+
 /// Standalone catalog for user-created skill packages under the runtime
 /// paths' `skills` directory. `scan()` is read-only; `prepareSnapshot()`
 /// builds (or reuses) an immutable content-addressed `toastty-user` plugin
 /// snapshot under `<agent-plugins>/user/<sourceDigest>/`. Delivery wiring is
 /// a separate concern; this type never touches launch paths and never reads
 /// `~/.codex`, `~/.claude`, or `~/.agents`.
-final class ToasttyUserSkillCatalog: @unchecked Sendable {
+final class ToasttyUserSkillCatalog: ToasttyUserSkillSnapshotProviding, @unchecked Sendable {
     private let userSkillsDirectoryURL: URL
     private let snapshotsRootURL: URL
     private let fileManager: FileManager
+    /// Serializes snapshot preparation within this (app-scoped) instance so
+    /// concurrent launch preparations cannot delete each other's staging or
+    /// race the corrupt-snapshot rebuild.
+    private let preparationLock = NSLock()
+    private let digestMemoLock = NSLock()
+    /// Per-process verdicts of the once-per-snapshot content digest
+    /// verification performed by `existingSnapshot()`.
+    private var digestVerificationMemo: [String: Bool] = [:]
 
     init(
         runtimePaths: ToasttyRuntimePaths = .resolve(),
@@ -72,6 +89,8 @@ final class ToasttyUserSkillCatalog: @unchecked Sendable {
     /// packages. Returns nil (and creates nothing) when no package is
     /// accepted; the delivery phase interprets nil as "no user plugin".
     func prepareSnapshot() throws -> UserSkillPluginSnapshot? {
+        preparationLock.lock()
+        defer { preparationLock.unlock() }
         cleanupOrphanedStaging()
         let scanResult = validator.scan(userSkillsDirectoryURL: userSkillsDirectoryURL)
         let payloads = scanResult.acceptedPayloads
@@ -83,6 +102,14 @@ final class ToasttyUserSkillCatalog: @unchecked Sendable {
 
         if fileManager.fileExists(atPath: destinationURL.path) {
             if let existing = try? verifiedSnapshot(at: destinationURL, sourceDigest: sourceDigest) {
+                // Refresh the receipt mtime so `existingSnapshot()`'s
+                // newest-receipt selection matches the most recently prepared
+                // snapshot (a content revert A→B→A would otherwise keep B
+                // newest while launches deliver A).
+                try? fileManager.setAttributes(
+                    [.modificationDate: Date()],
+                    ofItemAtPath: existing.receiptURL.path
+                )
                 return existing
             }
             // A corrupt existing snapshot directory is removed and rebuilt.
@@ -112,6 +139,72 @@ final class ToasttyUserSkillCatalog: @unchecked Sendable {
             throw error
         }
         return try verifiedSnapshot(at: destinationURL, sourceDigest: sourceDigest)
+    }
+
+    /// Reuse of the newest already-built snapshot without scanning sources or
+    /// staging anything. Every call performs structural existence checks
+    /// (receipt decode, both plugin manifests, the skills root, and each
+    /// accepted package directory). The receipt's recorded content digest is
+    /// additionally recomputed once per process per snapshot identity and the
+    /// verdict memoized, so half-deleted or tampered snapshots are rejected
+    /// before their root can reach a `--plugin-dir` argument, while repeat
+    /// synchronous launches stay cheap. Content changes after a verified
+    /// first read are out of scope here — the snapshot is Toastty-owned and
+    /// content-addressed, and the Codex side always byte-verifies its own
+    /// delivered cache.
+    func existingSnapshot() -> UserSkillPluginSnapshot? {
+        guard let children = try? fileManager.contentsOfDirectory(
+            at: snapshotsRootURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        var newest: (modified: Date, snapshot: UserSkillPluginSnapshot)?
+        for child in children {
+            let receiptURL = child.appendingPathComponent(Self.receiptFileName)
+            guard let data = try? Data(contentsOf: receiptURL),
+                  let receipt = try? JSONDecoder().decode(SnapshotReceipt.self, from: data),
+                  receipt.schemaVersion == 1,
+                  receipt.pluginName == UserSkillPluginSnapshot.pluginName,
+                  receipt.sourceDigest == child.lastPathComponent,
+                  receipt.version == Self.version(sourceDigest: receipt.sourceDigest) else {
+                continue
+            }
+            let marketplaceRootURL = child.appendingPathComponent(
+                Self.marketplaceDirectoryName,
+                isDirectory: true
+            )
+            let pluginRootURL = marketplaceRootURL
+                .appendingPathComponent("plugins", isDirectory: true)
+                .appendingPathComponent(UserSkillPluginSnapshot.pluginName, isDirectory: true)
+            guard hasIntactStructure(pluginRootURL: pluginRootURL, receipt: receipt),
+                  hasVerifiedContentDigest(pluginRootURL: pluginRootURL, receipt: receipt) else {
+                continue
+            }
+            let modified = (try? fileManager.attributesOfItem(atPath: receiptURL.path))?[.modificationDate] as? Date
+                ?? .distantPast
+            guard newest == nil || modified > newest!.modified else { continue }
+            newest = (modified, UserSkillPluginSnapshot(
+                pluginName: receipt.pluginName,
+                version: receipt.version,
+                sourceDigest: receipt.sourceDigest,
+                pluginContentDigest: receipt.pluginContentDigest,
+                pluginRootURL: pluginRootURL,
+                marketplaceRootURL: marketplaceRootURL,
+                skillsRootURL: pluginRootURL.appendingPathComponent("skills", isDirectory: true),
+                receiptURL: receiptURL,
+                acceptedPackageNames: receipt.acceptedPackageNames
+            ))
+        }
+        return newest?.snapshot
+    }
+
+    /// Rescan seam for the management UI: rebuilds (or reuses) the snapshot
+    /// from the current user skill sources.
+    @discardableResult
+    func refreshUserSkills() throws -> UserSkillPluginSnapshot? {
+        try prepareSnapshot()
     }
 }
 
@@ -173,11 +266,14 @@ private extension ToasttyUserSkillCatalog {
     }
 
     /// O_NOFOLLOW read so a symlink swapped in after validation can never leak
-    /// out-of-package bytes into a snapshot.
+    /// out-of-package bytes into a snapshot. O_NONBLOCK guards the open itself:
+    /// a FIFO swapped in after validation would otherwise block `open()`
+    /// forever (a reader waits for a writer). The flag is cleared before
+    /// reading — it never affects reads of the regular files we accept.
     static func readRegularFileNoFollow(at url: URL) throws -> Data {
         let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
             guard let path else { return -1 }
-            return Darwin.open(path, O_RDONLY | O_NOFOLLOW)
+            return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         }
         guard descriptor >= 0 else {
             throw ToasttyUserSkillCatalogError.sourceUnreadable(url.path)
@@ -186,6 +282,10 @@ private extension ToasttyUserSkillCatalog {
         defer { try? handle.close() }
         var status = stat()
         guard fstat(descriptor, &status) == 0, (status.st_mode & S_IFMT) == S_IFREG else {
+            throw ToasttyUserSkillCatalogError.sourceUnreadable(url.path)
+        }
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags & ~O_NONBLOCK) >= 0 else {
             throw ToasttyUserSkillCatalogError.sourceUnreadable(url.path)
         }
         guard let data = try? handle.readToEnd() else {
@@ -389,7 +489,49 @@ private extension ToasttyUserSkillCatalog {
         )
     }
 
+    // MARK: - Existing-snapshot verification
+
+    /// Structural existence checks run on every `existingSnapshot()` call:
+    /// both plugin manifests, the skills root, and each accepted package
+    /// directory named in the receipt.
+    func hasIntactStructure(pluginRootURL: URL, receipt: SnapshotReceipt) -> Bool {
+        let skillsRootURL = pluginRootURL.appendingPathComponent("skills", isDirectory: true)
+        var requiredPaths = [
+            pluginRootURL.appendingPathComponent(".codex-plugin/plugin.json").path,
+            pluginRootURL.appendingPathComponent(".claude-plugin/plugin.json").path,
+            skillsRootURL.path,
+        ]
+        requiredPaths += receipt.acceptedPackageNames.map { name in
+            skillsRootURL.appendingPathComponent(name, isDirectory: true).path
+        }
+        return requiredPaths.allSatisfy { fileManager.fileExists(atPath: $0) }
+    }
+
+    /// Recomputes the plugin content digest once per process per snapshot
+    /// identity and memoizes the verdict; repeat calls trust the memo.
+    func hasVerifiedContentDigest(pluginRootURL: URL, receipt: SnapshotReceipt) -> Bool {
+        let memoKey = "\(receipt.sourceDigest)|\(receipt.pluginContentDigest)"
+        digestMemoLock.lock()
+        let memo = digestVerificationMemo[memoKey]
+        digestMemoLock.unlock()
+        if let memo { return memo }
+        let digest = try? ToasttyAgentPluginBundle.contentDigest(
+            rootURL: pluginRootURL,
+            fileManager: fileManager
+        )
+        let verified = digest == receipt.pluginContentDigest
+        digestMemoLock.lock()
+        digestVerificationMemo[memoKey] = verified
+        digestMemoLock.unlock()
+        return verified
+    }
+
     // MARK: - Housekeeping
+
+    /// Staging directories younger than this are presumed to belong to a
+    /// concurrent build (defense against multi-process runs; in-process runs
+    /// are serialized by `preparationLock`).
+    static let stagingOrphanMaxAge: TimeInterval = 3600
 
     func cleanupOrphanedStaging() {
         guard let children = try? fileManager.contentsOfDirectory(
@@ -400,6 +542,9 @@ private extension ToasttyUserSkillCatalog {
             return
         }
         for child in children where child.lastPathComponent.hasPrefix(".staging-") {
+            let modified = (try? fileManager.attributesOfItem(atPath: child.path))?[.modificationDate] as? Date
+                ?? .distantPast
+            guard Date().timeIntervalSince(modified) > Self.stagingOrphanMaxAge else { continue }
             try? fileManager.removeItem(at: child)
         }
     }

@@ -648,6 +648,501 @@ final class CodexSkillsManagerTests: XCTestCase {
         )
     }
 
+    // MARK: - User plugin delivery
+
+    func testDualPopulationDeliversUserPluginWithTwoEntryProfile() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSnapshot: snapshot
+        )
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(preparation.status.availability, .ready)
+        XCTAssertEqual(
+            preparation.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+        // Shipped and user plugins each populate through their own throwaway
+        // install.
+        XCTAssertEqual(
+            fixture.recorder.operations,
+            ["marketplace.add", "plugin.install", "marketplace.add", "plugin.install"]
+        )
+        let userVersionURL = fixture.userCacheVersionURL(runtime: runtime, snapshot: snapshot)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: userVersionURL.appendingPathComponent("skills/alpha-skill/SKILL.md").path
+            )
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path))
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents(includeUserPlugin: true)
+        )
+        // The user's config.toml is still never created or written.
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: runtime.codexHomeURL.appendingPathComponent("config.toml").path
+            )
+        )
+    }
+
+    func testUserPopulationFailureIsIsolatedFromShippedDelivery() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        fixture.pluginClient.installErrorsBySelector["toastty-user@toastty-user"] =
+            CodexPluginCLIError.commandFailed("plugin add", 1, "fixture user failure")
+
+        // Repeated user failures never trip the shipped circuit breaker: the
+        // shipped configuration stays delivered and the user population is
+        // retried on every launch (two identical shipped failures would have
+        // paused automatic retries).
+        for _ in 0..<3 {
+            let preparation = try fixture.manager.prepareForManagedLaunch(
+                runtime: runtime,
+                userSnapshot: snapshot
+            )
+            XCTAssertNotNil(preparation.configuration)
+            XCTAssertEqual(preparation.status.availability, .ready)
+            guard case .failed(.populationFailed(let detail)) = preparation.userSkills else {
+                return XCTFail("Expected populationFailed, got \(preparation.userSkills)")
+            }
+            XCTAssertTrue(detail.contains("fixture user failure"))
+        }
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+
+        // Recovery needs no repair: the next launch with a working CLI
+        // delivers the user plugin.
+        fixture.pluginClient.installErrorsBySelector = [:]
+        let recovered = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSnapshot: snapshot
+        )
+        XCTAssertEqual(
+            recovered.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+    }
+
+    func testNilUserSnapshotAfterDeliveryRemovesUserStateAndProfileEntry() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+        fixture.recorder.reset()
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSnapshot: nil
+        )
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(preparation.userSkills, .notDelivered)
+        XCTAssertEqual(fixture.recorder.operations, [])
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents
+        )
+    }
+
+    func testRestoredLaunchWithBothPluginsVerifiesWithoutSubprocessWork() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        let first = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+        fixture.recorder.reset()
+        let restartedManager = fixture.makeRestartedManager()
+
+        let restored = try restartedManager.prepareForRestoredManagedLaunch(
+            runtime: runtime,
+            userSnapshot: snapshot
+        )
+
+        XCTAssertEqual(restored.configuration, first.configuration)
+        XCTAssertEqual(
+            restored.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+        XCTAssertEqual(fixture.recorder.operations, [])
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents(includeUserPlugin: true)
+        )
+    }
+
+    func testRestoredLaunchWithStaleUserCacheDropsUserEntryWithoutPopulation() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+        try "\nStale bytes.\n".append(
+            to: fixture.userCacheVersionURL(runtime: runtime, snapshot: snapshot)
+                .appendingPathComponent("skills/alpha-skill/SKILL.md")
+        )
+        fixture.recorder.reset()
+        let restartedManager = fixture.makeRestartedManager()
+
+        let restored = try restartedManager.prepareForRestoredManagedLaunch(
+            runtime: runtime,
+            userSnapshot: snapshot
+        )
+
+        XCTAssertNotNil(restored.configuration)
+        guard case .failed(.staleCache) = restored.userSkills else {
+            return XCTFail("Expected staleCache, got \(restored.userSkills)")
+        }
+        // Restore never runs user-plugin population.
+        XCTAssertEqual(fixture.recorder.operations, [])
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents
+        )
+    }
+
+    func testRestoredLaunchWithMissingUserCacheDropsUserEntry() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+        try FileManager.default.removeItem(at: fixture.userCacheRootURL(runtime: runtime))
+        fixture.recorder.reset()
+        let restartedManager = fixture.makeRestartedManager()
+
+        let restored = try restartedManager.prepareForRestoredManagedLaunch(
+            runtime: runtime,
+            userSnapshot: snapshot
+        )
+
+        XCTAssertNotNil(restored.configuration)
+        guard case .failed(.staleCache) = restored.userSkills else {
+            return XCTFail("Expected staleCache, got \(restored.userSkills)")
+        }
+        XCTAssertEqual(fixture.recorder.operations, [])
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents
+        )
+    }
+
+    func testStaleUserCacheOnManagedLaunchIsRepopulated() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+        try "\nStale bytes.\n".append(
+            to: fixture.userCacheVersionURL(runtime: runtime, snapshot: snapshot)
+                .appendingPathComponent("skills/alpha-skill/SKILL.md")
+        )
+        fixture.recorder.reset()
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSnapshot: snapshot
+        )
+
+        XCTAssertEqual(
+            preparation.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+        // Only the user plugin repopulates; shipped delivery is untouched.
+        XCTAssertEqual(fixture.recorder.operations, ["marketplace.add", "plugin.install"])
+    }
+
+    func testDigestMismatchedUserPopulationIsRejectedWithoutAffectingShipped() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        fixture.pluginClient.tamperedInstallSelectors = ["toastty-user@toastty-user"]
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSnapshot: snapshot
+        )
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(preparation.status.availability, .ready)
+        guard case .failed(.digestMismatch) = preparation.userSkills else {
+            return XCTFail("Expected digestMismatch, got \(preparation.userSkills)")
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents
+        )
+    }
+
+    func testShippedOnlyPreparationLeavesDeliveredUserStateUntouched() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+
+        // Repair and other shipped-only entry points never touch user state.
+        let repaired = try fixture.manager.repair(runtime: runtime)
+
+        XCTAssertEqual(repaired.availability, .ready)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents(includeUserPlugin: true)
+        )
+    }
+
+    func testUninstallRemovesUserPluginState() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+
+        let status = try fixture.manager.uninstall(
+            runtime: runtime,
+            hasActiveManagedCodexSession: false
+        )
+
+        XCTAssertEqual(status.availability, .notInstalled)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: fixture.profileConfigURL(runtime: runtime).path)
+        )
+    }
+
+    /// A slow user population must not hold the lock shipped preparation
+    /// needs: a second manager instance (no in-memory cache, so it takes the
+    /// locked shipped path against the shared static locks) completes its
+    /// shipped verification while the user install is still in flight.
+    func testSlowUserPopulationDoesNotBlockShippedPreparation() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+
+        let gate = DispatchSemaphore(value: 0)
+        fixture.pluginClient.installGatesBySelector["toastty-user@toastty-user"] = gate
+        let userInstallStarted = expectation(description: "user install started")
+        fixture.pluginClient.onInstallStart = { selector in
+            if selector == "toastty-user@toastty-user" {
+                userInstallStarted.fulfill()
+            }
+        }
+        let userFlowFinished = expectation(description: "user flow finished")
+        let userPreparation = PreparationBox()
+        DispatchQueue.global().async { [manager = fixture.manager] in
+            userPreparation.set(
+                try? manager.prepareForManagedLaunch(
+                    runtime: runtime,
+                    userSnapshot: snapshot
+                )
+            )
+            userFlowFinished.fulfill()
+        }
+        wait(for: [userInstallStarted], timeout: 5)
+
+        // While the user population is blocked, a shipped-only preparation on
+        // a fresh manager instance (shared static locks, no in-memory cache)
+        // must complete well inside the operation budget.
+        let start = Date()
+        let shipped = try fixture.makeRestartedManager().prepareForManagedLaunch(runtime: runtime)
+        XCTAssertNotNil(shipped.configuration)
+        XCTAssertLessThan(Date().timeIntervalSince(start), CodexSkillsManager.operationTimeout)
+
+        gate.signal()
+        wait(for: [userFlowFinished], timeout: 10)
+        XCTAssertEqual(
+            userPreparation.current?.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+    }
+
+    /// Timing out while WAITING for the operation lock is not a provisioning
+    /// failure: two concurrent waiters that give up must not advance the
+    /// shipped circuit breaker toward its pause threshold.
+    func testShippedLockWaitTimeoutDoesNotTripShippedBreaker() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let gate = DispatchSemaphore(value: 0)
+        fixture.pluginClient.installGatesBySelector["toastty@toastty"] = gate
+        let holderInstallStarted = expectation(description: "holder install started")
+        fixture.pluginClient.onInstallStart = { selector in
+            if selector == "toastty@toastty" {
+                holderInstallStarted.fulfill()
+            }
+        }
+        let holderFinished = expectation(description: "holder finished")
+        DispatchQueue.global().async { [manager = fixture.manager] in
+            // Holds the operation lock past its own deadline; ends in a
+            // single deadline failure of its own.
+            _ = try? manager.prepareForManagedLaunch(runtime: runtime)
+            holderFinished.fulfill()
+        }
+        wait(for: [holderInstallStarted], timeout: 5)
+
+        // Two concurrent waiters exhaust their lock-wait budget and throw.
+        let waitersFinished = expectation(description: "waiters finished")
+        waitersFinished.expectedFulfillmentCount = 2
+        for _ in 0..<2 {
+            DispatchQueue.global().async { [manager = fixture.manager] in
+                do {
+                    _ = try manager.prepareForManagedLaunch(runtime: runtime)
+                    XCTFail("Expected a lock-wait timeout")
+                } catch {
+                    XCTAssertEqual(error as? CodexSkillsManagerError, .operationTimedOut)
+                }
+                waitersFinished.fulfill()
+            }
+        }
+        wait(for: [waitersFinished], timeout: CodexSkillsManager.operationTimeout + 5)
+        gate.signal()
+        wait(for: [holderFinished], timeout: 10)
+
+        // The holder's own deadline failure contributes at most one strike;
+        // if the two lock-wait timeouts had also counted, the breaker would
+        // now be paused and this preparation would deliver nothing.
+        fixture.pluginClient.installGatesBySelector = [:]
+        fixture.pluginClient.onInstallStart = nil
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(preparation.status.availability, .ready)
+    }
+
+    /// Live end-to-end population of both plugins through the real Codex CLI
+    /// against throwaway homes only. Skips when no real codex binary is
+    /// available (`CODEX_BIN` is honored; Toastty agent shims are not the
+    /// CLI).
+    func testLiveCodexDeliversShippedAndUserPluginsEndToEnd() throws {
+        guard let codexURL = Self.resolveRealCodexExecutable() else {
+            throw XCTSkip("codex is unavailable; skipped live dual-population check")
+        }
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let manager = CodexSkillsManager(
+            runtimePaths: .resolve(homeDirectoryPath: fixture.homeURL.path, environment: [:]),
+            homeDirectoryURL: fixture.homeURL,
+            sourcePluginURLProvider: { [sourcePluginURL = fixture.sourcePluginURL] in sourcePluginURL },
+            sourceMarketplaceURLProvider: { [sourceMarketplaceURL = fixture.sourceMarketplaceURL] in
+                sourceMarketplaceURL
+            },
+            pluginClient: CodexPluginCLIClient()
+        )
+        let snapshot = try fixture.userSnapshot()
+        // npm-installed codex is a `#!/usr/bin/env node` script; make its
+        // sibling `node` resolvable from the population subprocesses.
+        let codexBinDirectory = codexURL.deletingLastPathComponent().path
+        let runtime = CodexIntegrationRuntime(
+            executableURL: codexURL,
+            processEnvironment: CodexProcessEnvironment(
+                codexHomeURL: fixture.rootURL.appendingPathComponent("live-codex-home", isDirectory: true),
+                path: "\(codexBinDirectory):/usr/bin:/bin"
+            ),
+            workingDirectoryURL: fixture.rootURL
+        )
+
+        let preparation = try manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSnapshot: snapshot
+        )
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(preparation.status.availability, .ready)
+        XCTAssertEqual(
+            preparation.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+        let userVersionURL = fixture.userCacheVersionURL(runtime: runtime, snapshot: snapshot)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: userVersionURL.appendingPathComponent("skills/alpha-skill/SKILL.md").path
+            )
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents(includeUserPlugin: true)
+        )
+    }
+
+    /// Resolves a real Codex CLI the way the plugin self-test does: honor
+    /// `CODEX_BIN`, then search PATH and common install locations, skipping
+    /// Toastty-managed agent shims (which intercept `codex` on dev machines).
+    private static func resolveRealCodexExecutable() -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        let fileManager = FileManager.default
+        var candidates: [URL] = []
+        if let explicit = environment["CODEX_BIN"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           explicit.isEmpty == false {
+            candidates.append(URL(fileURLWithPath: explicit))
+        }
+        var searchDirectories = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+        searchDirectories.append(contentsOf: ["/opt/homebrew/bin", "/usr/local/bin"])
+        let nodeVersionsURL = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".nvm/versions/node", isDirectory: true)
+        if let nodeVersions = try? fileManager.contentsOfDirectory(atPath: nodeVersionsURL.path) {
+            for version in nodeVersions.sorted().reversed() {
+                searchDirectories.append(
+                    nodeVersionsURL.appendingPathComponent("\(version)/bin", isDirectory: true).path
+                )
+            }
+        }
+        candidates.append(contentsOf: searchDirectories.map {
+            URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent("codex")
+        })
+        for candidate in candidates {
+            guard fileManager.isExecutableFile(atPath: candidate.path) else { continue }
+            guard candidate.resolvingSymlinksInPath().lastPathComponent != "toastty-agent-shim" else {
+                continue
+            }
+            return candidate
+        }
+        return nil
+    }
+
     func testSkillsManagerHasNoHookAppServerOrReconciliationDependency() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -681,6 +1176,7 @@ private extension CodexSkillsManagerTests {
         let recorder = OperationRecorder()
         let pluginClient: FakeCodexPluginClient
         let manager: CodexSkillsManager
+        let userCatalog: ToasttyUserSkillCatalog
 
         init() throws {
             rootURL = FileManager.default.temporaryDirectory
@@ -720,6 +1216,9 @@ private extension CodexSkillsManagerTests {
                 sourcePluginURLProvider: { [sourcePluginURL] in sourcePluginURL },
                 sourceMarketplaceURLProvider: { [sourceMarketplaceURL] in sourceMarketplaceURL },
                 pluginClient: pluginClient
+            )
+            userCatalog = ToasttyUserSkillCatalog(
+                runtimePaths: .resolve(homeDirectoryPath: homeURL.path, environment: [:])
             )
         }
 
@@ -789,6 +1288,48 @@ private extension CodexSkillsManagerTests {
 
         func cacheRootURL(runtime: CodexIntegrationRuntime) -> URL {
             runtime.codexHomeURL.appendingPathComponent("plugins/cache/toastty/toastty", isDirectory: true)
+        }
+
+        // MARK: User skills
+
+        var userSkillsSourceURL: URL {
+            homeURL.appendingPathComponent(".toastty/skills", isDirectory: true)
+        }
+
+        @discardableResult
+        func writeUserSkillPackage(named name: String) throws -> URL {
+            let packageURL = userSkillsSourceURL.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+            try "---\nname: \(name)\ndescription: Test skill.\n---\n\nBody.\n".write(
+                to: packageURL.appendingPathComponent("SKILL.md"),
+                atomically: true,
+                encoding: .utf8
+            )
+            return packageURL
+        }
+
+        func userSnapshot(packageName: String = "alpha-skill") throws -> UserSkillPluginSnapshot {
+            try writeUserSkillPackage(named: packageName)
+            return try XCTUnwrap(userCatalog.prepareSnapshot())
+        }
+
+        func userReceiptURL(runtime: CodexIntegrationRuntime) -> URL {
+            homeStateURL(runtime: runtime).appendingPathComponent("user-receipt.json")
+        }
+
+        func userCacheRootURL(runtime: CodexIntegrationRuntime) -> URL {
+            runtime.codexHomeURL.appendingPathComponent(
+                "plugins/cache/toastty-user/toastty-user",
+                isDirectory: true
+            )
+        }
+
+        func userCacheVersionURL(
+            runtime: CodexIntegrationRuntime,
+            snapshot: UserSkillPluginSnapshot
+        ) -> URL {
+            userCacheRootURL(runtime: runtime)
+                .appendingPathComponent(snapshot.version, isDirectory: true)
         }
 
         func cacheVersionDirectories(runtime: CodexIntegrationRuntime) throws -> [URL] {
@@ -874,6 +1415,19 @@ private extension CodexSkillsManagerTests {
     }
 }
 
+private final class PreparationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: CodexSkillsPreparation?
+
+    func set(_ newValue: CodexSkillsPreparation?) {
+        lock.withLock { value = newValue }
+    }
+
+    var current: CodexSkillsPreparation? {
+        lock.withLock { value }
+    }
+}
+
 private final class OperationRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String] = []
@@ -894,7 +1448,9 @@ private final class OperationRecorder: @unchecked Sendable {
 /// Emulates the Codex plugin CLI: population installs stage canonical cache
 /// bytes inside whichever `CODEX_HOME` the manager targets (a throwaway home
 /// in the new mechanism), while list/remove serve the legacy-cleanup path
-/// against preregistered per-home state.
+/// against preregistered per-home state. Marketplace and plugin identities
+/// are derived from the registered source manifests so the fake serves both
+/// the shipped `toastty` plugin and the generated `toastty-user` plugin.
 private final class FakeCodexPluginClient: CodexPluginCLIManaging, @unchecked Sendable {
     private let recorder: OperationRecorder
     private let lock = NSLock()
@@ -903,6 +1459,14 @@ private final class FakeCodexPluginClient: CodexPluginCLIManaging, @unchecked Se
     private var legacyPluginsByHome: [String: [CodexInstalledPlugin]] = [:]
     private var populationHomes: [String] = []
     var installError: Error?
+    var installErrorsBySelector: [String: Error] = [:]
+    /// Selectors whose produced cache gets an extra file appended, simulating
+    /// a CLI install that does not reproduce the source bytes.
+    var tamperedInstallSelectors: Set<String> = []
+    /// Semaphores an install blocks on before proceeding, keyed by selector;
+    /// used to hold a population mid-flight for concurrency tests.
+    var installGatesBySelector: [String: DispatchSemaphore] = [:]
+    var onInstallStart: (@Sendable (String) -> Void)?
     var listMarketplacesError: Error?
 
     init(recorder: OperationRecorder) {
@@ -936,7 +1500,10 @@ private final class FakeCodexPluginClient: CodexPluginCLIManaging, @unchecked Se
             populationHomes.append(key(runtime))
             marketplaceSourcesByHome[key(runtime)] = sourcePath
         }
-        return "toastty"
+        let manifestURL = URL(fileURLWithPath: sourcePath, isDirectory: true)
+            .appendingPathComponent(".agents/plugins/marketplace.json")
+        let manifest = (try? JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL))) as? [String: Any]
+        return manifest?["name"] as? String ?? "toastty"
     }
 
     func installPlugin(
@@ -945,27 +1512,52 @@ private final class FakeCodexPluginClient: CodexPluginCLIManaging, @unchecked Se
         deadline: Date
     ) throws -> CodexPluginInstallation {
         recorder.append("plugin.install")
+        onInstallStart?(selector)
+        if let gate = lock.withLock({ installGatesBySelector[selector] }) {
+            gate.wait()
+        }
         if let installError { throw installError }
+        if let selectorError = lock.withLock({ installErrorsBySelector[selector] }) {
+            throw selectorError
+        }
+        let components = selector.split(separator: "@").map(String.init)
+        guard components.count == 2 else {
+            throw CodexPluginCLIError.commandFailed("plugin add", 1, "invalid selector \(selector)")
+        }
+        let pluginName = components[0]
+        let marketplaceName = components[1]
         let sourcePath = lock.withLock { marketplaceSourcesByHome[key(runtime)] }
         guard let sourcePath else {
             throw CodexPluginCLIError.commandFailed("plugin add", 1, "marketplace not registered")
         }
         let pluginSource = URL(fileURLWithPath: sourcePath, isDirectory: true)
-            .appendingPathComponent("plugins/toastty", isDirectory: true)
-        let descriptor = try ToasttyAgentPluginBundle.read(pluginRootURL: pluginSource)
+            .appendingPathComponent("plugins/\(pluginName)", isDirectory: true)
+        let manifest = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: pluginSource.appendingPathComponent(".codex-plugin/plugin.json"))
+        ) as? [String: Any]
+        guard let version = manifest?["version"] as? String else {
+            throw CodexPluginCLIError.commandFailed("plugin add", 1, "missing plugin manifest version")
+        }
         let destination = runtime.codexHomeURL
-            .appendingPathComponent("plugins/cache/toastty/toastty", isDirectory: true)
-            .appendingPathComponent(descriptor.version, isDirectory: true)
+            .appendingPathComponent("plugins/cache/\(marketplaceName)/\(pluginName)", isDirectory: true)
+            .appendingPathComponent(version, isDirectory: true)
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         try FileManager.default.copyItem(at: pluginSource, to: destination)
+        if lock.withLock({ tamperedInstallSelectors.contains(selector) }) {
+            try "tampered install output".write(
+                to: destination.appendingPathComponent("tampered.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
         return CodexPluginInstallation(
             pluginID: selector,
-            name: "toastty",
-            marketplaceName: "toastty",
-            version: descriptor.version,
+            name: pluginName,
+            marketplaceName: marketplaceName,
+            version: version,
             installedPath: destination.path
         )
     }

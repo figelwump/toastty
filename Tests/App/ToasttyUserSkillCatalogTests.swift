@@ -374,10 +374,14 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
         XCTAssertEqual(claudeManifest?["version"] as? String, first.version)
 
         // Rebuilding without source changes reuses the immutable snapshot.
-        let receiptIdentity = try fileIdentity(at: first.receiptURL)
+        // The receipt's modification date is intentionally refreshed on reuse
+        // (newest-receipt selection), so identity is inode plus content.
+        let receiptInode = try fileInode(at: first.receiptURL)
+        let receiptData = try Data(contentsOf: first.receiptURL)
         let second = try XCTUnwrap(fixture.catalog.prepareSnapshot())
         XCTAssertEqual(second, first)
-        XCTAssertEqual(try fileIdentity(at: second.receiptURL), receiptIdentity)
+        XCTAssertEqual(try fileInode(at: second.receiptURL), receiptInode)
+        XCTAssertEqual(try Data(contentsOf: second.receiptURL), receiptData)
     }
 
     func testContentChangeCreatesNewSnapshotAndRevertReusesOriginal() throws {
@@ -429,20 +433,33 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
         let fixture = try makeFixture(named: "staging")
         defer { fixture.cleanup() }
         try fixture.writePackage(named: "alpha-skill")
-        let orphanURL = fixture.snapshotsRootURL.appendingPathComponent(".staging-orphan", isDirectory: true)
-        try FileManager.default.createDirectory(at: orphanURL, withIntermediateDirectories: true)
+        // An aged orphan (left by a crashed earlier run) is removed; a fresh
+        // staging directory is presumed to belong to a concurrent build in
+        // another process and is left alone.
+        let agedOrphanURL = fixture.snapshotsRootURL.appendingPathComponent(".staging-orphan", isDirectory: true)
+        try FileManager.default.createDirectory(at: agedOrphanURL, withIntermediateDirectories: true)
         try "junk".write(
-            to: orphanURL.appendingPathComponent("junk.txt"),
+            to: agedOrphanURL.appendingPathComponent("junk.txt"),
             atomically: true,
             encoding: .utf8
         )
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -7200)],
+            ofItemAtPath: agedOrphanURL.path
+        )
+        let freshStagingURL = fixture.snapshotsRootURL.appendingPathComponent(".staging-fresh", isDirectory: true)
+        try FileManager.default.createDirectory(at: freshStagingURL, withIntermediateDirectories: true)
 
         let snapshot = try XCTUnwrap(fixture.catalog.prepareSnapshot())
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: agedOrphanURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: freshStagingURL.path))
         let siblings = try FileManager.default.contentsOfDirectory(atPath: fixture.snapshotsRootURL.path)
-        XCTAssertEqual(siblings.filter { $0.hasPrefix(".staging-") }, [])
-        XCTAssertEqual(siblings.sorted(), [snapshot.sourceDigest])
+        XCTAssertEqual(siblings.filter { $0.hasPrefix(".staging-") }, [".staging-fresh"])
+        XCTAssertEqual(
+            siblings.filter { $0.hasPrefix(".") == false }.sorted(),
+            [snapshot.sourceDigest]
+        )
         // A completed snapshot always carries its receipt as the completion
         // marker; content exists wherever the receipt exists.
         XCTAssertTrue(FileManager.default.fileExists(atPath: snapshot.receiptURL.path))
@@ -499,6 +516,169 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
             ),
             "Isolated runs must never write into the real home's .toastty"
         )
+    }
+
+    func testFileSwappedForFifoAfterScanFailsFastWithoutHanging() throws {
+        let swappingFileManager = FifoSwappingFileManager()
+        let fixture = try makeFixture(named: "fifo-swap", fileManager: swappingFileManager)
+        defer { fixture.cleanup() }
+        let packageURL = try fixture.writePackage(named: "alpha-skill")
+        let trapURL = packageURL.appendingPathComponent("trap.txt")
+        try "regular for the scan".write(to: trapURL, atomically: true, encoding: .utf8)
+        swappingFileManager.swapTargetPath = trapURL.path
+
+        // Without O_NONBLOCK the FIFO open would block forever waiting for a
+        // writer; the snapshot build must fail fast with a typed error.
+        let finished = expectation(description: "prepareSnapshot returned")
+        let errorBox = ErrorBox()
+        DispatchQueue.global().async { [catalog = fixture.catalog] in
+            do {
+                _ = try catalog.prepareSnapshot()
+            } catch {
+                errorBox.set(error)
+            }
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: 10)
+
+        guard case .sourceUnreadable(let path)? = errorBox.current as? ToasttyUserSkillCatalogError else {
+            return XCTFail("Expected sourceUnreadable, got \(String(describing: errorBox.current))")
+        }
+        XCTAssertTrue(path.hasSuffix("alpha-skill/trap.txt"), path)
+    }
+
+    func testExistingSnapshotRejectsHalfDeletedSnapshots() throws {
+        for missingRelativePath in [
+            "marketplace/plugins/toastty-user/.claude-plugin",
+            "marketplace/plugins/toastty-user/.codex-plugin",
+            "marketplace/plugins/toastty-user/skills/alpha-skill",
+        ] {
+            let fixture = try makeFixture(named: "half-deleted")
+            defer { fixture.cleanup() }
+            try fixture.writePackage(named: "alpha-skill")
+            let snapshot = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+            let snapshotRoot = fixture.snapshotsRootURL
+                .appendingPathComponent(snapshot.sourceDigest, isDirectory: true)
+            try FileManager.default.removeItem(
+                at: snapshotRoot.appendingPathComponent(missingRelativePath)
+            )
+
+            XCTAssertNil(fixture.catalog.existingSnapshot(), missingRelativePath)
+        }
+    }
+
+    func testExistingSnapshotRejectsTamperedContentOnFirstVerification() throws {
+        let fixture = try makeFixture(named: "tampered-existing")
+        defer { fixture.cleanup() }
+        try fixture.writePackage(named: "alpha-skill")
+        let snapshot = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+        try "tampered".write(
+            to: snapshot.skillsRootURL.appendingPathComponent("alpha-skill/SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        XCTAssertNil(fixture.catalog.existingSnapshot())
+    }
+
+    func testExistingSnapshotMemoizesDigestVerification() throws {
+        let fixture = try makeFixture(named: "digest-memo")
+        defer { fixture.cleanup() }
+        try fixture.writePackage(named: "alpha-skill")
+        let prepared = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+
+        let first = try XCTUnwrap(fixture.catalog.existingSnapshot())
+        XCTAssertEqual(first.sourceDigest, prepared.sourceDigest)
+        // Directory enumeration may standardize /var to /private/var; compare
+        // symlink-resolved paths.
+        XCTAssertEqual(
+            first.pluginRootURL.resolvingSymlinksInPath().path,
+            prepared.pluginRootURL.resolvingSymlinksInPath().path
+        )
+
+        // Content tampering that keeps the structure intact: a repeat call on
+        // the same instance trusts the memoized digest verdict (no recompute),
+        // while a fresh instance recomputes and rejects — proving both that
+        // the digest check exists and that repeat calls skip it.
+        try "tampered extra".write(
+            to: first.pluginRootURL.appendingPathComponent("extra.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let memoized = try XCTUnwrap(fixture.catalog.existingSnapshot())
+        XCTAssertEqual(memoized.sourceDigest, first.sourceDigest)
+
+        let freshCatalog = ToasttyUserSkillCatalog(
+            runtimePaths: .resolve(
+                homeDirectoryPath: fixture.realHomeURL.path,
+                environment: ["TOASTTY_RUNTIME_HOME": fixture.runtimeHomeURL.path]
+            )
+        )
+        XCTAssertNil(freshCatalog.existingSnapshot())
+    }
+
+    func testConcurrentPrepareSnapshotCallsBothSucceed() throws {
+        let fixture = try makeFixture(named: "concurrent")
+        defer { fixture.cleanup() }
+        try fixture.writePackage(named: "alpha-skill")
+
+        let finished = expectation(description: "both prepareSnapshot calls returned")
+        finished.expectedFulfillmentCount = 2
+        let results = SnapshotResultsBox()
+        for _ in 0..<2 {
+            DispatchQueue.global().async { [catalog = fixture.catalog] in
+                results.append(Result { try catalog.prepareSnapshot() })
+                finished.fulfill()
+            }
+        }
+        wait(for: [finished], timeout: 10)
+
+        let snapshots = results.current.map { result -> UserSkillPluginSnapshot? in
+            switch result {
+            case .success(let snapshot): return snapshot
+            case .failure(let error):
+                XCTFail("Concurrent prepareSnapshot failed: \(error)")
+                return nil
+            }
+        }
+        XCTAssertEqual(snapshots.count, 2)
+        XCTAssertEqual(snapshots.compactMap { $0?.sourceDigest }.count, 2)
+        XCTAssertEqual(snapshots.first??.sourceDigest, snapshots.last??.sourceDigest)
+    }
+
+    func testExistingSnapshotTracksMostRecentlyPreparedAfterContentRevert() throws {
+        let fixture = try makeFixture(named: "revert-tracking")
+        defer { fixture.cleanup() }
+        let packageURL = try fixture.writePackage(named: "alpha-skill")
+        let extraURL = packageURL.appendingPathComponent("notes.md")
+        try "original".write(to: extraURL, atomically: true, encoding: .utf8)
+        let original = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+
+        try "changed".write(to: extraURL, atomically: true, encoding: .utf8)
+        let changed = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+        XCTAssertNotEqual(changed.sourceDigest, original.sourceDigest)
+
+        // Reverting reuses the original snapshot AND makes it the one
+        // `existingSnapshot()` selects, so sync/restored launches deliver the
+        // same snapshot async launches prepare.
+        try "original".write(to: extraURL, atomically: true, encoding: .utf8)
+        let reverted = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+        XCTAssertEqual(reverted.sourceDigest, original.sourceDigest)
+        XCTAssertEqual(fixture.catalog.existingSnapshot()?.sourceDigest, original.sourceDigest)
+    }
+
+    func testCRLFAndBOMFrontmatterAccepted() throws {
+        let fixture = try makeFixture(named: "crlf-bom")
+        defer { fixture.cleanup() }
+        try fixture.writePackage(
+            named: "alpha-skill",
+            skillFileContents: "\u{FEFF}---\r\nname: alpha-skill\r\ndescription: Test skill.\r\n---\r\n\r\nBody.\r\n"
+        )
+
+        let state = fixture.catalog.scan()
+
+        XCTAssertEqual(state.packages.count, 1)
+        XCTAssertEqual(state.packages.first?.status, .accepted)
     }
 
     // MARK: - Live Codex CLI acceptance
@@ -603,7 +783,11 @@ private extension ToasttyUserSkillCatalogTests {
         }
     }
 
-    func makeFixture(named name: String, rootURL: URL? = nil) throws -> Fixture {
+    func makeFixture(
+        named name: String,
+        rootURL: URL? = nil,
+        fileManager: FileManager = .default
+    ) throws -> Fixture {
         let resolvedRootURL = rootURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-user-skills-\(name)-\(UUID().uuidString)", isDirectory: true)
         let realHomeURL = resolvedRootURL.appendingPathComponent("real-home", isDirectory: true)
@@ -621,17 +805,15 @@ private extension ToasttyUserSkillCatalogTests {
             rootURL: resolvedRootURL,
             realHomeURL: realHomeURL,
             runtimeHomeURL: runtimeHomeURL,
-            catalog: ToasttyUserSkillCatalog(runtimePaths: runtimePaths),
+            catalog: ToasttyUserSkillCatalog(runtimePaths: runtimePaths, fileManager: fileManager),
             // Volume-hosted fixtures disappear with the volume.
             removesRootOnCleanup: rootURL == nil
         )
     }
 
-    func fileIdentity(at url: URL) throws -> String {
+    func fileInode(at url: URL) throws -> String {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        let inode = (attributes[.systemFileNumber] as? NSNumber)?.stringValue ?? "0"
-        let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        return "\(inode):\(modified)"
+        return (attributes[.systemFileNumber] as? NSNumber)?.stringValue ?? "0"
     }
 
     @discardableResult
@@ -702,5 +884,58 @@ private extension ToasttyUserSkillCatalogTests {
 private extension UserSkillCatalogState {
     func package(named name: String) -> UserSkillPackage? {
         packages.first { $0.name == name }
+    }
+}
+
+/// Replaces the target regular file with a FIFO the moment the validator's
+/// readability probe touches it, reproducing a scan-to-copy swap race.
+private final class FifoSwappingFileManager: FileManager, @unchecked Sendable {
+    private let lock = NSLock()
+    private var targetPath: String?
+    private var swapped = false
+
+    var swapTargetPath: String? {
+        get { lock.withLock { targetPath } }
+        set { lock.withLock { targetPath = newValue } }
+    }
+
+    override func isReadableFile(atPath path: String) -> Bool {
+        let readable = super.isReadableFile(atPath: path)
+        let shouldSwap = lock.withLock { () -> Bool in
+            guard swapped == false, let targetPath, targetPath == path else { return false }
+            swapped = true
+            return true
+        }
+        if shouldSwap {
+            try? removeItem(atPath: path)
+            _ = mkfifo(path, 0o644)
+        }
+        return readable
+    }
+}
+
+private final class ErrorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Error?
+
+    func set(_ error: Error) {
+        lock.withLock { value = error }
+    }
+
+    var current: Error? {
+        lock.withLock { value }
+    }
+}
+
+private final class SnapshotResultsBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [Result<UserSkillPluginSnapshot?, Error>] = []
+
+    func append(_ result: Result<UserSkillPluginSnapshot?, Error>) {
+        lock.withLock { results.append(result) }
+    }
+
+    var current: [Result<UserSkillPluginSnapshot?, Error>] {
+        lock.withLock { results }
     }
 }
