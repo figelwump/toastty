@@ -279,6 +279,32 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.operations, [])
     }
 
+    /// The ownership marker only counts as the first line: a user file that
+    /// merely quotes it mid-file stays foreign — preserved, with a conflict.
+    func testProfileWithMidFileMarkerIsTreatedAsForeign() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let profileURL = fixture.profileConfigURL(runtime: runtime)
+        try FileManager.default.createDirectory(
+            at: profileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let foreignContents = """
+        # user-authored overlay quoting Toastty's marker:
+        \(CodexManagedProfileConfig.ownershipMarker)
+        model = "gpt-5"
+
+        """
+        try foreignContents.write(to: profileURL, atomically: true, encoding: .utf8)
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+
+        XCTAssertNil(preparation.configuration)
+        XCTAssertEqual(preparation.status.availability, .failed)
+        XCTAssertEqual(try String(contentsOf: profileURL, encoding: .utf8), foreignContents)
+    }
+
     func testMissingProfileConfigIsRestoredWithoutSubprocessWork() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -680,7 +706,7 @@ final class CodexSkillsManagerTests: XCTestCase {
     enabled = false
 
     [[skills.config]]
-    name = "toastty:toastty"
+    name = "toastty:worktree-done"
     enabled = false
 
     # profiles below
@@ -730,6 +756,54 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertEqual(
             try fixture.codexUserConfigContents(runtime: runtime),
             Self.expectedNeutralizedSkillsConfig
+        )
+        XCTAssertEqual(fixture.configBackups(runtime: runtime).count, 1)
+    }
+
+    /// Only the exact five legacy names are removable, and only while still
+    /// disabled: user-authored `toastty:*` entries and re-enabled legacy
+    /// entries are not Toastty's to touch.
+    func testLegacyNeutralizationRemovesOnlyDisabledAllowlistedBlocks() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let config = """
+        [[skills.config]]
+        name = "toastty:custom-thing"
+        enabled = false
+
+        [[skills.config]]
+        name = "toastty:toastty-capabilities"
+        enabled = true
+
+        [[skills.config]]
+        name = "toastty:worktree-done"
+        enabled = false
+
+        [profiles.speed]
+        model = "gpt-5"
+
+        """
+        try fixture.writeCodexUserConfig(config, runtime: runtime)
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(
+            try fixture.codexUserConfigContents(runtime: runtime),
+            """
+            [[skills.config]]
+            name = "toastty:custom-thing"
+            enabled = false
+
+            [[skills.config]]
+            name = "toastty:toastty-capabilities"
+            enabled = true
+
+            [profiles.speed]
+            model = "gpt-5"
+
+            """
         )
         XCTAssertEqual(fixture.configBackups(runtime: runtime).count, 1)
     }
@@ -1178,6 +1252,59 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertEqual(
             try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
             CodexManagedProfileConfig.fileContents
+        )
+    }
+
+    /// `.unavailable` with delivered-but-unverifiable user state excludes the
+    /// user entry from the overlay (unverified bytes must not load) while
+    /// preserving cache and receipt for later reconciliation.
+    func testUnavailableResolutionExcludesUnverifiableUserEntryWithoutDeleting() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        let snapshot = try fixture.userSnapshot()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime, userSnapshot: snapshot)
+        try "\nTampered bytes.\n".append(
+            to: fixture.userCacheVersionURL(runtime: runtime, snapshot: snapshot)
+                .appendingPathComponent("skills/alpha-skill/SKILL.md")
+        )
+        fixture.recorder.reset()
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSkills: .unavailable
+        )
+
+        XCTAssertNotNil(preparation.configuration)
+        guard case .failed(.staleCache) = preparation.userSkills else {
+            return XCTFail("Expected staleCache, got \(preparation.userSkills)")
+        }
+        XCTAssertEqual(fixture.recorder.operations, [])
+        // Overlay excludes the user entry; the files themselves survive.
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: fixture.userCacheRootURL(runtime: runtime).path)
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: fixture.userReceiptURL(runtime: runtime).path)
+        )
+
+        // A later definitive resolution repopulates and restores the
+        // two-entry overlay.
+        let recovered = try fixture.manager.prepareForManagedLaunch(
+            runtime: runtime,
+            userSkills: .snapshot(snapshot)
+        )
+        XCTAssertEqual(
+            recovered.userSkills,
+            .delivered(version: snapshot.version, contentDigest: snapshot.pluginContentDigest)
+        )
+        XCTAssertEqual(
+            try String(contentsOf: fixture.profileConfigURL(runtime: runtime), encoding: .utf8),
+            CodexManagedProfileConfig.fileContents(includeUserPlugin: true)
         )
     }
 

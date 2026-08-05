@@ -25,4 +25,30 @@ final class CodexSkillsIntegrationTests: XCTestCase {
         )
         XCTAssertFalse(CodexManagedProfileConfig.isToasttyOwned(""))
     }
+
+    /// Ownership requires the marker as the first line; a marker pasted into
+    /// the middle of a user-authored overlay does not surrender the file.
+    func testOwnershipMarkerMustBeTheFirstLine() {
+        XCTAssertTrue(
+            CodexManagedProfileConfig.isToasttyOwned(
+                CodexManagedProfileConfig.fileContents(includeUserPlugin: true)
+            )
+        )
+        // A leading UTF-8 BOM and surrounding whitespace are tolerated.
+        XCTAssertTrue(
+            CodexManagedProfileConfig.isToasttyOwned(
+                "\u{FEFF}" + CodexManagedProfileConfig.fileContents
+            )
+        )
+        XCTAssertTrue(
+            CodexManagedProfileConfig.isToasttyOwned(
+                "  " + CodexManagedProfileConfig.ownershipMarker + "\nmodel = \"gpt-5\"\n"
+            )
+        )
+        XCTAssertFalse(
+            CodexManagedProfileConfig.isToasttyOwned(
+                "# user-authored overlay\n\(CodexManagedProfileConfig.ownershipMarker)\nmodel = \"gpt-5\"\n"
+            )
+        )
+    }
 }

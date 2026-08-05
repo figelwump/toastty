@@ -872,11 +872,16 @@ private extension CodexSkillsManager {
     }
 
     /// Writes the canonical Toastty overlay when it is missing or drifted.
-    /// A foreign file at the profile path is never overwritten. The user
-    /// entry is included exactly while a user receipt points at an existing
-    /// cache subtree; the user-plugin phase updates that state before calling
-    /// here, so the overlay always converges to the delivered set.
-    func ensureProfileConfig(runtime: CodexIntegrationRuntime) throws {
+    /// A foreign file at the profile path is never overwritten. By default
+    /// the user entry is included exactly while a user receipt points at an
+    /// existing cache subtree (the cheap probe); the user-plugin phase can
+    /// pass an explicit `includeUserPlugin` decision instead — used to force
+    /// a shipped-only overlay when delivered user state exists on disk but
+    /// failed byte verification.
+    func ensureProfileConfig(
+        runtime: CodexIntegrationRuntime,
+        includeUserPlugin: Bool? = nil
+    ) throws {
         // The overlay is the one file both the shipped phase (under
         // `operationLock`) and the user phase (under `userOperationLock`)
         // rewrite; this briefly-held dedicated lock serializes the
@@ -887,7 +892,8 @@ private extension CodexSkillsManager {
         let url = profileConfigURL(for: runtime)
         let expected = Data(
             CodexManagedProfileConfig.fileContents(
-                includeUserPlugin: userPluginStateLooksDeliverable(runtime: runtime)
+                includeUserPlugin: includeUserPlugin
+                    ?? userPluginStateLooksDeliverable(runtime: runtime)
             ).utf8
         )
         if (try? Data(contentsOf: url)) == expected { return }
@@ -1277,14 +1283,19 @@ private extension CodexSkillsManager {
         case .unavailable:
             // The resolution could not complete (timeout, build error,
             // unverifiable snapshot store). This must never be conflated with
-            // "the user has no skills": previously delivered state stays
-            // completely untouched. A verified receipt-plus-cache keeps its
-            // profile entry and delivers; otherwise this launch proceeds
-            // shipped-only without deleting anything, and a later definitive
-            // resolution reconciles.
-            guard let record = readUserReceipt(runtime),
-                  (try? verifyUserInstalledFiles(runtime: runtime, record: record)) != nil else {
+            // "the user has no skills": delivered files are never deleted. A
+            // verified receipt-plus-cache keeps its profile entry and
+            // delivers; delivered state that fails byte verification is
+            // excluded from the overlay (so unverified bytes never load)
+            // while cache and receipt stay on disk for a later definitive
+            // resolution to reconcile.
+            guard let record = readUserReceipt(runtime) else {
+                // Nothing was ever delivered; nothing to exclude.
                 return .notDelivered
+            }
+            guard (try? verifyUserInstalledFiles(runtime: runtime, record: record)) != nil else {
+                try? ensureProfileConfig(runtime: runtime, includeUserPlugin: false)
+                return .failed(.staleCache(userPluginCacheRootURL(for: runtime).path))
             }
             do {
                 try ensureProfileConfig(runtime: runtime)
@@ -1569,16 +1580,22 @@ private extension CodexSkillsManager {
             logLegacySkillsConfigAnomaly("config.toml is not valid UTF-8", configURL: configURL)
             return
         }
-        // Cheap guard: nothing resembling a Toastty skill name means nothing
-        // to do (the common steady state).
-        guard contents.contains("\"toastty:") else { return }
-        guard let edited = Self.removingToasttySkillsConfigBlocks(from: contents) else {
+        // Cheap guard: none of the exact legacy skill names present means
+        // nothing to do (the common steady state).
+        guard Self.legacyDisabledSkillNames.contains(where: { contents.contains("\"\($0)\"") }) else {
+            return
+        }
+        guard contents.contains("\r") == false else {
             logLegacySkillsConfigAnomaly(
-                "toastty skill names present but no removable well-formed [[skills.config]] block",
+                "config.toml uses unsupported line endings",
                 configURL: configURL
             )
             return
         }
+        // nil here is benign: a legacy name may appear in a block that is not
+        // removable (for example re-enabled by the user) or outside a
+        // well-formed block; both are left untouched without noise.
+        guard let edited = Self.removingToasttySkillsConfigBlocks(from: contents) else { return }
 
         let backupURL = homeStateURL(for: runtime).appendingPathComponent(
             "config-backup-\(Self.legacyConfigBackupTimestamp()).toml",
@@ -1626,15 +1643,28 @@ private extension CodexSkillsManager {
         return formatter.string(from: Date())
     }
 
+    /// The exact skill names the retired mechanism disable-unioned into the
+    /// user's config. Only these — and only while still disabled — are ever
+    /// removed; any other `toastty:*` entry (user-authored, re-enabled, or
+    /// from a future mechanism) is not Toastty's to touch.
+    static let legacyDisabledSkillNames: Set<String> = [
+        "toastty:toastty-capabilities",
+        "toastty:toastty-open-markdown",
+        "toastty:toastty-scratchpad",
+        "toastty:worktree-create",
+        "toastty:worktree-done",
+    ]
+
     /// Line-based removal (validator-script style, deliberately not a TOML
     /// parser round-trip, which would normalize the file): drops every whole
-    /// `[[skills.config]]` array-of-table block whose `name` value starts
-    /// with `"toastty:"`, together with the blank separator lines inside and
+    /// `[[skills.config]]` array-of-table block whose `name` value is exactly
+    /// one of `legacyDisabledSkillNames` AND that still carries
+    /// `enabled = false`, together with the blank separator lines inside and
     /// immediately after the block, and keeps every other line — comments,
-    /// unrelated `[[skills.config]]` blocks, ordering — byte-identically.
-    /// Returns nil when there is nothing to remove or the shape is not
-    /// understood (CRLF line endings, toastty names outside a well-formed
-    /// block); callers fail open on nil.
+    /// unrelated or re-enabled `[[skills.config]]` blocks, ordering —
+    /// byte-identically. Returns nil when there is nothing to remove or the
+    /// shape is not understood (CRLF line endings, legacy names outside a
+    /// well-formed block); callers fail open on nil.
     static func removingToasttySkillsConfigBlocks(from contents: String) -> String? {
         guard contents.contains("\r") == false else { return nil }
         let lines = contents.components(separatedBy: "\n")
@@ -1651,7 +1681,8 @@ private extension CodexSkillsManager {
             }
             var span = [index]
             var pendingBlanks: [Int] = []
-            var isToasttyBlock = false
+            var blockName: String?
+            var blockIsDisabled = false
             var cursor = index + 1
             while cursor < scanCount {
                 let trimmed = lines[cursor].trimmingCharacters(in: .whitespaces)
@@ -1668,12 +1699,17 @@ private extension CodexSkillsManager {
                 span.append(contentsOf: pendingBlanks)
                 pendingBlanks = []
                 span.append(cursor)
-                if isToasttySkillNameAssignment(trimmed) {
-                    isToasttyBlock = true
+                if let name = skillNameAssignmentValue(trimmed) {
+                    blockName = name
+                }
+                if isDisabledAssignment(trimmed) {
+                    blockIsDisabled = true
                 }
                 cursor += 1
             }
-            if isToasttyBlock {
+            if let blockName,
+               legacyDisabledSkillNames.contains(blockName),
+               blockIsDisabled {
                 removedIndices.formUnion(span)
                 // Trailing blank separators disappear with their block.
                 removedIndices.formUnion(pendingBlanks)
@@ -1687,15 +1723,32 @@ private extension CodexSkillsManager {
             .joined(separator: "\n")
     }
 
-    /// `name = "toastty:…` with flexible whitespace around `=`, applied to an
-    /// already-trimmed line.
-    static func isToasttySkillNameAssignment(_ trimmedLine: String) -> Bool {
-        guard trimmedLine.hasPrefix("name") else { return false }
-        var rest = trimmedLine.dropFirst("name".count)
+    /// The quoted value of a `name = "…"` assignment with flexible whitespace
+    /// around `=`, applied to an already-trimmed line; nil for any other
+    /// line.
+    static func skillNameAssignmentValue(_ trimmedLine: String) -> String? {
+        guard trimmedLine.hasPrefix("name") else { return nil }
+        var rest = Substring(trimmedLine).dropFirst("name".count)
+        rest = rest.drop(while: { $0 == " " || $0 == "\t" })
+        guard rest.first == "=" else { return nil }
+        rest = rest.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
+        guard rest.first == "\"" else { return nil }
+        rest = rest.dropFirst()
+        guard let closingQuoteIndex = rest.firstIndex(of: "\"") else { return nil }
+        return String(rest[..<closingQuoteIndex])
+    }
+
+    /// `enabled = false` with flexible whitespace, optionally followed by a
+    /// comment, applied to an already-trimmed line.
+    static func isDisabledAssignment(_ trimmedLine: String) -> Bool {
+        guard trimmedLine.hasPrefix("enabled") else { return false }
+        var rest = Substring(trimmedLine).dropFirst("enabled".count)
         rest = rest.drop(while: { $0 == " " || $0 == "\t" })
         guard rest.first == "=" else { return false }
         rest = rest.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
-        return rest.hasPrefix("\"toastty:")
+        guard rest.hasPrefix("false") else { return false }
+        let remainder = rest.dropFirst("false".count).trimmingCharacters(in: .whitespaces)
+        return remainder.isEmpty || remainder.hasPrefix("#")
     }
 
     // MARK: - Legacy cleanup

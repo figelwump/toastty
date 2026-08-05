@@ -245,20 +245,26 @@ final class ToasttyUserSkillCatalog: ToasttyUserSkillSnapshotProviding, @uncheck
 
     /// Disk-aware resolution for synchronous and restored launch preparation:
     /// a verified snapshot resolves as such; an entirely absent snapshot
-    /// store (converged empty or never prepared) is confirmed `.empty`;
-    /// snapshot directories that exist but fail verification are
-    /// `.unavailable` so delivery never destroys state it could not read.
+    /// store (converged empty or never prepared) is confirmed `.empty`; a
+    /// store that exists but cannot be enumerated (permissions, I/O), or
+    /// whose snapshot directories all fail verification, is `.unavailable`
+    /// so delivery never destroys state it could not read.
     func existingSnapshotResolution() -> UserSkillSnapshotResolution {
         if let snapshot = existingSnapshot() {
             return .snapshot(snapshot)
+        }
+        guard fileManager.fileExists(atPath: snapshotsRootURL.path) else {
+            // A missing snapshot root has nothing to deliver anywhere.
+            return .empty
         }
         guard let children = try? fileManager.contentsOfDirectory(
             at: snapshotsRootURL,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            // A missing snapshot root has nothing to deliver anywhere.
-            return .empty
+            // Present but unreadable: unconfirmed emptiness must never be a
+            // destructive signal.
+            return .unavailable
         }
         let hasSnapshotDirectories = children.contains { child in
             (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
@@ -357,6 +363,14 @@ private extension ToasttyUserSkillCatalog {
     /// covers the executable bit (user packages may rely on helper scripts),
     /// so it is a deliberate parallel implementation rather than a shared
     /// helper.
+    ///
+    /// Deliberate asymmetry with `ToasttyAgentPluginBundle.contentDigest`:
+    /// SOURCE identity must detect exec-bit changes (they change delivered
+    /// behavior — the bit is mirrored onto staged copies), so the bit is
+    /// hashed here; PLUGIN-CONTENT identity excludes modes because staged and
+    /// cached copies get their permissions normalized deterministically after
+    /// every copy. Do NOT change either algorithm — changing the content
+    /// digest would invalidate every existing receipt and cache.
     static func sourceDigest(
         payloads: [ToasttyUserSkillScanResult.PackagePayload],
         fileManager: FileManager

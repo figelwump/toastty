@@ -758,6 +758,75 @@ final class ToasttyUserSkillCatalogTests: XCTestCase {
         XCTAssertEqual(fixture.catalog.existingSnapshotResolution(), .empty)
     }
 
+    func testExistingSnapshotResolutionTreatsUnreadableStoreAsUnavailable() throws {
+        let fixture = try makeFixture(named: "unreadable-store")
+        defer { fixture.cleanup() }
+        try fixture.writePackage(named: "alpha-skill")
+        _ = try XCTUnwrap(fixture.catalog.prepareSnapshot())
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: fixture.snapshotsRootURL.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: fixture.snapshotsRootURL.path
+            )
+        }
+
+        // Present but unreadable is `.unavailable`, never the destructive
+        // `.empty` (the manager leaves delivered state untouched for
+        // `.unavailable`, see testUnavailableResolutionLeavesDeliveredUserStateUntouchedAndDelivers).
+        XCTAssertEqual(fixture.catalog.existingSnapshotResolution(), .unavailable)
+    }
+
+    func testHiddenEntriesInsidePackagesAreIgnoredEverywhere() throws {
+        let cleanFixture = try makeFixture(named: "hidden-clean")
+        defer { cleanFixture.cleanup() }
+        let cleanPackageURL = try cleanFixture.writePackage(named: "alpha-skill")
+        try "visible notes".write(
+            to: cleanPackageURL.appendingPathComponent("notes.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let cleanSnapshot = try XCTUnwrap(cleanFixture.catalog.prepareSnapshot())
+
+        let hiddenFixture = try makeFixture(named: "hidden-noisy")
+        defer { hiddenFixture.cleanup() }
+        let hiddenPackageURL = try hiddenFixture.writePackage(named: "alpha-skill")
+        try "visible notes".write(
+            to: hiddenPackageURL.appendingPathComponent("notes.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "junk".write(
+            to: hiddenPackageURL.appendingPathComponent(".DS_Store"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let gitDirectoryURL = hiddenPackageURL.appendingPathComponent(".git", isDirectory: true)
+        try FileManager.default.createDirectory(at: gitDirectoryURL, withIntermediateDirectories: true)
+        try "[core]\n".write(
+            to: gitDirectoryURL.appendingPathComponent("config"),
+            atomically: true,
+            encoding: .utf8
+        )
+        // A hidden file larger than the package cap must not count toward it.
+        try Data(repeating: 0x61, count: 6 * 1024 * 1024)
+            .write(to: hiddenPackageURL.appendingPathComponent(".filler.bin"))
+
+        let state = hiddenFixture.catalog.scan()
+        XCTAssertEqual(state.packages.first?.status, .accepted)
+
+        let hiddenSnapshot = try XCTUnwrap(hiddenFixture.catalog.prepareSnapshot())
+        // Hidden entries affect neither the source digest nor the copy.
+        XCTAssertEqual(hiddenSnapshot.sourceDigest, cleanSnapshot.sourceDigest)
+        let copiedEntries = try FileManager.default.contentsOfDirectory(
+            atPath: hiddenSnapshot.skillsRootURL.appendingPathComponent("alpha-skill").path
+        )
+        XCTAssertEqual(Set(copiedEntries), ["SKILL.md", "notes.md"])
+    }
+
     // MARK: - Live Codex CLI acceptance
 
     /// Verifies that the real Codex CLI accepts the generated marketplace

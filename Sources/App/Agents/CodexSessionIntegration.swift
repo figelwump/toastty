@@ -52,8 +52,21 @@ enum CodexManagedProfileConfig {
         return contents
     }
 
+    /// Ownership requires the marker as the FIRST line (a leading UTF-8 BOM
+    /// and surrounding whitespace are tolerated). A marker appearing later in
+    /// the file — for example pasted into a user-authored overlay — does not
+    /// make the file Toastty's to overwrite or delete.
     static func isToasttyOwned(_ contents: String) -> Bool {
-        contents.contains(ownershipMarker)
+        var contents = contents
+        if contents.hasPrefix("\u{FEFF}") {
+            contents.removeFirst()
+        }
+        guard let firstLine = contents
+            .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .first else {
+            return false
+        }
+        return firstLine.trimmingCharacters(in: .whitespaces) == ownershipMarker
     }
 }
 

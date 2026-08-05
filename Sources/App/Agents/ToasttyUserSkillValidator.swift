@@ -327,6 +327,11 @@ private extension ToasttyUserSkillValidator {
             return .unreadable
         }
         for childName in childNames.sorted() {
+            // Hidden entries are ignored at every depth, matching the
+            // documented contract: they never reach the inventory, so they
+            // affect neither caps, the source digest, nor the snapshot copy
+            // (Finder's .DS_Store churn must not force spurious rebuilds).
+            guard childName.hasPrefix(".") == false else { continue }
             let childURL = directoryURL.appendingPathComponent(childName)
             let childRelativePath = relativePath.isEmpty ? childName : relativePath + "/" + childName
             let childDepth = depth + 1

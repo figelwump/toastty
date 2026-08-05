@@ -122,6 +122,16 @@ extension ToasttyAgentPluginBundle {
     /// relative paths and file bytes, length-prefixed into SHA-256. Also used
     /// by `ToasttyUserSkillCatalog` to fingerprint generated `toastty-user`
     /// plugin roots for later cache verification.
+    ///
+    /// Deliberate asymmetry with `ToasttyUserSkillCatalog.sourceDigest`: this
+    /// digest covers paths+bytes ONLY, excluding file modes, because staged
+    /// and cached copies get their permissions normalized deterministically
+    /// (script exec bits restored, everything else 0644) after every copy —
+    /// mode is not part of plugin-content identity. The catalog's source
+    /// digest additionally hashes the executable bit because a source
+    /// exec-bit change alters delivered behavior and must produce a new
+    /// snapshot. Do NOT change this algorithm: it would invalidate every
+    /// existing receipt and cache.
     static func contentDigest(rootURL: URL, fileManager: FileManager) throws -> String {
         guard let enumerator = fileManager.enumerator(
             at: rootURL,
