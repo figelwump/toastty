@@ -106,6 +106,7 @@ enum AgentLaunchInstrumentation {
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
                 fileManager: fileManager,
+                launchEnvironment: launchEnvironment,
                 statusTrackingSource: codexStatusTrackingSource,
                 skillsIntegration: codexSkillsIntegration
             )
@@ -223,6 +224,7 @@ enum AgentLaunchInstrumentation {
         cliExecutablePath: String,
         sessionID: String,
         fileManager: FileManager,
+        launchEnvironment: [String: String],
         statusTrackingSource: CodexStatusTrackingSource,
         skillsIntegration: CodexSkillsLaunchConfiguration?
     ) throws -> PreparedAgentLaunchCommand {
@@ -241,7 +243,8 @@ enum AgentLaunchInstrumentation {
             let skillsPreparation = prepareCodexSkills(
                 argv: argv,
                 configuration: skillsIntegration,
-                executableIndex: safeExecutableIndex
+                executableIndex: safeExecutableIndex,
+                launchEnvironment: launchEnvironment
             )
             if skillsPreparation.result == .injected,
                let skillsIntegration {
@@ -263,7 +266,7 @@ enum AgentLaunchInstrumentation {
                     to: notifyScriptURL,
                     fileManager: fileManager
                 )
-                let notifyArray = CodexSkillsConfigSerializer.tomlStringArrayLiteral([
+                let notifyArray = CodexConfigTOMLSerializer.tomlStringArrayLiteral([
                     "/bin/sh",
                     notifyScriptURL.path,
                 ])
@@ -1511,10 +1514,17 @@ private extension AgentLaunchInstrumentation {
         let result: CodexSkillsInjectionResult
     }
 
+    /// Injects `--profile toastty-managed` after the resolved Codex
+    /// executable. The profile flag cannot repeat (hard Codex CLI error), so a
+    /// caller-supplied profile is a refusal, and the flag only makes sense
+    /// against the `CODEX_HOME` whose overlay and plugin cache Toastty
+    /// populated, so a caller-replaced home is also a refusal. All refusals
+    /// fail open: Codex launches without Toastty skills.
     private static func prepareCodexSkills(
         argv: [String],
         configuration: CodexSkillsLaunchConfiguration?,
-        executableIndex: Int?
+        executableIndex: Int?,
+        launchEnvironment: [String: String]
     ) -> CodexSkillsPreparation {
         guard let configuration else {
             return CodexSkillsPreparation(
@@ -1528,19 +1538,25 @@ private extension AgentLaunchInstrumentation {
                 result: .refused(reason: "opaque_or_unsafe_codex_argv")
             )
         }
-        guard containsConflictingCodexConfigOverride(in: argv, after: insertionIndex) == false else {
+        guard containsCallerProfileFlag(in: argv, after: insertionIndex) == false else {
             return CodexSkillsPreparation(
                 argv: argv,
-                result: .refused(reason: "conflicting_codex_skills_override")
+                result: .refused(reason: "caller_profile_flag")
+            )
+        }
+        guard codexHomeMatchesConfiguration(
+            launchEnvironment: launchEnvironment,
+            configuration: configuration
+        ) else {
+            return CodexSkillsPreparation(
+                argv: argv,
+                result: .refused(reason: "codex_home_replaced")
             )
         }
 
-        let override = CodexSkillsConfigSerializer.skillsConfigOverride(
-            enabling: configuration.qualifiedSkillNames
-        )
         return CodexSkillsPreparation(
             argv: insertingArguments(
-                ["-c", override],
+                ["--profile", CodexSkillsContract.profileName],
                 into: argv,
                 afterIndex: insertionIndex
             ),
@@ -1663,38 +1679,46 @@ extension AgentLaunchInstrumentation {
         return executableIndex
     }
 
-    private static func containsConflictingCodexConfigOverride(
+    /// `--profile` cannot repeat, so any caller-supplied profile flag between
+    /// the Codex executable and a `--` terminator refuses injection. Covers
+    /// the long form, the `-p` short form, `=`-attached variants, and the
+    /// clap attached short form (`-pfoo`). Any other `-p*` token is treated as
+    /// a profile flag too: over-matching only skips skills (fail-open), while
+    /// under-matching would double the flag and hard-fail the Codex launch.
+    private static func containsCallerProfileFlag(
         in argv: [String],
         after executableIndex: Int
     ) -> Bool {
         let boundaryIndex = argv[(executableIndex + 1)...].firstIndex(of: "--") ?? argv.endIndex
-        var index = executableIndex + 1
-        while index < boundaryIndex {
-            let argument = argv[index]
-            if argument == "-c" || argument == "--config" {
-                guard index + 1 < boundaryIndex else { return false }
-                if isConflictingCodexConfigValue(argv[index + 1]) {
-                    return true
-                }
-                index += 2
-                continue
-            }
-            if argument.hasPrefix("--config="),
-               isConflictingCodexConfigValue(String(argument.dropFirst("--config=".count))) {
+        for argument in argv[(executableIndex + 1)..<boundaryIndex] {
+            if argument == "--profile"
+                || argument.hasPrefix("--profile=")
+                || argument.hasPrefix("-p") {
                 return true
             }
-            index += 1
         }
         return false
     }
 
-    private static func isConflictingCodexConfigValue(_ value: String) -> Bool {
-        guard let equalsIndex = value.firstIndex(of: "=") else { return false }
-        let key = value[..<equalsIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-        return key == "skills"
-            || key.hasPrefix("skills.")
-            || key == "skills.config"
-            || key.hasPrefix("skills.config.")
+    /// `configuration.codexHomePath` is the home the resolver actually
+    /// provisioned for this launch (capability hint, request environment, or
+    /// the default home). The launch environment is often empty for Codex
+    /// (the shell's real `CODEX_HOME` travels in the capability hint), so
+    /// only an explicit `CODEX_HOME` here can contradict the provisioned
+    /// home and refuse injection.
+    private static func codexHomeMatchesConfiguration(
+        launchEnvironment: [String: String],
+        configuration: CodexSkillsLaunchConfiguration
+    ) -> Bool {
+        guard let explicitHomePath = normalizedNonEmptyValue(launchEnvironment["CODEX_HOME"]) else {
+            return true
+        }
+        return standardizedFilePath(explicitHomePath)
+            == standardizedFilePath(configuration.codexHomePath)
+    }
+
+    private static func standardizedFilePath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     static func baselineEnvironment(for agent: AgentKind) -> [String: String] {
@@ -1709,11 +1733,11 @@ extension AgentLaunchInstrumentation {
 
     // Internal test seam for validating Codex config escaping behavior directly.
     static func tomlStringArrayLiteralForTesting(_ values: [String]) -> String {
-        CodexSkillsConfigSerializer.tomlStringArrayLiteral(values)
+        CodexConfigTOMLSerializer.tomlStringArrayLiteral(values)
     }
 
     // Internal test seam for validating TOML basic string escaping directly.
     static func tomlBasicStringLiteralForTesting(_ value: String) -> String {
-        CodexSkillsConfigSerializer.tomlBasicStringLiteral(value)
+        CodexConfigTOMLSerializer.tomlBasicStringLiteral(value)
     }
 }

@@ -18,12 +18,11 @@ struct CodexSkillsStatus: Equatable, Sendable {
     let installedVersion: String?
     let bundledDigest: String?
     let installedDigest: String?
-    let installedPath: String?
-    let marketplacePath: String
+    let cachePath: String?
+    let profileConfigPath: String
     let updatePending: Bool
     let repairPending: Bool
     let hasActiveManagedSession: Bool
-    let disabledNameTombstones: [String]
 
     var isReady: Bool {
         availability == .ready && updatePending == false && repairPending == false
@@ -42,16 +41,15 @@ enum CodexSkillsManagerError: LocalizedError, Equatable {
     case bundledMarketplaceUnavailable(String)
     case invalidCodexHome(String)
     case operationTimedOut
-    case marketplaceConflict(String)
-    case pluginConflict(String)
+    case profileConfigConflict(String)
     case ownedStateMismatch(String)
     case pluginInstallMismatch
     case pluginNotInstalled
     case installedPluginMismatch(String)
-    case ordinarySkillsMismatch(expected: [String], actual: [String])
-    case ordinarySkillEnabled(String)
     case activeSessions
     case copyFailed(String)
+    case cacheSwapFailed(String)
+    case legacyCleanupFailed(String)
     case uninstallFailed(String)
     case rollbackUnverified(String)
 
@@ -65,26 +63,24 @@ enum CodexSkillsManagerError: LocalizedError, Equatable {
             return "Codex home must be an absolute path: \(path)"
         case .operationTimedOut:
             return "Codex skills provisioning timed out."
-        case .marketplaceConflict(let path):
-            return "A marketplace named toastty already exists at \(path). Toastty preserved it."
-        case .pluginConflict(let pluginID):
-            return "A plugin named toastty is already installed as \(pluginID). Toastty preserved it."
+        case .profileConfigConflict(let path):
+            return "A Codex profile file Toastty does not own exists at \(path). Toastty preserved it; managed sessions launch without Toastty skills until it is moved or removed."
         case .ownedStateMismatch(let path):
             return "Toastty cannot verify ownership of the Codex skills state at \(path)."
         case .pluginInstallMismatch:
-            return "Codex installed an unexpected plugin while provisioning Toastty skills."
+            return "Codex produced an unexpected plugin while populating Toastty skills."
         case .pluginNotInstalled:
             return "The Toastty Codex skills plugin is not installed."
         case .installedPluginMismatch(let path):
-            return "The installed Toastty Codex plugin does not match the verified bundle at \(path)."
-        case .ordinarySkillsMismatch(let expected, let actual):
-            return "Ordinary Codex reported an unexpected Toastty skill set (expected \(expected); found \(actual))."
-        case .ordinarySkillEnabled(let name):
-            return "Toastty skill \(name) is enabled in ordinary Codex."
+            return "The cached Toastty Codex plugin does not match the verified bundle at \(path)."
         case .activeSessions:
             return "Wait for active managed Codex sessions to finish before changing the plugin."
         case .copyFailed(let path):
             return "Toastty could not stage its Codex skills plugin at \(path)."
+        case .cacheSwapFailed(let message):
+            return "Toastty could not update its Codex plugin cache: \(message)"
+        case .legacyCleanupFailed(let message):
+            return "Toastty could not clean up its previous Codex skills installation: \(message)"
         case .uninstallFailed(let message):
             return "Toastty could not uninstall its Codex skills: \(message)"
         case .rollbackUnverified(let message):
@@ -190,6 +186,23 @@ enum CodexIntegrationRuntimeLocator {
     }
 }
 
+/// Delivers the shipped Toastty skills to managed Codex sessions through a
+/// profile-based mechanism that never writes to the user's Codex
+/// `config.toml`:
+///
+/// 1. Population (off the launch path): install the bundled plugin into a
+///    throwaway `CODEX_HOME` with the real Codex CLI so the cache bytes are
+///    canonical, digest-verify them, then atomically swap the produced
+///    subtree into the real `$CODEX_HOME/plugins/cache/toastty/toastty/`.
+/// 2. A Toastty-owned `$CODEX_HOME/toastty-managed.config.toml` overlay
+///    enables the cached plugin for processes launched with
+///    `--profile toastty-managed`; ordinary sessions see nothing.
+/// 3. A receipt sidecar under `~/.toastty/agent-plugins/codex/` records the
+///    verified cache identity so later launches byte-verify without
+///    subprocess work.
+///
+/// See docs/plans/evidence/codex-session-scoped-skills-2026-08-04.md for the
+/// capability evidence this mechanism rests on.
 final class CodexSkillsManager: @unchecked Sendable {
     static let operationTimeout: TimeInterval = 4
     private static let operationLock = NSLock()
@@ -202,7 +215,6 @@ final class CodexSkillsManager: @unchecked Sendable {
     private let sourceMarketplaceURLProvider: @Sendable () -> URL?
     private let fileManager: FileManager
     private let pluginClient: any CodexPluginCLIManaging
-    private let skillClient: any CodexSkillsConfiguring
     private let cacheLock = NSLock()
     private var cachedConfigurations: [String: CachedConfiguration] = [:]
 
@@ -216,19 +228,13 @@ final class CodexSkillsManager: @unchecked Sendable {
                 .appendingPathComponent("ToasttyAgentPluginBundle", isDirectory: true)
         },
         fileManager: FileManager = .default,
-        pluginClient: any CodexPluginCLIManaging = CodexPluginCLIClient(),
-        skillClient: any CodexSkillsConfiguring = CodexAppServerClient()
+        pluginClient: any CodexPluginCLIManaging = CodexPluginCLIClient()
     ) {
         self.homeDirectoryURL = homeDirectoryURL
         self.sourcePluginURLProvider = sourcePluginURLProvider
         self.sourceMarketplaceURLProvider = sourceMarketplaceURLProvider
         self.fileManager = fileManager
         self.pluginClient = pluginClient
-        self.skillClient = skillClient
-    }
-
-    var stableMarketplaceURL: URL {
-        homeDirectoryURL.appendingPathComponent(".toastty/codex-plugin", isDirectory: true)
     }
 
     var stateRootURL: URL {
@@ -237,8 +243,18 @@ final class CodexSkillsManager: @unchecked Sendable {
 
     func cachedLaunchConfiguration(runtime: CodexIntegrationRuntime) -> CodexSkillsLaunchConfiguration? {
         cacheLock.lock()
-        defer { cacheLock.unlock() }
-        return cachedConfigurations[runtimeKey(runtime)]?.configuration
+        let entry = cachedConfigurations[runtimeKey(runtime)]
+        cacheLock.unlock()
+        guard let entry else { return nil }
+        // Cheap existence guard: another manager instance may have
+        // uninstalled or replaced the on-disk state since this entry was
+        // verified. Anything deeper stays with the prepare paths.
+        guard fileManager.fileExists(atPath: receiptURL(for: runtime).path),
+              fileManager.fileExists(atPath: profileConfigURL(for: runtime).path),
+              fileManager.fileExists(atPath: entry.configuration.skillsRootPath) else {
+            return nil
+        }
+        return entry.configuration
     }
 
     func prepareForManagedLaunch(
@@ -261,37 +277,45 @@ final class CodexSkillsManager: @unchecked Sendable {
         }
 
         if pendingRepair(for: runtime) == false,
+           legacyStateFileExists(runtime) == false,
            let cached = cachedEntry(runtime: runtime),
-           cached.verificationLevel == .full,
-           cached.fingerprint == fingerprint(runtime: runtime, bundled: bundled, record: readOwnershipRecord(runtime)) {
-            if cached.record.installedDigest == bundled.contentDigest {
-                return CodexSkillsPreparation(
-                    configuration: cached.configuration,
-                    status: readyStatus(
-                        bundled: bundled,
-                        record: cached.record,
-                        runtime: runtime
-                    ),
-                    installedOrUpdated: false,
-                    firstInstallSucceeded: false
-                )
-            }
+           cached.fingerprint == fingerprint(runtime: runtime, bundled: bundled, record: readReceipt(runtime)),
+           cached.record.installedDigest == bundled.contentDigest {
+            return CodexSkillsPreparation(
+                configuration: cached.configuration,
+                status: readyStatus(
+                    bundled: bundled,
+                    record: cached.record,
+                    runtime: runtime
+                ),
+                installedOrUpdated: false,
+                firstInstallSucceeded: false
+            )
         }
 
         try acquireOperationLock(until: deadline)
         defer { Self.operationLock.unlock() }
 
-        let oldRecord = readOwnershipRecord(runtime)
-        let oldVerified = try? verifyExisting(
+        let oldRecord = readReceipt(runtime)
+        let oldVerified = try? verifyInstalledFiles(
             runtime: runtime,
             bundled: bundled,
             record: oldRecord,
-            deadline: deadline,
             requireBundledDigest: false
         )
         if let oldVerified,
            oldVerified.record.installedDigest == bundled.contentDigest,
-           pendingRepair(for: runtime) == false {
+           pendingRepair(for: runtime) == false,
+           legacyStateFileExists(runtime) == false {
+            do {
+                try ensureProfileConfig(runtime: runtime)
+            } catch let error as CodexSkillsManagerError {
+                if case .profileConfigConflict = error {
+                    incrementFailure(for: signature)
+                    return conflictPreparation(runtime: runtime, bundled: bundled, error: error)
+                }
+                throw error
+            }
             cache(oldVerified, runtime: runtime, bundled: bundled)
             clearFailure(for: signature)
             return CodexSkillsPreparation(
@@ -311,7 +335,7 @@ final class CodexSkillsManager: @unchecked Sendable {
             let prepared = try provision(
                 runtime: runtime,
                 bundled: bundled,
-                oldRecord: oldRecord,
+                oldVerified: oldVerified,
                 deadline: deadline
             )
             clearPendingRepair(for: runtime)
@@ -329,15 +353,29 @@ final class CodexSkillsManager: @unchecked Sendable {
             )
         } catch {
             incrementFailure(for: signature)
-            if let managerError = error as? CodexSkillsManagerError,
-               case .rollbackUnverified = managerError {
-                clearCachedConfiguration(runtime)
-                throw error
+            if let managerError = error as? CodexSkillsManagerError {
+                if case .rollbackUnverified = managerError {
+                    clearCachedConfiguration(runtime)
+                    throw error
+                }
+                if case .profileConfigConflict = managerError {
+                    return conflictPreparation(runtime: runtime, bundled: bundled, error: managerError)
+                }
             }
-            if let oldVerified {
-                cache(oldVerified, runtime: runtime, bundled: bundled)
+            // Stale-skills fallback: refresh failed but a verified older cache
+            // still exists. Re-verify from disk because provisioning may have
+            // touched the cache before failing.
+            if oldVerified != nil,
+               let stillVerified = try? verifyInstalledFiles(
+                   runtime: runtime,
+                   bundled: bundled,
+                   record: readReceipt(runtime),
+                   requireBundledDigest: false
+               ),
+               (try? ensureProfileConfig(runtime: runtime)) != nil {
+                cache(stillVerified, runtime: runtime, bundled: bundled)
                 return CodexSkillsPreparation(
-                    configuration: oldVerified.configuration,
+                    configuration: stillVerified.configuration,
                     status: failedStatus(
                         runtime: runtime,
                         bundled: bundled,
@@ -351,49 +389,76 @@ final class CodexSkillsManager: @unchecked Sendable {
         }
     }
 
-    /// Restored sessions must select the bundled version before their resume command is
-    /// submitted. Reuse a current byte-verified install without subprocess work; otherwise
-    /// perform the same bounded, fail-open provisioning as a new managed launch.
+    /// Restored sessions must select the bundled version before their resume
+    /// command is submitted. Restore ladder: (1) receipt plus cache digest
+    /// matching the bundle is reused with pure filesystem checks; (2) any
+    /// mismatch runs the same bounded population as a new managed launch;
+    /// (3) a failed refresh falls back to a verified older cache with a
+    /// stale-skills status; (4) nothing usable fails open without skills.
     func prepareForRestoredManagedLaunch(
         runtime: CodexIntegrationRuntime
     ) throws -> CodexSkillsPreparation {
-        // A restored pane may be prepared after files changed within this app process.
-        // Never let an earlier cache entry override the disk verification below.
+        // A restored pane may be prepared after files changed within this app
+        // process. Never let an earlier cache entry override the disk
+        // verification below.
         clearCachedConfiguration(runtime)
         let bundled = try bundledDescriptor()
-        if pendingRepair(for: runtime) == false,
-           let record = readOwnershipRecord(runtime),
-           record.installedDigest == bundled.contentDigest,
-           let verified = try? verifyInstalledFiles(
-               runtime: runtime,
-               bundled: bundled,
-               record: record,
-               requireBundledDigest: true
-           ) {
-            cache(
-                verified,
-                runtime: runtime,
-                bundled: bundled,
-                verificationLevel: .installedFiles
-            )
-            return CodexSkillsPreparation(
-                configuration: verified.configuration,
-                status: readyStatus(bundled: bundled, record: record, runtime: runtime),
-                installedOrUpdated: false,
-                firstInstallSucceeded: false
-            )
+        // The fast path verifies and may rewrite the profile overlay, so it
+        // must hold the same operation lock as provisioning and uninstall;
+        // otherwise a racing uninstall could see its deleted overlay
+        // recreated.
+        try acquireOperationLock(until: Date().addingTimeInterval(Self.operationTimeout))
+        let fastResult = lockedRestoreFastPath(runtime: runtime, bundled: bundled)
+        Self.operationLock.unlock()
+        if let fastResult {
+            return fastResult
         }
         return try prepareForManagedLaunch(runtime: runtime)
+    }
+
+    /// Restore-ladder branch 1, executed under the operation lock. Returns
+    /// nil when the current install cannot be reused as-is and the bounded
+    /// provisioning path should run instead.
+    private func lockedRestoreFastPath(
+        runtime: CodexIntegrationRuntime,
+        bundled: ToasttyAgentPluginDescriptor
+    ) -> CodexSkillsPreparation? {
+        guard pendingRepair(for: runtime) == false,
+              legacyStateFileExists(runtime) == false,
+              let record = readReceipt(runtime),
+              record.installedDigest == bundled.contentDigest,
+              let verified = try? verifyInstalledFiles(
+                  runtime: runtime,
+                  bundled: bundled,
+                  record: record,
+                  requireBundledDigest: true
+              ) else {
+            return nil
+        }
+        do {
+            try ensureProfileConfig(runtime: runtime)
+        } catch let error as CodexSkillsManagerError where isProfileConflict(error) {
+            incrementFailure(for: failureSignature(runtime: runtime, bundled: bundled))
+            return conflictPreparation(runtime: runtime, bundled: bundled, error: error)
+        } catch {
+            return nil
+        }
+        cache(verified, runtime: runtime, bundled: bundled)
+        return CodexSkillsPreparation(
+            configuration: verified.configuration,
+            status: readyStatus(bundled: bundled, record: record, runtime: runtime),
+            installedOrUpdated: false,
+            firstInstallSucceeded: false
+        )
     }
 
     func status(
         runtime: CodexIntegrationRuntime,
         hasActiveManagedCodexSession: Bool
     ) -> CodexSkillsStatus {
-        let deadline = Date().addingTimeInterval(Self.operationTimeout)
         do {
             let bundled = try bundledDescriptor()
-            guard let record = readOwnershipRecord(runtime) else {
+            guard let record = readReceipt(runtime) else {
                 return CodexSkillsStatus(
                     availability: .notInstalled,
                     detail: "Toastty skills will be added automatically on the next managed Codex launch.",
@@ -401,21 +466,20 @@ final class CodexSkillsManager: @unchecked Sendable {
                     installedVersion: nil,
                     bundledDigest: bundled.contentDigest,
                     installedDigest: nil,
-                    installedPath: nil,
-                    marketplacePath: marketplaceURL(for: runtime).path,
+                    cachePath: nil,
+                    profileConfigPath: profileConfigURL(for: runtime).path,
                     updatePending: false,
                     repairPending: pendingRepair(for: runtime),
-                    hasActiveManagedSession: hasActiveManagedCodexSession,
-                    disabledNameTombstones: CodexSkillsContract.retiredQualifiedSkillNames
+                    hasActiveManagedSession: hasActiveManagedCodexSession
                 )
             }
-            let verified = try verifyExisting(
+            let verified = try verifyInstalledFiles(
                 runtime: runtime,
                 bundled: bundled,
                 record: record,
-                deadline: deadline,
                 requireBundledDigest: false
             )
+            try checkProfileConfigOwnership(runtime: runtime)
             cache(verified, runtime: runtime, bundled: bundled)
             return readyStatus(
                 bundled: bundled,
@@ -423,26 +487,19 @@ final class CodexSkillsManager: @unchecked Sendable {
                 runtime: runtime,
                 hasActiveManagedCodexSession: hasActiveManagedCodexSession
             )
-        } catch let error as CodexPluginCLIError where error.isUnsupported {
-            return unsupportedStatus(runtime: runtime, detail: error.localizedDescription)
-        } catch let error as CodexPluginCLIError where error.isRuntimeUnavailable {
-            return unrunnableStatus(runtime: runtime, detail: error.localizedDescription)
-        } catch let error as CodexAppServerClientError where error.isUnsupported {
-            return unsupportedStatus(runtime: runtime, detail: error.localizedDescription)
         } catch {
             return CodexSkillsStatus(
                 availability: .failed,
                 detail: error.localizedDescription,
                 bundledVersion: (try? bundledDescriptor().version),
-                installedVersion: readOwnershipRecord(runtime)?.installedVersion,
+                installedVersion: readReceipt(runtime)?.installedVersion,
                 bundledDigest: (try? bundledDescriptor().contentDigest),
-                installedDigest: readOwnershipRecord(runtime)?.installedDigest,
-                installedPath: readOwnershipRecord(runtime)?.installedPath,
-                marketplacePath: marketplaceURL(for: runtime).path,
+                installedDigest: readReceipt(runtime)?.installedDigest,
+                cachePath: readReceipt(runtime)?.cachePath,
+                profileConfigPath: profileConfigURL(for: runtime).path,
                 updatePending: false,
                 repairPending: pendingRepair(for: runtime),
-                hasActiveManagedSession: hasActiveManagedCodexSession,
-                disabledNameTombstones: CodexSkillsContract.retiredQualifiedSkillNames
+                hasActiveManagedSession: hasActiveManagedCodexSession
             )
         }
     }
@@ -464,40 +521,33 @@ final class CodexSkillsManager: @unchecked Sendable {
         try acquireOperationLock(until: deadline)
         defer { Self.operationLock.unlock() }
 
-        let marketplaceURL = marketplaceURL(for: runtime)
-        let ownershipStateURL = ownershipStateURL(for: runtime)
-        guard let record = readOwnershipRecord(runtime),
-              standardizedPath(record.marketplacePath) == standardizedPath(marketplaceURL.path) else {
-            throw CodexSkillsManagerError.ownedStateMismatch(ownershipStateURL.path)
+        let receiptURL = receiptURL(for: runtime)
+        guard let record = readReceipt(runtime) else {
+            throw CodexSkillsManagerError.ownedStateMismatch(receiptURL.path)
         }
         let bundled = try bundledDescriptor()
-        _ = try verifyExisting(
+        _ = try verifyInstalledFiles(
             runtime: runtime,
             bundled: bundled,
             record: record,
-            deadline: deadline,
-            requireBundledDigest: false,
-            requireExclusiveMarketplace: true
-        )
-        try pluginClient.removePlugin(
-            runtime: runtime,
-            selector: pluginSelector,
-            deadline: deadline
-        )
-        try pluginClient.removeMarketplace(
-            runtime: runtime,
-            name: CodexSkillsContract.marketplaceName,
-            deadline: deadline
+            requireBundledDigest: false
         )
 
         do {
-            if fileManager.fileExists(atPath: marketplaceURL.path) {
-                try fileManager.removeItem(at: marketplaceURL)
+            let cacheRoot = pluginCacheRootURL(for: runtime)
+            if fileManager.fileExists(atPath: cacheRoot.path) {
+                try fileManager.removeItem(at: cacheRoot)
             }
-            if fileManager.fileExists(atPath: ownershipStateURL.path) {
-                try fileManager.removeItem(at: ownershipStateURL)
+            removeDirectoryIfEmpty(cacheRoot.deletingLastPathComponent())
+            let profileURL = profileConfigURL(for: runtime)
+            if let contents = try? String(contentsOf: profileURL, encoding: .utf8),
+               CodexManagedProfileConfig.isToasttyOwned(contents) {
+                try fileManager.removeItem(at: profileURL)
             }
-            try removeStagedVersionsIfUnused()
+            if fileManager.fileExists(atPath: receiptURL.path) {
+                try fileManager.removeItem(at: receiptURL)
+            }
+            removeDirectoryIfEmpty(receiptURL.deletingLastPathComponent())
         } catch {
             throw CodexSkillsManagerError.uninstallFailed(error.localizedDescription)
         }
@@ -510,7 +560,21 @@ final class CodexSkillsManager: @unchecked Sendable {
 }
 
 private extension CodexSkillsManager {
-    struct OwnershipRecord: Codable, Equatable, Sendable {
+    /// Sidecar recording the verified cache identity for one `CODEX_HOME`.
+    struct ReceiptRecord: Codable, Equatable, Sendable {
+        let schemaVersion: Int
+        let profileName: String
+        let cachePath: String
+        let installedVersion: String
+        let installedDigest: String
+        let skillNames: [String]
+        let codexExecutablePath: String
+        let codexExecutableSignature: String
+    }
+
+    /// Ownership record written by the retired marketplace-install mechanism.
+    /// Only decoded during the one-shot legacy cleanup.
+    struct LegacyOwnershipRecord: Codable, Equatable, Sendable {
         let schemaVersion: Int
         let marketplaceName: String
         let marketplacePath: String
@@ -522,40 +586,39 @@ private extension CodexSkillsManager {
 
     struct VerifiedInstallation {
         let configuration: CodexSkillsLaunchConfiguration
-        let record: OwnershipRecord
+        let record: ReceiptRecord
     }
 
     struct CachedConfiguration {
-        enum VerificationLevel {
-            case installedFiles
-            case full
-        }
-
         let configuration: CodexSkillsLaunchConfiguration
-        let record: OwnershipRecord
+        let record: ReceiptRecord
         let fingerprint: String
-        let verificationLevel: VerificationLevel
     }
 
-    var versionsRootURL: URL {
-        stateRootURL.appendingPathComponent("versions", isDirectory: true)
-    }
-
-    func ownershipStateURL(for runtime: CodexIntegrationRuntime) -> URL {
+    func homeStateURL(for runtime: CodexIntegrationRuntime) -> URL {
         stateRootURL
             .appendingPathComponent("homes", isDirectory: true)
             .appendingPathComponent(homeKey(runtime.codexHomeURL.path), isDirectory: true)
-            .appendingPathComponent("state.json", isDirectory: false)
     }
 
-    func marketplaceURL(for runtime: CodexIntegrationRuntime) -> URL {
-        let defaultCodexHome = homeDirectoryURL.appendingPathComponent(".codex", isDirectory: true)
-        if standardizedPath(runtime.codexHomeURL.path) == standardizedPath(defaultCodexHome.path) {
-            return stableMarketplaceURL
-        }
-        return ownershipStateURL(for: runtime)
-            .deletingLastPathComponent()
-            .appendingPathComponent("marketplace", isDirectory: true)
+    func receiptURL(for runtime: CodexIntegrationRuntime) -> URL {
+        homeStateURL(for: runtime).appendingPathComponent("receipt.json", isDirectory: false)
+    }
+
+    func profileConfigURL(for runtime: CodexIntegrationRuntime) -> URL {
+        runtime.codexHomeURL.appendingPathComponent(
+            CodexSkillsContract.profileConfigFileName,
+            isDirectory: false
+        )
+    }
+
+    /// `$CODEX_HOME/plugins/cache/<marketplace>/<plugin>` — the single-version
+    /// plugin directory Toastty swaps atomically.
+    func pluginCacheRootURL(for runtime: CodexIntegrationRuntime) -> URL {
+        runtime.codexHomeURL
+            .appendingPathComponent("plugins/cache", isDirectory: true)
+            .appendingPathComponent(CodexSkillsContract.marketplaceName, isDirectory: true)
+            .appendingPathComponent(CodexSkillsContract.pluginName, isDirectory: true)
     }
 
     func homeKey(_ path: String) -> String {
@@ -563,10 +626,6 @@ private extension CodexSkillsManager {
             .prefix(12)
             .map { String(format: "%02x", $0) }
             .joined()
-    }
-
-    var pluginSelector: String {
-        "\(CodexSkillsContract.pluginName)@\(CodexSkillsContract.marketplaceName)"
     }
 
     func bundledDescriptor() throws -> ToasttyAgentPluginDescriptor {
@@ -592,428 +651,453 @@ private extension CodexSkillsManager {
         return url
     }
 
-    func provision(
-        runtime: CodexIntegrationRuntime,
-        bundled: ToasttyAgentPluginDescriptor,
-        oldRecord: OwnershipRecord?,
-        deadline: Date
-    ) throws -> VerifiedInstallation {
-        try checkDeadline(deadline)
-        let marketplaceURL = marketplaceURL(for: runtime)
-        let marketplaces = try pluginClient.listMarketplaces(runtime: runtime, deadline: deadline)
-        let existingMarketplace = marketplaces.first {
-            $0.name == CodexSkillsContract.marketplaceName
-        }
-        if let existingMarketplace,
-           marketplaceMatches(existingMarketplace, expectedURL: marketplaceURL) == false {
-            throw CodexSkillsManagerError.marketplaceConflict(existingMarketplace.rootPath)
-        }
-        let existingPlugins = try pluginClient.listInstalledPlugins(
-            runtime: runtime,
-            deadline: deadline
-        )
-        if let conflict = existingPlugins.first(where: {
-            $0.name == CodexSkillsContract.pluginName && $0.pluginID != pluginSelector
-        }) {
-            throw CodexSkillsManagerError.pluginConflict(conflict.pluginID)
-        }
-        let disabledNames = Set(
-            (oldRecord?.skillNames ?? []).map { "\(CodexSkillsContract.pluginName):\($0)" }
-                + bundled.qualifiedSkillNames
-                + CodexSkillsContract.retiredQualifiedSkillNames
-        )
-        try persistDisabledSkills(
-            disabledNames.sorted(),
-            runtime: runtime,
-            deadline: deadline
-        )
+    func isProfileConflict(_ error: CodexSkillsManagerError) -> Bool {
+        if case .profileConfigConflict = error { return true }
+        return false
+    }
 
-        let stagedPluginURL = try stageImmutablePlugin(bundled)
-        let previousLink = try currentStablePluginLinkDestination(marketplaceURL: marketplaceURL)
-        var addedMarketplace = false
-        do {
-            try stageStableMarketplace(
-                pluginURL: stagedPluginURL,
-                marketplaceURL: marketplaceURL,
-                allowExistingOwnedLayout: isOwnedMarketplaceLayout(marketplaceURL: marketplaceURL)
-            )
-            if existingMarketplace == nil {
-                let name = try pluginClient.addMarketplace(
-                    runtime: runtime,
-                    sourcePath: marketplaceURL.path,
-                    deadline: deadline
-                )
-                guard name == CodexSkillsContract.marketplaceName else {
-                    throw CodexSkillsManagerError.marketplaceConflict(name)
-                }
-                addedMarketplace = true
-            }
+    // MARK: - Profile overlay
 
-            let installation = try pluginClient.installPlugin(
-                runtime: runtime,
-                selector: pluginSelector,
-                deadline: deadline
-            )
-            guard installation.pluginID == pluginSelector,
-                  installation.name == CodexSkillsContract.pluginName,
-                  installation.marketplaceName == CodexSkillsContract.marketplaceName else {
-                throw CodexSkillsManagerError.pluginInstallMismatch
-            }
-            try persistDisabledSkills(
-                disabledNames.sorted(),
-                runtime: runtime,
-                deadline: deadline
-            )
-            let installed = try ToasttyAgentPluginBundle.read(
-                pluginRootURL: URL(fileURLWithPath: installation.installedPath, isDirectory: true),
-                fileManager: fileManager
-            )
-            guard installed.version == bundled.version,
-                  installed.contentDigest == bundled.contentDigest else {
-                throw CodexSkillsManagerError.installedPluginMismatch(
-                    "\(installation.installedPath) (expected \(bundled.version)/\(bundled.contentDigest), found \(installed.version)/\(installed.contentDigest))"
-                )
-            }
-            try verifyOrdinarySkills(
-                expectedNames: bundled.qualifiedSkillNames,
-                runtime: runtime,
-                deadline: deadline
-            )
-            let record = OwnershipRecord(
-                schemaVersion: 1,
-                marketplaceName: CodexSkillsContract.marketplaceName,
-                marketplacePath: marketplaceURL.path,
-                installedPath: installation.installedPath,
-                installedVersion: installed.version,
-                installedDigest: installed.contentDigest,
-                skillNames: installed.skillNames
-            )
-            try writeOwnershipRecord(record, runtime: runtime)
-            return VerifiedInstallation(
-                configuration: launchConfiguration(descriptor: installed),
-                record: record
-            )
-        } catch {
-            let updateError = error
-            if let previousLink {
-                try? replaceStablePluginLink(
-                    with: URL(fileURLWithPath: previousLink),
-                    marketplaceURL: marketplaceURL
-                )
-            } else {
-                try? removeStableMarketplaceIfUnowned(
-                    runtime: runtime,
-                    marketplaceURL: marketplaceURL
-                )
-            }
-            if addedMarketplace {
-                try? pluginClient.removeMarketplace(
-                    runtime: runtime,
-                    name: CodexSkillsContract.marketplaceName,
-                    deadline: deadline
-                )
-            }
-            if let oldRecord {
-                do {
-                    _ = try verifyExisting(
-                        runtime: runtime,
-                        bundled: bundled,
-                        record: oldRecord,
-                        deadline: deadline,
-                        requireBundledDigest: false
-                    )
-                } catch {
-                    throw CodexSkillsManagerError.rollbackUnverified(
-                        "\(updateError.localizedDescription) Rollback check: \(error.localizedDescription)"
-                    )
-                }
-            }
-            throw updateError
+    /// Throws when a foreign file occupies the Toastty profile path. Never
+    /// writes.
+    func checkProfileConfigOwnership(runtime: CodexIntegrationRuntime) throws {
+        let url = profileConfigURL(for: runtime)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        guard let contents = try? String(contentsOf: url, encoding: .utf8),
+              CodexManagedProfileConfig.isToasttyOwned(contents) else {
+            throw CodexSkillsManagerError.profileConfigConflict(url.path)
         }
     }
 
-    func verifyExisting(
-        runtime: CodexIntegrationRuntime,
-        bundled: ToasttyAgentPluginDescriptor,
-        record: OwnershipRecord?,
-        deadline: Date,
-        requireBundledDigest: Bool,
-        requireExclusiveMarketplace: Bool = false
-    ) throws -> VerifiedInstallation {
-        let verified = try verifyInstalledFiles(
-            runtime: runtime,
-            bundled: bundled,
-            record: record,
-            requireBundledDigest: requireBundledDigest
+    /// Writes the canonical Toastty overlay when it is missing or drifted.
+    /// A foreign file at the profile path is never overwritten.
+    func ensureProfileConfig(runtime: CodexIntegrationRuntime) throws {
+        try checkProfileConfigOwnership(runtime: runtime)
+        let url = profileConfigURL(for: runtime)
+        let expected = Data(CodexManagedProfileConfig.fileContents.utf8)
+        if (try? Data(contentsOf: url)) == expected { return }
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
         )
-        let record = verified.record
-        let marketplaces = try pluginClient.listMarketplaces(runtime: runtime, deadline: deadline)
-        guard let marketplace = marketplaces.first(where: { $0.name == CodexSkillsContract.marketplaceName }) else {
-            throw CodexSkillsManagerError.pluginNotInstalled
-        }
-        guard marketplaceMatches(marketplace, expectedURL: marketplaceURL(for: runtime)) else {
-            throw CodexSkillsManagerError.marketplaceConflict(marketplace.rootPath)
-        }
-        let plugins = try pluginClient.listInstalledPlugins(runtime: runtime, deadline: deadline)
-        if requireExclusiveMarketplace,
-           plugins.contains(where: {
-               $0.marketplaceName == CodexSkillsContract.marketplaceName
-                   && $0.pluginID != pluginSelector
-           }) {
-            throw CodexSkillsManagerError.uninstallFailed(
-                "The Toastty marketplace has other installed plugins, so Toastty preserved it."
-            )
-        }
-        guard let plugin = plugins.first(where: { $0.pluginID == pluginSelector }),
-              plugin.name == CodexSkillsContract.pluginName,
-              plugin.marketplaceName == CodexSkillsContract.marketplaceName else {
-            throw CodexSkillsManagerError.pluginNotInstalled
-        }
-        guard plugin.version == record.installedVersion else {
-            throw CodexSkillsManagerError.installedPluginMismatch(record.installedPath)
-        }
-        try verifyOrdinarySkills(
-            expectedNames: verified.configuration.qualifiedSkillNames,
-            runtime: runtime,
-            deadline: deadline
-        )
-        return verified
+        try expected.write(to: url, options: .atomic)
     }
+
+    // MARK: - Verification
 
     func verifyInstalledFiles(
         runtime: CodexIntegrationRuntime,
         bundled: ToasttyAgentPluginDescriptor,
-        record: OwnershipRecord?,
+        record: ReceiptRecord?,
         requireBundledDigest: Bool
     ) throws -> VerifiedInstallation {
         guard let record else { throw CodexSkillsManagerError.pluginNotInstalled }
         guard record.schemaVersion == 1,
-              record.marketplaceName == CodexSkillsContract.marketplaceName,
-              standardizedPath(record.marketplacePath) == standardizedPath(marketplaceURL(for: runtime).path) else {
-            throw CodexSkillsManagerError.ownedStateMismatch(ownershipStateURL(for: runtime).path)
+              record.profileName == CodexSkillsContract.profileName else {
+            throw CodexSkillsManagerError.ownedStateMismatch(receiptURL(for: runtime).path)
         }
-        guard isOwnedMarketplaceLayout(marketplaceURL: marketplaceURL(for: runtime)) else {
-            throw CodexSkillsManagerError.ownedStateMismatch(marketplaceURL(for: runtime).path)
+        let cacheRoot = pluginCacheRootURL(for: runtime)
+        let recordedCacheURL = URL(fileURLWithPath: record.cachePath, isDirectory: true)
+        guard standardizedPath(recordedCacheURL.deletingLastPathComponent().path)
+            == standardizedPath(cacheRoot.path) else {
+            throw CodexSkillsManagerError.ownedStateMismatch(receiptURL(for: runtime).path)
+        }
+        // Keep the single-version invariant `codex plugin add` maintains.
+        let versionDirectories = (try? fileManager.contentsOfDirectory(
+            at: cacheRoot,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        guard versionDirectories.count == 1,
+              versionDirectories.first.map({ standardizedPath($0.path) })
+                  == standardizedPath(recordedCacheURL.path) else {
+            throw CodexSkillsManagerError.installedPluginMismatch(cacheRoot.path)
         }
         let installed = try ToasttyAgentPluginBundle.read(
-            pluginRootURL: URL(fileURLWithPath: record.installedPath, isDirectory: true),
+            pluginRootURL: recordedCacheURL,
             fileManager: fileManager
         )
         guard installed.version == record.installedVersion,
               installed.contentDigest == record.installedDigest,
               installed.skillNames == record.skillNames else {
-            throw CodexSkillsManagerError.installedPluginMismatch(record.installedPath)
+            throw CodexSkillsManagerError.installedPluginMismatch(record.cachePath)
         }
         if requireBundledDigest, installed.contentDigest != bundled.contentDigest {
-            throw CodexSkillsManagerError.installedPluginMismatch(record.installedPath)
+            throw CodexSkillsManagerError.installedPluginMismatch(record.cachePath)
         }
         return VerifiedInstallation(
-            configuration: launchConfiguration(descriptor: installed),
+            configuration: launchConfiguration(runtime: runtime, descriptor: installed),
             record: record
         )
     }
 
-    func persistDisabledSkills(
-        _ names: [String],
-        runtime: CodexIntegrationRuntime,
-        deadline: Date
-    ) throws {
-        try skillClient.writeSkillConfigs(
-            invocation: invocation(runtime: runtime, deadline: deadline),
-            states: names.map { CodexSkillState(name: $0, enabled: false) }
-        )
-    }
+    // MARK: - Provisioning
 
-    func verifyOrdinarySkills(
-        expectedNames: [String],
+    func provision(
         runtime: CodexIntegrationRuntime,
+        bundled: ToasttyAgentPluginDescriptor,
+        oldVerified: VerifiedInstallation?,
         deadline: Date
-    ) throws {
-        let expected = Set(expectedNames)
-        let pluginPrefix = "\(CodexSkillsContract.pluginName):"
-        let listed = try skillClient.listSkills(
-            invocation: invocation(runtime: runtime, deadline: deadline)
-        )
-        let toasttySkills = listed.filter { $0.name.hasPrefix(pluginPrefix) }
-        let actual = Set(toasttySkills.map(\.name))
-        guard actual == expected else {
-            throw CodexSkillsManagerError.ordinarySkillsMismatch(
-                expected: expected.sorted(),
-                actual: actual.sorted()
-            )
+    ) throws -> VerifiedInstallation {
+        try checkDeadline(deadline)
+        // Fail fast on a foreign profile file before any subprocess work.
+        try checkProfileConfigOwnership(runtime: runtime)
+        if legacyStateFileExists(runtime) {
+            try performLegacyCleanup(runtime: runtime, deadline: deadline)
         }
-        if let enabled = toasttySkills.first(where: { $0.enabled }) {
-            throw CodexSkillsManagerError.ordinarySkillEnabled(enabled.name)
-        }
-    }
 
-    func invocation(
-        runtime: CodexIntegrationRuntime,
-        deadline: Date
-    ) throws -> CodexAppServerInvocation {
-        let remaining = deadline.timeIntervalSinceNow
-        guard remaining > 0 else { throw CodexSkillsManagerError.operationTimedOut }
-        return CodexAppServerInvocation(
-            executableURL: runtime.executableURL,
-            processEnvironment: runtime.processEnvironment,
-            workingDirectoryURL: runtime.workingDirectoryURL,
-            configOverrides: [],
-            timeout: remaining
+        let installed = try populateCache(
+            runtime: runtime,
+            bundled: bundled,
+            oldVerified: oldVerified,
+            deadline: deadline
+        )
+        let record = ReceiptRecord(
+            schemaVersion: 1,
+            profileName: CodexSkillsContract.profileName,
+            cachePath: installed.pluginRootURL.path,
+            installedVersion: installed.version,
+            installedDigest: installed.contentDigest,
+            skillNames: installed.skillNames,
+            codexExecutablePath: runtime.executableURL.path,
+            codexExecutableSignature: metadataSignature(runtime.executableURL)
+        )
+        try writeReceipt(record, runtime: runtime)
+        try ensureProfileConfig(runtime: runtime)
+        return VerifiedInstallation(
+            configuration: launchConfiguration(runtime: runtime, descriptor: installed),
+            record: record
         )
     }
 
-    func stageImmutablePlugin(_ bundled: ToasttyAgentPluginDescriptor) throws -> URL {
-        let versionRoot = versionsRootURL.appendingPathComponent(
-            "\(bundled.version)-\(bundled.contentDigest)",
+    /// Installs the bundled plugin through the real Codex CLI in a throwaway
+    /// `CODEX_HOME` so the cache bytes are canonical, verifies them against
+    /// the bundle, and atomically swaps the produced subtree into the real
+    /// cache.
+    func populateCache(
+        runtime: CodexIntegrationRuntime,
+        bundled: ToasttyAgentPluginDescriptor,
+        oldVerified: VerifiedInstallation?,
+        deadline: Date
+    ) throws -> ToasttyAgentPluginDescriptor {
+        let stagingRoot = fileManager.temporaryDirectory.appendingPathComponent(
+            "toastty-codex-plugin-populate-\(UUID().uuidString)",
             isDirectory: true
         )
-        let destination = versionRoot.appendingPathComponent("toastty", isDirectory: true)
-        if fileManager.fileExists(atPath: destination.path) {
-            let existing = try ToasttyAgentPluginBundle.read(
-                pluginRootURL: destination,
-                fileManager: fileManager
-            )
-            guard existing.contentDigest == bundled.contentDigest else {
-                throw CodexSkillsManagerError.copyFailed(destination.path)
-            }
-            return destination
-        }
+        defer { try? fileManager.removeItem(at: stagingRoot) }
 
-        try fileManager.createDirectory(at: versionsRootURL, withIntermediateDirectories: true)
-        let temporaryRoot = versionsRootURL.appendingPathComponent(
-            ".staging-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        let temporaryPlugin = temporaryRoot.appendingPathComponent("toastty", isDirectory: true)
-        do {
-            try fileManager.createDirectory(at: temporaryRoot, withIntermediateDirectories: false)
-            try fileManager.copyItem(at: bundled.pluginRootURL, to: temporaryPlugin)
-            try normalizeScriptPermissions(in: temporaryPlugin)
-            clearQuarantine(from: temporaryPlugin)
-            let copied = try ToasttyAgentPluginBundle.read(
-                pluginRootURL: temporaryPlugin,
-                fileManager: fileManager
-            )
-            guard copied.contentDigest == bundled.contentDigest else {
-                throw CodexSkillsManagerError.copyFailed(destination.path)
-            }
-            do {
-                try fileManager.moveItem(at: temporaryRoot, to: versionRoot)
-            } catch where fileManager.fileExists(atPath: destination.path) {
-                try? fileManager.removeItem(at: temporaryRoot)
-            }
-            return destination
-        } catch {
-            try? fileManager.removeItem(at: temporaryRoot)
-            throw error
-        }
-    }
-
-    func stageStableMarketplace(
-        pluginURL: URL,
-        marketplaceURL: URL,
-        allowExistingOwnedLayout: Bool
-    ) throws {
-        if fileManager.fileExists(atPath: marketplaceURL.path),
-           allowExistingOwnedLayout == false,
-           isOwnedMarketplaceLayout(marketplaceURL: marketplaceURL) == false {
-            throw CodexSkillsManagerError.ownedStateMismatch(marketplaceURL.path)
-        }
-        let destinationManifest = marketplaceURL.appendingPathComponent(
+        // Stage the marketplace fixture inside the throwaway root.
+        let stagedMarketplaceURL = stagingRoot.appendingPathComponent("marketplace", isDirectory: true)
+        let stagedManifestURL = stagedMarketplaceURL.appendingPathComponent(
             ".agents/plugins/marketplace.json",
             isDirectory: false
         )
-        let sourceManifest = try bundledMarketplaceManifestURL()
-        try fileManager.createDirectory(
-            at: destinationManifest.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+        let stagedPluginURL = stagedMarketplaceURL.appendingPathComponent(
+            "plugins/\(CodexSkillsContract.pluginName)",
+            isDirectory: true
         )
-        let sourceData = try Data(contentsOf: sourceManifest)
-        if (try? Data(contentsOf: destinationManifest)) != sourceData {
-            try sourceData.write(to: destinationManifest, options: .atomic)
+        do {
+            try fileManager.createDirectory(
+                at: stagedManifestURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try fileManager.copyItem(at: bundledMarketplaceManifestURL(), to: stagedManifestURL)
+            try fileManager.createDirectory(
+                at: stagedPluginURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try fileManager.copyItem(at: bundled.pluginRootURL, to: stagedPluginURL)
+            try normalizeScriptPermissions(in: stagedPluginURL)
+            clearQuarantine(from: stagedPluginURL)
+        } catch let error as CodexSkillsManagerError {
+            throw error
+        } catch {
+            throw CodexSkillsManagerError.copyFailed(stagedPluginURL.path)
         }
-        try fileManager.createDirectory(
-            at: marketplaceURL.appendingPathComponent("plugins", isDirectory: true),
-            withIntermediateDirectories: true
+        let staged = try ToasttyAgentPluginBundle.read(
+            pluginRootURL: stagedPluginURL,
+            fileManager: fileManager
         )
-        try replaceStablePluginLink(with: pluginURL, marketplaceURL: marketplaceURL)
+        guard staged.contentDigest == bundled.contentDigest else {
+            throw CodexSkillsManagerError.copyFailed(stagedPluginURL.path)
+        }
+        try checkDeadline(deadline)
+
+        // Install through the CLI against the throwaway home.
+        let throwawayHomeURL = stagingRoot.appendingPathComponent("codex-home", isDirectory: true)
+        try fileManager.createDirectory(at: throwawayHomeURL, withIntermediateDirectories: true)
+        let throwawayRuntime = CodexIntegrationRuntime(
+            executableURL: runtime.executableURL,
+            processEnvironment: CodexProcessEnvironment(
+                codexHomeURL: throwawayHomeURL,
+                path: runtime.processEnvironment.path
+            ),
+            workingDirectoryURL: stagingRoot
+        )
+        let marketplaceName = try pluginClient.addMarketplace(
+            runtime: throwawayRuntime,
+            sourcePath: stagedMarketplaceURL.path,
+            deadline: deadline
+        )
+        guard marketplaceName == CodexSkillsContract.marketplaceName else {
+            throw CodexSkillsManagerError.pluginInstallMismatch
+        }
+        let installation = try pluginClient.installPlugin(
+            runtime: throwawayRuntime,
+            selector: CodexSkillsContract.pluginSelector,
+            deadline: deadline
+        )
+        guard installation.pluginID == CodexSkillsContract.pluginSelector,
+              installation.name == CodexSkillsContract.pluginName,
+              installation.marketplaceName == CodexSkillsContract.marketplaceName else {
+            throw CodexSkillsManagerError.pluginInstallMismatch
+        }
+        let producedPluginDirURL = throwawayHomeURL
+            .appendingPathComponent("plugins/cache", isDirectory: true)
+            .appendingPathComponent(CodexSkillsContract.marketplaceName, isDirectory: true)
+            .appendingPathComponent(CodexSkillsContract.pluginName, isDirectory: true)
+        let producedVersionURL = URL(fileURLWithPath: installation.installedPath, isDirectory: true)
+        guard standardizedPath(producedVersionURL.deletingLastPathComponent().path)
+            == standardizedPath(producedPluginDirURL.path) else {
+            throw CodexSkillsManagerError.pluginInstallMismatch
+        }
+        let produced = try ToasttyAgentPluginBundle.read(
+            pluginRootURL: producedVersionURL,
+            fileManager: fileManager
+        )
+        guard produced.version == bundled.version,
+              produced.contentDigest == bundled.contentDigest else {
+            throw CodexSkillsManagerError.installedPluginMismatch(
+                "\(installation.installedPath) (expected \(bundled.version)/\(bundled.contentDigest), found \(produced.version)/\(produced.contentDigest))"
+            )
+        }
+        // The CLI copy may drop helper modes or add quarantine; normalize the
+        // Toastty-owned bytes before they reach the real cache. The digest
+        // covers file bytes only, so this cannot invalidate verification.
+        try normalizeScriptPermissions(in: producedVersionURL)
+        clearQuarantine(from: producedVersionURL)
+        try checkDeadline(deadline)
+
+        try swapCacheSubtree(
+            producedPluginDirURL: producedPluginDirURL,
+            runtime: runtime,
+            bundled: bundled,
+            oldVerified: oldVerified
+        )
+        let finalVersionURL = pluginCacheRootURL(for: runtime)
+            .appendingPathComponent(producedVersionURL.lastPathComponent, isDirectory: true)
+        return try ToasttyAgentPluginBundle.read(
+            pluginRootURL: finalVersionURL,
+            fileManager: fileManager
+        )
     }
 
-    func replaceStablePluginLink(with destination: URL, marketplaceURL: URL) throws {
-        let pluginsRoot = marketplaceURL.appendingPathComponent("plugins", isDirectory: true)
-        try fileManager.createDirectory(at: pluginsRoot, withIntermediateDirectories: true)
-        let link = pluginsRoot.appendingPathComponent("toastty", isDirectory: true)
-        let temporary = pluginsRoot.appendingPathComponent(".toastty-\(UUID().uuidString)")
-        try fileManager.createSymbolicLink(at: temporary, withDestinationURL: destination)
-        let result = temporary.path.withCString { sourcePointer in
-            link.path.withCString { destinationPointer in
-                Darwin.rename(sourcePointer, destinationPointer)
+    /// Stage sibling, rename old out, rename new in, remove old — keeping the
+    /// plugin directory single-version like `codex plugin add` does.
+    func swapCacheSubtree(
+        producedPluginDirURL: URL,
+        runtime: CodexIntegrationRuntime,
+        bundled: ToasttyAgentPluginDescriptor,
+        oldVerified: VerifiedInstallation?
+    ) throws {
+        let cacheRoot = pluginCacheRootURL(for: runtime)
+        let parent = cacheRoot.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        let stagingURL = parent.appendingPathComponent(".toastty-staging-\(UUID().uuidString)", isDirectory: true)
+        let retiredURL = parent.appendingPathComponent(".toastty-old-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fileManager.moveItem(at: producedPluginDirURL, to: stagingURL)
+        } catch {
+            // The throwaway home may sit on another volume; fall back to a copy.
+            do {
+                try fileManager.copyItem(at: producedPluginDirURL, to: stagingURL)
+            } catch {
+                try? fileManager.removeItem(at: stagingURL)
+                throw CodexSkillsManagerError.cacheSwapFailed(error.localizedDescription)
             }
         }
-        guard result == 0 else {
-            try? fileManager.removeItem(at: temporary)
-            throw CodexSkillsManagerError.copyFailed(link.path)
+
+        var retiredOld = false
+        do {
+            if fileManager.fileExists(atPath: cacheRoot.path) {
+                try fileManager.moveItem(at: cacheRoot, to: retiredURL)
+                retiredOld = true
+            }
+            try fileManager.moveItem(at: stagingURL, to: cacheRoot)
+        } catch {
+            try? fileManager.removeItem(at: stagingURL)
+            if retiredOld {
+                try restoreRetiredCache(
+                    retiredURL: retiredURL,
+                    cacheRoot: cacheRoot,
+                    runtime: runtime,
+                    bundled: bundled,
+                    swapError: error
+                )
+            }
+            throw CodexSkillsManagerError.cacheSwapFailed(error.localizedDescription)
+        }
+        if retiredOld {
+            try? fileManager.removeItem(at: retiredURL)
         }
     }
 
-    func currentStablePluginLinkDestination(marketplaceURL: URL) throws -> String? {
-        let link = marketplaceURL.appendingPathComponent("plugins/toastty", isDirectory: true)
-        guard fileManager.fileExists(atPath: link.path) else { return nil }
-        let values = try link.resourceValues(forKeys: [.isSymbolicLinkKey])
-        guard values.isSymbolicLink == true else {
-            throw CodexSkillsManagerError.ownedStateMismatch(link.path)
-        }
-        return try fileManager.destinationOfSymbolicLink(atPath: link.path)
-    }
-
-    func isOwnedMarketplaceLayout(marketplaceURL: URL) -> Bool {
-        let manifest = marketplaceURL.appendingPathComponent(
-            ".agents/plugins/marketplace.json"
-        )
-        guard let data = try? Data(contentsOf: manifest),
-              let expectedManifestURL = try? bundledMarketplaceManifestURL(),
-              let expectedData = try? Data(contentsOf: expectedManifestURL),
-              data == expectedData,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["name"] as? String == CodexSkillsContract.marketplaceName else {
-            return false
-        }
-        let link = marketplaceURL.appendingPathComponent("plugins/toastty")
-        guard (try? link.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true,
-              let destination = try? fileManager.destinationOfSymbolicLink(atPath: link.path) else {
-            return false
-        }
-        let destinationURL = URL(
-            fileURLWithPath: destination,
-            relativeTo: link.deletingLastPathComponent()
-        ).standardizedFileURL
-        let versionsPath = standardizedPath(versionsRootURL.path) + "/"
-        return standardizedPath(destinationURL.path).hasPrefix(versionsPath)
-            && (try? ToasttyAgentPluginBundle.read(
-                pluginRootURL: destinationURL,
-                fileManager: fileManager
-            )) != nil
-    }
-
-    func marketplaceMatches(
-        _ marketplace: CodexPluginMarketplace,
-        expectedURL: URL
-    ) -> Bool {
-        guard standardizedPath(marketplace.rootPath) == standardizedPath(expectedURL.path),
-              let sourcePath = marketplace.sourcePath else {
-            return false
-        }
-        return standardizedPath(sourcePath) == standardizedPath(expectedURL.path)
-    }
-
-    func removeStableMarketplaceIfUnowned(
+    func restoreRetiredCache(
+        retiredURL: URL,
+        cacheRoot: URL,
         runtime: CodexIntegrationRuntime,
-        marketplaceURL: URL
+        bundled: ToasttyAgentPluginDescriptor,
+        swapError: Error
     ) throws {
-        guard readOwnershipRecord(runtime) == nil,
-              isOwnedMarketplaceLayout(marketplaceURL: marketplaceURL) else { return }
-        try fileManager.removeItem(at: marketplaceURL)
+        do {
+            if fileManager.fileExists(atPath: cacheRoot.path) {
+                try fileManager.removeItem(at: cacheRoot)
+            }
+            try fileManager.moveItem(at: retiredURL, to: cacheRoot)
+            _ = try verifyInstalledFiles(
+                runtime: runtime,
+                bundled: bundled,
+                record: readReceipt(runtime),
+                requireBundledDigest: false
+            )
+        } catch {
+            throw CodexSkillsManagerError.rollbackUnverified(
+                "\(swapError.localizedDescription) Rollback check: \(error.localizedDescription)"
+            )
+        }
     }
+
+    // MARK: - Legacy cleanup
+
+    /// One-shot migration for machines provisioned by the retired mechanism
+    /// (user-config marketplace registration, CLI-installed plugin,
+    /// `~/.toastty/codex-plugin` staging, `state.json`). The stale
+    /// `skills.config` disabled entries in the user's config are deliberately
+    /// left alone: missing-skill tombstones are proven tolerated, and never
+    /// touching the user's config is the point of the new mechanism.
+    func performLegacyCleanup(
+        runtime: CodexIntegrationRuntime,
+        deadline: Date
+    ) throws {
+        let legacyStateURL = legacyStateURL(for: runtime)
+        let legacyRecord = (try? Data(contentsOf: legacyStateURL))
+            .flatMap { try? JSONDecoder().decode(LegacyOwnershipRecord.self, from: $0) }
+        // An undecodable state file still attempts the ownership-checked CLI
+        // deregistration against the computed default marketplace identity so
+        // the user-config registration is not orphaned.
+        let expectedMarketplacePath = legacyRecord?.marketplacePath
+            ?? legacyMarketplaceURL(for: runtime).path
+
+        do {
+            let marketplaces = try pluginClient.listMarketplaces(runtime: runtime, deadline: deadline)
+            if let marketplace = marketplaces.first(where: { $0.name == CodexSkillsContract.marketplaceName }),
+               standardizedPath(marketplace.rootPath) == standardizedPath(expectedMarketplacePath) {
+                let plugins = try pluginClient.listInstalledPlugins(runtime: runtime, deadline: deadline)
+                if plugins.contains(where: { $0.pluginID == CodexSkillsContract.pluginSelector }) {
+                    try pluginClient.removePlugin(
+                        runtime: runtime,
+                        selector: CodexSkillsContract.pluginSelector,
+                        deadline: deadline
+                    )
+                }
+                let hasForeignDependent = plugins.contains {
+                    $0.marketplaceName == CodexSkillsContract.marketplaceName
+                        && $0.pluginID != CodexSkillsContract.pluginSelector
+                }
+                if hasForeignDependent == false {
+                    try pluginClient.removeMarketplace(
+                        runtime: runtime,
+                        name: CodexSkillsContract.marketplaceName,
+                        deadline: deadline
+                    )
+                }
+            }
+        } catch let error as CodexPluginCLIError where error.isUnsupported {
+            // A Codex without plugin management cannot be holding the legacy
+            // registration; continue with filesystem cleanup.
+        } catch let error where isRetryableLegacyCLIFailure(error) {
+            // The CLI could not run at all (missing executable, spawn
+            // failure, 126/127, timeout). Leave every piece of legacy state
+            // in place — including state.json — so a later launch with a
+            // working CLI retries the deregistration, and let provisioning
+            // proceed regardless.
+            return
+        } catch {
+            throw CodexSkillsManagerError.legacyCleanupFailed(error.localizedDescription)
+        }
+
+        do {
+            let legacyMarketplaceURL = legacyMarketplaceURL(for: runtime)
+            if fileManager.fileExists(atPath: legacyMarketplaceURL.path) {
+                try fileManager.removeItem(at: legacyMarketplaceURL)
+            }
+            if fileManager.fileExists(atPath: legacyStateURL.path) {
+                try fileManager.removeItem(at: legacyStateURL)
+            }
+            try removeLegacyVersionsIfUnused()
+        } catch {
+            throw CodexSkillsManagerError.legacyCleanupFailed(error.localizedDescription)
+        }
+    }
+
+    /// CLI failures that mean "Codex could not run right now" rather than
+    /// "the deregistration was rejected"; these defer legacy cleanup instead
+    /// of counting toward the failure circuit breaker.
+    func isRetryableLegacyCLIFailure(_ error: Error) -> Bool {
+        guard let cliError = error as? CodexPluginCLIError else { return false }
+        switch cliError {
+        case .executableUnavailable, .launchFailed, .timedOut:
+            return true
+        case .commandFailed:
+            return cliError.isRuntimeUnavailable
+        case .malformedJSON:
+            return false
+        }
+    }
+
+    var legacyStableMarketplaceURL: URL {
+        homeDirectoryURL.appendingPathComponent(".toastty/codex-plugin", isDirectory: true)
+    }
+
+    var legacyVersionsRootURL: URL {
+        stateRootURL.appendingPathComponent("versions", isDirectory: true)
+    }
+
+    func legacyStateURL(for runtime: CodexIntegrationRuntime) -> URL {
+        homeStateURL(for: runtime).appendingPathComponent("state.json", isDirectory: false)
+    }
+
+    func legacyStateFileExists(_ runtime: CodexIntegrationRuntime) -> Bool {
+        fileManager.fileExists(atPath: legacyStateURL(for: runtime).path)
+    }
+
+    func legacyMarketplaceURL(for runtime: CodexIntegrationRuntime) -> URL {
+        let defaultCodexHome = homeDirectoryURL.appendingPathComponent(".codex", isDirectory: true)
+        if standardizedPath(runtime.codexHomeURL.path) == standardizedPath(defaultCodexHome.path) {
+            return legacyStableMarketplaceURL
+        }
+        return homeStateURL(for: runtime).appendingPathComponent("marketplace", isDirectory: true)
+    }
+
+    func removeLegacyVersionsIfUnused() throws {
+        let homesRoot = stateRootURL.appendingPathComponent("homes", isDirectory: true)
+        if let enumerator = fileManager.enumerator(
+            at: homesRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let url as URL in enumerator where url.lastPathComponent == "state.json" {
+                if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                    return
+                }
+            }
+        }
+        if fileManager.fileExists(atPath: legacyVersionsRootURL.path) {
+            try fileManager.removeItem(at: legacyVersionsRootURL)
+        }
+    }
+
+    // MARK: - Staged-copy normalization
 
     func normalizeScriptPermissions(in pluginRootURL: URL) throws {
         let skills = pluginRootURL.appendingPathComponent("skills", isDirectory: true)
@@ -1054,35 +1138,56 @@ private extension CodexSkillsManager {
         }
     }
 
+    // MARK: - Records, statuses, caching
+
     func launchConfiguration(
+        runtime: CodexIntegrationRuntime,
         descriptor: ToasttyAgentPluginDescriptor
     ) -> CodexSkillsLaunchConfiguration {
         CodexSkillsLaunchConfiguration(
-            qualifiedSkillNames: descriptor.qualifiedSkillNames,
+            profileName: CodexSkillsContract.profileName,
+            codexHomePath: runtime.codexHomeURL.path,
             skillsRootPath: descriptor.skillsRootURL.path,
             version: descriptor.version,
             contentDigest: descriptor.contentDigest
         )
     }
 
-    func readOwnershipRecord(_ runtime: CodexIntegrationRuntime) -> OwnershipRecord? {
-        guard let data = try? Data(contentsOf: ownershipStateURL(for: runtime)) else { return nil }
-        return try? JSONDecoder().decode(OwnershipRecord.self, from: data)
+    func readReceipt(_ runtime: CodexIntegrationRuntime) -> ReceiptRecord? {
+        guard let data = try? Data(contentsOf: receiptURL(for: runtime)) else { return nil }
+        return try? JSONDecoder().decode(ReceiptRecord.self, from: data)
     }
 
-    func writeOwnershipRecord(
-        _ record: OwnershipRecord,
+    func writeReceipt(
+        _ record: ReceiptRecord,
         runtime: CodexIntegrationRuntime
     ) throws {
-        let url = ownershipStateURL(for: runtime)
+        let url = receiptURL(for: runtime)
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try JSONEncoder().encode(record)
         try data.write(to: url, options: .atomic)
     }
 
+    func conflictPreparation(
+        runtime: CodexIntegrationRuntime,
+        bundled: ToasttyAgentPluginDescriptor,
+        error: CodexSkillsManagerError
+    ) -> CodexSkillsPreparation {
+        CodexSkillsPreparation(
+            configuration: nil,
+            status: failedStatus(
+                runtime: runtime,
+                bundled: bundled,
+                detail: error.localizedDescription
+            ),
+            installedOrUpdated: false,
+            firstInstallSucceeded: false
+        )
+    }
+
     func readyStatus(
         bundled: ToasttyAgentPluginDescriptor,
-        record: OwnershipRecord,
+        record: ReceiptRecord,
         runtime: CodexIntegrationRuntime,
         hasActiveManagedCodexSession: Bool = false
     ) -> CodexSkillsStatus {
@@ -1103,12 +1208,11 @@ private extension CodexSkillsManager {
             installedVersion: record.installedVersion,
             bundledDigest: bundled.contentDigest,
             installedDigest: record.installedDigest,
-            installedPath: record.installedPath,
-            marketplacePath: marketplaceURL(for: runtime).path,
+            cachePath: record.cachePath,
+            profileConfigPath: profileConfigURL(for: runtime).path,
             updatePending: updatePending,
             repairPending: repairPending,
-            hasActiveManagedSession: hasActiveManagedCodexSession,
-            disabledNameTombstones: CodexSkillsContract.retiredQualifiedSkillNames
+            hasActiveManagedSession: hasActiveManagedCodexSession
         )
     }
 
@@ -1117,7 +1221,7 @@ private extension CodexSkillsManager {
         bundled: ToasttyAgentPluginDescriptor,
         detail: String
     ) -> CodexSkillsStatus {
-        let record = readOwnershipRecord(runtime)
+        let record = readReceipt(runtime)
         return CodexSkillsStatus(
             availability: .failed,
             detail: detail,
@@ -1125,66 +1229,23 @@ private extension CodexSkillsManager {
             installedVersion: record?.installedVersion,
             bundledDigest: bundled.contentDigest,
             installedDigest: record?.installedDigest,
-            installedPath: record?.installedPath,
-            marketplacePath: marketplaceURL(for: runtime).path,
+            cachePath: record?.cachePath,
+            profileConfigPath: profileConfigURL(for: runtime).path,
             updatePending: record?.installedDigest != bundled.contentDigest,
             repairPending: pendingRepair(for: runtime),
-            hasActiveManagedSession: false,
-            disabledNameTombstones: CodexSkillsContract.retiredQualifiedSkillNames
-        )
-    }
-
-    func unsupportedStatus(
-        runtime: CodexIntegrationRuntime,
-        detail: String
-    ) -> CodexSkillsStatus {
-        CodexSkillsStatus(
-            availability: .unsupported,
-            detail: detail,
-            bundledVersion: try? bundledDescriptor().version,
-            installedVersion: readOwnershipRecord(runtime)?.installedVersion,
-            bundledDigest: try? bundledDescriptor().contentDigest,
-            installedDigest: readOwnershipRecord(runtime)?.installedDigest,
-            installedPath: readOwnershipRecord(runtime)?.installedPath,
-            marketplacePath: marketplaceURL(for: runtime).path,
-            updatePending: false,
-            repairPending: pendingRepair(for: runtime),
-            hasActiveManagedSession: false,
-            disabledNameTombstones: CodexSkillsContract.retiredQualifiedSkillNames
-        )
-    }
-
-    func unrunnableStatus(
-        runtime: CodexIntegrationRuntime,
-        detail: String
-    ) -> CodexSkillsStatus {
-        CodexSkillsStatus(
-            availability: .unrunnable,
-            detail: detail,
-            bundledVersion: try? bundledDescriptor().version,
-            installedVersion: readOwnershipRecord(runtime)?.installedVersion,
-            bundledDigest: try? bundledDescriptor().contentDigest,
-            installedDigest: readOwnershipRecord(runtime)?.installedDigest,
-            installedPath: readOwnershipRecord(runtime)?.installedPath,
-            marketplacePath: marketplaceURL(for: runtime).path,
-            updatePending: false,
-            repairPending: pendingRepair(for: runtime),
-            hasActiveManagedSession: false,
-            disabledNameTombstones: CodexSkillsContract.retiredQualifiedSkillNames
+            hasActiveManagedSession: false
         )
     }
 
     func cache(
         _ verified: VerifiedInstallation,
         runtime: CodexIntegrationRuntime,
-        bundled: ToasttyAgentPluginDescriptor,
-        verificationLevel: CachedConfiguration.VerificationLevel = .full
+        bundled: ToasttyAgentPluginDescriptor
     ) {
         let entry = CachedConfiguration(
             configuration: verified.configuration,
             record: verified.record,
-            fingerprint: fingerprint(runtime: runtime, bundled: bundled, record: verified.record),
-            verificationLevel: verificationLevel
+            fingerprint: fingerprint(runtime: runtime, bundled: bundled, record: verified.record)
         )
         cacheLock.lock()
         cachedConfigurations[runtimeKey(runtime)] = entry
@@ -1206,15 +1267,15 @@ private extension CodexSkillsManager {
     func fingerprint(
         runtime: CodexIntegrationRuntime,
         bundled: ToasttyAgentPluginDescriptor,
-        record: OwnershipRecord?
+        record: ReceiptRecord?
     ) -> String {
         [
             runtimeKey(runtime),
             metadataSignature(runtime.executableURL),
-            dataSignature(runtime.codexHomeURL.appendingPathComponent("config.toml")),
             bundled.contentDigest,
-            dataSignature(ownershipStateURL(for: runtime)),
-            record.map { metadataSignature(URL(fileURLWithPath: $0.installedPath)) } ?? "none",
+            dataSignature(receiptURL(for: runtime)),
+            dataSignature(profileConfigURL(for: runtime)),
+            record.map { metadataSignature(URL(fileURLWithPath: $0.cachePath)) } ?? "none",
         ].joined(separator: "|")
     }
 
@@ -1225,8 +1286,8 @@ private extension CodexSkillsManager {
         [
             runtimeKey(runtime),
             metadataSignature(runtime.executableURL),
-            dataSignature(runtime.codexHomeURL.appendingPathComponent("config.toml")),
             bundled.contentDigest,
+            dataSignature(profileConfigURL(for: runtime)),
         ].joined(separator: "|")
     }
 
@@ -1251,22 +1312,15 @@ private extension CodexSkillsManager {
         return String(data.hashValue)
     }
 
-    func removeStagedVersionsIfUnused() throws {
-        let homesRoot = stateRootURL.appendingPathComponent("homes", isDirectory: true)
-        if let enumerator = fileManager.enumerator(
-            at: homesRoot,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for case let url as URL in enumerator where url.lastPathComponent == "state.json" {
-                if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
-                    return
-                }
-            }
+    func removeDirectoryIfEmpty(_ url: URL) {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: nil,
+            options: []
+        ), contents.isEmpty else {
+            return
         }
-        if fileManager.fileExists(atPath: versionsRootURL.path) {
-            try fileManager.removeItem(at: versionsRootURL)
-        }
+        try? fileManager.removeItem(at: url)
     }
 
     func standardizedPath(_ path: String) -> String {

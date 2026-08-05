@@ -218,7 +218,7 @@ struct CodexSkillsManagementSheet: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes only Toastty's Codex plugin, marketplace registration, and staged plugin files. Codex hooks and unrelated skills are not changed.")
+            Text("This removes only Toastty's cached Codex plugin, its managed profile file, and Toastty's receipt. Your Codex config.toml, hooks, and unrelated skills are not changed.")
         }
         .onAppear {
             model.refresh(hasActiveManagedCodexSession: hasActiveManagedCodexSession)
@@ -381,16 +381,10 @@ struct CodexSkillsManagementSheet: View {
         DisclosureGroup("Codex plugin details", isExpanded: $detailsExpanded) {
             VStack(alignment: .leading, spacing: 8) {
                 if let status = model.status {
-                    technicalRow("Marketplace", value: status.marketplacePath)
-                    technicalRow("Installed plugin", value: status.installedPath ?? "Not installed")
+                    technicalRow("Managed profile", value: status.profileConfigPath)
+                    technicalRow("Plugin cache", value: status.cachePath ?? "Not installed")
                     technicalRow("Bundled version", value: status.bundledVersion ?? "Unavailable")
                     technicalRow("Bundled digest", value: status.bundledDigest ?? "Unavailable")
-                    if status.disabledNameTombstones.isEmpty == false {
-                        technicalRow(
-                            "Disabled-name tombstones",
-                            value: status.disabledNameTombstones.joined(separator: ", ")
-                        )
-                    }
                 } else if model.codexNotFoundMessage != nil {
                     Text("Codex paths are unavailable because Toastty could not find a supported codex or cdx executable.")
                         .foregroundStyle(ToastyTheme.mutedText)

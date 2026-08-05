@@ -233,13 +233,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
-    func testPrepareCodexLaunchInjectsOnlyDeterministicManagedSkills() throws {
+    func testPrepareCodexLaunchInjectsManagedProfileDeterministically() throws {
         let configuration = codexSkillsConfiguration(
-            skillNames: [
-                "toastty:worktree-create",
-                "toastty:toastty-scratchpad",
-                "toastty:worktree-create",
-            ],
             skillsRootPath: "/tmp/Skills ü\\root"
         )
 
@@ -257,15 +252,12 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
         XCTAssertEqual(first.argv, second.argv)
         XCTAssertEqual(first.codexSkillsInjectionResult, .injected)
-        XCTAssertEqual(first.environment["TOASTTY_SKILLS_ROOT"], "/tmp/Skills ü\\root")
-        let overrides = configOverrides(in: first.argv)
-        XCTAssertEqual(overrides.count, 1)
         XCTAssertEqual(
-            overrides[0],
-            #"skills.config=[{name="toastty:toastty-scratchpad",enabled=true},{name="toastty:worktree-create",enabled=true}]"#
+            first.argv,
+            ["codex", "--profile", "toastty-managed", "resume", "thread-id"]
         )
-        XCTAssertFalse(overrides.contains { $0.hasPrefix("hooks=") })
-        XCTAssertEqual(Array(first.argv.suffix(2)), ["resume", "thread-id"])
+        XCTAssertEqual(first.environment["TOASTTY_SKILLS_ROOT"], "/tmp/Skills ü\\root")
+        XCTAssertEqual(configOverrides(in: first.argv), [])
     }
 
     func testPrepareCodexLaunchInjectsAfterDirectAliasWrapperResumeAndForkExecutable() throws {
@@ -280,9 +272,10 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         for (argv, executableIndex, label) in cases {
             let prepared = try prepareCodex(argv: argv, source: .hooks, configuration: configuration)
             defer { cleanup([prepared]) }
+            XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected, label)
             XCTAssertEqual(prepared.argv[executableIndex], argv[executableIndex], label)
-            XCTAssertEqual(prepared.argv[executableIndex + 1], "-c", label)
-            XCTAssertEqual(configOverrides(in: prepared.argv).count, 1, label)
+            XCTAssertEqual(prepared.argv[executableIndex + 1], "--profile", label)
+            XCTAssertEqual(prepared.argv[executableIndex + 2], "toastty-managed", label)
         }
     }
 
@@ -296,10 +289,10 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
         XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
         let overrides = configOverrides(in: prepared.argv)
-        XCTAssertEqual(overrides.count, 2)
-        XCTAssertTrue(overrides.contains { $0.hasPrefix("skills.config=") })
+        XCTAssertEqual(overrides.count, 1)
         XCTAssertTrue(overrides.contains { $0.hasPrefix("notify=[") })
-        XCTAssertFalse(overrides.contains { $0.hasPrefix("hooks=") })
+        XCTAssertTrue(prepared.argv.contains("--profile"))
+        XCTAssertTrue(prepared.argv.contains("toastty-managed"))
     }
 
     func testPrepareCodexLaunchRefusesOpaqueSkillsWithoutChangingHookStatusMode() throws {
@@ -336,17 +329,22 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
                 prepared.codexSkillsInjectionResult,
                 .refused(reason: "opaque_or_unsafe_codex_argv")
             )
-            XCTAssertFalse(configOverrides(in: prepared.argv).contains { $0.hasPrefix("skills.config=") })
+            XCTAssertEqual(prepared.argv, argv)
             XCTAssertNotNil(prepared.artifacts?.codexSessionLogURL)
         }
     }
 
-    func testPrepareCodexLaunchRefusesOnlyConflictingSkillsOverrides() throws {
+    func testPrepareCodexLaunchRefusesCallerProfileFlags() throws {
         let configuration = codexSkillsConfiguration()
         let cases = [
-            ["codex", "--config=skills.config=[]", "fork", "thread"],
-            ["codex", "-c", "skills.config=[]", "exec", "prompt"],
-            ["codex", "--config", "skills.enabled=false", "resume"],
+            ["codex", "--profile", "other", "exec", "prompt"],
+            ["codex", "--profile=other", "resume"],
+            ["codex", "-p", "other", "fork", "thread"],
+            ["codex", "-p=other"],
+            // clap attached short form: `-pfoo` selects profile "foo".
+            ["codex", "-pfoo", "exec", "prompt"],
+            ["codex", "-p=foo", "resume"],
+            ["run-sandboxed.sh", "codex", "--profile", "other", "resume", "--last"],
         ]
 
         for argv in cases {
@@ -355,19 +353,89 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
             XCTAssertEqual(
                 prepared.codexSkillsInjectionResult,
-                .refused(reason: "conflicting_codex_skills_override")
+                .refused(reason: "caller_profile_flag")
             )
             XCTAssertNil(prepared.environment["TOASTTY_SKILLS_ROOT"])
             XCTAssertNotNil(prepared.artifacts?.codexSessionLogURL)
-            XCTAssertEqual(configOverrides(in: prepared.argv), configOverrides(in: argv))
+            XCTAssertFalse(prepared.argv.contains("toastty-managed"))
         }
     }
 
-    func testPrepareCodexLaunchAllowsUnrelatedHookAndNotifyOverrides() throws {
+    func testPrepareCodexLaunchInjectsWhenProfileTokenOnlyFollowsTerminator() throws {
+        let prepared = try prepareCodex(
+            argv: ["codex", "exec", "--", "--profile"],
+            source: .hooks,
+            configuration: codexSkillsConfiguration()
+        )
+        defer { cleanup([prepared]) }
+
+        XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
+        XCTAssertEqual(
+            prepared.argv,
+            ["codex", "--profile", "toastty-managed", "exec", "--", "--profile"]
+        )
+    }
+
+    func testPrepareCodexLaunchInjectsForHintResolvedCustomHomeWithEmptyLaunchEnvironment() throws {
+        // Standard shim flow: the shell's real CODEX_HOME travels only in the
+        // capability hint, the resolver provisions that home into the
+        // configuration, and request.environment stays empty for Codex.
+        // Injection must succeed for the provisioned custom home.
+        let configuration = codexSkillsConfiguration(
+            codexHomePath: "/tmp/toastty-custom-codex-home"
+        )
+
+        let prepared = try prepareCodex(
+            argv: ["codex", "resume", "abc"],
+            source: .hooks,
+            configuration: configuration,
+            launchEnvironment: [:]
+        )
+        defer { cleanup([prepared]) }
+
+        XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
+        XCTAssertEqual(
+            prepared.argv,
+            ["codex", "--profile", "toastty-managed", "resume", "abc"]
+        )
+        XCTAssertEqual(prepared.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPrepareCodexLaunchRefusesReplacedCodexHome() throws {
+        let configuration = codexSkillsConfiguration(codexHomePath: "/tmp/toastty-home-a")
+
+        let replaced = try prepareCodex(
+            argv: ["codex", "resume", "abc"],
+            source: .hooks,
+            configuration: configuration,
+            launchEnvironment: ["CODEX_HOME": "/tmp/toastty-home-b"]
+        )
+        let matching = try prepareCodex(
+            argv: ["codex", "resume", "abc"],
+            source: .hooks,
+            configuration: configuration,
+            launchEnvironment: ["CODEX_HOME": "/tmp/toastty-home-a"]
+        )
+        defer { cleanup([replaced, matching]) }
+
+        XCTAssertEqual(
+            replaced.codexSkillsInjectionResult,
+            .refused(reason: "codex_home_replaced")
+        )
+        XCTAssertEqual(replaced.argv, ["codex", "resume", "abc"])
+        XCTAssertNil(replaced.environment["TOASTTY_SKILLS_ROOT"])
+        XCTAssertEqual(matching.codexSkillsInjectionResult, .injected)
+        XCTAssertTrue(matching.argv.contains("toastty-managed"))
+    }
+
+    func testPrepareCodexLaunchAllowsCallerConfigOverridesIncludingSkillsConfig() throws {
+        // The retired `-c skills.config` mechanism treated skills overrides as
+        // conflicts; the profile mechanism has no such conflict, and caller
+        // `skills.config` toggles are honored by Codex under the profile.
         for argv in [
+            ["codex", "-c", "skills.config=[]", "exec", "prompt"],
             ["codex", "-c", "hooks={}", "exec", "prompt"],
             ["codex", "--config", "notify=[\"/usr/bin/true\"]", "resume"],
-            ["codex", "-c", "hooks.SessionStart=[]", "fork", "thread"],
         ] {
             let prepared = try prepareCodex(
                 argv: argv,
@@ -377,8 +445,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             defer { cleanup([prepared]) }
 
             XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
-            XCTAssertNotNil(configOverrides(in: prepared.argv).first { $0.hasPrefix("skills.config=") })
-            XCTAssertFalse(configOverrides(in: prepared.argv).contains { $0.hasPrefix("hooks={SessionStart") })
+            XCTAssertTrue(prepared.argv.contains("toastty-managed"))
+            XCTAssertEqual(configOverrides(in: prepared.argv), configOverrides(in: argv))
         }
     }
 
@@ -1253,11 +1321,13 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
     }
 
     private func codexSkillsConfiguration(
-        skillNames: [String] = ["toastty:toastty-scratchpad"],
+        codexHomePath: String = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent(".codex", isDirectory: true).path,
         skillsRootPath: String = "/tmp/toastty plugin/skills"
     ) -> CodexSkillsLaunchConfiguration {
         CodexSkillsLaunchConfiguration(
-            qualifiedSkillNames: skillNames,
+            profileName: CodexSkillsContract.profileName,
+            codexHomePath: codexHomePath,
             skillsRootPath: skillsRootPath,
             version: "0.2.0",
             contentDigest: "abc123"
@@ -1267,7 +1337,8 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
     private func prepareCodex(
         argv: [String],
         source: CodexStatusTrackingSource,
-        configuration: CodexSkillsLaunchConfiguration
+        configuration: CodexSkillsLaunchConfiguration,
+        launchEnvironment: [String: String] = [:]
     ) throws -> PreparedAgentLaunchCommand {
         try AgentLaunchInstrumentation.prepare(
             agent: .codex,
@@ -1276,6 +1347,7 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             sessionID: "test-\(UUID().uuidString)",
             workingDirectory: nil,
             fileManager: .default,
+            launchEnvironment: launchEnvironment,
             codexStatusTrackingSource: source,
             codexSkillsIntegration: configuration
         )

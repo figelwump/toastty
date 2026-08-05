@@ -155,14 +155,6 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
                     continuation.resume(
                         returning: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
                     )
-                } catch let error as CodexAppServerClientError {
-                    if error.isUnsupported {
-                        markUnsupported(key)
-                    }
-                    logFailure(error, runtime: runtime)
-                    continuation.resume(
-                        returning: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
-                    )
                 } catch {
                     logFailure(error, runtime: runtime)
                     continuation.resume(
@@ -192,9 +184,6 @@ final class CodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving,
                 status: preparation.status
             )
         } catch let error as CodexPluginCLIError {
-            if error.isUnsupported { markUnsupported(key) }
-            logFailure(error, runtime: runtime)
-        } catch let error as CodexAppServerClientError {
             if error.isUnsupported { markUnsupported(key) }
             logFailure(error, runtime: runtime)
         } catch {

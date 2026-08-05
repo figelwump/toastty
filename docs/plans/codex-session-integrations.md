@@ -122,6 +122,23 @@ repository's instructions and launch tooling.
 
 ## Codex provisioning architecture
 
+> **Superseded 2026-08-04 (profile-based delivery).** The mechanism described
+> in this section — user-config marketplace registration, app-server
+> `skills/config/write` disable-unions, and a per-process `-c skills.config`
+> enable override — has been replaced by a profile-based mechanism that never
+> writes to the user's `config.toml`. Population installs the bundled plugin
+> into a throwaway `CODEX_HOME` through the Codex CLI, digest-verifies the
+> produced cache bytes, and atomically swaps them into
+> `$CODEX_HOME/plugins/cache/toastty/toastty/`. A Toastty-owned
+> `$CODEX_HOME/toastty-managed.config.toml` overlay enables the plugin, and
+> managed launches inject `--profile toastty-managed`; ordinary sessions see
+> no Toastty skills and no disabled-name tombstones. A receipt sidecar under
+> `~/.toastty/agent-plugins/codex/` supports cheap byte-verification on later
+> launches, and a one-shot legacy cleanup uninstalls the old marketplace
+> registration on first provisioning. Capability evidence:
+> `docs/plans/evidence/codex-session-scoped-skills-2026-08-04.md`. The
+> "no named Codex profile" non-goal below is superseded accordingly.
+
 ### Required host-capability spike
 
 Before design-dependent implementation, add a repeatable probe that uses a
@@ -493,9 +510,11 @@ Validation after implementation:
   plain name, leave it untouched, show manual duplicate guidance, and verify
   that the namespaced Toastty plugin remains callable for the managed session.
 - Persistent disables always cover the union of old and new Toastty skill
-  names before install/update.
-- Do not create a `CODEX_HOME` overlay, named Codex profile, global Claude
-  install, custom skill editor, hook migration, or hook trust bypass.
+  names before install/update. (Superseded: the profile-based mechanism
+  writes no persistent disables; see the note above.)
+- Do not create a `CODEX_HOME` overlay home, global Claude install, custom
+  skill editor, hook migration, or hook trust bypass. (The earlier "no named
+  Codex profile" non-goal is superseded by profile-based delivery.)
 - Do not add automatic old-Claude-bundle deletion in the first slice.
 
 ## References

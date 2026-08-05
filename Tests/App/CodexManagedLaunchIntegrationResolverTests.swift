@@ -4,7 +4,7 @@ import XCTest
 @testable import ToasttyApp
 
 final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
-    func testDirectLaunchUsesResolvedExecutableAndCustomCodexHomeThenFailsOpen() async throws {
+    func testDirectLaunchUsesResolvedExecutableThenFailsOpen() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let customHome = fixture.rootURL.appendingPathComponent("custom-codex-home", isDirectory: true)
@@ -23,13 +23,14 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
 
         XCTAssertNil(decision.configuration)
         XCTAssertNil(decision.status)
-        let invocation = try XCTUnwrap(fixture.skillClient.invocations.first)
+        let invocation = try XCTUnwrap(fixture.pluginClient.invocations.first)
         XCTAssertEqual(invocation.executableURL, fixture.executableURL)
-        XCTAssertEqual(invocation.codexHomeURL, customHome)
         XCTAssertEqual(
             invocation.processEnvironment.path,
             "\(fixture.executableURL.deletingLastPathComponent().path):/usr/bin:/bin"
         )
+        // Population targets a throwaway home, never the launch CODEX_HOME.
+        XCTAssertNotEqual(invocation.codexHomeURL, customHome)
     }
 
     func testOpaqueWrapperIsNeverProbed() async throws {
@@ -49,7 +50,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
 
         XCTAssertNil(decision.configuration)
         XCTAssertNil(decision.status)
-        XCTAssertEqual(fixture.skillClient.invocations.count, 0)
+        XCTAssertEqual(fixture.pluginClient.invocations.count, 0)
     }
 
     func testUnsupportedRuntimeIsCachedAfterFirstProbe() async throws {
@@ -66,7 +67,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
             workingDirectory: fixture.rootURL.path
         )
 
-        XCTAssertEqual(fixture.skillClient.invocations.count, 1)
+        XCTAssertEqual(fixture.pluginClient.invocations.count, 1)
     }
 
     func testUnsupportedRuntimeIsRetriedAfterExecutableChanges() async throws {
@@ -92,7 +93,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
             workingDirectory: fixture.rootURL.path
         )
 
-        XCTAssertEqual(fixture.skillClient.invocations.count, 2)
+        XCTAssertEqual(fixture.pluginClient.invocations.count, 2)
     }
 
     func testSynchronousRestorePathRunsBoundedProvisioningAndFailsOpen() throws {
@@ -106,7 +107,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
 
         XCTAssertNil(decision.configuration)
         XCTAssertNil(decision.status)
-        XCTAssertEqual(fixture.skillClient.invocations.count, 1)
+        XCTAssertEqual(fixture.pluginClient.invocations.count, 1)
     }
 
     func testTypedCodexPathOverridesTheSharedLoginShellPath() async throws {
@@ -129,7 +130,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            fixture.skillClient.invocations.first?.processEnvironment.path,
+            fixture.pluginClient.invocations.first?.processEnvironment.path,
             "/typed/node/bin:/usr/bin:/bin"
         )
     }
@@ -151,7 +152,7 @@ final class CodexManagedLaunchSkillsResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            fixture.skillClient.invocations.first?.processEnvironment.path,
+            fixture.pluginClient.invocations.first?.processEnvironment.path,
             "\(fixture.executableURL.deletingLastPathComponent().path):/usr/bin:/bin"
         )
     }
@@ -177,7 +178,7 @@ private extension CodexManagedLaunchSkillsResolverTests {
         let rootURL: URL
         let homeURL: URL
         let executableURL: URL
-        let skillClient: UnsupportedRecordingSkillsClient
+        let pluginClient: UnsupportedRecordingPluginClient
         let resolver: CodexManagedLaunchSkillsResolver
 
         init() throws {
@@ -185,7 +186,7 @@ private extension CodexManagedLaunchSkillsResolverTests {
                 .appendingPathComponent("toastty-codex-skills-resolver-\(UUID().uuidString)", isDirectory: true)
             homeURL = rootURL.appendingPathComponent("home", isDirectory: true)
             executableURL = rootURL.appendingPathComponent("bin/codex")
-            skillClient = UnsupportedRecordingSkillsClient()
+            pluginClient = UnsupportedRecordingPluginClient()
             try FileManager.default.createDirectory(at: homeURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(
                 at: executableURL.deletingLastPathComponent(),
@@ -211,8 +212,7 @@ private extension CodexManagedLaunchSkillsResolverTests {
                     repositoryRoot.appendingPathComponent("plugins/toastty", isDirectory: true)
                 },
                 sourceMarketplaceURLProvider: { repositoryRoot },
-                pluginClient: PreflightOnlyPluginClient(),
-                skillClient: skillClient
+                pluginClient: pluginClient
             )
             resolver = CodexManagedLaunchSkillsResolver(
                 homeDirectoryURL: homeURL,
@@ -239,61 +239,60 @@ private extension CodexManagedLaunchSkillsResolverTests {
     }
 }
 
-private final class UnsupportedRecordingSkillsClient: CodexSkillsConfiguring, @unchecked Sendable {
+/// Records the population invocation and reports an unsupported Codex CLI so
+/// resolver-level fail-open and unsupported-caching behavior can be observed
+/// without touching real state.
+private final class UnsupportedRecordingPluginClient: CodexPluginCLIManaging, @unchecked Sendable {
     private let lock = NSLock()
-    private var storage: [CodexAppServerInvocation] = []
+    private var storage: [CodexIntegrationRuntime] = []
 
-    var invocations: [CodexAppServerInvocation] {
+    var invocations: [CodexIntegrationRuntime] {
         lock.lock()
         defer { lock.unlock() }
         return storage
     }
 
-    func writeSkillConfigs(
-        invocation: CodexAppServerInvocation,
-        states: [CodexSkillState]
-    ) throws {
-        lock.lock()
-        storage.append(invocation)
-        lock.unlock()
-        throw CodexAppServerClientError.rpcError(
-            method: "skills/config/write",
-            code: -32601,
-            message: "Method not found"
-        )
-    }
-
-    func listSkills(invocation: CodexAppServerInvocation) throws -> [CodexSkillState] {
-        XCTFail("listSkills should not run after the first write fails")
-        return []
-    }
-}
-
-private struct PreflightOnlyPluginClient: CodexPluginCLIManaging {
     func listMarketplaces(runtime: CodexIntegrationRuntime, deadline: Date) throws -> [CodexPluginMarketplace] {
+        // Only the legacy-cleanup path lists marketplaces; these fixtures
+        // never stage legacy state.
+        XCTFail("listMarketplaces should not run without legacy state")
         return []
     }
 
     func listInstalledPlugins(runtime: CodexIntegrationRuntime, deadline: Date) throws -> [CodexInstalledPlugin] {
-        // Provisioning checks for a foreign same-name plugin before touching Codex settings.
+        XCTFail("listInstalledPlugins should not run without legacy state")
         return []
     }
 
-    func addMarketplace(runtime: CodexIntegrationRuntime, sourcePath: String, deadline: Date) throws -> String {
-        XCTFail("Plugin CLI should not run after the first skills write fails")
-        return "toastty"
+    func addMarketplace(
+        runtime: CodexIntegrationRuntime,
+        sourcePath: String,
+        deadline: Date
+    ) throws -> String {
+        lock.lock()
+        storage.append(runtime)
+        lock.unlock()
+        throw CodexPluginCLIError.commandFailed(
+            "plugin marketplace add",
+            2,
+            "unrecognized subcommand 'plugin'"
+        )
     }
 
-    func installPlugin(runtime: CodexIntegrationRuntime, selector: String, deadline: Date) throws -> CodexPluginInstallation {
-        XCTFail("Plugin CLI should not run after the first skills write fails")
+    func installPlugin(
+        runtime: CodexIntegrationRuntime,
+        selector: String,
+        deadline: Date
+    ) throws -> CodexPluginInstallation {
+        XCTFail("Plugin install should not run after the marketplace add fails")
         throw CodexPluginCLIError.commandFailed("plugin add", 1, "unexpected")
     }
 
     func removePlugin(runtime: CodexIntegrationRuntime, selector: String, deadline: Date) throws {
-        XCTFail("Plugin CLI should not run")
+        XCTFail("Plugin CLI remove should not run")
     }
 
     func removeMarketplace(runtime: CodexIntegrationRuntime, name: String, deadline: Date) throws {
-        XCTFail("Plugin CLI should not run")
+        XCTFail("Marketplace remove should not run")
     }
 }
