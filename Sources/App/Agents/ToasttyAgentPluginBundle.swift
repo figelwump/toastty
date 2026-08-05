@@ -117,6 +117,52 @@ enum ToasttyAgentPluginBundleError: LocalizedError, Equatable {
     }
 }
 
+extension ToasttyAgentPluginBundle {
+    /// Deterministic digest over every regular file under `rootURL`: sorted
+    /// relative paths and file bytes, length-prefixed into SHA-256. Also used
+    /// by `ToasttyUserSkillCatalog` to fingerprint generated `toastty-user`
+    /// plugin roots for later cache verification.
+    static func contentDigest(rootURL: URL, fileManager: FileManager) throws -> String {
+        guard let enumerator = fileManager.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
+            options: [],
+            errorHandler: { _, _ in false }
+        ) else {
+            throw ToasttyAgentPluginBundleError.unreadablePlugin(rootURL.path)
+        }
+
+        var files: [(relativePath: String, url: URL)] = []
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isSymbolicLink != true else {
+                throw ToasttyAgentPluginBundleError.symbolicLink(url.path)
+            }
+            if values.isRegularFile == true {
+                let relativePath = url.pathComponents
+                    .suffix(enumerator.level)
+                    .joined(separator: "/")
+                files.append((relativePath, url))
+            } else if values.isDirectory != true {
+                throw ToasttyAgentPluginBundleError.unreadablePlugin(url.path)
+            }
+        }
+
+        var hasher = SHA256()
+        for file in files.sorted(by: { $0.relativePath < $1.relativePath }) {
+            let data: Data
+            do {
+                data = try Data(contentsOf: file.url)
+            } catch {
+                throw ToasttyAgentPluginBundleError.unreadablePlugin(file.url.path)
+            }
+            hasher.update(data: Data("file:\(file.relativePath.utf8.count):\(file.relativePath):\(data.count):".utf8))
+            hasher.update(data: data)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 private extension ToasttyAgentPluginBundle {
     struct CodexManifest: Decodable {
         let name: String
@@ -205,45 +251,5 @@ private extension ToasttyAgentPluginBundle {
             return rawValue
         }
         return nil
-    }
-
-    static func contentDigest(rootURL: URL, fileManager: FileManager) throws -> String {
-        guard let enumerator = fileManager.enumerator(
-            at: rootURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
-            options: [],
-            errorHandler: { _, _ in false }
-        ) else {
-            throw ToasttyAgentPluginBundleError.unreadablePlugin(rootURL.path)
-        }
-
-        var files: [(relativePath: String, url: URL)] = []
-        for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
-            guard values.isSymbolicLink != true else {
-                throw ToasttyAgentPluginBundleError.symbolicLink(url.path)
-            }
-            if values.isRegularFile == true {
-                let relativePath = url.pathComponents
-                    .suffix(enumerator.level)
-                    .joined(separator: "/")
-                files.append((relativePath, url))
-            } else if values.isDirectory != true {
-                throw ToasttyAgentPluginBundleError.unreadablePlugin(url.path)
-            }
-        }
-
-        var hasher = SHA256()
-        for file in files.sorted(by: { $0.relativePath < $1.relativePath }) {
-            let data: Data
-            do {
-                data = try Data(contentsOf: file.url)
-            } catch {
-                throw ToasttyAgentPluginBundleError.unreadablePlugin(file.url.path)
-            }
-            hasher.update(data: Data("file:\(file.relativePath.utf8.count):\(file.relativePath):\(data.count):".utf8))
-            hasher.update(data: data)
-        }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
