@@ -42,6 +42,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
     private let homeDirectoryPath: String
     private let temporaryDirectoryPath: String
+    private let userSkillsRootOverridePath: String?
 
     private init(
         runtimeHomeURL: URL?,
@@ -49,7 +50,8 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         worktreeRootURL: URL?,
         runtimeLabel: String?,
         homeDirectoryPath: String,
-        temporaryDirectoryPath: String
+        temporaryDirectoryPath: String,
+        userSkillsRootOverridePath: String?
     ) {
         self.runtimeHomeURL = runtimeHomeURL
         self.runtimeHomeStrategy = runtimeHomeStrategy
@@ -57,6 +59,7 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         self.runtimeLabel = runtimeLabel
         self.homeDirectoryPath = homeDirectoryPath
         self.temporaryDirectoryPath = temporaryDirectoryPath
+        self.userSkillsRootOverridePath = userSkillsRootOverridePath
     }
 
     public var isRuntimeHomeEnabled: Bool {
@@ -155,12 +158,25 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         )
     }
 
-    /// The user's skill-package source directory.
+    /// The user's skill-package source directory. User skills are USER state,
+    /// not app runtime state: like the real `~/.codex` home (which is
+    /// deliberately never isolated), this resolves under the resolved user
+    /// home (`<home>/.toastty/skills`) in every strategy — including
+    /// worktree-derived and explicit runtime homes — so runtime-isolated dev
+    /// instances see the same skills the user authored. A non-empty
+    /// `TOASTTY_USER_SKILLS_ROOT` in the resolution environment overrides the
+    /// source directory entirely; that is the hermetic escape hatch for
+    /// automated harnesses (smoke runs, dev-run scripts, tests) that must not
+    /// read the operator's real skills. Snapshots, staging, and receipts
+    /// under `agentPluginsDirectoryURL` remain runtime-isolated — only the
+    /// source read follows the user.
     public var userSkillsDirectoryURL: URL {
-        configDirectoryURL.appending(
-            path: Self.userSkillsDirectoryName,
-            directoryHint: .isDirectory
-        )
+        if let userSkillsRootOverridePath {
+            return URL(filePath: userSkillsRootOverridePath, directoryHint: .isDirectory)
+        }
+        return URL(filePath: homeDirectoryPath)
+            .appending(path: Self.configDirectoryName, directoryHint: .isDirectory)
+            .appending(path: Self.userSkillsDirectoryName, directoryHint: .isDirectory)
     }
 
     /// Parent of the Toastty-owned per-agent plugin staging/state roots.
@@ -219,7 +235,8 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
             worktreeRootURL: worktreeRootURL,
             runtimeLabel: runtimeLabel,
             homeDirectoryPath: homeDirectoryPath,
-            temporaryDirectoryPath: environment["TMPDIR"] ?? NSTemporaryDirectory()
+            temporaryDirectoryPath: environment["TMPDIR"] ?? NSTemporaryDirectory(),
+            userSkillsRootOverridePath: normalizedUserSkillsRootPath(environment: environment)
         )
     }
 
@@ -255,10 +272,11 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
             at: managedAgentResumeDirectoryURL,
             withIntermediateDirectories: true
         )
-        try fileManager.createDirectory(
-            at: userSkillsDirectoryURL,
-            withIntermediateDirectories: true
-        )
+        // The user-skills source directory is deliberately NOT created here:
+        // for isolated runs it points at the real user home (or an explicit
+        // override), and dev runs must never create real-home directories.
+        // Creation belongs to the management sheet's Create action and the
+        // documented manual flow.
         if let automationSocketFileURL {
             try fileManager.createDirectory(
                 at: automationSocketFileURL.deletingLastPathComponent(),
@@ -272,6 +290,18 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         if existingContents != expectedContents {
             try expectedContents.write(to: versionFileURL, atomically: true, encoding: .utf8)
         }
+    }
+
+    /// An empty or whitespace-only value is treated as unset.
+    private static func normalizedUserSkillsRootPath(environment: [String: String]) -> String? {
+        guard let rawValue = environment[ToasttyLaunchContextEnvironment.userSkillsRootKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawValue.isEmpty == false else {
+            return nil
+        }
+
+        let expandedPath = (rawValue as NSString).expandingTildeInPath
+        return URL(filePath: expandedPath).standardizedFileURL.path
     }
 
     private static func normalizedRuntimeHomeURL(environment: [String: String]) -> URL? {

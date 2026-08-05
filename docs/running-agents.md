@@ -309,7 +309,12 @@ Codex and Claude Code sessions.
   frontmatter containing `name` and a non-empty `description`. The directory
   name must match the frontmatter name exactly: lowercase letters, digits, and
   hyphens only, at most 64 characters. A package may contain additional
-  supporting files and folders next to `SKILL.md`.
+  supporting files and folders next to `SKILL.md`. User skills are user
+  state: runtime-isolated dev instances (worktree-derived or explicit runtime
+  homes) read the same real `~/.toastty/skills` source, while their
+  snapshots, staging, and receipts stay isolated under the runtime home.
+  Automated harnesses that need full isolation set `TOASTTY_USER_SKILLS_ROOT`
+  in the app's environment to redirect the source directory.
 - **Validation**: hidden directories (names starting with `.`) are ignored.
   Symbolic links and special files are rejected. Per-package caps are 5 MB and
   a folder depth of 8, with `SKILL.md` itself capped at 256 KB. Catalog-wide
@@ -469,7 +474,7 @@ Every agent launched through Toastty receives these environment variables, set i
 | `TOASTTY_CWD` | Resolved launch working directory: explicit automation `cwd` when supplied, otherwise the target or restored panel working directory when available |
 | `TOASTTY_REPO_ROOT` | Git repository root inferred from the resolved launch working directory when available |
 | `TOASTTY_SKILLS_ROOT` | Delivered shipped Toastty plugin `skills/` path for supported managed Codex and Claude Code launches (the verified Toastty-owned Codex plugin cache, or the immutable staged Claude plugin copy); absent when preparation, verification, or safe argument insertion is unavailable. Reserved and read-only for agents; never write into it |
-| `TOASTTY_USER_SKILLS_ROOT` | User skill-package source directory (`~/.toastty/skills`, or its runtime-isolated equivalent). Advertised on managed launches so agents can create user skills there on request; the directory is not created automatically |
+| `TOASTTY_USER_SKILLS_ROOT` | User skill-package source directory (the real `~/.toastty/skills` even for runtime-isolated instances). Advertised on managed launches so agents can create user skills there on request; the directory is not created automatically. Setting the same variable in the app's own environment overrides the source directory — the isolation escape hatch automated harnesses use |
 
 Agent-specific variables are added on top of these (for example, `CODEX_TUI_RECORD_SESSION` and `CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT` for Codex launches).
 

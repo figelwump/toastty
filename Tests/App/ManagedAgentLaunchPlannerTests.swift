@@ -100,6 +100,10 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
                 homeDirectoryPath: rootURL.appendingPathComponent("real-home").path,
                 environment: [
                     "TOASTTY_RUNTIME_HOME": rootURL.appendingPathComponent("runtime-home").path,
+                    // Hermetic override: user skills follow the real home by
+                    // default, so the fixture redirects the source explicitly.
+                    "TOASTTY_USER_SKILLS_ROOT": rootURL
+                        .appendingPathComponent("runtime-home/skills").path,
                 ]
             )
         )
@@ -380,7 +384,9 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         }
     }
 
-    func testManagedLaunchResolvesUserSkillsRootFromLaunchEnvironment() throws {
+    /// User skills are user state: a runtime-home override in the launch
+    /// request no longer redirects the advertised source directory.
+    func testRequestRuntimeHomeNoLongerRedirectsAdvertisedUserSkillsRoot() throws {
         let fixture = try makePlannerFixture()
         let isolatedRuntimeHome = "/tmp/toastty-planner-user-skills-tests/runtime-home"
 
@@ -397,10 +403,38 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
         }
 
-        XCTAssertEqual(
+        XCTAssertNotEqual(
             plan.environment["TOASTTY_USER_SKILLS_ROOT"],
             "\(isolatedRuntimeHome)/skills"
         )
+        XCTAssertEqual(
+            plan.environment["TOASTTY_USER_SKILLS_ROOT"],
+            ToasttyRuntimePaths.resolve().userSkillsDirectoryURL.path
+        )
+    }
+
+    /// `TOASTTY_USER_SKILLS_ROOT` in the app's own process environment (the
+    /// hermetic harness override) is honored and re-advertised to children;
+    /// per-launch callers remain unable to set it (reserved at the service).
+    func testProcessEnvironmentUserSkillsRootOverrideIsAdvertised() throws {
+        let overridePath = "/tmp/toastty-planner-user-skills-tests/hermetic-skills"
+        let fixture = try makePlannerFixture(
+            processEnvironmentProvider: { ["TOASTTY_USER_SKILLS_ROOT": overridePath] }
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        }
+
+        XCTAssertEqual(plan.environment["TOASTTY_USER_SKILLS_ROOT"], overridePath)
     }
 
     func testPendingPanelParentClaimAdoptsLiveParentForManagedLaunch() throws {
@@ -2155,7 +2189,8 @@ private func makePlannerFixture(
     },
     codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
     claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
-    userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil
+    userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil,
+    processEnvironmentProvider: (@Sendable () -> [String: String])? = nil
 ) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
@@ -2199,7 +2234,8 @@ private func makePlannerFixture(
         codexSkillsResolver: resolvedCodexSkillsResolver,
         claudeSkillsBundleManager: claudeSkillsBundleManager ?? TestClaudeSkillsBundleManager(configuration: nil),
         userSkillSnapshotProvider: userSkillSnapshotProvider
-            ?? RecordingUserSkillSnapshotProvider(snapshot: nil)
+            ?? RecordingUserSkillSnapshotProvider(snapshot: nil),
+        processEnvironmentProvider: processEnvironmentProvider
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)

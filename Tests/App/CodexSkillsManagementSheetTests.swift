@@ -222,6 +222,10 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
                 homeDirectoryPath: rootURL.appendingPathComponent("real-home").path,
                 environment: [
                     "TOASTTY_RUNTIME_HOME": rootURL.appendingPathComponent("runtime-home").path,
+                    // Hermetic override: user skills follow the real home by
+                    // default, so the fixture redirects the source explicitly.
+                    "TOASTTY_USER_SKILLS_ROOT": rootURL
+                        .appendingPathComponent("runtime-home/skills").path,
                 ]
             )
         )

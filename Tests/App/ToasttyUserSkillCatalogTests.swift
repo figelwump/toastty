@@ -876,7 +876,14 @@ private extension ToasttyUserSkillCatalogTests {
         )
         let runtimePaths = ToasttyRuntimePaths.resolve(
             homeDirectoryPath: realHomeURL.path,
-            environment: ["TOASTTY_RUNTIME_HOME": runtimeHomeURL.path]
+            environment: [
+                "TOASTTY_RUNTIME_HOME": runtimeHomeURL.path,
+                // The sanctioned hermetic mechanism: user skills follow the
+                // real user home by default, so isolated fixtures redirect
+                // the source explicitly.
+                "TOASTTY_USER_SKILLS_ROOT": runtimeHomeURL
+                    .appendingPathComponent("skills", isDirectory: true).path,
+            ]
         )
         return Fixture(
             rootURL: resolvedRootURL,

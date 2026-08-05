@@ -77,8 +77,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/workspace-layout-profiles.json`
   - `<runtime-home>/recent-right-panel-items.json`
   - `<runtime-home>/managed-agent-resume/`
-  - `<runtime-home>/skills/`
-  - `<runtime-home>/agent-plugins/`
+  - `<runtime-home>/agent-plugins/` (user-skill snapshots, staging, and receipts stay isolated here; the user-skill SOURCE is not isolated — isolated instances read the real `~/.toastty/skills/` unless `TOASTTY_USER_SKILLS_ROOT` redirects it, the override automated harnesses use)
   - `<runtime-home>/scratchpad-documents/`
   - `<runtime-home>/history/pane-journals/`
   - `<runtime-home>/logs/toastty.log`

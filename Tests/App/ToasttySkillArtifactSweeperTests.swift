@@ -443,7 +443,13 @@ private extension ToasttySkillArtifactSweeperTests {
         try Fixture.writePluginBundle(at: bundledSourceURL, version: "3.0.0")
         let runtimePaths = ToasttyRuntimePaths.resolve(
             homeDirectoryPath: realHomeURL.path,
-            environment: ["TOASTTY_RUNTIME_HOME": runtimeHomeURL.path]
+            environment: [
+                "TOASTTY_RUNTIME_HOME": runtimeHomeURL.path,
+                // Hermetic override: user skills follow the real home by
+                // default, so the fixture redirects the source explicitly.
+                "TOASTTY_USER_SKILLS_ROOT": runtimeHomeURL
+                    .appendingPathComponent("skills", isDirectory: true).path,
+            ]
         )
         let catalog = ToasttyUserSkillCatalog(runtimePaths: runtimePaths)
         let claudeManager = ClaudeSkillsBundleManager(

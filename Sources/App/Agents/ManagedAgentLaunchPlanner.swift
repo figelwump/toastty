@@ -63,6 +63,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
     private let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
     private let userSkillSnapshotProvider: any ToasttyUserSkillSnapshotProviding
+    /// App-process environment source for launch-scoped runtime-path
+    /// resolution (the `TOASTTY_USER_SKILLS_ROOT` harness override lives
+    /// here). Injectable for tests.
+    private let processEnvironmentProvider: @Sendable () -> [String: String]
     /// Bound on user-snapshot preparation during async launch prep; matches
     /// the Codex skills operation budget. Settable for tests.
     var userSkillSnapshotPreparationTimeout: TimeInterval = CodexSkillsManager.operationTimeout
@@ -88,7 +92,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
         codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
         claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
-        userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil
+        userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil,
+        processEnvironmentProvider: (@Sendable () -> [String: String])? = nil
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -114,6 +119,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             ?? ClaudeSkillsBundleManager(fileManager: fileManager)
         self.userSkillSnapshotProvider = userSkillSnapshotProvider
             ?? ToasttyUserSkillCatalog(fileManager: fileManager)
+        self.processEnvironmentProvider = processEnvironmentProvider
+            ?? { ProcessInfo.processInfo.environment }
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
@@ -491,11 +498,15 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = target.panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.socketPathKey] = socketPathProvider()
         environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
-        // Launch-scoped resolution: the request environment may carry runtime
-        // isolation overrides, so isolated instances advertise their isolated
-        // user-skills directory. The directory is only advertised, never
-        // created here.
-        let launchRuntimeEnvironment = ProcessInfo.processInfo.environment
+        // Advertise the effective user-skills SOURCE directory. User skills
+        // are user state: runtime-home overrides in the launch environment no
+        // longer redirect it — the resolution follows the real user home
+        // unless the app's own process environment carries
+        // TOASTTY_USER_SKILLS_ROOT (the hermetic harness override; the same
+        // key doubles as this advertisement). Per-launch callers cannot spoof
+        // it: the key is reserved by AgentLaunchService's environment
+        // validation. The directory is only advertised, never created here.
+        let launchRuntimeEnvironment = processEnvironmentProvider()
             .merging(request.environment) { _, new in new }
         environment[ToasttyLaunchContextEnvironment.userSkillsRootKey] =
             ToasttyRuntimePaths.resolve(environment: launchRuntimeEnvironment)

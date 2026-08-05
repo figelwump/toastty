@@ -427,6 +427,10 @@ struct AgentLaunchServiceTests {
                 environment: [
                     "TOASTTY_RUNTIME_HOME": userSkillsHomeURL
                         .appendingPathComponent("runtime-home").path,
+                    // Hermetic override: user skills follow the real home by
+                    // default, so the fixture redirects the source explicitly.
+                    "TOASTTY_USER_SKILLS_ROOT": userSkillsHomeURL
+                        .appendingPathComponent("runtime-home/skills").path,
                 ]
             )
         )
@@ -1259,6 +1263,19 @@ struct AgentLaunchServiceTests {
             terminalCommandRouter: terminalRouter,
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
+            // Hermetic user-skill catalog: user skills follow the real user
+            // home by default now, and these async launch tests must not
+            // scan the operator's real ~/.toastty/skills.
+            userSkillCatalog: ToasttyUserSkillCatalog(
+                runtimePaths: .resolve(
+                    homeDirectoryPath: FileManager.default.temporaryDirectory
+                        .appendingPathComponent(
+                            "toastty-launch-ui-user-skills-\(UUID().uuidString)",
+                            isDirectory: true
+                        ).path,
+                    environment: [:]
+                )
+            ),
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-tests.sock" },
             codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
