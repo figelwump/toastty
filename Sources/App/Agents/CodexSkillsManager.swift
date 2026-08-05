@@ -306,6 +306,18 @@ final class CodexSkillsManager: @unchecked Sendable {
         agentPluginsDirectoryURL.appendingPathComponent("codex", isDirectory: true)
     }
 
+    /// Sweep seam: holds both the shipped and user operation locks (in the
+    /// same order as `uninstall`) so `ToasttySkillArtifactSweeper`'s Codex
+    /// cache-litter pass cannot race an in-flight cache swap in either
+    /// plugin phase.
+    static func withExclusiveCacheAccess<T>(_ body: () throws -> T) rethrows -> T {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+        userOperationLock.lock()
+        defer { userOperationLock.unlock() }
+        return try body()
+    }
+
     func cachedLaunchConfiguration(runtime: CodexIntegrationRuntime) -> CodexSkillsLaunchConfiguration? {
         cacheLock.lock()
         let entry = cachedConfigurations[runtimeKey(runtime)]

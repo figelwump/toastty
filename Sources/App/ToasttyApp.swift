@@ -891,6 +891,25 @@ struct ToasttyApp: App {
         let codexSkillsManager = CodexSkillsManager(runtimePaths: runtimePaths)
         let claudeSkillsBundleManager = ClaudeSkillsBundleManager(runtimePaths: runtimePaths)
         let userSkillCatalog = ToasttyUserSkillCatalog(runtimePaths: runtimePaths)
+        // Startup-only GC of the append-only skill staging roots and Codex
+        // cache swap litter. Dispatched here — before the launch service
+        // exists and before the restored-launch planner is handed to the
+        // registry below — so no launch preparation can begin until the
+        // sweep is queued. It runs off the main thread; strict
+        // completes-before ordering is not required because the sweep holds
+        // the same locks the providers use (catalog preparation lock, Claude
+        // staging queue, Codex operation locks) and its retention policy
+        // keeps exactly the artifacts any preparation can resolve (current
+        // Claude bundle dir, newest-receipt user snapshot, plus each one's
+        // verified fallback). See ToasttySkillArtifactSweeper.
+        let skillArtifactSweeper = ToasttySkillArtifactSweeper(
+            runtimePaths: runtimePaths,
+            userSkillCatalog: userSkillCatalog,
+            claudeSkillsBundleManager: claudeSkillsBundleManager
+        )
+        DispatchQueue.global(qos: .utility).async {
+            skillArtifactSweeper.sweep()
+        }
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,

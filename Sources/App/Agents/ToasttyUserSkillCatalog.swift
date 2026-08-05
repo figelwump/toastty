@@ -206,6 +206,51 @@ final class ToasttyUserSkillCatalog: ToasttyUserSkillSnapshotProviding, @uncheck
     func refreshUserSkills() throws -> UserSkillPluginSnapshot? {
         try prepareSnapshot()
     }
+
+    // MARK: - Sweep seams
+
+    /// Staging directories younger than this are presumed to belong to a
+    /// concurrent build (defense against multi-process runs; in-process runs
+    /// are serialized by `preparationLock`). Internal so
+    /// `ToasttySkillArtifactSweeper` shares the same age gate.
+    static let stagingOrphanMaxAge: TimeInterval = 3600
+
+    /// Serializes `body` against snapshot preparation. Used by
+    /// `ToasttySkillArtifactSweeper` so startup GC cannot race a concurrent
+    /// `prepareSnapshot()` build or the corrupt-snapshot rebuild.
+    func withPreparationLock<T>(_ body: () throws -> T) rethrows -> T {
+        preparationLock.lock()
+        defer { preparationLock.unlock() }
+        return try body()
+    }
+
+    /// Sweep seam for `ToasttySkillArtifactSweeper`: decodes the snapshot
+    /// receipt at `directoryURL` with the same checks `existingSnapshot()`
+    /// applies and reports its modification date plus whether the snapshot
+    /// passes the structural integrity checks. Content digests are
+    /// deliberately not recomputed — sweep retention is structural, and the
+    /// delivery phase byte-verifies whatever it consumes. Returns nil when
+    /// the directory carries no valid receipt.
+    func assessSnapshotDirectoryForSweep(
+        _ directoryURL: URL
+    ) -> (receiptModified: Date, isStructurallyIntact: Bool)? {
+        let receiptURL = directoryURL.appendingPathComponent(Self.receiptFileName)
+        guard let data = try? Data(contentsOf: receiptURL),
+              let receipt = try? JSONDecoder().decode(SnapshotReceipt.self, from: data),
+              receipt.schemaVersion == 1,
+              receipt.pluginName == UserSkillPluginSnapshot.pluginName,
+              receipt.sourceDigest == directoryURL.lastPathComponent,
+              receipt.version == Self.version(sourceDigest: receipt.sourceDigest) else {
+            return nil
+        }
+        let pluginRootURL = directoryURL
+            .appendingPathComponent(Self.marketplaceDirectoryName, isDirectory: true)
+            .appendingPathComponent("plugins", isDirectory: true)
+            .appendingPathComponent(UserSkillPluginSnapshot.pluginName, isDirectory: true)
+        let modified = (try? fileManager.attributesOfItem(atPath: receiptURL.path))?[.modificationDate] as? Date
+            ?? .distantPast
+        return (modified, hasIntactStructure(pluginRootURL: pluginRootURL, receipt: receipt))
+    }
 }
 
 private extension ToasttyUserSkillCatalog {
@@ -527,11 +572,6 @@ private extension ToasttyUserSkillCatalog {
     }
 
     // MARK: - Housekeeping
-
-    /// Staging directories younger than this are presumed to belong to a
-    /// concurrent build (defense against multi-process runs; in-process runs
-    /// are serialized by `preparationLock`).
-    static let stagingOrphanMaxAge: TimeInterval = 3600
 
     func cleanupOrphanedStaging() {
         guard let children = try? fileManager.contentsOfDirectory(

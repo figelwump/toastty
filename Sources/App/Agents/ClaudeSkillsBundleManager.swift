@@ -110,6 +110,13 @@ final class ClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Se
             }
         }
     }
+
+    /// Sweep seam: runs `body` on the manager's serial preparation queue so
+    /// `ToasttySkillArtifactSweeper` and any in-flight staging or restored
+    /// preparation serialize correctly.
+    func withExclusiveStagingAccess<T>(_ body: () -> T) -> T {
+        queue.sync(execute: body)
+    }
 }
 
 private extension ClaudeSkillsBundleManager {
