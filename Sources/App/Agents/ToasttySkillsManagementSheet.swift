@@ -676,10 +676,6 @@ struct ToasttySkillsManagementSheet: View {
                     technicalRow("Plugin cache", value: status.cachePath ?? "Not installed")
                     technicalRow("Bundled version", value: status.bundledVersion ?? "Unavailable")
                     technicalRow("Bundled digest", value: status.bundledDigest ?? "Unavailable")
-                    technicalRow(
-                        "Effective digest",
-                        value: status.bundledDigest.map { String($0.prefix(8)) } ?? "Unavailable"
-                    )
                 } else if model.codexNotFoundMessage != nil {
                     Text("Codex paths are unavailable because Toastty could not find a supported codex or cdx executable.")
                         .foregroundStyle(ToastyTheme.mutedText)
