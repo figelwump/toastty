@@ -230,9 +230,6 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             UserSkillDiagnostic.missingSkillFile.displayMessage
         )
         XCTAssertNil(model.snapshotDigest)
-        XCTAssertEqual(model.codexDeliveryDetail, "No user skills are staged for delivery.")
-        XCTAssertEqual(model.claudeDeliveryDetail, "No user skills are staged for delivery.")
-        XCTAssertEqual(model.otherRuntimesDeliveryDetail, "No user skills are staged for delivery.")
         XCTAssertFalse(model.isWorking)
     }
 
@@ -250,7 +247,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
     }
 
     @MainActor
-    func testUserSkillsModelDeliveryDetailsFromVerifiedSnapshot() async {
+    func testUserSkillsModelSnapshotDigestFromVerifiedSnapshot() async {
         let snapshot = makeSnapshot(
             packageNames: ["alpha-skill"],
             pluginContentDigest: "abcdef1234567890"
@@ -267,9 +264,6 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         await model.waitForPendingWork()
 
         XCTAssertEqual(model.snapshotDigest, "abcdef1234567890")
-        XCTAssertEqual(model.codexDeliveryDetail, "Ready for next launch — digest abcdef12")
-        XCTAssertEqual(model.claudeDeliveryDetail, "Delivered on next launch")
-        XCTAssertEqual(model.otherRuntimesDeliveryDetail, "Delivered on next launch")
     }
 
     @MainActor
@@ -312,8 +306,6 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
         XCTAssertNil(model.snapshotDigest)
         XCTAssertEqual(model.acceptedCount, 0)
-        XCTAssertEqual(model.codexDeliveryDetail, "No user skills are staged for delivery.")
-        XCTAssertEqual(model.claudeDeliveryDetail, "No user skills are staged for delivery.")
         XCTAssertNil(model.errorMessage)
     }
 
@@ -407,7 +399,6 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
             model.errorMessage,
             ToasttyUserSkillCatalogError.snapshotWriteFailed("/tmp/user-skills").localizedDescription
         )
-        XCTAssertEqual(model.codexDeliveryDetail, model.errorMessage)
     }
 
     @MainActor

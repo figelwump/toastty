@@ -169,26 +169,6 @@ final class UserSkillsManagementModel: ObservableObject {
         userSkillsDirectoryExists == false
     }
 
-    var codexDeliveryDetail: String {
-        if let errorMessage { return errorMessage }
-        if let snapshotDigest {
-            return "Ready for next launch — digest \(String(snapshotDigest.prefix(8)))"
-        }
-        return "No user skills are staged for delivery."
-    }
-
-    var claudeDeliveryDetail: String {
-        snapshotDigest == nil
-            ? "No user skills are staged for delivery."
-            : "Delivered on next launch"
-    }
-
-    /// Pi, OpenCode, and MiMo Code consume the same verified user-skills
-    /// snapshot Claude Code does, so their delivery detail mirrors it.
-    var otherRuntimesDeliveryDetail: String {
-        claudeDeliveryDetail
-    }
-
     static func statusDescription(for package: UserSkillPackage) -> String {
         switch package.status {
         case .accepted:
@@ -654,9 +634,10 @@ struct ToasttySkillsManagementSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Codex: \(userSkillsModel.codexDeliveryDetail)")
-                Text("Claude Code: \(userSkillsModel.claudeDeliveryDetail)")
-                Text("Pi, OpenCode, MiMo Code: \(userSkillsModel.otherRuntimesDeliveryDetail)")
+                if let errorMessage = userSkillsModel.errorMessage {
+                    Text(errorMessage)
+                        .foregroundStyle(ToastyTheme.sessionErrorText)
+                }
                 Text("Running sessions keep the skills they launched with; new launches use the current set.")
             }
             .font(.system(size: 11))
