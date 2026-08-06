@@ -32,6 +32,7 @@ SOCKET_PATH_ARG=""
 APP_PID_ARG=""
 APP_SERVER_PID_ARG=""
 APP_SERVER_LISTENER_PID_ARG=""
+APP_SERVER_LAUNCHD_LABEL_ARG=""
 
 CLEANUP_REMOTE_WORKTREE_CREATED=0
 CLEANUP_REMOTE_PREPARED=0
@@ -44,6 +45,7 @@ CLEANUP_SOCKET_PATH=""
 CLEANUP_APP_PID=""
 CLEANUP_APP_SERVER_PID=""
 CLEANUP_APP_SERVER_LISTENER_PID=""
+CLEANUP_APP_SERVER_LAUNCHD_LABEL=""
 
 usage() {
   cat <<'EOF'
@@ -367,6 +369,10 @@ run_remote_prepare_mode() {
   local app_binary="$app_bundle/Contents/MacOS/Toastty"
   local instance_json="$runtime_home/instance.json"
   local codex_cli="/Applications/Codex.app/Contents/Resources/codex"
+  local app_server_launchd_label="com.giantthings.toastty.cu-appserver.${run_hash_value}"
+  local app_server_plist="$remote_run_root/app-server.plist"
+  local app_server_launcher="$remote_run_root/app-server-launch.sh"
+  local gui_domain="gui/$(id -u)"
   local app_pid=""
   local app_server_pid=""
   local app_server_listener_pid=""
@@ -378,6 +384,7 @@ run_remote_prepare_mode() {
     if [[ "$prepare_succeeded" == "1" ]]; then
       return "$cleanup_exit_code"
     fi
+    launchctl bootout "$gui_domain/$app_server_launchd_label" >/dev/null 2>&1 || true
     rm -f "$socket_path"
     if [[ -n "$app_server_listener_pid" ]]; then
       kill "$app_server_listener_pid" >/dev/null 2>&1 || true
@@ -443,29 +450,56 @@ run_remote_prepare_mode() {
 
   app_server_port="$(pick_unused_port)" || fail "Failed to allocate a free port for codex app-server"
 
-  # The Computer Use helper spawns nested `codex` processes via `env codex`,
-  # which needs the CLI on PATH; the SSH login shell on the remote host does
-  # not provide it, so expose the bundled CLI's directory to the process tree.
-  PATH="$(dirname "$codex_cli"):$PATH" \
-  nohup script -q "$app_server_session_log" "$codex_cli" app-server \
-    -c "model=\"${CODEX_COMPUTER_USE_MODEL}\"" \
-    -c "model_reasoning_effort=\"${CODEX_COMPUTER_USE_REASONING_EFFORT}\"" \
-    --listen "ws://127.0.0.1:${app_server_port}" \
-    >"$app_server_log" 2>&1 < /dev/null &
-  app_server_pid=$!
+  # Run the app-server inside the Aqua (GUI) login session via a per-run
+  # LaunchAgent. Launched from the SSH background session instead, the
+  # Computer Use helper cannot resolve console-session apps or their windows
+  # (procNotFound/cgWindowNotFound), and TCC consent prompts are auto-denied
+  # because that session has no UI. The launcher keeps the bundled CLI's
+  # directory on PATH because the helper spawns nested `codex` via `env`.
+  cat >"$app_server_launcher" <<EOF
+#!/bin/bash
+export PATH="$(dirname "$codex_cli"):\$PATH"
+exec script -q "$app_server_session_log" "$codex_cli" app-server \
+  -c "model=\"${CODEX_COMPUTER_USE_MODEL}\"" \
+  -c "model_reasoning_effort=\"${CODEX_COMPUTER_USE_REASONING_EFFORT}\"" \
+  --listen "ws://127.0.0.1:${app_server_port}"
+EOF
+  chmod +x "$app_server_launcher"
+
+  cat >"$app_server_plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${app_server_launchd_label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${app_server_launcher}</string>
+  </array>
+  <key>WorkingDirectory</key><string>${remote_worktree_dir}</string>
+  <key>StandardOutPath</key><string>${app_server_log}</string>
+  <key>StandardErrorPath</key><string>${app_server_log}</string>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+EOF
+
+  launchctl bootout "$gui_domain/$app_server_launchd_label" >/dev/null 2>&1 || true
+  launchctl bootstrap "$gui_domain" "$app_server_plist" \
+    || fail "Failed to bootstrap codex app-server into $gui_domain"
 
   for _ in $(seq 1 150); do
     if curl -fsS "http://127.0.0.1:${app_server_port}/readyz" >/dev/null 2>&1; then
-      break
-    fi
-    if ! kill -0 "$app_server_pid" >/dev/null 2>&1; then
       break
     fi
     sleep 0.2
   done
 
   curl -fsS "http://127.0.0.1:${app_server_port}/readyz" >/dev/null 2>&1 || fail "codex app-server did not become ready"
+  app_server_pid="$(launchctl print "$gui_domain/$app_server_launchd_label" 2>/dev/null | grep -m 1 'pid =' | grep -Eo '[0-9]+' || true)"
   app_server_listener_pid="$(lsof -tiTCP:"$app_server_port" -sTCP:LISTEN | head -n 1 || true)"
+  [[ -n "$app_server_pid" ]] || app_server_pid="$app_server_listener_pid"
+  [[ -n "$app_server_pid" ]] || fail "Failed to resolve the codex app-server pid"
 
   cat >"$launch_json" <<EOF
 {
@@ -486,7 +520,8 @@ run_remote_prepare_mode() {
   "codexReasoningEffort": "$(json_escape "$CODEX_COMPUTER_USE_REASONING_EFFORT")",
   "appServerPort": ${app_server_port},
   "appServerPid": ${app_server_pid},
-  "appServerListenerPid": $(if [[ -n "$app_server_listener_pid" ]]; then printf '%s' "$app_server_listener_pid"; else printf 'null'; fi)
+  "appServerListenerPid": $(if [[ -n "$app_server_listener_pid" ]]; then printf '%s' "$app_server_listener_pid"; else printf 'null'; fi),
+  "appServerLaunchdLabel": "$(json_escape "$app_server_launchd_label")"
 }
 EOF
 
@@ -509,6 +544,10 @@ run_remote_stop_mode() {
   }
 
   rm -f "$SOCKET_PATH_ARG"
+
+  if [[ -n "$APP_SERVER_LAUNCHD_LABEL_ARG" ]]; then
+    launchctl bootout "gui/$(id -u)/$APP_SERVER_LAUNCHD_LABEL_ARG" >/dev/null 2>&1 || true
+  fi
 
   if [[ -n "$APP_SERVER_LISTENER_PID_ARG" ]]; then
     kill "$APP_SERVER_LISTENER_PID_ARG" >/dev/null 2>&1 || true
@@ -570,6 +609,7 @@ run_local_mode() {
   CLEANUP_APP_PID=""
   CLEANUP_APP_SERVER_PID=""
   CLEANUP_APP_SERVER_LISTENER_PID=""
+  CLEANUP_APP_SERVER_LAUNCHD_LABEL=""
 
   cleanup_local_mode() {
     local cleanup_exit_code=$?
@@ -587,7 +627,8 @@ run_local_mode() {
         "$CLEANUP_SOCKET_PATH" \
         "$CLEANUP_APP_PID" \
         "$CLEANUP_APP_SERVER_PID" \
-        "${CLEANUP_APP_SERVER_LISTENER_PID:-}" <<'EOF' >/dev/null 2>&1 || true
+        "${CLEANUP_APP_SERVER_LISTENER_PID:-}" \
+        "${CLEANUP_APP_SERVER_LAUNCHD_LABEL:-}" <<'EOF' >/dev/null 2>&1 || true
 set -euo pipefail
 remote_worktree_dir="$1"
 script_path="$2"
@@ -596,6 +637,7 @@ socket_path="$4"
 app_pid="$5"
 app_server_pid="$6"
 app_server_listener_pid="${7:-}"
+app_server_launchd_label="${8:-}"
 cd "$remote_worktree_dir"
 /bin/bash "$script_path" \
   --run-label "$run_label" \
@@ -603,7 +645,8 @@ cd "$remote_worktree_dir"
   --socket-path "$socket_path" \
   --app-pid "$app_pid" \
   --app-server-pid "$app_server_pid" \
-  --app-server-listener-pid "$app_server_listener_pid"
+  --app-server-listener-pid "$app_server_listener_pid" \
+  --app-server-launchd-label "$app_server_launchd_label"
 EOF
     fi
 
@@ -724,10 +767,13 @@ EOF
   app_pid="$(jq -r '.appPid' "$launch_json")"
   app_server_pid="$(jq -r '.appServerPid' "$launch_json")"
   app_server_listener_pid="$(jq -r '.appServerListenerPid // empty' "$launch_json")"
+  local app_server_launchd_label
+  app_server_launchd_label="$(jq -r '.appServerLaunchdLabel // empty' "$launch_json")"
   socket_path="$(jq -r '.socketPath' "$launch_json")"
   CLEANUP_APP_PID="$app_pid"
   CLEANUP_APP_SERVER_PID="$app_server_pid"
   CLEANUP_APP_SERVER_LISTENER_PID="$app_server_listener_pid"
+  CLEANUP_APP_SERVER_LAUNCHD_LABEL="$app_server_launchd_label"
   CLEANUP_SOCKET_PATH="$socket_path"
   local remote_app_server_port
   remote_app_server_port="$(jq -r '.appServerPort' "$launch_json")"
@@ -789,7 +835,8 @@ EOF
       "$socket_path" \
       "$app_pid" \
       "$app_server_pid" \
-      "${app_server_listener_pid:-}" <<'EOF'; then
+      "${app_server_listener_pid:-}" \
+      "${app_server_launchd_label:-}" <<'EOF'; then
 set -euo pipefail
 remote_worktree_dir="$1"
 script_path="$2"
@@ -798,6 +845,7 @@ socket_path="$4"
 app_pid="$5"
 app_server_pid="$6"
 app_server_listener_pid="${7:-}"
+app_server_launchd_label="${8:-}"
 cd "$remote_worktree_dir"
 /bin/bash "$script_path" \
   --run-label "$run_label" \
@@ -805,7 +853,8 @@ cd "$remote_worktree_dir"
   --socket-path "$socket_path" \
   --app-pid "$app_pid" \
   --app-server-pid "$app_server_pid" \
-  --app-server-listener-pid "$app_server_listener_pid"
+  --app-server-listener-pid "$app_server_listener_pid" \
+  --app-server-launchd-label "$app_server_launchd_label"
 EOF
     CLEANUP_REMOTE_STOPPED=1
   else
@@ -974,6 +1023,11 @@ while [[ $# -gt 0 ]]; do
     --app-server-listener-pid)
       [[ $# -ge 2 ]] || fail "--app-server-listener-pid requires a value"
       APP_SERVER_LISTENER_PID_ARG="$2"
+      shift 2
+      ;;
+    --app-server-launchd-label)
+      [[ $# -ge 2 ]] || fail "--app-server-launchd-label requires a value"
+      APP_SERVER_LAUNCHD_LABEL_ARG="$2"
       shift 2
       ;;
     -h|--help)
