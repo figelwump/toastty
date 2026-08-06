@@ -640,14 +640,18 @@ app_server_pid="$6"
 app_server_listener_pid="${7:-}"
 app_server_launchd_label="${8:-}"
 cd "$remote_worktree_dir"
-/bin/bash "$script_path" \
-  --run-label "$run_label" \
-  --remote-stop \
-  --socket-path "$socket_path" \
-  --app-pid "$app_pid" \
-  --app-server-pid "$app_server_pid" \
-  --app-server-listener-pid "$app_server_listener_pid" \
-  --app-server-launchd-label "$app_server_launchd_label"
+stop_args=(
+  --run-label "$run_label"
+  --remote-stop
+  --socket-path "$socket_path"
+  --app-pid "$app_pid"
+  --app-server-pid "$app_server_pid"
+  --app-server-listener-pid "$app_server_listener_pid"
+)
+if [[ -n "$app_server_launchd_label" ]]; then
+  stop_args+=(--app-server-launchd-label "$app_server_launchd_label")
+fi
+/bin/bash "$script_path" "${stop_args[@]}"
 EOF
     fi
 
@@ -848,14 +852,18 @@ app_server_pid="$6"
 app_server_listener_pid="${7:-}"
 app_server_launchd_label="${8:-}"
 cd "$remote_worktree_dir"
-/bin/bash "$script_path" \
-  --run-label "$run_label" \
-  --remote-stop \
-  --socket-path "$socket_path" \
-  --app-pid "$app_pid" \
-  --app-server-pid "$app_server_pid" \
-  --app-server-listener-pid "$app_server_listener_pid" \
-  --app-server-launchd-label "$app_server_launchd_label"
+stop_args=(
+  --run-label "$run_label"
+  --remote-stop
+  --socket-path "$socket_path"
+  --app-pid "$app_pid"
+  --app-server-pid "$app_server_pid"
+  --app-server-listener-pid "$app_server_listener_pid"
+)
+if [[ -n "$app_server_launchd_label" ]]; then
+  stop_args+=(--app-server-launchd-label "$app_server_launchd_label")
+fi
+/bin/bash "$script_path" "${stop_args[@]}"
 EOF
     CLEANUP_REMOTE_STOPPED=1
   else
