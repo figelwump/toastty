@@ -28,6 +28,12 @@ extension ClaudeSkillsBundleManaging {
     }
 }
 
+/// Stages the shipped agent plugin once and serves every additive skills
+/// runtime from it (`AgentKind.usesStagedSkillsTree`): Claude consumes
+/// `pluginRootPath` as a `--plugin-dir`, while pi, OpenCode, and MiMo Code
+/// consume the plain `skills/<name>/SKILL.md` tree at `skillsRootPath`. The
+/// staging root keeps its `claude` component: it is content-addressed and
+/// already swept, so the shared payload needs no migration.
 final class ClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Sendable {
     private let sourcePluginURLProvider: @Sendable () -> URL?
     private let stagingRootURL: URL

@@ -146,7 +146,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 workingDirectory: assessedWorkingDirectory
             )
             : nil
-        let claudeSkillsConfiguration = request.agent == .claude
+        let stagedSkillsConfiguration = request.agent.usesStagedSkillsTree
             ? claudeSkillsBundleManager.existingVerifiedConfiguration()
             : nil
         // Synchronous preparation never builds a snapshot; it reuses the
@@ -154,15 +154,15 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         // skills. Codex synchronous launches need no resolution at all: any
         // previously delivered user entry already rides in the profile
         // overlay.
-        let userSkillResolution = request.agent == .claude
+        let userSkillResolution = request.agent.usesStagedSkillsTree
             ? userSkillSnapshotProvider.existingSnapshotResolution()
             : nil
         return try prepareManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             codexSkillsDecision: codexSkillsDecision,
-            claudeSkillsConfiguration: claudeSkillsConfiguration,
-            claudeUserPluginRootPath: claudeUserPluginRootPath(
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            deliveredUserSkillsRootPath: deliveredUserSkillsRootPath(
                 for: request.agent,
                 resolution: userSkillResolution
             ),
@@ -177,7 +177,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
         // Resolved once per launch preparation and passed to both hosts.
-        let userSkillResolution = request.agent == .codex || request.agent == .claude
+        let userSkillResolution = request.agent == .codex || request.agent.usesStagedSkillsTree
             ? await preparedUserSkillResolution()
             : nil
         let codexSkillsDecision = request.agent == .codex
@@ -187,15 +187,15 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 userSkillResolution: userSkillResolution ?? .unavailable
             )
             : nil
-        let claudeSkillsConfiguration = request.agent == .claude
+        let stagedSkillsConfiguration = request.agent.usesStagedSkillsTree
             ? await claudeSkillsBundleManager.prepareForManagedLaunch()
             : nil
         let plan = try prepareManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             codexSkillsDecision: codexSkillsDecision,
-            claudeSkillsConfiguration: claudeSkillsConfiguration,
-            claudeUserPluginRootPath: claudeUserPluginRootPath(
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            deliveredUserSkillsRootPath: deliveredUserSkillsRootPath(
                 for: request.agent,
                 resolution: userSkillResolution
             ),
@@ -205,7 +205,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             request: request,
             windowID: target.windowID,
             codexSkillsDecision: codexSkillsDecision,
-            claudeSkillsConfiguration: claudeSkillsConfiguration,
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
             userSkillSnapshot: userSkillResolution?.snapshot
         )
         return plan
@@ -219,7 +219,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
         // Restored preparation reuses the newest existing on-disk snapshot
         // resolution (receipt/existence checks only) and never builds one.
-        let userSkillResolution = request.agent == .codex || request.agent == .claude
+        let userSkillResolution = request.agent == .codex || request.agent.usesStagedSkillsTree
             ? userSkillSnapshotProvider.existingSnapshotResolution()
             : nil
         let codexSkillsDecision = request.agent == .codex
@@ -229,15 +229,15 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 userSkillResolution: userSkillResolution ?? .unavailable
             )
             : nil
-        let claudeSkillsConfiguration = request.agent == .claude
+        let stagedSkillsConfiguration = request.agent.usesStagedSkillsTree
             ? claudeSkillsBundleManager.prepareForRestoredManagedLaunch()
             : nil
         let plan = try prepareManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
             codexSkillsDecision: codexSkillsDecision,
-            claudeSkillsConfiguration: claudeSkillsConfiguration,
-            claudeUserPluginRootPath: claudeUserPluginRootPath(
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            deliveredUserSkillsRootPath: deliveredUserSkillsRootPath(
                 for: request.agent,
                 resolution: userSkillResolution
             ),
@@ -247,29 +247,41 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             request: request,
             windowID: target.windowID,
             codexSkillsDecision: codexSkillsDecision,
-            claudeSkillsConfiguration: claudeSkillsConfiguration,
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
             userSkillSnapshot: userSkillResolution?.snapshot
         )
         return plan
     }
 
-    private func claudeUserPluginRootPath(
+    /// Runtime-specific projection of one user skills snapshot: Claude takes
+    /// the generated plugin root, and the other additive runtimes take the
+    /// plain skills tree inside it.
+    private func deliveredUserSkillsRootPath(
         for agent: AgentKind,
         resolution: UserSkillSnapshotResolution?
     ) -> String? {
-        guard agent == .claude, let resolution else { return nil }
+        guard agent.usesStagedSkillsTree, let resolution else { return nil }
         switch resolution {
         case .snapshot(let snapshot):
-            return snapshot.pluginRootURL.path
+            return userSkillsRootPath(for: agent, snapshot: snapshot)
         case .empty:
             return nil
         case .unavailable:
             // An incomplete resolution (timed-out or failed build) falls back
             // to the newest snapshot the catalog can verify right now, and
-            // drops the flag when nothing verifies — never a destructive
-            // outcome for Claude either way.
-            return userSkillSnapshotProvider.existingSnapshot()?.pluginRootURL.path
+            // drops the delivery when nothing verifies — never a destructive
+            // outcome for an additive runtime either way.
+            return userSkillSnapshotProvider.existingSnapshot().map { snapshot in
+                userSkillsRootPath(for: agent, snapshot: snapshot)
+            }
         }
+    }
+
+    private func userSkillsRootPath(
+        for agent: AgentKind,
+        snapshot: UserSkillPluginSnapshot
+    ) -> String {
+        agent == .claude ? snapshot.pluginRootURL.path : snapshot.skillsRootURL.path
     }
 
     /// Builds (or reuses) the user skills snapshot off the main actor,
@@ -329,15 +341,23 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         request: ManagedAgentLaunchRequest,
         windowID: UUID,
         codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
-        claudeSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
+        stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
         userSkillSnapshot: UserSkillPluginSnapshot?
     ) {
         let isAvailable: Bool
         if request.agent == .codex {
             isAvailable = codexSkillsDecision?.configuration != nil
                 && codexSkillsDecision?.status?.isReady == true
-        } else if request.agent == .claude {
-            isAvailable = claudeSkillsConfiguration != nil
+        } else if request.agent.usesStagedSkillsTree {
+            // Additive runtimes post on a resolved staged configuration (the
+            // Claude precedent), except when the caller's argv explicitly opts
+            // pi out of injection — announcing provisioned skills right after
+            // a `--no-skills`/`--no-extensions` launch would be wrong. Unsafe
+            // or opaque argv shapes keep the optimistic notice, matching
+            // Claude and Codex today.
+            isAvailable = stagedSkillsConfiguration != nil
+                && (request.agent != .pi
+                    || AgentLaunchInstrumentation.piLaunchWillInjectSkills(argv: request.argv))
         } else {
             isAvailable = false
         }
@@ -358,31 +378,29 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     }
 
     /// Number of user skill packages actually delivered with this launch.
-    /// Codex requires a `.delivered` user-plugin outcome; Claude delivers the
-    /// snapshot's plugin root directly whenever a snapshot was resolved.
+    /// Codex requires a `.delivered` user-plugin outcome; the additive
+    /// runtimes deliver the snapshot's projected root directly whenever a
+    /// snapshot was resolved.
     static func deliveredUserSkillCount(
         agent: AgentKind,
         codexUserSkills: CodexUserSkillsDeliveryState?,
         userSkillSnapshot: UserSkillPluginSnapshot?
     ) -> Int {
         guard let userSkillSnapshot else { return 0 }
-        switch agent {
-        case .codex:
+        if agent == .codex {
             guard case .delivered = codexUserSkills else { return 0 }
             return userSkillSnapshot.acceptedPackageNames.count
-        case .claude:
-            return userSkillSnapshot.acceptedPackageNames.count
-        default:
-            return 0
         }
+        guard agent.usesStagedSkillsTree else { return 0 }
+        return userSkillSnapshot.acceptedPackageNames.count
     }
 
     private func prepareManagedLaunch(
         _ request: ManagedAgentLaunchRequest,
         inheritedScopedWorkspaceIDs: Set<UUID>?,
         codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
-        claudeSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
-        claudeUserPluginRootPath: String?,
+        stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
+        deliveredUserSkillsRootPath: String?,
         assessedWorkingDirectory: String?
     ) throws -> ManagedAgentLaunchPlan {
         guard let sessionRuntimeStore else {
@@ -417,8 +435,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             launchEnvironment: request.environment,
             codexStatusTrackingSource: codexStatusTrackingSource,
             codexSkillsIntegration: effectiveCodexSkillsConfiguration,
-            claudeSkillsIntegration: claudeSkillsConfiguration,
-            claudeUserPluginRootPath: claudeUserPluginRootPath
+            stagedSkillsIntegration: stagedSkillsConfiguration,
+            deliveredUserSkillsRootPath: deliveredUserSkillsRootPath
         )
         let launchStart = nowProvider()
         let parentSessionID = resolvedParentSessionID(
@@ -633,8 +651,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         launchEnvironment: [String: String],
         codexStatusTrackingSource: CodexStatusTrackingSource,
         codexSkillsIntegration: CodexSkillsLaunchConfiguration?,
-        claudeSkillsIntegration: ClaudeSkillsLaunchConfiguration?,
-        claudeUserPluginRootPath: String? = nil
+        stagedSkillsIntegration: ClaudeSkillsLaunchConfiguration?,
+        deliveredUserSkillsRootPath: String? = nil
     ) -> PreparedAgentLaunchCommand {
         do {
             return try AgentLaunchInstrumentation.prepare(
@@ -647,8 +665,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 launchEnvironment: launchEnvironment,
                 codexStatusTrackingSource: codexStatusTrackingSource,
                 codexSkillsIntegration: codexSkillsIntegration,
-                claudeSkillsIntegration: claudeSkillsIntegration,
-                claudeUserPluginRootPath: claudeUserPluginRootPath
+                stagedSkillsIntegration: stagedSkillsIntegration,
+                deliveredUserSkillsRootPath: deliveredUserSkillsRootPath
             )
         } catch {
             ToasttyLog.warning(

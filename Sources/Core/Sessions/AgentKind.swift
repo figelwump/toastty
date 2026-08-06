@@ -43,6 +43,20 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
     public static let pi = Self(rawValue: "pi")!
     public static let processWatch = Self(rawValue: "process-watch")!
 
+    /// Runtimes that take Toastty's staged skills tree additively at launch —
+    /// the shipped `skills/<name>/SKILL.md` tree, plus the user snapshot's
+    /// tree when one is delivered — without rewriting any user configuration.
+    /// Codex is deliberately absent: it receives the same payloads through its
+    /// managed profile overlay instead.
+    public var usesStagedSkillsTree: Bool {
+        switch self {
+        case .claude, .mimocode, .opencode, .pi:
+            return true
+        default:
+            return false
+        }
+    }
+
     public var displayName: String {
         switch self {
         case .claude:

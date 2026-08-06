@@ -191,6 +191,12 @@ final class UserSkillsManagementModel: ObservableObject {
             : "Delivered on next launch"
     }
 
+    /// Pi, OpenCode, and MiMo Code consume the same verified user-skills
+    /// snapshot Claude Code does, so their delivery detail mirrors it.
+    var otherRuntimesDeliveryDetail: String {
+        claudeDeliveryDetail
+    }
+
     static func statusDescription(for package: UserSkillPackage) -> String {
         switch package.status {
         case .accepted:
@@ -434,7 +440,7 @@ struct ToasttySkillsManagementSheet: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Toastty Skills")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Toastty provides its four shipped skills, plus your user-created skills, to managed Codex and Claude Code sessions. Ordinary sessions are unaffected.")
+                Text("Toastty provides its four shipped skills, plus your user-created skills, to managed Codex, Claude Code, Pi, OpenCode, and MiMo Code sessions. Ordinary sessions are unaffected.")
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -450,6 +456,7 @@ struct ToasttySkillsManagementSheet: View {
         VStack(spacing: 12) {
             codexStatusCard
             claudeStatusCard
+            otherRuntimesStatusCard
         }
     }
 
@@ -552,6 +559,47 @@ struct ToasttySkillsManagementSheet: View {
         .accessibilityIdentifier("sheet.claude-skills.status")
     }
 
+    /// Pi, OpenCode, and MiMo Code consume the same staged skills tree Claude
+    /// Code does, so this card reuses `claudeModel`'s status rather than
+    /// running a second fetch against the shared bundle manager.
+    private var otherRuntimesStatusCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: claudeStatusSymbolName)
+                    .foregroundStyle(claudeStatusColor)
+                Text("Pi, OpenCode, MiMo Code")
+                    .font(.system(size: 13, weight: .semibold))
+                statusPill(claudeStatusTitle, color: claudeStatusColor)
+                Spacer()
+                if claudeModel.isWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            Text(otherRuntimesStatusDetail)
+                .font(.system(size: 12))
+                .foregroundStyle(
+                    claudeStatusIsUnavailable
+                        ? ToastyTheme.sessionErrorText
+                        : ToastyTheme.mutedText
+                )
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Pi adds skills per launch with --skill; OpenCode and MiMo Code add them through per-launch config content.")
+                .font(.system(size: 11))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(ToastyTheme.hairline, lineWidth: 1)
+        }
+        .accessibilityIdentifier("sheet.other-runtimes-skills.status")
+    }
+
     private var skillsList: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Shipped Skills")
@@ -568,7 +616,7 @@ struct ToasttySkillsManagementSheet: View {
                 .accessibilityIdentifier("sheet.toastty-skills.skill.\(skill.name)")
             }
 
-            Text("Toastty does not change separately installed global skills. If duplicate, unnamespaced Toastty skills appear, remove those copies manually from ~/.codex/skills, ~/.claude/skills, or ~/.agents/skills.")
+            Text(Self.duplicateSkillsGuidanceText)
                 .font(.system(size: 11))
                 .foregroundStyle(ToastyTheme.inactiveText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -631,6 +679,7 @@ struct ToasttySkillsManagementSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Codex: \(userSkillsModel.codexDeliveryDetail)")
                 Text("Claude Code: \(userSkillsModel.claudeDeliveryDetail)")
+                Text("Pi, OpenCode, MiMo Code: \(userSkillsModel.otherRuntimesDeliveryDetail)")
                 Text("Running sessions keep the skills they launched with; new launches use the current set.")
             }
             .font(.system(size: 11))
@@ -831,6 +880,26 @@ struct ToasttySkillsManagementSheet: View {
         guard case .unavailable = claudeModel.status else { return false }
         return true
     }
+
+    private var otherRuntimesStatusDetail: String {
+        Self.otherRuntimesStatusDetail(for: claudeModel.status)
+    }
+
+    /// Static for testability, matching `ManagedAgentSkillsProvisionedBanner.message(for:)`.
+    static func otherRuntimesStatusDetail(for status: ClaudeSkillsDeliveryStatus?) -> String {
+        switch status {
+        case .providedAtLaunch(let configuration):
+            return "Toastty passes version \(configuration.version) only to managed Pi, OpenCode, and MiMo Code launches."
+        case .stagesOnNextLaunch(let version):
+            return "Toastty will stage version \(version) when the next managed Pi, OpenCode, or MiMo Code session launches."
+        case .unavailable(let detail):
+            return detail
+        case nil:
+            return "Checking Toastty's bundled skills for Pi, OpenCode, and MiMo Code."
+        }
+    }
+
+    static let duplicateSkillsGuidanceText = "Toastty does not change separately installed global skills. If duplicate, unnamespaced Toastty skills appear, remove those copies manually: Codex checks ~/.codex/skills; Claude Code checks ~/.claude/skills; Pi checks <project>/.pi/skills, .agents/skills in the project and its ancestors, ~/.pi/agent/skills, and ~/.agents/skills; OpenCode and MiMo Code check project and home .opencode/skills, .claude/skills, .agents/skills, and .mimocode/skills (MiMo Code also checks ~/.codex/skills). For Pi, a discovered copy silently wins over the one Toastty injects. For OpenCode and MiMo Code, whichever same-named copy loads first wins, and that can vary between launches."
 }
 
 struct ManagedAgentSkillsProvisionedBanner: View {

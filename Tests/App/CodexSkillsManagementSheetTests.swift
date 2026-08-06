@@ -147,6 +147,64 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         )
     }
 
+    // MARK: - Other-runtimes status card (Pi, OpenCode, MiMo Code)
+
+    func testOtherRuntimesStatusDetailForProvidedAtLaunch() {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/plugin",
+            skillsRootPath: "/tmp/plugin/skills",
+            version: "0.1.0-abc",
+            contentDigest: "digest"
+        )
+        XCTAssertEqual(
+            ToasttySkillsManagementSheet.otherRuntimesStatusDetail(
+                for: .providedAtLaunch(configuration)
+            ),
+            "Toastty passes version 0.1.0-abc only to managed Pi, OpenCode, and MiMo Code launches."
+        )
+    }
+
+    func testOtherRuntimesStatusDetailForStagesOnNextLaunch() {
+        XCTAssertEqual(
+            ToasttySkillsManagementSheet.otherRuntimesStatusDetail(
+                for: .stagesOnNextLaunch(version: "0.2.0-def")
+            ),
+            "Toastty will stage version 0.2.0-def when the next managed Pi, OpenCode, or MiMo Code session launches."
+        )
+    }
+
+    func testOtherRuntimesStatusDetailForUnavailable() {
+        XCTAssertEqual(
+            ToasttySkillsManagementSheet.otherRuntimesStatusDetail(
+                for: .unavailable(detail: "Toastty could not verify the staged skills plugin.")
+            ),
+            "Toastty could not verify the staged skills plugin."
+        )
+    }
+
+    func testOtherRuntimesStatusDetailWhileChecking() {
+        XCTAssertEqual(
+            ToasttySkillsManagementSheet.otherRuntimesStatusDetail(for: nil),
+            "Checking Toastty's bundled skills for Pi, OpenCode, and MiMo Code."
+        )
+    }
+
+    // MARK: - Duplicate-skills guidance copy
+
+    func testDuplicateSkillsGuidanceMentionsEveryRuntimesDiscoveryDirectories() {
+        let guidance = ToasttySkillsManagementSheet.duplicateSkillsGuidanceText
+
+        XCTAssertTrue(guidance.contains("~/.codex/skills"))
+        XCTAssertTrue(guidance.contains("~/.claude/skills"))
+        XCTAssertTrue(guidance.contains(".pi/skills"))
+        XCTAssertTrue(guidance.contains("~/.pi/agent/skills"))
+        XCTAssertTrue(guidance.contains("~/.agents/skills"))
+        XCTAssertTrue(guidance.contains(".opencode/skills"))
+        XCTAssertTrue(guidance.contains(".mimocode/skills"))
+        XCTAssertTrue(guidance.contains("discovered copy silently wins"))
+        XCTAssertTrue(guidance.contains("loads first wins"))
+    }
+
     // MARK: - User skills section model
 
     @MainActor
@@ -174,6 +232,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         XCTAssertNil(model.snapshotDigest)
         XCTAssertEqual(model.codexDeliveryDetail, "No user skills are staged for delivery.")
         XCTAssertEqual(model.claudeDeliveryDetail, "No user skills are staged for delivery.")
+        XCTAssertEqual(model.otherRuntimesDeliveryDetail, "No user skills are staged for delivery.")
         XCTAssertFalse(model.isWorking)
     }
 
@@ -210,6 +269,7 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
         XCTAssertEqual(model.snapshotDigest, "abcdef1234567890")
         XCTAssertEqual(model.codexDeliveryDetail, "Ready for next launch — digest abcdef12")
         XCTAssertEqual(model.claudeDeliveryDetail, "Delivered on next launch")
+        XCTAssertEqual(model.otherRuntimesDeliveryDetail, "Delivered on next launch")
     }
 
     @MainActor

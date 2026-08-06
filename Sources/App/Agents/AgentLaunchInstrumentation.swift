@@ -77,6 +77,21 @@ enum AgentLaunchInstrumentationError: LocalizedError {
 enum AgentLaunchInstrumentation {
     nonisolated(unsafe) static var piExtensionPathProviderForTesting: (() -> String?)?
 
+    /// Whether a pi launch with this argv will actually receive injected
+    /// skills, composing the same extension and skills gates `prepare` applies.
+    /// The planner consults this so the skills-provisioned notice is never
+    /// posted for a launch whose caller explicitly opted out.
+    static func piLaunchWillInjectSkills(argv: [String]) -> Bool {
+        let commandIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .pi, argv: argv)
+        return piLaunchAllowsExtensionInjection(argv: argv, commandIndex: commandIndex)
+            && piLaunchAllowsSkillsInjection(argv: argv, commandIndex: commandIndex)
+    }
+
+    /// `stagedSkillsIntegration` is the staged shipped-skills payload shared by
+    /// every additive runtime, and `deliveredUserSkillsRootPath` is the caller's
+    /// runtime-specific projection of the user skills snapshot (Claude consumes
+    /// the plugin root; the other additive runtimes consume the plain skills
+    /// tree). Codex takes both through its profile overlay instead.
     static func prepare(
         agent: AgentKind,
         argv: [String],
@@ -87,8 +102,8 @@ enum AgentLaunchInstrumentation {
         launchEnvironment: [String: String] = [:],
         codexStatusTrackingSource: CodexStatusTrackingSource = .sessionLogFallback(reason: "default"),
         codexSkillsIntegration: CodexSkillsLaunchConfiguration? = nil,
-        claudeSkillsIntegration: ClaudeSkillsLaunchConfiguration? = nil,
-        claudeUserPluginRootPath: String? = nil
+        stagedSkillsIntegration: ClaudeSkillsLaunchConfiguration? = nil,
+        deliveredUserSkillsRootPath: String? = nil
     ) throws -> PreparedAgentLaunchCommand {
         if agent == .claude {
             return try prepareClaudeLaunch(
@@ -97,8 +112,8 @@ enum AgentLaunchInstrumentation {
                 sessionID: sessionID,
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
-                skillsIntegration: claudeSkillsIntegration,
-                userPluginRootPath: claudeUserPluginRootPath
+                skillsIntegration: stagedSkillsIntegration,
+                userPluginRootPath: deliveredUserSkillsRootPath
             )
         }
 
@@ -122,7 +137,9 @@ enum AgentLaunchInstrumentation {
                 sessionID: sessionID,
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
-                launchEnvironment: launchEnvironment
+                launchEnvironment: launchEnvironment,
+                skillsIntegration: stagedSkillsIntegration,
+                userSkillsRootPath: deliveredUserSkillsRootPath
             )
         }
 
@@ -134,12 +151,20 @@ enum AgentLaunchInstrumentation {
                 sessionID: sessionID,
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
-                launchEnvironment: launchEnvironment
+                launchEnvironment: launchEnvironment,
+                skillsIntegration: stagedSkillsIntegration,
+                userSkillsRootPath: deliveredUserSkillsRootPath
             )
         }
 
         if agent == .pi {
-            return try preparePiLaunch(argv: argv, sessionID: sessionID, fileManager: fileManager)
+            return try preparePiLaunch(
+                argv: argv,
+                sessionID: sessionID,
+                fileManager: fileManager,
+                skillsIntegration: stagedSkillsIntegration,
+                userSkillsRootPath: deliveredUserSkillsRootPath
+            )
         }
 
         return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
@@ -315,7 +340,9 @@ enum AgentLaunchInstrumentation {
         sessionID: String,
         workingDirectory: String?,
         fileManager: FileManager,
-        launchEnvironment: [String: String]
+        launchEnvironment: [String: String],
+        skillsIntegration: ClaudeSkillsLaunchConfiguration?,
+        userSkillsRootPath: String?
     ) throws -> PreparedAgentLaunchCommand {
         if normalizedNonEmptyValue(launchEnvironment[runtime.configContentEnvironmentKey]) != nil {
             throw AgentLaunchInstrumentationError.agentConfigContentEnvironmentAlreadySet(
@@ -346,19 +373,30 @@ enum AgentLaunchInstrumentation {
                 ).appending("\n").utf8
             ).write(to: pluginURL, options: .atomic)
 
-            let configContent: [String: Any] = [
+            var configContent: [String: Any] = [
                 "plugin": [
                     pluginURL.absoluteURL.standardizedFileURL.absoluteString,
                 ],
             ]
+            var environment: [String: String] = [:]
+            // `skills.paths` entries must be plain absolute paths: unlike
+            // `plugin`, a `file://` URI silently discovers nothing. The whole
+            // object replaces any `skills` the user's own config layers set,
+            // so it is emitted only alongside the shipped tree.
+            if let skillsIntegration {
+                var skillsPaths = [skillsIntegration.skillsRootPath]
+                if let userSkillsRootPath = normalizedNonEmptyValue(userSkillsRootPath) {
+                    skillsPaths.append(userSkillsRootPath)
+                }
+                configContent["skills"] = ["paths": skillsPaths]
+                environment[ToasttyLaunchContextEnvironment.skillsRootKey] = skillsIntegration.skillsRootPath
+            }
             let configData = try JSONSerialization.data(withJSONObject: configContent, options: [.sortedKeys])
-            let configString = String(decoding: configData, as: UTF8.self)
+            environment[runtime.configContentEnvironmentKey] = String(decoding: configData, as: UTF8.self)
 
             return PreparedAgentLaunchCommand(
                 argv: argv,
-                environment: [
-                    runtime.configContentEnvironmentKey: configString,
-                ],
+                environment: environment,
                 artifacts: PreparedAgentLaunchArtifacts(
                     directoryURL: artifactsDirectoryURL,
                     codexSessionLogURL: nil,
@@ -374,7 +412,9 @@ enum AgentLaunchInstrumentation {
     private static func preparePiLaunch(
         argv: [String],
         sessionID: String,
-        fileManager: FileManager
+        fileManager: FileManager,
+        skillsIntegration: ClaudeSkillsLaunchConfiguration?,
+        userSkillsRootPath: String?
     ) throws -> PreparedAgentLaunchCommand {
         let artifactsDirectoryURL = try makeArtifactsDirectory(
             prefix: "toastty-pi-launch",
@@ -383,7 +423,7 @@ enum AgentLaunchInstrumentation {
         )
 
         let telemetryLogURL = artifactsDirectoryURL.appendingPathComponent("pi-telemetry.jsonl", isDirectory: false)
-        let environment = [
+        var environment = [
             "TOASTTY_PI_TELEMETRY_LOG_PATH": telemetryLogURL.path,
         ]
 
@@ -405,9 +445,23 @@ enum AgentLaunchInstrumentation {
             throw AgentLaunchInstrumentationError.missingPiExtensionResource
         }
 
+        // `--skill` is repeatable and takes the parent directory of
+        // `<name>/SKILL.md` folders, so the staged trees are additive with any
+        // caller-supplied `--skill`.
+        var launchArguments = ["--extension", extensionPath]
+        if piLaunchAllowsSkillsInjection(argv: argv, commandIndex: insertionIndex) {
+            if let skillsIntegration {
+                launchArguments += ["--skill", skillsIntegration.skillsRootPath]
+                environment[ToasttyLaunchContextEnvironment.skillsRootKey] = skillsIntegration.skillsRootPath
+            }
+            if let userSkillsRootPath = normalizedNonEmptyValue(userSkillsRootPath) {
+                launchArguments += ["--skill", userSkillsRootPath]
+            }
+        }
+
         return PreparedAgentLaunchCommand(
             argv: insertingArguments(
-                ["--extension", extensionPath],
+                launchArguments,
                 into: argv,
                 afterIndex: insertionIndex
             ),
@@ -1582,6 +1636,22 @@ private extension AgentLaunchInstrumentation {
                 return true
             }
             if argument == "--no-extensions" || argument == "-ne" {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// pi parses argv as one flat left-to-right scan with no end-of-flags
+    /// boundary — a literal `--` is an unknown-option hard error Toastty never
+    /// inserts — so a caller opt-out counts wherever it sits after the resolved
+    /// command. `--no-skills` only suppresses pi's own discovery roots, but
+    /// Toastty honors it as an explicit "no injected skills" request, mirroring
+    /// the `--no-extensions` precedent.
+    static func piLaunchAllowsSkillsInjection(argv: [String], commandIndex: Int) -> Bool {
+        let startIndex = min(max(commandIndex + 1, 0), argv.count)
+        for argument in argv.dropFirst(startIndex) {
+            if argument == "--no-skills" || argument == "-ns" {
                 return false
             }
         }
