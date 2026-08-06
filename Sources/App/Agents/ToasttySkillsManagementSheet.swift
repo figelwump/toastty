@@ -165,6 +165,10 @@ final class UserSkillsManagementModel: ObservableObject {
         return "User Skills — \(acceptedCount) included"
     }
 
+    var userSkillsDirectoryDisplayPath: String {
+        NSString(string: userSkillsDirectoryPath).abbreviatingWithTildeInPath
+    }
+
     var showsCreateFolderAffordance: Bool {
         userSkillsDirectoryExists == false
     }
@@ -609,6 +613,11 @@ struct ToasttySkillsManagementSheet: View {
                 }
             }
 
+            Text("Put custom Toastty skills in \(userSkillsModel.userSkillsDirectoryDisplayPath) and they load automatically into new agent sessions.")
+                .font(.system(size: 12))
+                .foregroundStyle(ToastyTheme.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+
             if let catalogState = userSkillsModel.catalogState, catalogState.packages.isEmpty == false {
                 ForEach(catalogState.packages, id: \.name) { package in
                     VStack(alignment: .leading, spacing: 3) {
@@ -627,7 +636,7 @@ struct ToasttySkillsManagementSheet: View {
                     .accessibilityIdentifier("sheet.toastty-skills.user.\(package.name)")
                 }
             } else {
-                Text("No user skills found. Add a skill as \(userSkillsModel.userSkillsDirectoryPath)/<name>/SKILL.md with name and description frontmatter.")
+                Text("No user skills found. Add a skill as <name>/SKILL.md with name and description frontmatter.")
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
