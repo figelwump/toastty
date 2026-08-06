@@ -27,19 +27,16 @@ public enum ManagedAgentPathResolver {
         )
 
         for directoryPath in pathComponents {
-            if let canonicalDirectoryPath = canonicalPathProvider(directoryPath),
-               canonicalExcludedDirectoryPaths.contains(canonicalDirectoryPath) {
-                continue
-            }
-
             let candidatePath = URL(fileURLWithPath: directoryPath, isDirectory: true)
                 .appendingPathComponent(commandName, isDirectory: false)
                 .path
-            if let canonicalCandidatePath = canonicalPathProvider(candidatePath),
-               canonicalExcludedExecutablePaths.contains(canonicalCandidatePath) {
-                continue
-            }
-            if isExecutableFile(candidatePath) {
+            if isExecutablePathAllowed(
+                candidatePath,
+                canonicalExcludedDirectoryPaths: canonicalExcludedDirectoryPaths,
+                canonicalExcludedExecutablePaths: canonicalExcludedExecutablePaths,
+                canonicalPathProvider: canonicalPathProvider,
+                isExecutableFile: isExecutableFile
+            ) {
                 return candidatePath
             }
         }
@@ -70,6 +67,52 @@ public enum ManagedAgentPathResolver {
         }
         guard entries.isEmpty == false else { return nil }
         return entries.joined(separator: ":")
+    }
+
+    public static func isExecutablePathAllowed(
+        _ executablePath: String,
+        excludedDirectoryPaths: Set<String> = [],
+        excludedExecutablePaths: Set<String> = [],
+        canonicalPathProvider: (String) -> String? = defaultCanonicalPath(for:),
+        isExecutableFile: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> Bool {
+        let canonicalExcludedDirectoryPaths = Set(
+            excludedDirectoryPaths.compactMap(canonicalPathProvider)
+        )
+        let canonicalExcludedExecutablePaths = Set(
+            excludedExecutablePaths.compactMap(canonicalPathProvider)
+        )
+
+        return isExecutablePathAllowed(
+            executablePath,
+            canonicalExcludedDirectoryPaths: canonicalExcludedDirectoryPaths,
+            canonicalExcludedExecutablePaths: canonicalExcludedExecutablePaths,
+            canonicalPathProvider: canonicalPathProvider,
+            isExecutableFile: isExecutableFile
+        )
+    }
+
+    private static func isExecutablePathAllowed(
+        _ executablePath: String,
+        canonicalExcludedDirectoryPaths: Set<String>,
+        canonicalExcludedExecutablePaths: Set<String>,
+        canonicalPathProvider: (String) -> String?,
+        isExecutableFile: (String) -> Bool
+    ) -> Bool {
+        let directoryPath = URL(fileURLWithPath: executablePath, isDirectory: false)
+            .deletingLastPathComponent()
+            .path
+        if let canonicalDirectoryPath = canonicalPathProvider(directoryPath),
+           canonicalExcludedDirectoryPaths.contains(canonicalDirectoryPath) {
+            return false
+        }
+
+        if let canonicalExecutablePath = canonicalPathProvider(executablePath),
+           canonicalExcludedExecutablePaths.contains(canonicalExecutablePath) {
+            return false
+        }
+
+        return isExecutableFile(executablePath)
     }
 
     private static func mergedPathComponents(

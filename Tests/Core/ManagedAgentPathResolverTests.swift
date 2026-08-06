@@ -83,4 +83,31 @@ struct ManagedAgentPathResolverTests {
 
         #expect(path == "\(binAliasURL.path):/usr/bin")
     }
+
+    @Test
+    func executablePathValidationRejectsSymlinkToExcludedExecutable() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("managed-agent-path-resolver-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+
+        let shimExecutableURL = rootURL.appendingPathComponent("toastty-agent-shim", isDirectory: false)
+        let piLinkURL = rootURL.appendingPathComponent("pi", isDirectory: false)
+        try "#!/bin/sh\nexit 0\n".write(to: shimExecutableURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: shimExecutableURL.path
+        )
+        try FileManager.default.createSymbolicLink(at: piLinkURL, withDestinationURL: shimExecutableURL)
+
+        let isAllowed = ManagedAgentPathResolver.isExecutablePathAllowed(
+            piLinkURL.path,
+            excludedExecutablePaths: [shimExecutableURL.path],
+            canonicalPathProvider: { path in
+                URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+            }
+        )
+
+        #expect(isAllowed == false)
+    }
 }

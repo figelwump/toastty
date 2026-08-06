@@ -1220,6 +1220,66 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         XCTAssertEqual(secondEvents.map(\.detail), ["Second prompt"])
     }
 
+    func testWatcherRetainsResolvedCollaborationCallAcrossCursorResume() async throws {
+        let logURL = try makeLogURL()
+        let cursorState = CodexSessionLogCursorState()
+        let checkpointExpectation = expectation(description: "First watcher checkpoints parser state")
+        let firstWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            if event.kind == .turnStarted {
+                checkpointExpectation.fulfill()
+            }
+        }
+
+        firstWatcher.start()
+        try append(
+            #"""
+            {"timestamp":"2026-08-03T22:40:51.000Z","type":"response_item","payload":{"type":"function_call","name":"interrupt_agent","namespace":"collaboration","arguments":"{\"target\":\"/root/reusable\"}","call_id":"call_interrupt"}}
+            {"timestamp":"2026-08-03T22:40:51.050Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_interrupt","output":"{\"previous_status\":\"running\"}"}}
+            {"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-checkpoint","msg":{"type":"user_message","message":"Checkpoint"}}}
+            """# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [checkpointExpectation], timeout: 1)
+        await firstWatcher.stop()
+
+        let recorder = EventRecorder()
+        let lifecycleExpectation = expectation(description: "Resumed watcher retains tool correlation")
+        let secondWatcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000,
+            cursorState: cursorState
+        ) { event in
+            await recorder.append(event)
+            lifecycleExpectation.fulfill()
+        }
+
+        secondWatcher.start()
+        try append(
+            #"{"timestamp":"2026-08-03T22:40:51.100Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_interrupt","agent_thread_id":"thread-reusable","agent_path":"/root/reusable","kind":"interrupted"}}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [lifecycleExpectation], timeout: 1)
+        await secondWatcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/reusable",
+                    hookActivityID: "thread-reusable",
+                    kind: .subagent,
+                    turnTransition: .deactivated
+                )
+            ),
+        ])
+    }
+
     func testWatcherDoesNotCommitOrEmitTrailingLineUntilNewlineAfterRestart() async throws {
         let logURL = try makeLogURL()
         let cursorState = CodexSessionLogCursorState()
@@ -1611,6 +1671,107 @@ final class CodexSessionLogWatcherTests: XCTestCase {
             events.compactMap(\.backgroundActivity?.activityID),
             ["/root/reviewer", "/root/reviewer"]
         )
+    }
+
+    func testWatcherCorrelatesReusableAgentInterruptAndFollowUpTurns() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-08-03T22:32:54.000Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"message\":\"Inspect Teller schema contracts\",\"task_name\":\"teller_schema_contract\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-08-03T22:32:54.100Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_spawn","agent_thread_id":"thread-teller","agent_path":"/root/teller_schema_contract","kind":"started"}}
+                {"timestamp":"2026-08-03T22:40:51.000Z","type":"response_item","payload":{"type":"function_call","name":"interrupt_agent","namespace":"collaboration","arguments":"{\"target\":\"/root/teller_schema_contract\"}","call_id":"call_interrupt_1"}}
+                {"timestamp":"2026-08-03T22:40:51.100Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_interrupt_1","agent_thread_id":"thread-teller","agent_path":"/root/teller_schema_contract","kind":"interrupted"}}
+                {"timestamp":"2026-08-03T22:40:56.000Z","type":"response_item","payload":{"type":"function_call","name":"followup_task","namespace":"collaboration","arguments":"{\"target\":\"/root/teller_schema_contract\",\"message\":\"Check one more case\"}","call_id":"call_followup"}}
+                {"timestamp":"2026-08-03T22:40:56.100Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_followup","agent_thread_id":"thread-teller","agent_path":"/root/teller_schema_contract","kind":"interacted"}}
+                {"timestamp":"2026-08-03T22:42:25.000Z","type":"response_item","payload":{"type":"function_call","name":"interrupt_agent","namespace":"collaboration","arguments":"{\"target\":\"/root/teller_schema_contract\"}","call_id":"call_interrupt_2"}}
+                {"timestamp":"2026-08-03T22:42:25.100Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_interrupt_2","agent_thread_id":"thread-teller","agent_path":"/root/teller_schema_contract","kind":"interrupted"}}
+                """#,
+            expectedCount: 4
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started teller_schema_contract",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/teller_schema_contract",
+                    hookActivityID: "thread-teller",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "teller_schema_contract",
+                    command: "Inspect Teller schema contracts"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/teller_schema_contract",
+                    hookActivityID: "thread-teller",
+                    kind: .subagent,
+                    turnTransition: .deactivated
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started teller_schema_contract",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/teller_schema_contract",
+                    hookActivityID: "thread-teller",
+                    kind: .subagent,
+                    displayName: "teller_schema_contract",
+                    turnTransition: .activated
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/teller_schema_contract",
+                    hookActivityID: "thread-teller",
+                    kind: .subagent,
+                    turnTransition: .deactivated
+                )
+            ),
+        ])
+    }
+
+    func testWatcherRetainsLifecycleCorrelationAfterToolOutput() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-08-03T22:40:51.000Z","type":"response_item","payload":{"type":"function_call","name":"interrupt_agent","namespace":"collaboration","arguments":"{\"target\":\"/root/reusable\"}","call_id":"call_interrupt"}}
+                {"timestamp":"2026-08-03T22:40:51.050Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_interrupt","output":"{\"previous_status\":\"running\"}"}}
+                {"timestamp":"2026-08-03T22:40:51.100Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_interrupt","agent_thread_id":"thread-reusable","agent_path":"/root/reusable","kind":"interrupted"}}
+                {"timestamp":"2026-08-03T22:40:56.000Z","type":"response_item","payload":{"type":"function_call","name":"followup_task","namespace":"collaboration","arguments":"{\"target\":\"/root/reusable\",\"message\":\"Continue\"}","call_id":"call_followup"}}
+                {"timestamp":"2026-08-03T22:40:56.050Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_followup","output":""}}
+                {"timestamp":"2026-08-03T22:40:56.100Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_followup","agent_path":"/root/reusable","kind":"interacted"}}
+                """#,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/reusable",
+                    hookActivityID: "thread-reusable",
+                    kind: .subagent,
+                    turnTransition: .deactivated
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started reusable",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/reusable",
+                    kind: .subagent,
+                    displayName: "reusable",
+                    turnTransition: .activated
+                )
+            ),
+        ])
     }
 
     func testWatcherUsesCollaborationOccurrenceTimeForReplayCutoff() async throws {

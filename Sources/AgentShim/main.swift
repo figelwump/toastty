@@ -349,7 +349,16 @@ private enum AgentCommandShim {
                 .compactMap { basePathResolver.resolveExecutable(commandName: $0) }
                 .first
         }
-        guard let executableResolution else { return nil }
+        guard let executableResolution,
+              ManagedAgentPathResolver.isExecutablePathAllowed(
+                  executableResolution.executablePath,
+                  excludedDirectoryPaths: excludedDirectoryPaths,
+                  excludedExecutablePaths: currentExecutablePaths,
+                  canonicalPathProvider: canonicalPath(for:),
+                  isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
+              ) else {
+            return nil
+        }
 
         let executableProbeAgentBasePath = ManagedAgentPathResolver.mergedPath(
             currentPath: effectiveAgentBasePath,
