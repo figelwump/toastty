@@ -240,12 +240,14 @@ When the profile ID is `codex`, Toastty:
 8. **Filters Codex thread metadata** so spawned subagent hook or notify completions do not clear the parent session's **Working** state. Codex `Stop` hooks must match the latched root thread or root turn before they can mark a managed session **Ready**; `Stop` hooks do not establish the root identity by themselves.
 9. **Logs helper delivery failures**. The installed Codex hook forwarder writes failures to `~/.toastty/codex-hooks/telemetry-failures.log`; fallback notify helper failures go to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active.
 
-Uninstall removes only Toastty-owned state: the plugin cache subtrees under
-`$CODEX_HOME/plugins/cache/toastty/` and `$CODEX_HOME/plugins/cache/toastty-user/`,
-the `toastty-managed.config.toml` overlay (only while it carries Toastty's
-ownership marker), and the receipts under `~/.toastty/agent-plugins/codex/`. It
-leaves hooks, the user's `config.toml`, unrelated Codex state, and all globally
-or repository-locally installed skills untouched.
+To remove Toastty's Codex state by hand (for example after deleting the app),
+delete the plugin cache subtrees under `$CODEX_HOME/plugins/cache/toastty/` and
+`$CODEX_HOME/plugins/cache/toastty-user/`, the `toastty-managed.config.toml`
+overlay, and the receipts under `~/.toastty/agent-plugins/codex/`. All of it is
+inert for ordinary Codex sessions, and the next managed launch simply
+re-provisions whatever is missing; hooks, the user's `config.toml`, unrelated
+Codex state, and all globally or repository-locally installed skills are never
+part of Toastty's skill state.
 
 Toastty shows one nonblocking notice the first time it successfully provides
 skills to each agent. It does not inspect or modify `~/.codex/skills`,

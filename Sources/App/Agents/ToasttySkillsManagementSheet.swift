@@ -72,14 +72,6 @@ final class CodexSkillsManagementModel: ObservableObject {
         }
     }
 
-    func uninstall(hasActiveManagedCodexSession: Bool) {
-        runOperation(refreshProcessPath: true) { manager, runtime in
-            return try manager.uninstall(
-                runtime: runtime,
-                hasActiveManagedCodexSession: hasActiveManagedCodexSession
-            )
-        }
-    }
 }
 
 @MainActor
@@ -358,7 +350,6 @@ struct ToasttySkillsManagementSheet: View {
     @StateObject private var model: CodexSkillsManagementModel
     @StateObject private var claudeModel: ClaudeSkillsManagementModel
     @StateObject private var userSkillsModel: UserSkillsManagementModel
-    @State private var showsUninstallConfirmation = false
     @State private var detailsExpanded = false
     @Environment(\.dismiss) private var dismiss
 
@@ -410,20 +401,6 @@ struct ToasttySkillsManagementSheet: View {
         .foregroundStyle(ToastyTheme.primaryText)
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(model.isWorking)
-        .confirmationDialog(
-            "Uninstall Toastty Codex Skills?",
-            isPresented: $showsUninstallConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Uninstall", role: .destructive) {
-                model.uninstall(
-                    hasActiveManagedCodexSession: hasActiveManagedCodexSession
-                )
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes only Toastty's cached Codex plugin, its managed profile file, and Toastty's receipt. Your Codex config.toml, hooks, and unrelated skills are not changed.")
-        }
         .onAppear {
             model.refresh(hasActiveManagedCodexSession: hasActiveManagedCodexSession)
             claudeModel.refresh()
@@ -724,7 +701,7 @@ struct ToasttySkillsManagementSheet: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ToastyTheme.mutedText)
                 if hasActiveManagedCodexSession {
-                    Text("Uninstall is available after managed Codex sessions stop. Running sessions pick up repairs after restart.")
+                    Text("Running sessions pick up repairs after restart.")
                         .font(.system(size: 11))
                         .foregroundStyle(ToastyTheme.inactiveText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -736,16 +713,6 @@ struct ToasttySkillsManagementSheet: View {
             }
             .disabled(model.isWorking)
             .accessibilityIdentifier("sheet.codex-skills.repair")
-
-            Button("Uninstall…", role: .destructive) {
-                showsUninstallConfirmation = true
-            }
-            .disabled(
-                model.isWorking
-                    || hasActiveManagedCodexSession
-                    || model.status?.installedVersion == nil
-            )
-            .accessibilityIdentifier("sheet.codex-skills.uninstall")
         }
     }
 
@@ -899,7 +866,7 @@ struct ToasttySkillsManagementSheet: View {
         }
     }
 
-    static let duplicateSkillsGuidanceText = "Toastty does not change separately installed global skills. If duplicate, unnamespaced Toastty skills appear, remove those copies manually: Codex checks ~/.codex/skills; Claude Code checks ~/.claude/skills; Pi checks <project>/.pi/skills, .agents/skills in the project and its ancestors, ~/.pi/agent/skills, and ~/.agents/skills; OpenCode and MiMo Code check project and home .opencode/skills, .claude/skills, .agents/skills, and .mimocode/skills (MiMo Code also checks ~/.codex/skills). For Pi, a discovered copy silently wins over the one Toastty injects. For OpenCode and MiMo Code, whichever same-named copy loads first wins, and that can vary between launches."
+    static let duplicateSkillsGuidanceText = "Toastty never changes global skill folders. If duplicate Toastty skills appear, remove the separately installed copies from ~/.codex/skills, ~/.claude/skills, or ~/.agents/skills."
 }
 
 struct ManagedAgentSkillsProvisionedBanner: View {

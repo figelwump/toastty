@@ -191,18 +191,18 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Duplicate-skills guidance copy
 
-    func testDuplicateSkillsGuidanceMentionsEveryRuntimesDiscoveryDirectories() {
+    func testDuplicateSkillsGuidanceStaysConciseAndNamesDeliveredHosts() {
         let guidance = ToasttySkillsManagementSheet.duplicateSkillsGuidanceText
 
+        // Only the hosts Toastty actually delivers skills to are named, and
+        // the note stays short enough to read at a glance in the sheet.
         XCTAssertTrue(guidance.contains("~/.codex/skills"))
         XCTAssertTrue(guidance.contains("~/.claude/skills"))
-        XCTAssertTrue(guidance.contains(".pi/skills"))
-        XCTAssertTrue(guidance.contains("~/.pi/agent/skills"))
         XCTAssertTrue(guidance.contains("~/.agents/skills"))
-        XCTAssertTrue(guidance.contains(".opencode/skills"))
-        XCTAssertTrue(guidance.contains(".mimocode/skills"))
-        XCTAssertTrue(guidance.contains("discovered copy silently wins"))
-        XCTAssertTrue(guidance.contains("loads first wins"))
+        XCTAssertTrue(guidance.contains("never changes global skill folders"))
+        XCTAssertFalse(guidance.contains(".pi/skills"))
+        XCTAssertFalse(guidance.contains(".opencode/skills"))
+        XCTAssertLessThan(guidance.count, 220)
     }
 
     // MARK: - User skills section model
