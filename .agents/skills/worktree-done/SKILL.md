@@ -1,68 +1,50 @@
 ---
 name: worktree-done
-description: Use this skill when the user wants to land the current Toastty worktree branch onto `main`, validate the merged result, report the outcome, and then optionally delete the worktree after explicit user approval.
+description: Use this repo-local skill when the user wants to land the current Toastty worktree branch onto `main`, validate the merged result, report the outcome, and then optionally delete the worktree after explicit user approval.
 ---
 
 # Worktree Done
 
-Use this workflow when a task is complete in a Toastty worktree and the next step is to land it on `main` and clean up safely.
+Use this workflow only for Toastty repository worktrees whose established
+landing branch is `main`.
 
 ## Core flow
 
-1. Resolve the current worktree context.
-   - Identify the current worktree path and current branch.
-   - Resolve the checkout that owns `main`.
-   - Do not repurpose the task worktree into `main` just to perform the merge.
-2. Preflight before landing anything.
-   - Confirm the current task changes are committed.
-   - Confirm the task worktree is clean.
-   - Confirm the `main` checkout is clean enough to accept a merge.
-   - If `main` has unrelated local changes, stop and ask the user before mixing work.
-3. Update `main` safely.
-   - Bring the `main` checkout up to date when that can be done without discarding local user work.
-   - Never use destructive resets or overwrite uncommitted work in the `main` checkout.
-4. Merge the worktree branch into `main`.
-   - Perform the merge from the `main` checkout, not from inside the feature worktree.
-   - Keep the feature worktree intact until validation passes.
-   - If the merge conflicts, resolve them deliberately and continue only once `main` is coherent again.
-   - Inspect the landed diff for worktree-only artifacts before validation.
-   - In Toastty, `WORKTREE_HANDOFF.md` is a handoff artifact and should not stay on `main` unless the user explicitly wants it committed there.
-5. Validate the merged result on `main`.
-   - Choose validation from the current repo instructions, not from this skill alone.
-   - Prefer the repo’s remote/wrapper validation paths for agent-driven test and smoke runs when they cover the change.
-   - If the change touched UI or runtime behavior, include the relevant smoke validation instead of relying on unit tests alone.
-   - Use local-only validation only when the repo instructions call for it, the check cannot run remotely, or a remote wrapper has failed and you are intentionally continuing with a local fallback.
-6. Report the landing result.
-   - If validation fails, tell the user exactly what failed, keep the worktree intact, and stop.
-   - If validation passes, summarize that `main` now contains the merged work and what validation succeeded.
-7. Ask before cleanup.
-   - After a clean merge and validation, ask the user if they are ready to delete the worktree.
-   - Do not delete the worktree until the user explicitly says yes.
-8. Delete on approval.
-   - Remove the feature worktree safely.
-   - If the feature branch is fully merged and no longer needed, delete the local branch too.
-   - Keep the `main` checkout intact and report what was removed.
+1. Resolve the current worktree path and branch and the checkout that owns
+   `main`. Do not repurpose the task worktree into `main`.
+2. Confirm the task changes are committed and the worktree is clean.
+3. Confirm the `main` checkout is clean enough to accept a merge. If it has
+   unrelated local changes, stop and ask the user before mixing work.
+4. Bring `main` up to date without discarding user work, then merge the
+   worktree branch from the `main` checkout.
+5. Keep the feature worktree intact until validation passes. Resolve conflicts
+   deliberately and inspect the landed diff for worktree-only artifacts.
+   `WORKTREE_HANDOFF.md` should not stay on `main` unless the user explicitly
+   wants it committed.
+6. Validate the merged result using this repository's `AGENTS.md` and
+   `.agents/skills/toastty-verify/SKILL.md`. Include runtime/UI validation when
+   the change requires it.
+7. Report the landing result. If validation fails, keep the worktree intact and
+   stop.
+8. After a clean merge and successful validation, ask whether the user is ready
+   to delete the worktree. Do not delete it without explicit approval.
+9. On approval, remove the feature worktree safely and delete the fully merged
+   local branch when it is no longer needed.
 
-## Important invariants
+## Invariants
 
-- Keep the task worktree as the recovery point until `main` has been merged and validated.
-- Do not claim success based only on a merge; validation must pass on the merged `main` checkout.
-- Do not delete the worktree automatically after a successful merge. The user must opt in.
-- If validation fails, leave both the worktree and branch in place so the user can continue from the same context.
-- Prefer a clean `main` landing path over clever shortcuts.
-- Do not leave `WORKTREE_HANDOFF.md` on `main` as part of routine worktree cleanup.
+- Keep the task worktree as the recovery point until `main` is merged and
+  validated.
+- Never use destructive resets or overwrite uncommitted work.
+- Do not claim success based only on a merge.
+- Do not move work onto `main` without explicit user confirmation.
+- If validation fails, leave both the worktree and branch available.
+- Report whether validation ran remotely, locally, or through a wrapper with
+  fallback.
 
-## Toastty-specific validation
-
-- Read the repo `AGENTS.md` before choosing the final validation set.
-- For agent-driven smoke validation, start with `sv exec -- scripts/remote/validate.sh --smoke-test ...` unless the current repo instructions make a narrower local check more appropriate.
-- For agent-driven `xcodebuild test` validation, prefer `sv exec -- scripts/remote/test.sh -- ...` when test coverage is needed and the wrapper applies.
-- Use `./scripts/automation/check.sh` only when it is explicitly the right validation for the situation, not as a default substitute for remote wrappers.
-- In handoff or completion messages, say whether each validation ran remotely, locally, or via a wrapper with fallback.
-
-## When to stop and ask the user
+## Stop and ask
 
 - The `main` checkout has unrelated local changes.
 - The merge requires a behavior change the user did not approve.
-- Validation fails and the fix is no longer a straightforward continuation of the landed task.
-- The user has not yet said whether the worktree should be deleted.
+- Validation fails and the fix is no longer a straightforward continuation.
+- The user has not approved worktree deletion.

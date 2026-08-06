@@ -103,6 +103,17 @@ public enum CodexSubagentObservation: Equatable, Sendable {
         command: String?
     )
     case rolloutFinish(activityID: ActivityID)
+    /// A correlated `followup_task` started a new turn on a reusable agent.
+    case rolloutTurnActivated(
+        activityID: ActivityID,
+        providerAgentID: ProviderAgentID?,
+        displayName: String?
+    )
+    /// A correlated `interrupt_agent` ended the reusable agent's current turn.
+    case rolloutTurnDeactivated(
+        activityID: ActivityID,
+        providerAgentID: ProviderAgentID?
+    )
     case streamReset
     case stop
 }
@@ -135,6 +146,12 @@ public enum CodexSubagentProjectionDecision: Equatable, Sendable {
         activityID: ActivityID,
         metadata: CodexSubagentProjectionMetadata
     )
+    /// Reopen an explicitly reactivated rollout-fallback turn, clearing the
+    /// application layer's matching finish tombstone as well.
+    case fallbackReopen(
+        activityID: ActivityID,
+        metadata: CodexSubagentProjectionMetadata
+    )
     case authoritativeHookReopen(
         providerAgentID: ProviderAgentID,
         display: CodexSubagentHookReopenDisplay
@@ -155,6 +172,8 @@ public enum CodexSubagentObservationKind: Equatable, Sendable {
     case hookFinish
     case rolloutStart
     case rolloutFinish
+    case rolloutTurnActivated
+    case rolloutTurnDeactivated
     case streamReset
     case stop
 }
@@ -338,6 +357,40 @@ public struct CodexSubagentReconciler: Equatable, Sendable {
         case .rolloutFinish:
             return ignored(.rolloutFinish, because: .incompatibleWithAuthority)
 
+        case .rolloutTurnActivated(_, let providerAgentID, let displayName):
+            guard let providerAgentID else {
+                return ignored(
+                    .rolloutTurnActivated,
+                    because: .missingExactCorrelationIdentifiers
+                )
+            }
+            clearTombstone(for: .providerAgent(providerAgentID))
+            let display: CodexSubagentHookReopenDisplay
+            if let meaningfulName = meaningfulDisplayName(displayName) {
+                display = .replace(meaningfulName)
+            } else {
+                display = .preserveExisting(defaultValue: "Sub-agent")
+            }
+            return CodexSubagentReduction(decisions: [
+                .authoritativeHookReopen(
+                    providerAgentID: providerAgentID,
+                    display: display
+                ),
+            ])
+
+        case .rolloutTurnDeactivated(_, let providerAgentID):
+            guard let providerAgentID else {
+                return ignored(
+                    .rolloutTurnDeactivated,
+                    because: .missingExactCorrelationIdentifiers
+                )
+            }
+            clearMetadata(for: providerAgentID)
+            recordTombstone(for: .providerAgent(providerAgentID), at: now)
+            return CodexSubagentReduction(decisions: [
+                .finish(.providerAgent(providerAgentID)),
+            ])
+
         case .streamReset:
             return .none
 
@@ -374,6 +427,21 @@ public struct CodexSubagentReconciler: Equatable, Sendable {
             ])
 
         case .rolloutFinish(let activityID):
+            recordTombstone(for: .rolloutActivity(activityID), at: now)
+            return CodexSubagentReduction(decisions: [
+                .finish(.rolloutActivity(activityID)),
+            ])
+
+        case .rolloutTurnActivated(let activityID, _, let displayName):
+            clearTombstone(for: .rolloutActivity(activityID))
+            return CodexSubagentReduction(decisions: [
+                .fallbackReopen(
+                    activityID: activityID,
+                    metadata: CodexSubagentProjectionMetadata(displayName: displayName)
+                ),
+            ])
+
+        case .rolloutTurnDeactivated(let activityID, _):
             recordTombstone(for: .rolloutActivity(activityID), at: now)
             return CodexSubagentReduction(decisions: [
                 .finish(.rolloutActivity(activityID)),

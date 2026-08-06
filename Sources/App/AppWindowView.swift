@@ -19,6 +19,9 @@ struct AppWindowView: View {
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
+    @State private var showsSkillsManagementSheet = false
+    @State private var skillsProvisionedNotice: ManagedAgentSkillsProvisionedNotice?
+    @State private var queuedSkillsProvisionedNotices: [ManagedAgentSkillsProvisionedNotice] = []
     @State private var appIsActive = true
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -98,6 +101,27 @@ struct AppWindowView: View {
 
             // Sidebar toggle button in the title bar area, right of traffic lights
             sidebarToggleButton
+
+            if let skillsProvisionedNotice {
+                ManagedAgentSkillsProvisionedBanner(
+                    notice: skillsProvisionedNotice,
+                    manage: {
+                        advanceSkillsProvisionedNotice()
+                        showsSkillsManagementSheet = true
+                    },
+                    dismiss: {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            advanceSkillsProvisionedNotice()
+                        }
+                    }
+                )
+                .frame(maxWidth: 680)
+                .padding(.top, 42)
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(20)
+            }
         }
         .alert(
             "Close this workspace?",
@@ -121,6 +145,16 @@ struct AppWindowView: View {
             }
         } message: { closeTarget in
             Text(closeTarget.confirmationMessage)
+        }
+        .sheet(isPresented: $showsSkillsManagementSheet) {
+            ToasttySkillsManagementSheet(
+                sessionRuntimeStore: sessionRuntimeStore,
+                codexSkillsManager: agentLaunchService.codexSkillsManager,
+                claudeSkillsBundleManager: agentLaunchService.claudeSkillsBundleManager,
+                userSkillCatalog: agentLaunchService.userSkillCatalog,
+                processPathProvider: agentLaunchService.codexProcessPathSnapshotProvider,
+                processPathRefreshProvider: agentLaunchService.codexProcessPathRefresher
+            )
         }
         .onAppear {
             appIsActive = NSApplication.shared.isActive
@@ -176,6 +210,23 @@ struct AppWindowView: View {
                 performGettingStartedPanelNativeAction(action)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyShowSkillsManagement)) { notification in
+            guard notification.object as? UUID == windowID else { return }
+            showsSkillsManagementSheet = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsProvisioned)) { notification in
+            guard let notice = ManagedAgentSkillsProvisionedNoticeStore.claim(
+                for: windowID,
+                notificationObject: notification.object
+            ) else { return }
+            withAnimation(.easeOut(duration: 0.15)) {
+                if skillsProvisionedNotice == nil {
+                    skillsProvisionedNotice = notice
+                } else if queuedSkillsProvisionedNotices.contains(where: { $0.agent == notice.agent }) == false {
+                    queuedSkillsProvisionedNotices.append(notice)
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
         }
@@ -183,6 +234,14 @@ struct AppWindowView: View {
             appIsActive = false
         }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
+    }
+
+    private func advanceSkillsProvisionedNotice() {
+        if queuedSkillsProvisionedNotices.isEmpty {
+            skillsProvisionedNotice = nil
+        } else {
+            skillsProvisionedNotice = queuedSkillsProvisionedNotices.removeFirst()
+        }
     }
 
     static func effectiveSidebarWidth(

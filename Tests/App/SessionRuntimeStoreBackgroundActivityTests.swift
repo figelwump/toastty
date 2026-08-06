@@ -369,6 +369,86 @@ extension SessionRuntimeStoreTests {
     }
 
     @Test
+    func codexCorrelatedRolloutInterruptAndFollowUpControlHookActivity() {
+        let store = SessionRuntimeStore()
+        defer { store.reset() }
+        let now = Date(timeIntervalSince1970: 1_700_001_260)
+        let sessionID = "sess-codex-correlated-turns"
+        let providerAgentID = "thread-teller"
+        let activityID = "/root/teller_schema_contract"
+
+        store.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            codexStatusTrackingSource: .hooks,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        let hookStart = CodexHookEvent(
+            hookEventName: "SubagentStart",
+            threadID: "thread-root",
+            turnID: "turn-root",
+            promptFingerprint: nil,
+            status: nil,
+            nativeSessionID: "thread-root",
+            sessionFilePath: nil,
+            cwd: nil,
+            subagentID: providerAgentID,
+            subagentType: "reviewer"
+        )
+        #expect(store.handleCodexHookEvent(
+            sessionID: sessionID,
+            event: hookStart,
+            at: now.addingTimeInterval(1)
+        ))
+
+        let interrupted = CodexSessionBackgroundActivity(
+            activityID: activityID,
+            hookActivityID: providerAgentID,
+            kind: .subagent,
+            turnTransition: .deactivated
+        )
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: sessionID,
+            observation: .finished(interrupted),
+            at: now.addingTimeInterval(2)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID[providerAgentID] == nil)
+
+        let followedUp = CodexSessionBackgroundActivity(
+            activityID: activityID,
+            hookActivityID: providerAgentID,
+            kind: .subagent,
+            displayName: "teller_schema_contract",
+            turnTransition: .activated
+        )
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: sessionID,
+            observation: .started(followedUp),
+            at: now.addingTimeInterval(3)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID[providerAgentID]?.displayName == "teller_schema_contract")
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID[activityID] == nil)
+
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: sessionID,
+            observation: .finished(interrupted),
+            at: now.addingTimeInterval(4)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID[providerAgentID] == nil)
+    }
+
+    @Test
     func codexSessionLogFallbackFinishTombstoneBlocksInferredFollowUpStart() {
         let store = SessionRuntimeStore()
         defer { store.reset() }
@@ -412,6 +492,20 @@ extension SessionRuntimeStoreTests {
         ) == false)
         #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
             .backgroundActivitiesByID[activityID] == nil)
+
+        let correlatedFollowUp = CodexSessionBackgroundActivity(
+            activityID: activityID,
+            kind: .subagent,
+            displayName: "plan_review",
+            turnTransition: .activated
+        )
+        #expect(store.handleCodexSubagentRolloutObservation(
+            sessionID: sessionID,
+            observation: .started(correlatedFollowUp),
+            at: now.addingTimeInterval(3)
+        ))
+        #expect(store.sessionRegistry.activeSession(sessionID: sessionID)?
+            .backgroundActivitiesByID[activityID]?.displayName == "plan_review")
     }
 
     @Test

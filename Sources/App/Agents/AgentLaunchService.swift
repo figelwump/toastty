@@ -108,23 +108,60 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
     private let agentCatalogProvider: any AgentCatalogProviding
     private let fileManager: FileManager
     private let managedLaunchPlanner: any ManagedAgentLaunchPlanning
+    private let codexProcessPathProvider: @Sendable () -> String?
+    private let codexProcessPathRefreshProvider: @Sendable () -> String?
+    /// App-scoped skills managers. Production creates exactly one of each in
+    /// `ToasttyApp` and injects them here; the skills-management sheet must use
+    /// these same instances so Repair/Uninstall act on the state the launch
+    /// path reads.
+    let codexSkillsManager: CodexSkillsManager
+    let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
+    let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
+    /// App-scoped user skill catalog, shared with the launch planner. The
+    /// later management UI's Rescan goes through
+    /// `userSkillCatalog.refreshUserSkills()` on this same instance.
+    let userSkillCatalog: ToasttyUserSkillCatalog
 
     init(
         store: AppStore,
         terminalCommandRouter: any TerminalCommandRouting,
         sessionRuntimeStore: SessionRuntimeStore,
         agentCatalogProvider: any AgentCatalogProviding,
+        codexSkillsManager: CodexSkillsManager? = nil,
+        claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
+        userSkillCatalog: ToasttyUserSkillCatalog? = nil,
         fileManager: FileManager = .default,
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath,
         socketPathProvider: @escaping @Sendable () -> String = AgentLaunchService.defaultSocketPath,
         codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = ManagedAgentLaunchPlanner.defaultCodexStatusTrackingSource,
-        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil
+        nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
+        codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
+        codexProcessPathProvider: @escaping @Sendable () -> String? = { nil },
+        codexProcessPathRefreshProvider: @escaping @Sendable () -> String? = { nil }
     ) {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
         self.agentCatalogProvider = agentCatalogProvider
         self.fileManager = fileManager
+        self.codexProcessPathProvider = codexProcessPathProvider
+        self.codexProcessPathRefreshProvider = codexProcessPathRefreshProvider
+        let resolvedCodexSkillsManager = codexSkillsManager
+            ?? CodexSkillsManager(fileManager: fileManager)
+        self.codexSkillsManager = resolvedCodexSkillsManager
+        let resolvedClaudeSkillsBundleManager = claudeSkillsBundleManager
+            ?? ClaudeSkillsBundleManager(fileManager: fileManager)
+        self.claudeSkillsBundleManager = resolvedClaudeSkillsBundleManager
+        let resolvedUserSkillCatalog = userSkillCatalog
+            ?? ToasttyUserSkillCatalog(fileManager: fileManager)
+        self.userSkillCatalog = resolvedUserSkillCatalog
+        let resolvedCodexSkillsResolver = codexSkillsResolver
+            ?? CodexManagedLaunchSkillsResolver(
+                fileManager: fileManager,
+                manager: resolvedCodexSkillsManager,
+                processPathProvider: codexProcessPathProvider
+            )
+        self.codexSkillsResolver = resolvedCodexSkillsResolver
         managedLaunchPlanner = ManagedAgentLaunchPlanner(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
@@ -139,8 +176,19 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             promptState: { [weak terminalCommandRouter] panelID in
                 terminalCommandRouter?.promptState(panelID: panelID) ?? .unavailable
             },
-            nativeSessionObserverRegistry: nativeSessionObserverRegistry
+            nativeSessionObserverRegistry: nativeSessionObserverRegistry,
+            codexSkillsResolver: resolvedCodexSkillsResolver,
+            claudeSkillsBundleManager: resolvedClaudeSkillsBundleManager,
+            userSkillSnapshotProvider: resolvedUserSkillCatalog
         )
+    }
+
+    var codexProcessPathSnapshotProvider: @Sendable () -> String? {
+        codexProcessPathProvider
+    }
+
+    var codexProcessPathRefresher: @Sendable () -> String? {
+        codexProcessPathRefreshProvider
     }
 
     func canLaunchAgent(profileID: String? = nil, workspaceID: UUID? = nil, panelID: UUID? = nil) -> Bool {
@@ -166,6 +214,65 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         parentSessionID: String? = nil,
         focusPolicy: TerminalInputFocusPolicy = .focusTarget
     ) throws -> AgentLaunchResult {
+        let preparation = try makeLaunchPreparation(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            initialPrompt: initialPrompt,
+            initialCommands: initialCommands,
+            parentSessionID: parentSessionID,
+            focusPolicy: focusPolicy
+        )
+        let plan = try managedLaunchPlanner.prepareManagedLaunch(
+            preparation.request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+        return try completeLaunch(preparation, plan: plan)
+    }
+
+    func launchAsync(
+        profileID: String,
+        workspaceID: UUID? = nil,
+        panelID: UUID? = nil,
+        cwd: String? = nil,
+        environment: [String: String] = [:],
+        initialPrompt: String? = nil,
+        initialCommands: [String] = [],
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil,
+        parentSessionID: String? = nil,
+        focusPolicy: TerminalInputFocusPolicy = .focusTarget
+    ) async throws -> AgentLaunchResult {
+        let preparation = try makeLaunchPreparation(
+            profileID: profileID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            cwd: cwd,
+            environment: environment,
+            initialPrompt: initialPrompt,
+            initialCommands: initialCommands,
+            parentSessionID: parentSessionID,
+            focusPolicy: focusPolicy
+        )
+        let plan = try await managedLaunchPlanner.prepareManagedLaunchAsync(
+            preparation.request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+        return try completeLaunch(preparation, plan: plan)
+    }
+
+    private func makeLaunchPreparation(
+        profileID: String,
+        workspaceID: UUID?,
+        panelID: UUID?,
+        cwd: String?,
+        environment: [String: String],
+        initialPrompt: String?,
+        initialCommands: [String],
+        parentSessionID: String?,
+        focusPolicy: TerminalInputFocusPolicy
+    ) throws -> AgentLaunchPreparation {
         guard let terminalCommandRouter else {
             throw AgentLaunchError.serviceUnavailable
         }
@@ -178,10 +285,8 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
                 availableProfileIDs: availableProfileIDs()
             )
         }
-
         let target = try resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)
         try ensurePanelAppearsInteractive(panelID: target.panelID, terminalCommandRouter: terminalCommandRouter)
-
         guard let agent = AgentKind(rawValue: launchProfile.id) else {
             throw AgentLaunchError.profileNotFound(
                 profileID: launchProfile.id,
@@ -189,47 +294,68 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
             )
         }
         let explicitCWD = try normalizedExplicitWorkingDirectory(cwd)
-        let launchEnvironment = try validatedLaunchEnvironment(environment)
-        let launchInitialCommands = try validatedInitialCommands(initialCommands)
-        let launchArgv = try argv(
-            for: launchProfile,
+        return AgentLaunchPreparation(
             agent: agent,
-            applyingInitialPrompt: initialPrompt
-        )
-        let plan = try managedLaunchPlanner.prepareManagedLaunch(
-            ManagedAgentLaunchRequest(
+            displayName: launchProfile.displayName,
+            target: target,
+            explicitCWD: explicitCWD,
+            initialCommands: try validatedInitialCommands(initialCommands),
+            focusPolicy: focusPolicy,
+            request: ManagedAgentLaunchRequest(
                 agent: agent,
                 panelID: target.panelID,
-                argv: launchArgv,
+                argv: try argv(
+                    for: launchProfile,
+                    agent: agent,
+                    applyingInitialPrompt: initialPrompt
+                ),
                 cwd: explicitCWD ?? target.cwd,
-                environment: launchEnvironment,
+                environment: try validatedLaunchEnvironment(environment),
                 parentSessionID: parentSessionID
-            ),
-            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+            )
         )
+    }
+
+    private func completeLaunch(
+        _ preparation: AgentLaunchPreparation,
+        plan: ManagedAgentLaunchPlan
+    ) throws -> AgentLaunchResult {
+        guard let terminalCommandRouter else {
+            managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+            throw AgentLaunchError.serviceUnavailable
+        }
+        do {
+            try ensurePanelAppearsInteractive(
+                panelID: preparation.target.panelID,
+                terminalCommandRouter: terminalCommandRouter
+            )
+        } catch {
+            managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
+            throw error
+        }
         var commandEnvironment = plan.environment
         commandEnvironment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] = "1"
         let commandLine = ShellCommandRenderer.render(
             argv: plan.argv,
             environment: commandEnvironment,
-            workingDirectory: explicitCWD,
-            initialCommands: launchInitialCommands
+            workingDirectory: preparation.explicitCWD,
+            initialCommands: preparation.initialCommands
         )
 
         guard terminalCommandRouter.sendText(
             commandLine,
             submit: true,
-            panelID: target.panelID,
-            focusPolicy: focusPolicy
+            panelID: preparation.target.panelID,
+            focusPolicy: preparation.focusPolicy
         ) else {
             managedLaunchPlanner.discardManagedLaunch(sessionID: plan.sessionID)
-            throw AgentLaunchError.terminalUnavailable(panelID: target.panelID)
+            throw AgentLaunchError.terminalUnavailable(panelID: preparation.target.panelID)
         }
         store?.recordSuccessfulAgentLaunch()
 
         return AgentLaunchResult(
-            agent: agent,
-            displayName: launchProfile.displayName,
+            agent: preparation.agent,
+            displayName: preparation.displayName,
             sessionID: plan.sessionID,
             windowID: plan.windowID,
             workspaceID: plan.workspaceID,
@@ -245,6 +371,26 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil
     ) throws -> ManagedAgentLaunchPlan {
         try managedLaunchPlanner.prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+    }
+
+    func prepareManagedLaunchAsync(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) async throws -> ManagedAgentLaunchPlan {
+        try await managedLaunchPlanner.prepareManagedLaunchAsync(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+    }
+
+    func prepareRestoredManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
+        try managedLaunchPlanner.prepareRestoredManagedLaunch(
             request,
             inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
         )
@@ -345,12 +491,15 @@ final class AgentLaunchService: ManagedAgentLaunchPlanning {
 
     private static let reservedLaunchEnvironmentKeys: Set<String> = [
         ToasttyLaunchContextEnvironment.sessionIDKey,
+        ToasttyLaunchContextEnvironment.agentKey,
         ToasttyLaunchContextEnvironment.panelIDKey,
         ToasttyLaunchContextEnvironment.socketPathKey,
         ToasttyLaunchContextEnvironment.cliPathKey,
         ToasttyLaunchContextEnvironment.cwdKey,
         ToasttyLaunchContextEnvironment.repoRootKey,
         ToasttyLaunchContextEnvironment.managedAgentShimBypassKey,
+        ToasttyLaunchContextEnvironment.skillsRootKey,
+        ToasttyLaunchContextEnvironment.userSkillsRootKey,
         "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT",
         "CODEX_TUI_RECORD_SESSION",
         "CODEX_TUI_SESSION_LOG_PATH",
@@ -588,4 +737,14 @@ private struct LaunchTarget {
     let workspaceID: UUID
     let panelID: UUID
     let cwd: String?
+}
+
+private struct AgentLaunchPreparation {
+    let agent: AgentKind
+    let displayName: String
+    let target: LaunchTarget
+    let explicitCWD: String?
+    let initialCommands: [String]
+    let focusPolicy: TerminalInputFocusPolicy
+    let request: ManagedAgentLaunchRequest
 }

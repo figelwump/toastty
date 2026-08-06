@@ -66,16 +66,17 @@ enum AgentLaunchUI {
             }
         }
 
-        do {
-            _ = try agentLaunchService.launch(
-                profileID: profileID,
-                workspaceID: workspaceID
-            )
-            return true
-        } catch {
-            presentLaunchError(error)
-            return false
+        Task { @MainActor in
+            do {
+                _ = try await agentLaunchService.launchAsync(
+                    profileID: profileID,
+                    workspaceID: workspaceID
+                )
+            } catch {
+                presentLaunchError(error)
+            }
         }
+        return true
     }
 
     private static func presentLaunchError(_ error: Error) {

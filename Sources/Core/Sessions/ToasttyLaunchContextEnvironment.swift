@@ -14,4 +14,6 @@ public enum ToasttyLaunchContextEnvironment {
     public static let paneJournalFileKey = "TOASTTY_PANE_JOURNAL_FILE"
     public static let agentShimDirectoryKey = "TOASTTY_AGENT_SHIM_DIR"
     public static let managedAgentShimBypassKey = "TOASTTY_MANAGED_AGENT_SHIM_BYPASS"
+    public static let skillsRootKey = "TOASTTY_SKILLS_ROOT"
+    public static let userSkillsRootKey = "TOASTTY_USER_SKILLS_ROOT"
 }

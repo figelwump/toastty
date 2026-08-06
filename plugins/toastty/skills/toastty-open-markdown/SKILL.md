@@ -9,18 +9,28 @@ Use this when you have already written a markdown file and want the user to revi
 
 ## Core flow
 
-1. Confirm the target file exists and is a markdown file.
-2. Require a Toastty-managed agent launch context:
-   - `TOASTTY_CLI_PATH`
-   - `TOASTTY_PANEL_ID`
-3. Resolve the current workspace from the current terminal panel.
-4. Open the file as a local-document panel in that workspace with the bundled helper:
+1. Require the managed Toastty skill root. Do not guess a repository, global
+   skill directory, or Codex cache location:
 
 ```bash
-.agents/skills/toastty-open-markdown/scripts/open-markdown-file.sh path/to/file.md
+if [[ -z "${TOASTTY_SKILLS_ROOT:-}" || ! -d "$TOASTTY_SKILLS_ROOT/toastty-open-markdown" ]]; then
+  echo "error: toastty-open-markdown must run inside a Toastty-managed agent session" >&2
+  exit 1
+fi
 ```
 
-5. Tell the user which file you opened.
+2. Confirm the target file exists and is a markdown file.
+3. Require a Toastty-managed agent launch context:
+   - `TOASTTY_CLI_PATH`
+   - `TOASTTY_PANEL_ID`
+4. Resolve the current workspace from the current terminal panel.
+5. Open the file as a local-document panel in that workspace with the bundled helper:
+
+```bash
+"$TOASTTY_SKILLS_ROOT/toastty-open-markdown/scripts/open-markdown-file.sh" path/to/file.md
+```
+
+6. Tell the user which file you opened.
 
 ## Important invariants
 
@@ -28,7 +38,10 @@ Use this when you have already written a markdown file and want the user to revi
 - Omit `placement` so Toastty uses the default placement for that workspace.
 - Target the current workspace derived from `TOASTTY_PANEL_ID`; do not guess a workspace ID.
 - Use this for markdown review artifacts such as plans, design notes, architecture docs, or implementation writeups.
-- If the required Toastty launch context is missing, stop and explain that the skill requires a Toastty-managed agent session.
+- If `TOASTTY_SKILLS_ROOT` or another required Toastty launch value is missing,
+  stop and explain that the skill must run inside a Toastty-managed agent
+  session. Never fall back to `.agents/skills`, `~/.agents/skills`,
+  `~/.codex/skills`, or a plugin cache path.
 
 ## Manual equivalent
 

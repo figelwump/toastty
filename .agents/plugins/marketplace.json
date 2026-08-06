@@ -1,0 +1,20 @@
+{
+  "name": "toastty",
+  "interface": {
+    "displayName": "Toastty"
+  },
+  "plugins": [
+    {
+      "name": "toastty",
+      "source": {
+        "source": "local",
+        "path": "./plugins/toastty"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

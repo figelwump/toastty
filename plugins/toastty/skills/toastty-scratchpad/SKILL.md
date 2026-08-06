@@ -9,6 +9,20 @@ description: Use this skill to show the user anything visual — design mockups,
 
 Use Scratchpad when a visual surface will communicate better than terminal prose. If the user asks to read or review an existing Scratchpad, export the current session-linked Scratchpad and answer from that content without replacing it. If the user asks to create or update a visual artifact, open the Scratchpad first with a quick loading screen, optionally replace it with meaningful intermediate valid HTML snapshots or exact targeted patches as the artifact takes shape, then publish the finished self-contained HTML artifact.
 
+## Managed Skill Root
+
+Before invoking a bundled helper, require the skill root injected by Toastty:
+
+```bash
+if [[ -z "${TOASTTY_SKILLS_ROOT:-}" || ! -d "$TOASTTY_SKILLS_ROOT/toastty-scratchpad" ]]; then
+  echo "error: toastty-scratchpad must run inside a Toastty-managed agent session" >&2
+  exit 1
+fi
+```
+
+Do not guess a repository checkout, global skill directory, or versioned Codex
+plugin cache when `TOASTTY_SKILLS_ROOT` is missing.
+
 ## Read Existing Scratchpad
 
 When the user asks to read, inspect, review, summarize, or propose changes based on the current Scratchpad, do not publish a loading screen and do not replace Scratchpad content.
@@ -42,7 +56,7 @@ The loading screen is intentionally minimal: a title (if known) and a subtle ani
 Publish the loading screen:
 
 ```bash
-~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
+"$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-outline.sh" \
   "Architecture Map"
 ```
 
@@ -51,7 +65,7 @@ than an update to the current one, pass `--new` on this first loading-screen
 publish only:
 
 ```bash
-~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-outline.sh \
+"$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-outline.sh" \
   --new \
   "Architecture Map"
 ```
@@ -238,14 +252,14 @@ If export reports that the session has no linked Scratchpad, ask the user to bin
 Pipe generated HTML into the helper:
 
 ```bash
-~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
+"$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-html.sh" \
   --title "Architecture Map" < /tmp/scratchpad.html
 ```
 
 Or publish an already-generated HTML file:
 
 ```bash
-~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
+"$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-html.sh" \
   --title "Data Flow" \
   --file /tmp/data-flow.html
 ```
@@ -253,7 +267,7 @@ Or publish an already-generated HTML file:
 For an explicit new/separate Scratchpad, add `--new` to the first publish:
 
 ```bash
-~/.agents/skills/toastty-scratchpad/scripts/publish-scratchpad-html.sh \
+"$TOASTTY_SKILLS_ROOT/toastty-scratchpad/scripts/publish-scratchpad-html.sh" \
   --new \
   --title "Data Flow" \
   --file /tmp/data-flow.html

@@ -16,6 +16,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         "background",
         "contains",
         "content",
+        "codexHomePath",
         "createPolicy",
         "cwd",
         "detail",
@@ -39,6 +40,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         "preflightPolicy",
         "profileID",
         "query",
+        "resolvedCodexExecutablePath",
         "sessionID",
         "source",
         "status",
@@ -115,7 +117,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    func execute(envelope: AutomationIncomingEnvelope) -> AutomationResponseEnvelope {
+    func execute(envelope: AutomationIncomingEnvelope) async -> AutomationResponseEnvelope {
         let startedAt = Date()
         let responseRequestID = envelope.requestID ?? UUID().uuidString
         let response: AutomationResponseEnvelope
@@ -129,7 +131,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                     callerSessionID: normalizedOptionalText(request.callerSessionID),
                     commandName: request.command
                 )
-                result = try executeCommand(
+                result = try await executeCommand(
                     named: request.command,
                     payload: request.payload,
                     context: context
@@ -186,7 +188,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
         named command: String,
         payload: [String: AutomationJSONValue],
         context: AutomationRequestContext
-    ) throws -> [String: AutomationJSONValue]? {
+    ) async throws -> [String: AutomationJSONValue]? {
         logUnrestrictedUnknownCallerIfNeeded(context)
 
         switch command {
@@ -218,14 +220,21 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 cwd: normalizedOptionalText(payload.string("cwd")),
                 environment: environment,
                 preflightPolicy: preflightPolicy,
-                parentSessionID: parentSessionID(for: context)
+                parentSessionID: parentSessionID(for: context),
+                codexCapabilityHint: normalizedOptionalText(payload.string("resolvedCodexExecutablePath")).map {
+                    ManagedCodexCapabilityHint(
+                        resolvedExecutablePath: $0,
+                        codexHomePath: normalizedOptionalText(payload.string("codexHomePath")),
+                        processPath: normalizedOptionalText(payload.string("codexProcessPath"))
+                    )
+                }
             )
 
             if let preflight = managedLaunchPreflightIfNeeded(for: request) {
                 return try automationObject(ManagedAgentLaunchPreparation(preflight: preflight))
             }
 
-            let plan = try agentLaunchService.prepareManagedLaunch(
+            let plan = try await agentLaunchService.prepareManagedLaunchAsync(
                 request,
                 inheritedScopedWorkspaceIDs: inheritedWorkspaceScope(for: context)
             )
@@ -258,7 +267,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             guard let actionID = payload.string("id"), actionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("id is required")
             }
-            let outcome = try appControlExecutor.runAction(
+            let outcome = try await appControlExecutor.runActionAsync(
                 id: actionID,
                 args: try parseArgsPayload(payload),
                 context: context
@@ -394,7 +403,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             guard let actionID = payload.string("action"), actionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("action is required")
             }
-            let outcome = try appControlExecutor.runAction(
+            let outcome = try await appControlExecutor.runActionAsync(
                 id: actionID,
                 args: try parseArgsPayload(payload),
                 context: context
@@ -440,7 +449,7 @@ final class AutomationCommandExecutor: @unchecked Sendable {
             if args["profileID"] == nil, let legacyAgent = args["agent"] {
                 args["profileID"] = legacyAgent
             }
-            let result = try appControlExecutor.runAction(
+            let result = try await appControlExecutor.runActionAsync(
                 id: AppControlActionID.agentLaunch.rawValue,
                 args: args,
                 context: context

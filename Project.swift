@@ -411,6 +411,18 @@ let project = Project(
                 .folderReference(path: "Sources/App/Resources/WebPanels"),
                 "docs/keyboard-shortcuts.md",
             ],
+            copyFiles: [
+                .resources(
+                    name: "Bundle Toastty Agent Plugin Marketplace",
+                    subpath: "ToasttyAgentPluginBundle/.agents/plugins",
+                    files: [".agents/plugins/marketplace.json"]
+                ),
+                .resources(
+                    name: "Bundle Toastty Agent Plugin",
+                    subpath: "ToasttyAgentPluginBundle/plugins",
+                    files: [.folderReference(path: "plugins/toastty")]
+                ),
+            ],
             scripts: [
                 .post(
                     script: bundleToasttyHelpersScript,

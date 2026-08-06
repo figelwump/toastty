@@ -302,6 +302,9 @@ struct ToasttyCLITests {
                 "--agent", "codex",
                 "--panel", panelID.uuidString,
                 "--cwd", "/tmp/repo",
+                "--resolved-codex-executable", "/opt/homebrew/bin/codex",
+                "--codex-home", "/tmp/codex-home",
+                "--codex-process-path", "/opt/homebrew/bin:/usr/bin:/bin",
                 "--arg", "codex",
                 "--arg", "--model",
                 "--arg", "gpt-5.4",
@@ -320,6 +323,11 @@ struct ToasttyCLITests {
         #expect(request.argv == ["codex", "--model", "gpt-5.4"])
         #expect(request.environment.isEmpty)
         #expect(request.preflightPolicy == .skip)
+        #expect(request.codexCapabilityHint == ManagedCodexCapabilityHint(
+            resolvedExecutablePath: "/opt/homebrew/bin/codex",
+            codexHomePath: "/tmp/codex-home",
+            processPath: "/opt/homebrew/bin:/usr/bin:/bin"
+        ))
     }
 
     @Test

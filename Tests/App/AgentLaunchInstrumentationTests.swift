@@ -61,6 +61,211 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertNotNil(matcherEntry, "Notification hook should have a wildcard matcher entry")
     }
 
+    func testPrepareClaudeLaunchAddsToasttyPluginAlongsideUserPluginDirectories() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty plugin",
+            skillsRootPath: "/tmp/toastty plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude", "--plugin-dir", "/tmp/user-one", "--plugin-dir=/tmp/user-two", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertEqual(preparedLaunch.argv.filter { $0 == "--plugin-dir" }.count, 2)
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/toastty plugin"))
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/user-one"))
+        XCTAssertTrue(preparedLaunch.argv.contains("--plugin-dir=/tmp/user-two"))
+        XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPrepareClaudeLaunchAddsToasttyPluginAfterSupportedWrapperCommand() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-plugin",
+            skillsRootPath: "/tmp/toastty-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["agent-safehouse", "--cwd", "/tmp/repo", "claude", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        let claudeIndex = try XCTUnwrap(preparedLaunch.argv.firstIndex(of: "claude"))
+        XCTAssertEqual(preparedLaunch.argv[safe: claudeIndex + 3], "--plugin-dir")
+        XCTAssertEqual(preparedLaunch.argv[safe: claudeIndex + 4], configuration.pluginRootPath)
+        XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPrepareClaudeLaunchAddsUserPluginDirAfterShippedPluginDir() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-plugin",
+            skillsRootPath: "/tmp/toastty-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration,
+            deliveredUserSkillsRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        let pluginDirIndices = preparedLaunch.argv.indices.filter {
+            preparedLaunch.argv[$0] == "--plugin-dir"
+        }
+        XCTAssertEqual(pluginDirIndices.count, 2)
+        // Shipped plugin first, user plugin second.
+        XCTAssertEqual(preparedLaunch.argv[safe: pluginDirIndices[0] + 1], configuration.pluginRootPath)
+        XCTAssertEqual(
+            preparedLaunch.argv[safe: pluginDirIndices[1] + 1],
+            "/tmp/user-plugin-root/toastty-user"
+        )
+        XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPrepareClaudeLaunchInjectsUserPluginDirIndependentlyOfShippedConfiguration() throws {
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: nil,
+            deliveredUserSkillsRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertEqual(preparedLaunch.argv.filter { $0 == "--plugin-dir" }.count, 1)
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/user-plugin-root/toastty-user"))
+        XCTAssertNil(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"])
+    }
+
+    func testPrepareClaudeLaunchOmitsUserPluginDirWhenNoUserRootProvided() throws {
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: nil,
+            deliveredUserSkillsRootPath: nil
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertFalse(preparedLaunch.argv.contains("--plugin-dir"))
+    }
+
+    func testPrepareClaudeLaunchUserPluginDirCoexistsWithCallerPluginDirs() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty plugin",
+            skillsRootPath: "/tmp/toastty plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude", "--plugin-dir", "/tmp/caller-one", "--plugin-dir=/tmp/caller-two", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration,
+            deliveredUserSkillsRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertEqual(preparedLaunch.argv.filter { $0 == "--plugin-dir" }.count, 3)
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/toastty plugin"))
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/user-plugin-root/toastty-user"))
+        XCTAssertTrue(preparedLaunch.argv.contains("/tmp/caller-one"))
+        XCTAssertTrue(preparedLaunch.argv.contains("--plugin-dir=/tmp/caller-two"))
+    }
+
+    func testPrepareClaudeLaunchOmitsUserPluginDirForOpaqueWrapper() throws {
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["custom-wrapper", "claude", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: nil,
+            deliveredUserSkillsRootPath: "/tmp/user-plugin-root/toastty-user"
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertFalse(preparedLaunch.argv.contains("--plugin-dir"))
+    }
+
+    func testPrepareCodexLaunchGainsOnlyTheProfileFlagForSkills() throws {
+        let configuration = CodexSkillsLaunchConfiguration(
+            profileName: "toastty-managed",
+            codexHomePath: "/tmp/codex-home",
+            skillsRootPath: "/tmp/codex-home/plugins/cache/toastty/toastty/1.0.0/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: ["codex"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            codexStatusTrackingSource: .hooks,
+            codexSkillsIntegration: configuration
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        // The user plugin rides entirely in the profile overlay: the Codex
+        // argv gains only the profile flag, never plugin-dir style arguments.
+        XCTAssertEqual(preparedLaunch.argv, ["codex", "--profile", "toastty-managed"])
+        XCTAssertEqual(preparedLaunch.codexSkillsInjectionResult, .injected)
+    }
+
+    func testPrepareClaudeLaunchOmitsToasttyPluginForOpaqueWrapper() throws {
+        let configuration = ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: "/tmp/toastty-plugin",
+            skillsRootPath: "/tmp/toastty-plugin/skills",
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["custom-wrapper", "claude", "--model", "opus"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration
+        )
+        defer { try? preparedLaunch.artifacts.map { try FileManager.default.removeItem(at: $0.directoryURL) } }
+
+        XCTAssertFalse(preparedLaunch.argv.contains("--plugin-dir"))
+        XCTAssertNil(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"])
+    }
+
     func testPrepareCodexLaunchFormatsNotifyOverrideAsTomlArray() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"
@@ -160,6 +365,223 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
                 "--dangerously-bypass-approvals-and-sandbox",
             ]
         )
+    }
+
+    func testPrepareCodexLaunchInjectsManagedProfileDeterministically() throws {
+        let configuration = codexSkillsConfiguration(
+            skillsRootPath: "/tmp/Skills ü\\root"
+        )
+
+        let first = try prepareCodex(
+            argv: ["codex", "resume", "thread-id"],
+            source: .hooks,
+            configuration: configuration
+        )
+        let second = try prepareCodex(
+            argv: ["codex", "resume", "thread-id"],
+            source: .hooks,
+            configuration: configuration
+        )
+        defer { cleanup([first, second]) }
+
+        XCTAssertEqual(first.argv, second.argv)
+        XCTAssertEqual(first.codexSkillsInjectionResult, .injected)
+        XCTAssertEqual(
+            first.argv,
+            ["codex", "--profile", "toastty-managed", "resume", "thread-id"]
+        )
+        XCTAssertEqual(first.environment["TOASTTY_SKILLS_ROOT"], "/tmp/Skills ü\\root")
+        XCTAssertEqual(configOverrides(in: first.argv), [])
+    }
+
+    func testPrepareCodexLaunchInjectsAfterDirectAliasWrapperResumeAndForkExecutable() throws {
+        let configuration = codexSkillsConfiguration()
+        let cases: [([String], Int, String)] = [
+            (["codex", "--search"], 0, "direct"),
+            (["cdx", "resume", "abc"], 0, "alias"),
+            (["agent-safehouse", "--cwd", "/tmp/repo", "/opt/homebrew/bin/codex", "fork", "abc"], 3, "wrapper fork"),
+            (["run-sandboxed.sh", "codex", "resume", "--last"], 1, "wrapper resume"),
+        ]
+
+        for (argv, executableIndex, label) in cases {
+            let prepared = try prepareCodex(argv: argv, source: .hooks, configuration: configuration)
+            defer { cleanup([prepared]) }
+            XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected, label)
+            XCTAssertEqual(prepared.argv[executableIndex], argv[executableIndex], label)
+            XCTAssertEqual(prepared.argv[executableIndex + 1], "--profile", label)
+            XCTAssertEqual(prepared.argv[executableIndex + 2], "toastty-managed", label)
+        }
+    }
+
+    func testPrepareCodexLaunchKeepsNotifyFallbackIndependentFromSkills() throws {
+        let prepared = try prepareCodex(
+            argv: ["codex", "exec", "prompt"],
+            source: .sessionLogFallback(reason: "hooks_untrusted"),
+            configuration: codexSkillsConfiguration()
+        )
+        defer { cleanup([prepared]) }
+
+        XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
+        let overrides = configOverrides(in: prepared.argv)
+        XCTAssertEqual(overrides.count, 1)
+        XCTAssertTrue(overrides.contains { $0.hasPrefix("notify=[") })
+        XCTAssertTrue(prepared.argv.contains("--profile"))
+        XCTAssertTrue(prepared.argv.contains("toastty-managed"))
+    }
+
+    func testPrepareCodexLaunchRefusesOpaqueSkillsWithoutChangingHookStatusMode() throws {
+        let configuration = codexSkillsConfiguration()
+        for argv in [
+            ["my-codex-wrapper", "resume", "abc"],
+            ["opaque-wrapper", "unexpected", "codex", "resume", "abc"],
+            ["wrapper", "--", "codex", "resume", "abc"],
+            ["codex", "wrapper", "codex"],
+        ] {
+            let prepared = try prepareCodex(argv: argv, source: .hooks, configuration: configuration)
+            defer { cleanup([prepared]) }
+            XCTAssertEqual(
+                prepared.codexSkillsInjectionResult,
+                .refused(reason: "opaque_or_unsafe_codex_argv")
+            )
+            XCTAssertEqual(prepared.argv, argv)
+            XCTAssertNil(prepared.environment["TOASTTY_SKILLS_ROOT"])
+            XCTAssertNotNil(prepared.artifacts?.codexSessionLogURL)
+        }
+    }
+
+    func testPrepareCodexLaunchRefusesWrapperFlagValuesAndShellIndirection() throws {
+        let configuration = codexSkillsConfiguration()
+        for argv in [
+            ["agent-safehouse", "--profile", "codex", "npm", "test"],
+            ["agent-safehouse", "sh", "-c", "codex"],
+            ["run-sandboxed.sh", "bash", "-lc", "codex"],
+        ] {
+            let prepared = try prepareCodex(argv: argv, source: .hooks, configuration: configuration)
+            defer { cleanup([prepared]) }
+
+            XCTAssertEqual(
+                prepared.codexSkillsInjectionResult,
+                .refused(reason: "opaque_or_unsafe_codex_argv")
+            )
+            XCTAssertEqual(prepared.argv, argv)
+            XCTAssertNotNil(prepared.artifacts?.codexSessionLogURL)
+        }
+    }
+
+    func testPrepareCodexLaunchRefusesCallerProfileFlags() throws {
+        let configuration = codexSkillsConfiguration()
+        let cases = [
+            ["codex", "--profile", "other", "exec", "prompt"],
+            ["codex", "--profile=other", "resume"],
+            ["codex", "-p", "other", "fork", "thread"],
+            ["codex", "-p=other"],
+            // clap attached short form: `-pfoo` selects profile "foo".
+            ["codex", "-pfoo", "exec", "prompt"],
+            ["codex", "-p=foo", "resume"],
+            ["run-sandboxed.sh", "codex", "--profile", "other", "resume", "--last"],
+        ]
+
+        for argv in cases {
+            let prepared = try prepareCodex(argv: argv, source: .hooks, configuration: configuration)
+            defer { cleanup([prepared]) }
+
+            XCTAssertEqual(
+                prepared.codexSkillsInjectionResult,
+                .refused(reason: "caller_profile_flag")
+            )
+            XCTAssertNil(prepared.environment["TOASTTY_SKILLS_ROOT"])
+            XCTAssertNotNil(prepared.artifacts?.codexSessionLogURL)
+            XCTAssertFalse(prepared.argv.contains("toastty-managed"))
+        }
+    }
+
+    func testPrepareCodexLaunchInjectsWhenProfileTokenOnlyFollowsTerminator() throws {
+        let prepared = try prepareCodex(
+            argv: ["codex", "exec", "--", "--profile"],
+            source: .hooks,
+            configuration: codexSkillsConfiguration()
+        )
+        defer { cleanup([prepared]) }
+
+        XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
+        XCTAssertEqual(
+            prepared.argv,
+            ["codex", "--profile", "toastty-managed", "exec", "--", "--profile"]
+        )
+    }
+
+    func testPrepareCodexLaunchInjectsForHintResolvedCustomHomeWithEmptyLaunchEnvironment() throws {
+        // Standard shim flow: the shell's real CODEX_HOME travels only in the
+        // capability hint, the resolver provisions that home into the
+        // configuration, and request.environment stays empty for Codex.
+        // Injection must succeed for the provisioned custom home.
+        let configuration = codexSkillsConfiguration(
+            codexHomePath: "/tmp/toastty-custom-codex-home"
+        )
+
+        let prepared = try prepareCodex(
+            argv: ["codex", "resume", "abc"],
+            source: .hooks,
+            configuration: configuration,
+            launchEnvironment: [:]
+        )
+        defer { cleanup([prepared]) }
+
+        XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
+        XCTAssertEqual(
+            prepared.argv,
+            ["codex", "--profile", "toastty-managed", "resume", "abc"]
+        )
+        XCTAssertEqual(prepared.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPrepareCodexLaunchRefusesReplacedCodexHome() throws {
+        let configuration = codexSkillsConfiguration(codexHomePath: "/tmp/toastty-home-a")
+
+        let replaced = try prepareCodex(
+            argv: ["codex", "resume", "abc"],
+            source: .hooks,
+            configuration: configuration,
+            launchEnvironment: ["CODEX_HOME": "/tmp/toastty-home-b"]
+        )
+        let matching = try prepareCodex(
+            argv: ["codex", "resume", "abc"],
+            source: .hooks,
+            configuration: configuration,
+            launchEnvironment: ["CODEX_HOME": "/tmp/toastty-home-a"]
+        )
+        defer { cleanup([replaced, matching]) }
+
+        XCTAssertEqual(
+            replaced.codexSkillsInjectionResult,
+            .refused(reason: "codex_home_replaced")
+        )
+        XCTAssertEqual(replaced.argv, ["codex", "resume", "abc"])
+        XCTAssertNil(replaced.environment["TOASTTY_SKILLS_ROOT"])
+        XCTAssertEqual(matching.codexSkillsInjectionResult, .injected)
+        XCTAssertTrue(matching.argv.contains("toastty-managed"))
+    }
+
+    func testPrepareCodexLaunchAllowsCallerConfigOverridesIncludingSkillsConfig() throws {
+        // The retired `-c skills.config` mechanism treated skills overrides as
+        // conflicts; the profile mechanism has no such conflict, and caller
+        // `skills.config` toggles are honored by Codex under the profile.
+        for argv in [
+            ["codex", "-c", "skills.config=[]", "exec", "prompt"],
+            ["codex", "-c", "hooks={}", "exec", "prompt"],
+            ["codex", "--config", "notify=[\"/usr/bin/true\"]", "resume"],
+        ] {
+            let prepared = try prepareCodex(
+                argv: argv,
+                source: .hooks,
+                configuration: codexSkillsConfiguration()
+            )
+            defer { cleanup([prepared]) }
+
+            XCTAssertEqual(prepared.codexSkillsInjectionResult, .injected)
+            XCTAssertTrue(prepared.argv.contains("toastty-managed"))
+            XCTAssertEqual(configOverrides(in: prepared.argv), configOverrides(in: argv))
+        }
     }
 
     func testPrepareOpenCodeLaunchInjectsFilePluginThroughConfigContent() throws {
@@ -727,6 +1149,85 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         }
     }
 
+    func testPrepareOpenCodeFamilyLaunchInjectsSkillsPathsAlongsidePlugin() throws {
+        let configuration = stagedSkillsConfiguration()
+
+        for (agent, commandName, configContentEnvironmentKey, otherEnvironmentKey) in [
+            (AgentKind.opencode, "opencode", "OPENCODE_CONFIG_CONTENT", "MIMOCODE_CONFIG_CONTENT"),
+            (AgentKind.mimocode, "mimo", "MIMOCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_CONTENT"),
+        ] {
+            let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+                agent: agent,
+                argv: [commandName],
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default,
+                stagedSkillsIntegration: configuration,
+                deliveredUserSkillsRootPath: "/tmp/user-snapshot/toastty-user/skills"
+            )
+            defer { cleanup([preparedLaunch]) }
+
+            XCTAssertEqual(preparedLaunch.argv, [commandName])
+            XCTAssertNil(preparedLaunch.environment[otherEnvironmentKey])
+            let configContent = try XCTUnwrap(preparedLaunch.environment[configContentEnvironmentKey])
+            let configObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any]
+            )
+            let skills = try XCTUnwrap(configObject["skills"] as? [String: Any])
+            // Plain absolute paths only: a `file://` URI discovers nothing here.
+            XCTAssertEqual(
+                skills["paths"] as? [String],
+                [configuration.skillsRootPath, "/tmp/user-snapshot/toastty-user/skills"]
+            )
+            let plugins = try XCTUnwrap(configObject["plugin"] as? [String])
+            XCTAssertTrue(try XCTUnwrap(plugins.first).hasPrefix("file://"))
+            XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+        }
+    }
+
+    func testPrepareOpenCodeFamilyLaunchOmitsSkillsWithoutStagedConfiguration() throws {
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .opencode,
+            argv: ["opencode"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: nil,
+            deliveredUserSkillsRootPath: "/tmp/user-snapshot/toastty-user/skills"
+        )
+        defer { cleanup([preparedLaunch]) }
+
+        // `skills` replaces the user's own config layers wholesale, so it is
+        // only ever emitted alongside the shipped tree.
+        let configContent = try XCTUnwrap(preparedLaunch.environment["OPENCODE_CONFIG_CONTENT"])
+        let configObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any]
+        )
+        XCTAssertNil(configObject["skills"])
+        XCTAssertNotNil(configObject["plugin"])
+        XCTAssertNil(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"])
+    }
+
+    func testPrepareOpenCodeFamilyLaunchStillRefusesCallerConfigContentWhenSkillsAreStaged() {
+        XCTAssertThrowsError(
+            try AgentLaunchInstrumentation.prepare(
+                agent: .mimocode,
+                argv: ["mimo"],
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default,
+                launchEnvironment: ["MIMOCODE_CONFIG_CONTENT": #"{"plugin":["user-plugin"]}"#],
+                stagedSkillsIntegration: stagedSkillsConfiguration(),
+                deliveredUserSkillsRootPath: "/tmp/user-snapshot/toastty-user/skills"
+            )
+        ) { error in
+            XCTAssertTrue(error.localizedDescription.contains("MIMOCODE_CONFIG_CONTENT"))
+        }
+    }
+
     func testPrepareClaudeLaunchInsertsSettingsAfterWrappedClaudeCommand() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"
@@ -881,6 +1382,156 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertEqual(terminatorLaunch.argv, ["pi", "--extension", "/toastty/pi-extension.js", "--", "--no-extensions"])
     }
 
+    func testPreparePiLaunchInjectsStagedAndUserSkillTreesAfterExtension() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        let configuration = stagedSkillsConfiguration()
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["agent-safehouse", "--cwd", "/tmp/repo", "pi", "--mode", "text"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration,
+            deliveredUserSkillsRootPath: "/tmp/user-snapshot/toastty-user/skills"
+        )
+        defer { cleanup([preparedLaunch]) }
+
+        XCTAssertEqual(
+            preparedLaunch.argv,
+            [
+                "agent-safehouse",
+                "--cwd",
+                "/tmp/repo",
+                "pi",
+                "--extension",
+                "/toastty/pi-extension.js",
+                "--skill",
+                configuration.skillsRootPath,
+                "--skill",
+                "/tmp/user-snapshot/toastty-user/skills",
+                "--mode",
+                "text",
+            ]
+        )
+        // A bare `--` is an unknown-option hard error in pi.
+        XCTAssertFalse(preparedLaunch.argv.contains("--"))
+        XCTAssertEqual(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+    }
+
+    func testPreparePiLaunchKeepsCallerSkillFlagsAndAddsStagedTrees() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        let configuration = stagedSkillsConfiguration()
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["pi", "--skill", "/user/skills"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration,
+            deliveredUserSkillsRootPath: "/tmp/user-snapshot/toastty-user/skills"
+        )
+        defer { cleanup([preparedLaunch]) }
+
+        XCTAssertEqual(
+            preparedLaunch.argv,
+            [
+                "pi",
+                "--extension",
+                "/toastty/pi-extension.js",
+                "--skill",
+                configuration.skillsRootPath,
+                "--skill",
+                "/tmp/user-snapshot/toastty-user/skills",
+                "--skill",
+                "/user/skills",
+            ]
+        )
+    }
+
+    func testPreparePiLaunchInjectsUserSkillTreeIndependentlyOfStagedConfiguration() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["pi"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: nil,
+            deliveredUserSkillsRootPath: "/tmp/user-snapshot/toastty-user/skills"
+        )
+        defer { cleanup([preparedLaunch]) }
+
+        XCTAssertEqual(
+            preparedLaunch.argv,
+            [
+                "pi",
+                "--extension",
+                "/toastty/pi-extension.js",
+                "--skill",
+                "/tmp/user-snapshot/toastty-user/skills",
+            ]
+        )
+        XCTAssertNil(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"])
+    }
+
+    func testPreparePiLaunchSkipsOnlySkillsForCallerNoSkillsOptOut() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        let configuration = stagedSkillsConfiguration()
+
+        // pi has no end-of-flags boundary, so the opt-out counts anywhere after
+        // the resolved command — including after positional message tokens.
+        for argv in [
+            ["pi", "--no-skills"],
+            ["pi", "-ns"],
+            ["pi", "-p", "hi", "--no-skills"],
+        ] {
+            let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+                agent: .pi,
+                argv: argv,
+                cliExecutablePath: "/bin/sh",
+                sessionID: "test-\(UUID().uuidString)",
+                workingDirectory: nil,
+                fileManager: .default,
+                stagedSkillsIntegration: configuration,
+                deliveredUserSkillsRootPath: "/tmp/user-snapshot/toastty-user/skills"
+            )
+            defer { cleanup([preparedLaunch]) }
+
+            XCTAssertFalse(preparedLaunch.argv.contains("--skill"))
+            XCTAssertNil(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"])
+            // Everything else about pi preparation is unaffected.
+            XCTAssertEqual(preparedLaunch.argv[safe: 1], "--extension")
+            XCTAssertEqual(preparedLaunch.argv[safe: 2], "/toastty/pi-extension.js")
+            XCTAssertNotNil(preparedLaunch.environment["TOASTTY_PI_TELEMETRY_LOG_PATH"])
+        }
+    }
+
+    func testPreparePiLaunchSkipsSkillsWhenExtensionInjectionIsRefused() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        let configuration = stagedSkillsConfiguration()
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .pi,
+            argv: ["pi", "--no-extensions"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            stagedSkillsIntegration: configuration,
+            deliveredUserSkillsRootPath: "/tmp/user-snapshot/toastty-user/skills"
+        )
+        defer { cleanup([preparedLaunch]) }
+
+        XCTAssertEqual(preparedLaunch.argv, ["pi", "--no-extensions"])
+        XCTAssertNil(preparedLaunch.environment["TOASTTY_SKILLS_ROOT"])
+    }
+
     func testPreparedClaudeHookScriptLogsTelemetryFailuresWithoutWritingToStdout() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"
@@ -1030,6 +1681,64 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             literal,
             "[\"/bin/sh\",\"path with quote \\\" and slash \\\\ and newline \\n\"]"
         )
+    }
+
+    private func stagedSkillsConfiguration(
+        pluginRootPath: String = "/tmp/toastty-plugin",
+        skillsRootPath: String = "/tmp/toastty-plugin/skills"
+    ) -> ClaudeSkillsLaunchConfiguration {
+        ClaudeSkillsLaunchConfiguration(
+            pluginRootPath: pluginRootPath,
+            skillsRootPath: skillsRootPath,
+            version: "1.0.0",
+            contentDigest: "abc123"
+        )
+    }
+
+    private func codexSkillsConfiguration(
+        codexHomePath: String = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent(".codex", isDirectory: true).path,
+        skillsRootPath: String = "/tmp/toastty plugin/skills"
+    ) -> CodexSkillsLaunchConfiguration {
+        CodexSkillsLaunchConfiguration(
+            profileName: CodexSkillsContract.profileName,
+            codexHomePath: codexHomePath,
+            skillsRootPath: skillsRootPath,
+            version: "0.2.0",
+            contentDigest: "abc123"
+        )
+    }
+
+    private func prepareCodex(
+        argv: [String],
+        source: CodexStatusTrackingSource,
+        configuration: CodexSkillsLaunchConfiguration,
+        launchEnvironment: [String: String] = [:]
+    ) throws -> PreparedAgentLaunchCommand {
+        try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: argv,
+            cliExecutablePath: "/bin/sh",
+            sessionID: "test-\(UUID().uuidString)",
+            workingDirectory: nil,
+            fileManager: .default,
+            launchEnvironment: launchEnvironment,
+            codexStatusTrackingSource: source,
+            codexSkillsIntegration: configuration
+        )
+    }
+
+    private func configOverrides(in argv: [String]) -> [String] {
+        argv.indices.compactMap { index in
+            guard argv[index] == "-c", index + 1 < argv.count else { return nil }
+            return argv[index + 1]
+        }
+    }
+
+    private func cleanup(_ launches: [PreparedAgentLaunchCommand]) {
+        for artifacts in launches.compactMap(\.artifacts) {
+            try? FileManager.default.removeItem(at: artifacts.directoryURL)
+        }
     }
 
     private func runOpenCodeFamilyPluginScenario(

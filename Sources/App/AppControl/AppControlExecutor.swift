@@ -617,6 +617,69 @@ final class AppControlExecutor {
         }
     }
 
+    func runActionAsync(
+        id rawID: String,
+        args: [String: AutomationJSONValue],
+        context: AutomationRequestContext = AutomationRequestContext(
+            callerSessionID: nil,
+            commandName: "app_control.run_action"
+        )
+    ) async throws -> AppControlActionOutcome {
+        guard AppControlActionID.resolve(rawID) == .agentLaunch else {
+            return try runAction(id: rawID, args: args, context: context)
+        }
+
+        let preparation = try withRequestContext(context) {
+            guard let profileID = normalizedOptionalText(args.stringValue("profileID")) else {
+                throw AutomationSocketError.invalidPayload("profileID is required")
+            }
+            if let targetWorkspaceID = try resolveAgentLaunchExistingWorkspaceID(args: args) {
+                try enforceWorkspaceAutomationAccess(targetWorkspaceID)
+            }
+            return AsyncAgentLaunchPreparation(
+                profileID: profileID,
+                workspaceID: args.uuid("workspaceID"),
+                panelID: args.uuid("panelID"),
+                cwd: normalizedOptionalText(args.stringValue("cwd")),
+                environment: try agentLaunchEnvironment(args: args),
+                initialPrompt: args.stringValue("initialPrompt"),
+                initialCommands: try agentLaunchInitialCommands(args: args),
+                inheritedScopedWorkspaceIDs: inheritedWorkspaceScopeForChildLaunch(),
+                parentSessionID: parentSessionIDForChildLaunch()
+            )
+        }
+
+        let result = try await agentLaunchService.launchAsync(
+            profileID: preparation.profileID,
+            workspaceID: preparation.workspaceID,
+            panelID: preparation.panelID,
+            cwd: preparation.cwd,
+            environment: preparation.environment,
+            initialPrompt: preparation.initialPrompt,
+            initialCommands: preparation.initialCommands,
+            inheritedScopedWorkspaceIDs: preparation.inheritedScopedWorkspaceIDs,
+            parentSessionID: preparation.parentSessionID,
+            focusPolicy: .preserveFirstResponder
+        )
+        try withRequestContext(context) {
+            try bindWorkspaceToScopedCallerIfNeeded(result.workspaceID, operation: rawID)
+        }
+
+        var response: [String: AutomationJSONValue] = [
+            "profileID": .string(result.agent.rawValue),
+            "agent": .string(result.agent.rawValue),
+            "displayName": .string(result.displayName),
+            "sessionID": .string(result.sessionID),
+            "windowID": .string(result.windowID.uuidString),
+            "workspaceID": .string(result.workspaceID.uuidString),
+            "panelID": .string(result.panelID.uuidString),
+            "command": .string(result.commandLine),
+        ]
+        if let cwd = result.cwd { response["cwd"] = .string(cwd) }
+        if let repoRoot = result.repoRoot { response["repoRoot"] = .string(repoRoot) }
+        return .init(didMutateState: true, result: response)
+    }
+
     func runQuery(
         id rawID: String,
         args: [String: AutomationJSONValue],
@@ -712,6 +775,18 @@ final class AppControlExecutor {
 }
 
 private extension AppControlExecutor {
+    struct AsyncAgentLaunchPreparation {
+        let profileID: String
+        let workspaceID: UUID?
+        let panelID: UUID?
+        let cwd: String?
+        let environment: [String: String]
+        let initialPrompt: String?
+        let initialCommands: [String]
+        let inheritedScopedWorkspaceIDs: Set<UUID>?
+        let parentSessionID: String?
+    }
+
     enum BrowserZoomAction {
         case increase
         case decrease

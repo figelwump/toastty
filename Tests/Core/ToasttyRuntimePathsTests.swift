@@ -25,6 +25,8 @@ struct ToasttyRuntimePathsTests {
         #expect(paths.paneJournalDirectoryURL.path == "/tmp/toastty-home/.toastty/history/pane-journals")
         #expect(paths.paneJournalFileURL(for: panelID).path == "/tmp/toastty-home/.toastty/history/pane-journals/11111111-1111-1111-1111-111111111111.journal")
         #expect(paths.scratchpadDocumentsDirectoryURL.path == "/tmp/toastty-home/.toastty/scratchpad-documents")
+        #expect(paths.userSkillsDirectoryURL.path == "/tmp/toastty-home/.toastty/skills")
+        #expect(paths.agentPluginsDirectoryURL.path == "/tmp/toastty-home/.toastty/agent-plugins")
         #expect(paths.defaultLogFileURL.path == "/tmp/toastty-home/Library/Logs/Toastty/toastty.log")
         #expect(paths.automationSocketFileURL == nil)
         #expect(paths.userDefaultsSuiteName == nil)
@@ -57,6 +59,10 @@ struct ToasttyRuntimePathsTests {
         #expect(first.paneJournalDirectoryURL.path == "\(runtimeHomePath)/history/pane-journals")
         #expect(first.paneJournalFileURL(for: panelID).path == "\(runtimeHomePath)/history/pane-journals/22222222-2222-2222-2222-222222222222.journal")
         #expect(first.scratchpadDocumentsDirectoryURL.path == "\(runtimeHomePath)/scratchpad-documents")
+        // User skills are user state: the source directory follows the real
+        // home even for runtime-isolated instances.
+        #expect(first.userSkillsDirectoryURL.path == "/tmp/ignored-home/.toastty/skills")
+        #expect(first.agentPluginsDirectoryURL.path == "\(runtimeHomePath)/agent-plugins")
         #expect(first.defaultLogFileURL.path == "\(runtimeHomePath)/logs/toastty.log")
         #expect(first.automationSocketFileURL?.path.hasSuffix("/events-v1.sock") == true)
         #expect(first.automationSocketFileURL?.path.contains("toastty-runtime-") == true)
@@ -105,6 +111,68 @@ struct ToasttyRuntimePathsTests {
         #expect(first.runtimeHomeURL?.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home")
         #expect(first.configFileURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/config")
         #expect(first.agentShimDirectoryURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/bin")
+        #expect(first.userSkillsDirectoryURL.path == "/tmp/ignored-home/.toastty/skills")
+        #expect(first.agentPluginsDirectoryURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/agent-plugins")
+    }
+
+    /// Worktree-derived dev instances (the primary way the app is run from a
+    /// worktree) read the user's real skills while every write path stays
+    /// under the runtime home.
+    @Test
+    func worktreeDerivedRuntimeReadsUserSkillsFromRealHomeWhileWritesStayIsolated() throws {
+        let paths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/real-user-home",
+            environment: ["TOASTTY_DEV_WORKTREE_ROOT": "/tmp/worktrees/main"]
+        )
+
+        #expect(paths.runtimeHomeStrategy == .worktreeDerived)
+        #expect(paths.userSkillsDirectoryURL.path == "/tmp/real-user-home/.toastty/skills")
+        let runtimeHomePath = try #require(paths.runtimeHomeURL?.path)
+        #expect(runtimeHomePath.hasPrefix("/tmp/worktrees/main/artifacts/dev-runs/"))
+        #expect(paths.agentPluginsDirectoryURL.path == "\(runtimeHomePath)/agent-plugins")
+        #expect(paths.configDirectoryURL.path == runtimeHomePath)
+    }
+
+    @Test
+    func userSkillsRootOverrideRedirectsSourceInEveryStrategy() {
+        let overrideEnvironment = ["TOASTTY_USER_SKILLS_ROOT": "/tmp/hermetic-skills"]
+
+        let userHomePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-home",
+            environment: overrideEnvironment
+        )
+        #expect(userHomePaths.userSkillsDirectoryURL.path == "/tmp/hermetic-skills")
+
+        let explicitPaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-home",
+            environment: overrideEnvironment.merging(
+                ["TOASTTY_RUNTIME_HOME": "/tmp/rt-home"]
+            ) { first, _ in first }
+        )
+        #expect(explicitPaths.userSkillsDirectoryURL.path == "/tmp/hermetic-skills")
+        #expect(explicitPaths.agentPluginsDirectoryURL.path == "/tmp/rt-home/agent-plugins")
+
+        let worktreePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/toastty-home",
+            environment: overrideEnvironment.merging(
+                ["TOASTTY_DEV_WORKTREE_ROOT": "/tmp/worktrees/main"]
+            ) { first, _ in first }
+        )
+        #expect(worktreePaths.userSkillsDirectoryURL.path == "/tmp/hermetic-skills")
+    }
+
+    @Test
+    func emptyOrBlankUserSkillsRootOverrideIsTreatedAsUnset() {
+        for blankValue in ["", "   ", "\n"] {
+            let paths = ToasttyRuntimePaths.resolve(
+                homeDirectoryPath: "/tmp/toastty-home",
+                environment: ["TOASTTY_USER_SKILLS_ROOT": blankValue]
+            )
+            #expect(
+                paths.userSkillsDirectoryURL.path == "/tmp/toastty-home/.toastty/skills",
+                "blank override value must be treated as unset"
+            )
+        }
     }
 
     @Test
@@ -155,6 +223,9 @@ struct ToasttyRuntimePathsTests {
         #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("bin").path))
         #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("history/panes").path))
         #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("history/pane-journals").path))
+        // The user-skills source now points at the real home for isolated
+        // runs; prepare() must not create real-home directories.
+        #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("skills").path) == false)
         let versionFileURL = runtimeHomeURL.appendingPathComponent("runtime-version.txt", isDirectory: false)
         let versionContents = try String(contentsOf: versionFileURL, encoding: .utf8)
         #expect(versionContents == "1\n")

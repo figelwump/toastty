@@ -668,6 +668,7 @@ struct ToasttyApp: App {
     private let agentLaunchSocketPath: String
     private let agentLaunchCLIExecutablePath: String?
     private let agentLaunchShimExecutablePath: String?
+    private let codexProcessPathStore: CodexProcessPathStore
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
@@ -819,6 +820,25 @@ struct ToasttyApp: App {
                 ]
             )
         }
+        let processEnvironment = processInfo.environment
+        let codexProcessPathResolver: @Sendable () -> String? = {
+            Self.resolveCodexProcessPath(
+                environment: processEnvironment,
+                agentShimDirectoryPath: runtimePaths.agentShimDirectoryURL.path
+            )
+        }
+        let resolvedAgentBasePath = ManagedAgentBasePathResolver(
+            environment: processEnvironment,
+            fallbackPath: nil
+        ).resolve()
+        let codexProcessPathStore = CodexProcessPathStore(
+            path: ManagedAgentPathResolver.sanitizedMergedPath(
+                preferredPath: resolvedAgentBasePath,
+                fallbackPath: processEnvironment["PATH"],
+                excludedDirectoryPaths: [runtimePaths.agentShimDirectoryURL.path]
+            ),
+            refreshPath: codexProcessPathResolver
+        )
         Self.configureBaseLaunchEnvironmentProvider(
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths,
@@ -826,10 +846,7 @@ struct ToasttyApp: App {
             cliExecutablePath: cliExecutablePath,
             shimDirectoryPath: shimDirectoryPath,
             basePath: processInfo.environment["PATH"],
-            agentBasePath: ManagedAgentBasePathResolver(
-                environment: processInfo.environment,
-                fallbackPath: nil
-            ).resolve()
+            agentBasePath: resolvedAgentBasePath
         )
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
@@ -891,13 +908,45 @@ struct ToasttyApp: App {
                 )
             }
         )
+        // Single app-scoped skills managers, shared between the launch path and
+        // the skills-management sheet so both act on the same in-memory state.
+        // They reuse the app-resolved runtime paths so runtime-isolated
+        // instances keep their Toastty-side skills state inside the isolated
+        // home.
+        let codexSkillsManager = CodexSkillsManager(runtimePaths: runtimePaths)
+        let claudeSkillsBundleManager = ClaudeSkillsBundleManager(runtimePaths: runtimePaths)
+        let userSkillCatalog = ToasttyUserSkillCatalog(runtimePaths: runtimePaths)
+        // Startup-only GC of the append-only skill staging roots and Codex
+        // cache swap litter. Dispatched here — before the launch service
+        // exists and before the restored-launch planner is handed to the
+        // registry below — so no launch preparation can begin until the
+        // sweep is queued. It runs off the main thread; strict
+        // completes-before ordering is not required because the sweep holds
+        // the same locks the providers use (catalog preparation lock, Claude
+        // staging queue, Codex operation locks) and its retention policy
+        // keeps exactly the artifacts any preparation can resolve (current
+        // Claude bundle dir, newest-receipt user snapshot, plus each one's
+        // verified fallback). See ToasttySkillArtifactSweeper.
+        let skillArtifactSweeper = ToasttySkillArtifactSweeper(
+            runtimePaths: runtimePaths,
+            userSkillCatalog: userSkillCatalog,
+            claudeSkillsBundleManager: claudeSkillsBundleManager
+        )
+        DispatchQueue.global(qos: .utility).async {
+            skillArtifactSweeper.sweep()
+        }
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogStore,
+            codexSkillsManager: codexSkillsManager,
+            claudeSkillsBundleManager: claudeSkillsBundleManager,
+            userSkillCatalog: userSkillCatalog,
             cliExecutablePathProvider: { cliExecutablePath },
-            socketPathProvider: { socketPath }
+            socketPathProvider: { socketPath },
+            codexProcessPathProvider: { codexProcessPathStore.currentPath() },
+            codexProcessPathRefreshProvider: { codexProcessPathStore.refresh() }
         )
         terminalRuntimeRegistry.setRestoredManagedLaunchPlanner(agentLaunchService)
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
@@ -927,6 +976,7 @@ struct ToasttyApp: App {
                     agentLaunchSocketPath: socketPath,
                     agentLaunchCLIExecutablePath: cliExecutablePath,
                     agentLaunchShimExecutablePath: agentShimExecutablePath,
+                    codexProcessPathStore: codexProcessPathStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry
                 )
             },
@@ -1072,6 +1122,7 @@ struct ToasttyApp: App {
         agentLaunchSocketPath = socketPath
         agentLaunchCLIExecutablePath = cliExecutablePath
         agentLaunchShimExecutablePath = agentShimExecutablePath
+        self.codexProcessPathStore = codexProcessPathStore
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
@@ -1124,6 +1175,7 @@ struct ToasttyApp: App {
                         agentLaunchSocketPath: socketPath,
                         agentLaunchCLIExecutablePath: cliExecutablePath,
                         agentLaunchShimExecutablePath: agentShimExecutablePath,
+                        codexProcessPathStore: codexProcessPathStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry
                     )
                 }
@@ -1148,10 +1200,10 @@ struct ToasttyApp: App {
         appLifecycleDelegate.configureStore(store)
         appLifecycleDelegate.configureTerminalRuntimeRegistry(terminalRuntimeRegistry)
         appLifecycleDelegate.configureWebPanelRuntimeRegistry(webPanelRuntimeRegistry)
-        Self.scheduleCodexStatusHookMaintenanceIfNeeded(automationConfig: bootstrap.automationConfig)
+        Self.scheduleCodexIntegrationMaintenanceIfNeeded(automationConfig: bootstrap.automationConfig)
     }
 
-    private static func scheduleCodexStatusHookMaintenanceIfNeeded(
+    private static func scheduleCodexIntegrationMaintenanceIfNeeded(
         automationConfig: AutomationConfig?
     ) {
         guard automationConfig == nil else { return }
@@ -1162,7 +1214,7 @@ struct ToasttyApp: App {
                     return
                 }
                 ToasttyLog.info(
-                    "Automatically maintained Codex status hooks",
+                    "Automatically maintained the Codex integration forwarder",
                     category: .bootstrap,
                     metadata: [
                         "hooks_file": result.status.hooksFileURL.path,
@@ -1427,6 +1479,7 @@ struct ToasttyApp: App {
             agentLaunchSocketPath: agentLaunchSocketPath,
             agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
             agentLaunchShimExecutablePath: agentLaunchShimExecutablePath,
+            codexProcessPathStore: codexProcessPathStore,
             terminalRuntimeRegistry: terminalRuntimeRegistry
         )
     }
@@ -1440,6 +1493,7 @@ struct ToasttyApp: App {
         agentLaunchSocketPath: String,
         agentLaunchCLIExecutablePath: String?,
         agentLaunchShimExecutablePath: String?,
+        codexProcessPathStore: CodexProcessPathStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry
     ) {
         var failureMessages: [String] = []
@@ -1462,6 +1516,17 @@ struct ToasttyApp: App {
         let toasttyConfig = ToasttyConfigStore.load()
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
+        let resolvedAgentBasePath = ManagedAgentBasePathResolver(
+            environment: ProcessInfo.processInfo.environment,
+            fallbackPath: nil
+        ).resolve()
+        codexProcessPathStore.update(
+            ManagedAgentPathResolver.sanitizedMergedPath(
+                preferredPath: resolvedAgentBasePath,
+                fallbackPath: ProcessInfo.processInfo.environment["PATH"],
+                excludedDirectoryPaths: [runtimePaths.agentShimDirectoryURL.path]
+            )
+        )
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
@@ -1476,10 +1541,7 @@ struct ToasttyApp: App {
                 cliExecutablePath: agentLaunchCLIExecutablePath,
                 shimDirectoryPath: shimDirectoryPath,
                 basePath: ProcessInfo.processInfo.environment["PATH"],
-                agentBasePath: ManagedAgentBasePathResolver(
-                    environment: ProcessInfo.processInfo.environment,
-                    fallbackPath: nil
-                ).resolve()
+                agentBasePath: resolvedAgentBasePath
             )
         } catch {
             failureMessages.append("Failed to update managed agent command shims: \(error.localizedDescription)")
@@ -1490,10 +1552,7 @@ struct ToasttyApp: App {
                 cliExecutablePath: agentLaunchCLIExecutablePath,
                 shimDirectoryPath: nil,
                 basePath: ProcessInfo.processInfo.environment["PATH"],
-                agentBasePath: ManagedAgentBasePathResolver(
-                    environment: ProcessInfo.processInfo.environment,
-                    fallbackPath: nil
-                ).resolve()
+                agentBasePath: resolvedAgentBasePath
             )
         }
         Self.applyConfiguredDefaultTerminalProfile(
@@ -1549,6 +1608,21 @@ struct ToasttyApp: App {
         alert.alertStyle = failureMessages.isEmpty ? .informational : .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private static func resolveCodexProcessPath(
+        environment: [String: String],
+        agentShimDirectoryPath: String
+    ) -> String? {
+        let resolvedAgentBasePath = ManagedAgentBasePathResolver(
+            environment: environment,
+            fallbackPath: nil
+        ).resolve()
+        return ManagedAgentPathResolver.sanitizedMergedPath(
+            preferredPath: resolvedAgentBasePath,
+            fallbackPath: environment["PATH"],
+            excludedDirectoryPaths: [agentShimDirectoryPath]
+        )
     }
 
     @MainActor

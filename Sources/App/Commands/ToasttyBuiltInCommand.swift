@@ -46,6 +46,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
     case manageConfig
     case manageTerminalProfiles
     case manageAgents
+    case manageToasttySkills
     case setUpAgentStatusHooks
     case copyDiagnosticsSnippet
     case reloadConfiguration
@@ -144,6 +145,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "terminal.profiles.manage"
         case .manageAgents:
             return "agent.profiles.manage"
+        case .manageToasttySkills:
+            return "agent.toastty-skills.manage"
         case .setUpAgentStatusHooks:
             return "agent.status-hooks.setup"
         case .copyDiagnosticsSnippet:
@@ -239,6 +242,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return "Manage Terminal Profiles"
         case .manageAgents:
             return "Manage Agents"
+        case .manageToasttySkills:
+            return "Manage Toastty Skills"
         case .setUpAgentStatusHooks:
             return "Set Up Agent Status Hooks"
         case .copyDiagnosticsSnippet:
@@ -332,7 +337,7 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return nil
         case .manageTerminalProfiles:
             return nil
-        case .manageAgents:
+        case .manageAgents, .manageToasttySkills:
             return nil
         case .setUpAgentStatusHooks:
             return nil
@@ -434,6 +439,8 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
             return ["manage", "open", "terminal", "profiles", "config", "toml"]
         case .manageAgents:
             return ["manage", "open", "agents", "agent", "profiles", "config", "toml"]
+        case .manageToasttySkills:
+            return ["manage", "toastty", "codex", "claude", "skills", "plugin", "repair", "uninstall"]
         case .setUpAgentStatusHooks:
             return ["agent", "status", "hooks", "setup", "codex", "claude", "telemetry"]
         case .copyDiagnosticsSnippet:

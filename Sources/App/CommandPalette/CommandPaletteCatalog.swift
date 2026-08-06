@@ -81,6 +81,7 @@ enum CommandPaletteCatalog {
             (.manageConfig, actions.canManageConfig(originWindowID: originWindowID)),
             (.manageTerminalProfiles, actions.canManageTerminalProfiles(originWindowID: originWindowID)),
             (.manageAgents, actions.canManageAgents(originWindowID: originWindowID)),
+            (.manageToasttySkills, actions.canManageToasttySkills(originWindowID: originWindowID)),
             (.setUpAgentStatusHooks, actions.canSetUpAgentStatusHooks(originWindowID: originWindowID)),
             (.copyDiagnosticsSnippet, actions.canCopyDiagnosticsSnippet(originWindowID: originWindowID)),
             (.reloadConfiguration, actions.canReloadConfiguration()),

@@ -249,7 +249,7 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
-    func agentLaunchUIRunAnywayBypassesCodexHooksWarningAndLaunches() throws {
+    func agentLaunchUIRunAnywayBypassesCodexHooksWarningAndLaunches() async throws {
         let fixture = try makeLaunchUITestFixture()
         let missingStatus = codexHookInstallStatus(state: .notInstalled)
 
@@ -266,6 +266,9 @@ struct AgentLaunchServiceTests {
         )
 
         #expect(launched)
+        for _ in 0..<100 where fixture.terminalRouter.sentTextByPanelID[fixture.panelID] == nil {
+            await Task.yield()
+        }
         #expect(fixture.terminalRouter.sentTextByPanelID[fixture.panelID] != nil)
         #expect(fixture.sessionRuntimeStore.sessionRegistry.sessionsByID.count == 1)
     }
@@ -293,7 +296,8 @@ struct AgentLaunchServiceTests {
             nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) },
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-tests.sock" },
-            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") },
+            codexSkillsResolver: ImmediateCodexManagedLaunchSkillsResolver()
         )
 
         let result = try service.launch(profileID: "codex")
@@ -402,6 +406,80 @@ struct AgentLaunchServiceTests {
             try service.launch(profileID: "claude")
         }
         #expect(store.hasEverLaunchedAgent == false)
+    }
+
+    @Test
+    func injectedSkillsManagersAreForwardedToLaunchPlannerAndResolver() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let agentCatalogProvider = TestAgentCatalogProvider()
+        let codexSkillsManager = CodexSkillsManager()
+        let claudeSkillsBundleManager = RecordingClaudeSkillsBundleManager()
+        let userSkillsHomeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-service-user-skills-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: userSkillsHomeURL) }
+        let userSkillCatalog = ToasttyUserSkillCatalog(
+            runtimePaths: .resolve(
+                homeDirectoryPath: userSkillsHomeURL.appendingPathComponent("real-home").path,
+                environment: [
+                    "TOASTTY_RUNTIME_HOME": userSkillsHomeURL
+                        .appendingPathComponent("runtime-home").path,
+                    // Hermetic override: user skills follow the real home by
+                    // default, so the fixture redirects the source explicitly.
+                    "TOASTTY_USER_SKILLS_ROOT": userSkillsHomeURL
+                        .appendingPathComponent("runtime-home/skills").path,
+                ]
+            )
+        )
+        let packageURL = userSkillsHomeURL.appendingPathComponent(
+            "runtime-home/skills/alpha-skill",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+        try "---\nname: alpha-skill\ndescription: Test skill.\n---\n".write(
+            to: packageURL.appendingPathComponent("SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let snapshot = try #require(try userSkillCatalog.refreshUserSkills())
+
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            codexSkillsManager: codexSkillsManager,
+            claudeSkillsBundleManager: claudeSkillsBundleManager,
+            userSkillCatalog: userSkillCatalog,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" },
+            codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
+        )
+
+        // The service exposes the exact injected instances (the skills sheet
+        // is wired from these), and the launch-path resolver wraps the same
+        // Codex manager instance.
+        #expect(service.codexSkillsManager === codexSkillsManager)
+        #expect(service.claudeSkillsBundleManager === claudeSkillsBundleManager)
+        #expect(service.userSkillCatalog === userSkillCatalog)
+        let resolver = try #require(
+            service.codexSkillsResolver as? CodexManagedLaunchSkillsResolver
+        )
+        #expect(resolver.manager === codexSkillsManager)
+
+        // The managed-launch planner consults the injected Claude manager and
+        // the injected user skill catalog: the synchronous launch reuses the
+        // catalog's existing snapshot for the second --plugin-dir.
+        let result = try service.launch(profileID: "claude")
+        #expect(claudeSkillsBundleManager.existingVerifiedConfigurationCallCount == 1)
+        // Path form may differ (/var vs /private/var); the content-addressed
+        // segment identifies the shared catalog's snapshot unambiguously.
+        #expect(result.commandLine.contains(
+            "\(snapshot.sourceDigest)/marketplace/plugins/toastty-user"
+        ))
     }
 
     @Test
@@ -845,6 +923,24 @@ struct AgentLaunchServiceTests {
                 environment: ["TOASTTY_SESSION_ID": "user-value"]
             )
         }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_SKILLS_ROOT' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "codex",
+                environment: ["TOASTTY_SKILLS_ROOT": "/tmp/user-controlled"]
+            )
+        }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_USER_SKILLS_ROOT' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "codex",
+                environment: ["TOASTTY_USER_SKILLS_ROOT": "/tmp/user-controlled"]
+            )
+        }
+        #expect(throws: AgentLaunchError.invalidLaunchEnvironment(message: "'TOASTTY_AGENT' is managed by Toastty")) {
+            _ = try service.launch(
+                profileID: "codex",
+                environment: ["TOASTTY_AGENT": "claude"]
+            )
+        }
     }
 
     @Test
@@ -1167,6 +1263,19 @@ struct AgentLaunchServiceTests {
             terminalCommandRouter: terminalRouter,
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
+            // Hermetic user-skill catalog: user skills follow the real user
+            // home by default now, and these async launch tests must not
+            // scan the operator's real ~/.toastty/skills.
+            userSkillCatalog: ToasttyUserSkillCatalog(
+                runtimePaths: .resolve(
+                    homeDirectoryPath: FileManager.default.temporaryDirectory
+                        .appendingPathComponent(
+                            "toastty-launch-ui-user-skills-\(UUID().uuidString)",
+                            isDirectory: true
+                        ).path,
+                    environment: [:]
+                )
+            ),
             cliExecutablePathProvider: { "/bin/sh" },
             socketPathProvider: { "/tmp/toastty-tests.sock" },
             codexStatusTrackingSourceProvider: { .sessionLogFallback(reason: "test") }
@@ -1190,6 +1299,37 @@ private final class SpyNativeSessionObserverRegistry: ManagedAgentNativeSessionO
 
     func cancelObservation(sessionID: String) {
         cancelledSessionIDs.append(sessionID)
+    }
+}
+
+private final class ImmediateCodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
+    func resolve(
+        request: ManagedAgentLaunchRequest,
+        workingDirectory: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+    }
+}
+
+private final class RecordingClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Sendable {
+    private let lock = NSLock()
+    private var existingVerifiedConfigurationCalls = 0
+
+    var existingVerifiedConfigurationCallCount: Int {
+        lock.withLock { existingVerifiedConfigurationCalls }
+    }
+
+    func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration? {
+        lock.withLock { existingVerifiedConfigurationCalls += 1 }
+        return nil
+    }
+
+    func deliveryStatus() async -> ClaudeSkillsDeliveryStatus {
+        .unavailable(detail: "test")
+    }
+
+    func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration? {
+        nil
     }
 }
 

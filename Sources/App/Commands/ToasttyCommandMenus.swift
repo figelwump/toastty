@@ -381,6 +381,11 @@ struct ToasttyCommandMenus: Commands {
             }
             Divider()
 
+            Button("\(ToasttyBuiltInCommand.manageToasttySkills.title)…") {
+                showSkillsManagement()
+            }
+            .disabled(gettingStartedTargetWindowID == nil)
+
             Button("Set Up Agent Status Hooks…") {
                 showAgentStatusHooksSetup()
             }
@@ -891,6 +896,14 @@ struct ToasttyCommandMenus: Commands {
 
     private func showAgentStatusHooksSetup() {
         showGettingStartedPanel(anchor: "codex-hooks")
+    }
+
+    private func showSkillsManagement() {
+        guard let windowID = gettingStartedTargetWindowID else { return }
+        NotificationCenter.default.post(
+            name: .toasttyShowSkillsManagement,
+            object: windowID
+        )
     }
 
     @ViewBuilder

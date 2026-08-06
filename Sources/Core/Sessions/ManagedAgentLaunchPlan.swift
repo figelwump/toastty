@@ -8,6 +8,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
     public let environment: [String: String]
     public let preflightPolicy: ManagedAgentLaunchPreflightPolicy
     public let parentSessionID: String?
+    public let codexCapabilityHint: ManagedCodexCapabilityHint?
 
     private enum CodingKeys: String, CodingKey {
         case agent
@@ -17,6 +18,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         case environment
         case preflightPolicy
         case parentSessionID
+        case codexCapabilityHint
     }
 
     public init(
@@ -26,7 +28,8 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         cwd: String?,
         environment: [String: String] = [:],
         preflightPolicy: ManagedAgentLaunchPreflightPolicy = .skip,
-        parentSessionID: String? = nil
+        parentSessionID: String? = nil,
+        codexCapabilityHint: ManagedCodexCapabilityHint? = nil
     ) {
         self.agent = agent
         self.panelID = panelID
@@ -35,6 +38,7 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         self.environment = environment
         self.preflightPolicy = preflightPolicy
         self.parentSessionID = Self.normalizedOptionalText(parentSessionID)
+        self.codexCapabilityHint = codexCapabilityHint
     }
 
     public init(from decoder: any Decoder) throws {
@@ -51,6 +55,29 @@ public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {
         parentSessionID = Self.normalizedOptionalText(
             try container.decodeIfPresent(String.self, forKey: .parentSessionID)
         )
+        codexCapabilityHint = try container.decodeIfPresent(
+            ManagedCodexCapabilityHint.self,
+            forKey: .codexCapabilityHint
+        )
+    }
+}
+
+/// A best-effort hint from the process that resolved the real Codex executable.
+/// Older clients omit this field, so the app must continue to resolve capabilities
+/// from the launch argv when it is absent.
+public struct ManagedCodexCapabilityHint: Codable, Equatable, Sendable {
+    public let resolvedExecutablePath: String
+    public let codexHomePath: String?
+    public let processPath: String?
+
+    public init(
+        resolvedExecutablePath: String,
+        codexHomePath: String? = nil,
+        processPath: String? = nil
+    ) {
+        self.resolvedExecutablePath = resolvedExecutablePath
+        self.codexHomePath = codexHomePath
+        self.processPath = processPath
     }
 }
 

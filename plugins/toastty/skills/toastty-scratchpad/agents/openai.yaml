@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toastty Scratchpad"
+  short_description: "Create, review, and update Toastty visuals."
+  default_prompt: "Use $toastty-scratchpad to turn this context into a visual Scratchpad panel."

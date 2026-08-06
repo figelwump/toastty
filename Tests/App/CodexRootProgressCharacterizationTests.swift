@@ -365,7 +365,8 @@ private final class CodexRootProgressPlannerFixture {
             codexStatusTrackingSourceProvider: { source },
             readVisibleText: { _ in readVisibleText() },
             promptState: { _ in promptState() },
-            nativeSessionObserverRegistry: CodexRootProgressNativeSessionObserverStub()
+            nativeSessionObserverRegistry: CodexRootProgressNativeSessionObserverStub(),
+            codexSkillsResolver: CodexRootProgressSkillsResolverStub()
         )
         let plan = try planner.prepareManagedLaunch(
             ManagedAgentLaunchRequest(
@@ -475,6 +476,15 @@ private final class CodexRootProgressPlannerFixture {
 private final class CodexRootProgressNativeSessionObserverStub: ManagedAgentNativeSessionObserving {
     func startObservation(_: ManagedAgentNativeSessionObservationContext) {}
     func cancelObservation(sessionID _: String) {}
+}
+
+private final class CodexRootProgressSkillsResolverStub: CodexManagedLaunchSkillsResolving {
+    func resolve(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+    }
 }
 
 private enum CodexRootProgressFixtureError: Error {

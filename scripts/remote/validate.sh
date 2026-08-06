@@ -852,6 +852,7 @@ run_remote_custom_mode() {
     build >/dev/null
 
   TOASTTY_RUNTIME_HOME="$runtime_home" \
+  TOASTTY_USER_SKILLS_ROOT="$runtime_home/skills" \
   TOASTTY_RUNTIME_LABEL="$runtime_label" \
   TOASTTY_SOCKET_PATH="$socket_path" \
   TOASTTY_DERIVED_PATH="$derived_path" \

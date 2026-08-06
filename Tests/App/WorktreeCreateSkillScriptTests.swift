@@ -259,8 +259,8 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
         XCTAssertTrue(agentLaunchLine.contains("profileID=codex"))
         XCTAssertTrue(agentLaunchLine.contains("cwd=\(worktreeURL.path)"))
-        XCTAssertTrue(agentLaunchLine.contains("env.TOASTTY_DEV_WORKTREE_ROOT=\(worktreeURL.path)"))
-        XCTAssertTrue(agentLaunchLine.contains("env.TOASTTY_DERIVED_PATH=\(worktreeURL.path)/artifacts/dev-runs/manual/Derived"))
+        XCTAssertFalse(agentLaunchLine.contains("env.TOASTTY_DEV_WORKTREE_ROOT="))
+        XCTAssertFalse(agentLaunchLine.contains("env.TOASTTY_DERIVED_PATH="))
         XCTAssertTrue(agentLaunchLine.contains("initialPrompt=Read WORKTREE_HANDOFF.md in the repo"))
         XCTAssertFalse(agentLaunchLine.contains("profileID=cdx"))
         XCTAssertFalse(try hasSendTextInvocation(invocationLogURL: invocationLogURL))
@@ -280,6 +280,41 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertLessThan(showIndex, parentScopeIndex)
         XCTAssertLessThan(parentScopeIndex, workspaceCreateIndex)
         XCTAssertLessThan(workspaceCreateIndex, childScopeIndex)
+    }
+
+    func testOpenSessionScriptPreservesManagedClaudeAgentByDefault() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-claude-agent")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "TOASTTY_AGENT": "claude",
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
+        XCTAssertTrue(agentLaunchLine.contains("profileID=claude"))
+        XCTAssertFalse(agentLaunchLine.contains("profileID=codex"))
     }
 
     func testOpenSessionScriptPreservesAlreadyScopedParentSession() throws {
@@ -662,11 +697,65 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         let agentLaunchLine = try agentLaunchInvocationLine(invocationLogURL: invocationLogURL)
         XCTAssertTrue(agentLaunchLine.contains("profileID=claude"))
         XCTAssertTrue(agentLaunchLine.contains("cwd=\(worktreeURL.path)"))
-        XCTAssertTrue(agentLaunchLine.contains("env.TOASTTY_DEV_WORKTREE_ROOT=\(worktreeURL.path)"))
-        XCTAssertTrue(agentLaunchLine.contains("env.TOASTTY_DERIVED_PATH=\(worktreeURL.path)/artifacts/dev-runs/manual/Derived"))
+        XCTAssertFalse(agentLaunchLine.contains("env.TOASTTY_DEV_WORKTREE_ROOT="))
+        XCTAssertFalse(agentLaunchLine.contains("env.TOASTTY_DERIVED_PATH="))
         XCTAssertTrue(agentLaunchLine.contains("initialPrompt=Read WORKTREE_HANDOFF.md in the repo"))
         XCTAssertFalse(agentLaunchLine.contains("profileID=codex"))
         XCTAssertFalse(try hasSendTextInvocation(invocationLogURL: invocationLogURL))
+    }
+
+    func testOpenSessionScriptFallbackDoesNotInjectToasttyDevelopmentEnvironment() throws {
+        let fileManager = FileManager.default
+        let rootURL = try makeTemporaryDirectory(prefix: "toastty-worktree-create-fallback")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let worktreeURL = rootURL.appendingPathComponent("worktree", isDirectory: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let handoffURL = worktreeURL.appendingPathComponent("WORKTREE_HANDOFF.md", isDirectory: false)
+        try Data("# Handoff\n".utf8).write(to: handoffURL, options: .atomic)
+
+        let invocationLogURL = rootURL.appendingPathComponent("cli-invocations.log", isDirectory: false)
+        let fakeCLIURL = try makeFakeToasttyCLI(in: rootURL)
+        _ = try makeExecutableScript(
+            named: "sleep",
+            contents: "#!/bin/sh\nexit 0",
+            in: rootURL
+        )
+
+        let result = try runScript(
+            at: skillScriptURL(named: "open-toastty-worktree-session.sh"),
+            environment: [
+                "FAKE_AGENT_LAUNCH_FAILURE": "1",
+                "FAKE_TOASTTY_LOG": invocationLogURL.path,
+                "PATH": "\(rootURL.path):/usr/bin:/bin:/usr/sbin:/sbin",
+                "TOASTTY_CLI_PATH": fakeCLIURL.path,
+                "TOASTTY_PANEL_ID": "33333333-3333-3333-3333-333333333333",
+                "TOASTTY_SESSION_ID": "77777777-7777-7777-7777-777777777777",
+            ],
+            arguments: [
+                "--workspace-name", "smoke",
+                "--worktree-path", worktreeURL.path,
+                "--handoff-file", handoffURL.path,
+                "--agent-command", "aider",
+                "--json",
+            ]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertTrue(result.stderr.contains("falling back to terminal.send-text"))
+
+        let payload = try jsonObject(from: result.stdout)
+        let startupCommand = try XCTUnwrap(payload["startup_command"] as? String)
+        XCTAssertTrue(startupCommand.hasPrefix("cd \(worktreeURL.path) && aider "))
+        XCTAssertTrue(startupCommand.contains("Read WORKTREE_HANDOFF.md in the repo"))
+        XCTAssertFalse(startupCommand.contains("TOASTTY_DEV_WORKTREE_ROOT"))
+        XCTAssertFalse(startupCommand.contains("TOASTTY_DERIVED_PATH"))
+
+        let sendTextLine = try sendTextInvocationLine(invocationLogURL: invocationLogURL)
+        XCTAssertTrue(sendTextLine.contains(startupCommand))
+        XCTAssertFalse(sendTextLine.contains("TOASTTY_DEV_WORKTREE_ROOT"))
+        XCTAssertFalse(sendTextLine.contains("TOASTTY_DERIVED_PATH"))
     }
 
     func testOpenSessionScriptPassesInitialCommandsToStructuredAgentLaunch() throws {
@@ -841,6 +930,12 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
             EOF
                 ;;
               \"action run agent.launch\")
+                if [ "${FAKE_AGENT_LAUNCH_FAILURE:-0}" = "1" ]; then
+                  cat <<'EOF'
+            {"error":{"code":"launch_failed","message":"agent launch failure"}}
+            EOF
+                  exit 1
+                fi
                 if [ "${FAKE_AGENT_LAUNCH_MISSING_SESSION:-0}" = "1" ]; then
                   cat <<'EOF'
             {"result":{"profileID":"codex","agent":"codex","displayName":"Codex","windowID":"11111111-1111-1111-1111-111111111111","workspaceID":"44444444-4444-4444-4444-444444444444","panelID":"55555555-5555-5555-5555-555555555555","command":"cd /tmp/worktree && codex prompt","cwd":"/tmp/worktree"}}

@@ -132,7 +132,22 @@ private enum AgentCommandShim {
                 panelID: panelID,
                 argv: invocation.argv,
                 cwd: cwd,
-                preflightPolicy: .interactive
+                preflightPolicy: .interactive,
+                codexCapabilityHint: invocation.agent == .codex
+                    && ["codex", "cdx"].contains(commandName.lowercased())
+                    ? ManagedCodexCapabilityHint(
+                        resolvedExecutablePath: realBinaryPath,
+                        codexHomePath: normalizedNonEmpty(resolvedLaunchEnvironment["CODEX_HOME"]),
+                        processPath: ManagedAgentPathResolver.sanitizedMergedPath(
+                            preferredPath: resolvedLaunchEnvironment["PATH"],
+                            fallbackPath: resolvedBinaryPath.agentBasePath,
+                            excludedDirectoryPaths: Set(
+                                [environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey]]
+                                    .compactMap(normalizedNonEmpty)
+                            )
+                        )
+                    )
+                    : nil
             ),
             environment: environment
         )
@@ -334,7 +349,16 @@ private enum AgentCommandShim {
                 .compactMap { basePathResolver.resolveExecutable(commandName: $0) }
                 .first
         }
-        guard let executableResolution else { return nil }
+        guard let executableResolution,
+              ManagedAgentPathResolver.isExecutablePathAllowed(
+                  executableResolution.executablePath,
+                  excludedDirectoryPaths: excludedDirectoryPaths,
+                  excludedExecutablePaths: currentExecutablePaths,
+                  canonicalPathProvider: canonicalPath(for:),
+                  isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
+              ) else {
+            return nil
+        }
 
         let executableProbeAgentBasePath = ManagedAgentPathResolver.mergedPath(
             currentPath: effectiveAgentBasePath,
@@ -438,7 +462,8 @@ private enum AgentCommandShim {
                     panelID: request.panelID,
                     argv: request.argv,
                     cwd: request.cwd,
-                    preflightPolicy: .skip
+                    preflightPolicy: .skip,
+                    codexCapabilityHint: request.codexCapabilityHint
                 )
                 return prepareManagedLaunch(
                     cliPath: cliPath,
@@ -476,6 +501,18 @@ private enum AgentCommandShim {
         }
         arguments.append("--preflight-policy")
         arguments.append(request.preflightPolicy.rawValue)
+        if let hint = request.codexCapabilityHint {
+            arguments.append("--resolved-codex-executable")
+            arguments.append(hint.resolvedExecutablePath)
+            if let codexHomePath = normalizedNonEmpty(hint.codexHomePath) {
+                arguments.append("--codex-home")
+                arguments.append(codexHomePath)
+            }
+            if let processPath = normalizedNonEmpty(hint.processPath) {
+                arguments.append("--codex-process-path")
+                arguments.append(processPath)
+            }
+        }
         for argument in request.argv {
             arguments.append("--arg")
             arguments.append(argument)

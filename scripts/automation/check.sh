@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUNTIME_OWNERSHIP_SELF_TEST="$ROOT_DIR/scripts/automation/runtime-ownership-self-test.sh"
 CLEANUP_ARTIFACTS_SELF_TEST="$ROOT_DIR/scripts/automation/cleanup-artifacts-self-test.sh"
+CODEX_PLUGIN_SELF_TEST="$ROOT_DIR/scripts/agents/toastty-plugin-self-test.sh"
+CODEX_PLUGIN_VALIDATOR="$ROOT_DIR/scripts/agents/validate-toastty-plugin.py"
 MANIFEST_VALIDATION_VERSION="9.9.9"
 MANIFEST_VALIDATION_BUILD_NUMBER="42"
 MANIFEST_VALIDATE_LOG=""
@@ -225,6 +227,17 @@ verify_bundled_helper_executables() {
   verify_bundled_helper_match "agent shim" "$shim_source_path" "$shim_bundled_path" || return 1
 }
 
+verify_bundled_codex_plugin() {
+  local scheme="$1"
+  local configuration="$2"
+  local app_path
+
+  app_path="$(resolve_app_path "$scheme" "$configuration")" || return 1
+  "$CODEX_PLUGIN_VALIDATOR" \
+    --repo-root "$ROOT_DIR" \
+    --bundle-resources "$app_path/Contents/Resources"
+}
+
 build_app_scheme_for_verification() {
   local scheme="$1"
   local configuration="$2"
@@ -328,6 +341,10 @@ if ! "$CLEANUP_ARTIFACTS_SELF_TEST"; then
   exit 10
 fi
 
+if ! "$CODEX_PLUGIN_SELF_TEST"; then
+  exit 10
+fi
+
 if ! run_web_panel_tests; then
   exit 10
 fi
@@ -361,6 +378,10 @@ if ! verify_bundled_helper_executables "ToasttyApp" "Debug"; then
   exit 10
 fi
 
+if ! verify_bundled_codex_plugin "ToasttyApp" "Debug"; then
+  exit 10
+fi
+
 if ! build_app_scheme_for_verification "ToasttyApp-Release" "Release"; then
   exit 10
 fi
@@ -370,6 +391,10 @@ if ! verify_child_process_tcc_metadata "ToasttyApp-Release" "Release"; then
 fi
 
 if ! verify_bundled_helper_executables "ToasttyApp-Release" "Release"; then
+  exit 10
+fi
+
+if ! verify_bundled_codex_plugin "ToasttyApp-Release" "Release"; then
   exit 10
 fi
 

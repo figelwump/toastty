@@ -8,6 +8,14 @@ protocol ManagedAgentLaunchPlanning: AnyObject {
         _ request: ManagedAgentLaunchRequest,
         inheritedScopedWorkspaceIDs: Set<UUID>?
     ) throws -> ManagedAgentLaunchPlan
+    func prepareManagedLaunchAsync(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>?
+    ) async throws -> ManagedAgentLaunchPlan
+    func prepareRestoredManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>?
+    ) throws -> ManagedAgentLaunchPlan
     func discardManagedLaunch(sessionID: String)
     func cancelNativeSessionObservation(sessionID: String)
 }
@@ -15,6 +23,26 @@ protocol ManagedAgentLaunchPlanning: AnyObject {
 extension ManagedAgentLaunchPlanning {
     func prepareManagedLaunch(_ request: ManagedAgentLaunchRequest) throws -> ManagedAgentLaunchPlan {
         try prepareManagedLaunch(request, inheritedScopedWorkspaceIDs: nil)
+    }
+
+    func prepareManagedLaunchAsync(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) async throws -> ManagedAgentLaunchPlan {
+        try prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
+    }
+
+    func prepareRestoredManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
+        try prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs
+        )
     }
 }
 
@@ -32,6 +60,16 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let promptState: @MainActor (UUID) -> TerminalPromptState
     private let nativeSessionObserverRegistry: any ManagedAgentNativeSessionObserving
     private let codexResumeResolver: any CodexManagedSessionResolving
+    private let codexSkillsResolver: any CodexManagedLaunchSkillsResolving
+    private let claudeSkillsBundleManager: any ClaudeSkillsBundleManaging
+    private let userSkillSnapshotProvider: any ToasttyUserSkillSnapshotProviding
+    /// App-process environment source for launch-scoped runtime-path
+    /// resolution (the `TOASTTY_USER_SKILLS_ROOT` harness override lives
+    /// here). Injectable for tests.
+    private let processEnvironmentProvider: @Sendable () -> [String: String]
+    /// Bound on user-snapshot preparation during async launch prep; matches
+    /// the Codex skills operation budget. Settable for tests.
+    var userSkillSnapshotPreparationTimeout: TimeInterval = CodexSkillsManager.operationTimeout
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
     private var codexRolloutWatchersBySessionID: [String: CodexRolloutSessionLogWatcherRegistration] = [:]
@@ -51,7 +89,11 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         readVisibleText: @escaping @MainActor (UUID) -> String?,
         promptState: @escaping @MainActor (UUID) -> TerminalPromptState,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
-        codexResumeResolver: (any CodexManagedSessionResolving)? = nil
+        codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
+        codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
+        claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
+        userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil,
+        processEnvironmentProvider: (@Sendable () -> [String: String])? = nil
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -71,6 +113,14 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 nowProvider: nowProvider
             )
         self.codexResumeResolver = codexResumeResolver ?? CodexManagedSessionResolver()
+        self.codexSkillsResolver = codexSkillsResolver
+            ?? CodexManagedLaunchSkillsResolver(fileManager: fileManager)
+        self.claudeSkillsBundleManager = claudeSkillsBundleManager
+            ?? ClaudeSkillsBundleManager(fileManager: fileManager)
+        self.userSkillSnapshotProvider = userSkillSnapshotProvider
+            ?? ToasttyUserSkillCatalog(fileManager: fileManager)
+        self.processEnvironmentProvider = processEnvironmentProvider
+            ?? { ProcessInfo.processInfo.environment }
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
@@ -88,12 +138,283 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         _ request: ManagedAgentLaunchRequest,
         inheritedScopedWorkspaceIDs: Set<UUID>? = nil
     ) throws -> ManagedAgentLaunchPlan {
+        let target = try resolveManagedLaunchTarget(panelID: request.panelID)
+        let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
+        let codexSkillsDecision = request.agent == .codex
+            ? codexSkillsResolver.resolve(
+                request: request,
+                workingDirectory: assessedWorkingDirectory
+            )
+            : nil
+        let stagedSkillsConfiguration = request.agent.usesStagedSkillsTree
+            ? claudeSkillsBundleManager.existingVerifiedConfiguration()
+            : nil
+        // Synchronous preparation never builds a snapshot; it reuses the
+        // newest valid on-disk snapshot resolution or launches without user
+        // skills. Codex synchronous launches need no resolution at all: any
+        // previously delivered user entry already rides in the profile
+        // overlay.
+        let userSkillResolution = request.agent.usesStagedSkillsTree
+            ? userSkillSnapshotProvider.existingSnapshotResolution()
+            : nil
+        return try prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
+            codexSkillsDecision: codexSkillsDecision,
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            deliveredUserSkillsRootPath: deliveredUserSkillsRootPath(
+                for: request.agent,
+                resolution: userSkillResolution
+            ),
+            assessedWorkingDirectory: assessedWorkingDirectory
+        )
+    }
+
+    func prepareManagedLaunchAsync(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) async throws -> ManagedAgentLaunchPlan {
+        let target = try resolveManagedLaunchTarget(panelID: request.panelID)
+        let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
+        // Resolved once per launch preparation and passed to both hosts.
+        let userSkillResolution = request.agent == .codex || request.agent.usesStagedSkillsTree
+            ? await preparedUserSkillResolution()
+            : nil
+        let codexSkillsDecision = request.agent == .codex
+            ? await codexSkillsResolver.resolveForManagedLaunch(
+                request: request,
+                workingDirectory: assessedWorkingDirectory,
+                userSkillResolution: userSkillResolution ?? .unavailable
+            )
+            : nil
+        let stagedSkillsConfiguration = request.agent.usesStagedSkillsTree
+            ? await claudeSkillsBundleManager.prepareForManagedLaunch()
+            : nil
+        let plan = try prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
+            codexSkillsDecision: codexSkillsDecision,
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            deliveredUserSkillsRootPath: deliveredUserSkillsRootPath(
+                for: request.agent,
+                resolution: userSkillResolution
+            ),
+            assessedWorkingDirectory: assessedWorkingDirectory
+        )
+        postSkillsProvisionedNoticeIfNeeded(
+            request: request,
+            windowID: target.windowID,
+            codexSkillsDecision: codexSkillsDecision,
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            userSkillSnapshot: userSkillResolution?.snapshot
+        )
+        return plan
+    }
+
+    func prepareRestoredManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>? = nil
+    ) throws -> ManagedAgentLaunchPlan {
+        let target = try resolveManagedLaunchTarget(panelID: request.panelID)
+        let assessedWorkingDirectory = normalizedNonEmpty(request.cwd) ?? target.cwd
+        // Restored preparation reuses the newest existing on-disk snapshot
+        // resolution (receipt/existence checks only) and never builds one.
+        let userSkillResolution = request.agent == .codex || request.agent.usesStagedSkillsTree
+            ? userSkillSnapshotProvider.existingSnapshotResolution()
+            : nil
+        let codexSkillsDecision = request.agent == .codex
+            ? codexSkillsResolver.resolveForRestoredManagedLaunch(
+                request: request,
+                workingDirectory: assessedWorkingDirectory,
+                userSkillResolution: userSkillResolution ?? .unavailable
+            )
+            : nil
+        let stagedSkillsConfiguration = request.agent.usesStagedSkillsTree
+            ? claudeSkillsBundleManager.prepareForRestoredManagedLaunch()
+            : nil
+        let plan = try prepareManagedLaunch(
+            request,
+            inheritedScopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
+            codexSkillsDecision: codexSkillsDecision,
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            deliveredUserSkillsRootPath: deliveredUserSkillsRootPath(
+                for: request.agent,
+                resolution: userSkillResolution
+            ),
+            assessedWorkingDirectory: assessedWorkingDirectory
+        )
+        postSkillsProvisionedNoticeIfNeeded(
+            request: request,
+            windowID: target.windowID,
+            codexSkillsDecision: codexSkillsDecision,
+            stagedSkillsConfiguration: stagedSkillsConfiguration,
+            userSkillSnapshot: userSkillResolution?.snapshot
+        )
+        return plan
+    }
+
+    /// Runtime-specific projection of one user skills snapshot: Claude takes
+    /// the generated plugin root, and the other additive runtimes take the
+    /// plain skills tree inside it.
+    private func deliveredUserSkillsRootPath(
+        for agent: AgentKind,
+        resolution: UserSkillSnapshotResolution?
+    ) -> String? {
+        guard agent.usesStagedSkillsTree, let resolution else { return nil }
+        switch resolution {
+        case .snapshot(let snapshot):
+            return userSkillsRootPath(for: agent, snapshot: snapshot)
+        case .empty:
+            return nil
+        case .unavailable:
+            // An incomplete resolution (timed-out or failed build) falls back
+            // to the newest snapshot the catalog can verify right now, and
+            // drops the delivery when nothing verifies — never a destructive
+            // outcome for an additive runtime either way.
+            return userSkillSnapshotProvider.existingSnapshot().map { snapshot in
+                userSkillsRootPath(for: agent, snapshot: snapshot)
+            }
+        }
+    }
+
+    private func userSkillsRootPath(
+        for agent: AgentKind,
+        snapshot: UserSkillPluginSnapshot
+    ) -> String {
+        agent == .claude ? snapshot.pluginRootURL.path : snapshot.skillsRootURL.path
+    }
+
+    /// Builds (or reuses) the user skills snapshot off the main actor,
+    /// bounded by `userSkillSnapshotPreparationTimeout`, and reports its
+    /// provenance: `.empty` only when the completed scan confirmed zero
+    /// accepted packages; `.unavailable` for a build failure or timeout so
+    /// delivery never mistakes an incomplete resolution for "the user has no
+    /// skills". On timeout the abandoned build may finish in the background
+    /// harmlessly: staging is isolated and publication is an atomic rename,
+    /// so a later launch can reuse it.
+    private func preparedUserSkillResolution() async -> UserSkillSnapshotResolution {
+        let provider = userSkillSnapshotProvider
+        let timeout = userSkillSnapshotPreparationTimeout
+        return await withCheckedContinuation { continuation in
+            let oneShot = OneShotSnapshotContinuation(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let resolution: UserSkillSnapshotResolution
+                do {
+                    resolution = try provider.prepareSnapshot()
+                        .map { .snapshot($0) } ?? .empty
+                } catch {
+                    let diagnostic: String
+                    switch error as? ToasttyUserSkillCatalogError {
+                    case .sourceUnreadable: diagnostic = "source_unreadable"
+                    case .snapshotWriteFailed: diagnostic = "snapshot_write_failed"
+                    case .snapshotVerificationFailed: diagnostic = "snapshot_verification_failed"
+                    case nil: diagnostic = "unknown"
+                    }
+                    ToasttyLog.warning(
+                        "User skills snapshot preparation failed; launching with shipped skills only",
+                        category: .automation,
+                        metadata: [
+                            "diagnostic": diagnostic,
+                            "error": error.localizedDescription,
+                        ]
+                    )
+                    resolution = .unavailable
+                }
+                _ = oneShot.resume(returning: resolution)
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                if oneShot.resume(returning: .unavailable) {
+                    ToasttyLog.warning(
+                        "User skills snapshot preparation timed out; launching with shipped skills only",
+                        category: .automation,
+                        metadata: [
+                            "diagnostic": "snapshot_preparation_timed_out",
+                            "timeout_seconds": String(timeout),
+                        ]
+                    )
+                }
+            }
+        }
+    }
+
+    private func postSkillsProvisionedNoticeIfNeeded(
+        request: ManagedAgentLaunchRequest,
+        windowID: UUID,
+        codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
+        stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
+        userSkillSnapshot: UserSkillPluginSnapshot?
+    ) {
+        let isAvailable: Bool
+        if request.agent == .codex {
+            isAvailable = codexSkillsDecision?.configuration != nil
+                && codexSkillsDecision?.status?.isReady == true
+        } else if request.agent.usesStagedSkillsTree {
+            // Additive runtimes post on a resolved staged configuration (the
+            // Claude precedent), except when the caller's argv explicitly opts
+            // pi out of injection — announcing provisioned skills right after
+            // a `--no-skills`/`--no-extensions` launch would be wrong. Unsafe
+            // or opaque argv shapes keep the optimistic notice, matching
+            // Claude and Codex today.
+            isAvailable = stagedSkillsConfiguration != nil
+                && (request.agent != .pi
+                    || AgentLaunchInstrumentation.piLaunchWillInjectSkills(argv: request.argv))
+        } else {
+            isAvailable = false
+        }
+        guard isAvailable else { return }
+        NotificationCenter.default.post(
+            name: .toasttyManagedAgentSkillsProvisioned,
+            object: ManagedAgentSkillsProvisionedNotice(
+                windowID: windowID,
+                agent: request.agent,
+                shippedSkillCount: ToasttyAgentPluginBundle.skills.count,
+                deliveredUserSkillCount: Self.deliveredUserSkillCount(
+                    agent: request.agent,
+                    codexUserSkills: codexSkillsDecision?.userSkills,
+                    userSkillSnapshot: userSkillSnapshot
+                )
+            )
+        )
+    }
+
+    /// Number of user skill packages actually delivered with this launch.
+    /// Codex requires a `.delivered` user-plugin outcome; the additive
+    /// runtimes deliver the snapshot's projected root directly whenever a
+    /// snapshot was resolved.
+    static func deliveredUserSkillCount(
+        agent: AgentKind,
+        codexUserSkills: CodexUserSkillsDeliveryState?,
+        userSkillSnapshot: UserSkillPluginSnapshot?
+    ) -> Int {
+        guard let userSkillSnapshot else { return 0 }
+        if agent == .codex {
+            guard case .delivered = codexUserSkills else { return 0 }
+            return userSkillSnapshot.acceptedPackageNames.count
+        }
+        guard agent.usesStagedSkillsTree else { return 0 }
+        return userSkillSnapshot.acceptedPackageNames.count
+    }
+
+    private func prepareManagedLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        inheritedScopedWorkspaceIDs: Set<UUID>?,
+        codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
+        stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
+        deliveredUserSkillsRootPath: String?,
+        assessedWorkingDirectory: String?
+    ) throws -> ManagedAgentLaunchPlan {
         guard let sessionRuntimeStore else {
             throw AgentLaunchError.serviceUnavailable
         }
 
         let target = try resolveManagedLaunchTarget(panelID: request.panelID)
         let resolvedCWD = normalizedNonEmpty(request.cwd) ?? target.cwd
+        let effectiveCodexSkillsConfiguration: CodexSkillsLaunchConfiguration? = if request.agent == .codex,
+                                                                                    resolvedCWD != assessedWorkingDirectory {
+            nil
+        } else {
+            codexSkillsDecision?.configuration
+        }
         let repoRootResolution = repositoryRootResolver(resolvedCWD)
         let repoRoot = repoRootResolution.repoRoot
         logRepositoryRootResolutionIfNeeded(
@@ -112,7 +433,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             sessionID: sessionID,
             workingDirectory: resolvedCWD,
             launchEnvironment: request.environment,
-            codexStatusTrackingSource: codexStatusTrackingSource
+            codexStatusTrackingSource: codexStatusTrackingSource,
+            codexSkillsIntegration: effectiveCodexSkillsConfiguration,
+            stagedSkillsIntegration: stagedSkillsConfiguration,
+            deliveredUserSkillsRootPath: deliveredUserSkillsRootPath
         )
         let launchStart = nowProvider()
         let parentSessionID = resolvedParentSessionID(
@@ -188,9 +512,23 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             environment[key] = value
         }
         environment[ToasttyLaunchContextEnvironment.sessionIDKey] = sessionID
+        environment[ToasttyLaunchContextEnvironment.agentKey] = request.agent.rawValue
         environment[ToasttyLaunchContextEnvironment.panelIDKey] = target.panelID.uuidString
         environment[ToasttyLaunchContextEnvironment.socketPathKey] = socketPathProvider()
         environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
+        // Advertise the effective user-skills SOURCE directory. User skills
+        // are user state: runtime-home overrides in the launch environment no
+        // longer redirect it — the resolution follows the real user home
+        // unless the app's own process environment carries
+        // TOASTTY_USER_SKILLS_ROOT (the hermetic harness override; the same
+        // key doubles as this advertisement). Per-launch callers cannot spoof
+        // it: the key is reserved by AgentLaunchService's environment
+        // validation. The directory is only advertised, never created here.
+        let launchRuntimeEnvironment = processEnvironmentProvider()
+            .merging(request.environment) { _, new in new }
+        environment[ToasttyLaunchContextEnvironment.userSkillsRootKey] =
+            ToasttyRuntimePaths.resolve(environment: launchRuntimeEnvironment)
+                .userSkillsDirectoryURL.path
         if let resolvedCWD {
             environment[ToasttyLaunchContextEnvironment.cwdKey] = resolvedCWD
         }
@@ -311,7 +649,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         sessionID: String,
         workingDirectory: String?,
         launchEnvironment: [String: String],
-        codexStatusTrackingSource: CodexStatusTrackingSource
+        codexStatusTrackingSource: CodexStatusTrackingSource,
+        codexSkillsIntegration: CodexSkillsLaunchConfiguration?,
+        stagedSkillsIntegration: ClaudeSkillsLaunchConfiguration?,
+        deliveredUserSkillsRootPath: String? = nil
     ) -> PreparedAgentLaunchCommand {
         do {
             return try AgentLaunchInstrumentation.prepare(
@@ -322,7 +663,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
                 launchEnvironment: launchEnvironment,
-                codexStatusTrackingSource: codexStatusTrackingSource
+                codexStatusTrackingSource: codexStatusTrackingSource,
+                codexSkillsIntegration: codexSkillsIntegration,
+                stagedSkillsIntegration: stagedSkillsIntegration,
+                deliveredUserSkillsRootPath: deliveredUserSkillsRootPath
             )
         } catch {
             ToasttyLog.warning(
@@ -334,6 +678,20 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     "error": error.localizedDescription,
                 ]
             )
+            if agent == .codex, codexSkillsIntegration != nil,
+               let fallback = try? AgentLaunchInstrumentation.prepare(
+                    agent: agent,
+                    argv: argv,
+                    cliExecutablePath: cliExecutablePath,
+                    sessionID: sessionID,
+                    workingDirectory: workingDirectory,
+                    fileManager: fileManager,
+                    launchEnvironment: launchEnvironment,
+                    codexStatusTrackingSource: codexStatusTrackingSource,
+                    codexSkillsIntegration: nil
+               ) {
+                return fallback
+            }
             return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
         }
     }
@@ -1004,6 +1362,27 @@ private struct CodexSessionLogStreamKey: Hashable {
 private struct CodexSessionLogCursorStateRegistration {
     let standardizedPath: String
     let cursorState: CodexSessionLogCursorState
+}
+
+/// First resume wins: lets the snapshot build race a timeout without ever
+/// resuming the continuation twice.
+private final class OneShotSnapshotContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<UserSkillSnapshotResolution, Never>?
+
+    init(_ continuation: CheckedContinuation<UserSkillSnapshotResolution, Never>) {
+        self.continuation = continuation
+    }
+
+    /// Returns true when this call performed the resume.
+    func resume(returning value: UserSkillSnapshotResolution) -> Bool {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
+        return pending != nil
+    }
 }
 
 private func normalizedNonEmpty(_ value: String?) -> String? {

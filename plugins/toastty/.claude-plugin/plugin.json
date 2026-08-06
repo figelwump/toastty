@@ -1,0 +1,8 @@
+{
+  "name": "toastty",
+  "version": "0.2.1",
+  "description": "Managed-session workflows for controlling Toastty from Codex and Claude Code.",
+  "author": {
+    "name": "Giant Things"
+  }
+}

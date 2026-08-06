@@ -63,6 +63,8 @@ protocol CommandPaletteActionHandling: AnyObject {
     func manageTerminalProfiles(originWindowID: UUID) -> Bool
     func canManageAgents(originWindowID: UUID) -> Bool
     func manageAgents(originWindowID: UUID) -> Bool
+    func canManageToasttySkills(originWindowID: UUID) -> Bool
+    func manageToasttySkills(originWindowID: UUID) -> Bool
     func canSetUpAgentStatusHooks(originWindowID: UUID) -> Bool
     func setUpAgentStatusHooks(originWindowID: UUID) -> Bool
     func canCopyDiagnosticsSnippet(originWindowID: UUID) -> Bool
@@ -531,6 +533,21 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return openAgentProfilesConfigurationAction(originWindowID)
     }
 
+    func canManageToasttySkills(originWindowID: UUID) -> Bool {
+        store?.window(id: originWindowID) != nil
+    }
+
+    func manageToasttySkills(originWindowID: UUID) -> Bool {
+        guard canManageToasttySkills(originWindowID: originWindowID) else {
+            return false
+        }
+        NotificationCenter.default.post(
+            name: .toasttyShowSkillsManagement,
+            object: originWindowID
+        )
+        return true
+    }
+
     func canSetUpAgentStatusHooks(originWindowID: UUID) -> Bool {
         store?.window(id: originWindowID) != nil
     }
@@ -706,6 +723,8 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             return manageTerminalProfiles(originWindowID: originWindowID)
         case .manageAgents:
             return manageAgents(originWindowID: originWindowID)
+        case .manageToasttySkills:
+            return manageToasttySkills(originWindowID: originWindowID)
         case .setUpAgentStatusHooks:
             return setUpAgentStatusHooks(originWindowID: originWindowID)
         case .copyDiagnosticsSnippet:

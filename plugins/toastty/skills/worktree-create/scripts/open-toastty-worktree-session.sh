@@ -7,7 +7,8 @@ usage: open-toastty-worktree-session.sh --workspace-name <name> --worktree-path 
 
 Creates a new Toastty workspace for a worktree and starts a new terminal command in it.
 By default the helper calls agent.launch with structured cwd, environment, and
-initialPrompt values. The agent CLI is codex unless --agent-command overrides it.
+initialPrompt values. The agent CLI preserves TOASTTY_AGENT=codex|claude,
+falls back to codex, and allows --agent-command to override it.
 Repeat --initial-command to run single-line shell commands after cwd setup and
 before the agent command in the structured launch path.
 --startup-command replaces the structured launch with a literal terminal command
@@ -34,7 +35,7 @@ workspace_name=""
 worktree_path=""
 handoff_file=""
 window_id=""
-agent_command="codex"
+agent_command=""
 agent_command_overridden=0
 startup_command=""
 initial_commands=()
@@ -104,6 +105,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$agent_command_overridden" != "1" ]]; then
+  case "${TOASTTY_AGENT:-}" in
+    codex|claude)
+      agent_command="$TOASTTY_AGENT"
+      ;;
+    *)
+      agent_command="codex"
+      ;;
+  esac
+fi
+
 if [[ -z "$workspace_name" || -z "$worktree_path" || -z "$handoff_file" ]]; then
   echo "error: --workspace-name, --worktree-path, and --handoff-file are required" >&2
   usage
@@ -163,16 +175,13 @@ build_initial_prompt() {
 }
 
 build_default_startup_command() {
-  local quoted_worktree quoted_prompt quoted_derived quoted_agent initial_prompt
+  local quoted_worktree quoted_prompt quoted_agent initial_prompt
   quoted_worktree="$(shell_quote "$worktree_path")"
-  quoted_derived="$(shell_quote "$worktree_path/artifacts/dev-runs/manual/Derived")"
   quoted_agent="$(shell_quote "$agent_command")"
   initial_prompt="$(build_initial_prompt)"
   quoted_prompt="$(shell_quote "$initial_prompt")"
-  printf "cd %s && export TOASTTY_DEV_WORKTREE_ROOT=%s TOASTTY_DERIVED_PATH=%s && %s %s" \
+  printf "cd %s && %s %s" \
     "$quoted_worktree" \
-    "$quoted_worktree" \
-    "$quoted_derived" \
     "$quoted_agent" \
     "$quoted_prompt"
 }
@@ -380,8 +389,6 @@ if [[ -z "$startup_command" ]]; then
     --workspace "$workspace_id"
     "profileID=$agent_command"
     "cwd=$worktree_path"
-    "env.TOASTTY_DEV_WORKTREE_ROOT=$worktree_path"
-    "env.TOASTTY_DERIVED_PATH=$worktree_path/artifacts/dev-runs/manual/Derived"
   )
   if [[ "${#initial_commands[@]}" -gt 0 ]]; then
     for initial_command in "${initial_commands[@]}"; do

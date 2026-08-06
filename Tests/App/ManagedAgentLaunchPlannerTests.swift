@@ -4,6 +4,529 @@ import XCTest
 
 @MainActor
 final class ManagedAgentLaunchPlannerTests: XCTestCase {
+    func testRestoredCodexPreparationUsesBoundedRestoreProvisioning() throws {
+        let resolver = RecordingCodexManagedLaunchSkillsResolver(
+            decision: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+        )
+        let fixture = try makePlannerFixture(codexSkillsResolver: resolver)
+
+        _ = try fixture.planner.prepareRestoredManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        XCTAssertEqual(resolver.restoredResolveCount, 1)
+        XCTAssertEqual(resolver.managedResolveCount, 0)
+    }
+
+    func testAsyncManagedLaunchProceedsShippedOnlyWhenSnapshotPreparationHangs() async throws {
+        let provider = HangingUserSkillSnapshotProvider(hangSeconds: 3)
+        let fixture = try makePlannerFixture(userSkillSnapshotProvider: provider)
+        fixture.planner.userSkillSnapshotPreparationTimeout = 0.2
+
+        let start = Date()
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        // A hanging snapshot build must never stall the managed launch: the
+        // preparation completes within the bound, shipped-only.
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertFalse(plan.argv.contains("--plugin-dir"))
+    }
+
+    func testAsyncCodexLaunchReportsUnavailableWhenSnapshotPreparationHangs() async throws {
+        let provider = HangingUserSkillSnapshotProvider(hangSeconds: 3)
+        let resolver = SnapshotCapturingCodexSkillsResolver()
+        let fixture = try makePlannerFixture(
+            codexSkillsResolver: resolver,
+            userSkillSnapshotProvider: provider
+        )
+        fixture.planner.userSkillSnapshotPreparationTimeout = 0.2
+
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        // A timed-out build is `.unavailable`, never `.empty`: the Codex host
+        // must not mistake an incomplete resolution for "the user has no
+        // skills" and destroy delivered user state.
+        XCTAssertEqual(resolver.capturedManagedResolutions, [.unavailable])
+    }
+
+    func testAsyncClaudeLaunchFallsBackToExistingSnapshotWhenPreparationFails() async throws {
+        let snapshot = makeUserSkillSnapshotFixture()
+        let provider = ThrowingPrepareUserSkillSnapshotProvider(existing: snapshot)
+        let fixture = try makePlannerFixture(userSkillSnapshotProvider: provider)
+
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        // `.unavailable` falls back to the newest verified on-disk snapshot
+        // instead of silently dropping user skills for the launch.
+        let pluginDirIndex = try XCTUnwrap(plan.argv.firstIndex(of: "--plugin-dir"))
+        XCTAssertEqual(plan.argv[safe: pluginDirIndex + 1], snapshot.pluginRootURL.path)
+    }
+
+    func testClaudeSyncLaunchDropsUserPluginAfterCatalogConvergesToEmpty() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-planner-user-converge-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let catalog = ToasttyUserSkillCatalog(
+            runtimePaths: .resolve(
+                homeDirectoryPath: rootURL.appendingPathComponent("real-home").path,
+                environment: [
+                    "TOASTTY_RUNTIME_HOME": rootURL.appendingPathComponent("runtime-home").path,
+                    // Hermetic override: user skills follow the real home by
+                    // default, so the fixture redirects the source explicitly.
+                    "TOASTTY_USER_SKILLS_ROOT": rootURL
+                        .appendingPathComponent("runtime-home/skills").path,
+                ]
+            )
+        )
+        let skillsRootURL = rootURL.appendingPathComponent("runtime-home/skills", isDirectory: true)
+        let packageURL = skillsRootURL.appendingPathComponent("alpha-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+        try "---\nname: alpha-skill\ndescription: Test skill.\n---\n".write(
+            to: packageURL.appendingPathComponent("SKILL.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let snapshot = try XCTUnwrap(catalog.prepareSnapshot())
+        let resolver = SnapshotCapturingCodexSkillsResolver()
+        let fixture = try makePlannerFixture(
+            codexSkillsResolver: resolver,
+            userSkillSnapshotProvider: catalog
+        )
+
+        let deliveringPlan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: "/tmp/repo"
+            )
+        )
+        fixture.sessionRuntimeStore.stopSession(sessionID: deliveringPlan.sessionID, at: Date())
+        XCTAssertTrue(deliveringPlan.argv.contains("--plugin-dir"))
+        XCTAssertTrue(deliveringPlan.argv.contains { argument in
+            argument.hasSuffix("\(snapshot.sourceDigest)/marketplace/plugins/toastty-user")
+        })
+
+        // The user deletes every skill; the next preparation converges the
+        // snapshot store.
+        try FileManager.default.removeItem(at: skillsRootURL)
+        XCTAssertNil(try catalog.prepareSnapshot())
+
+        // Sync Claude launches stop injecting the stale root immediately.
+        let convergedPlan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: "/tmp/repo"
+            )
+        )
+        fixture.sessionRuntimeStore.stopSession(sessionID: convergedPlan.sessionID, at: Date())
+        XCTAssertFalse(convergedPlan.argv.contains("--plugin-dir"))
+
+        // Restored Codex launches receive the confirmed-empty resolution so
+        // the manager converges the profile back to shipped-only.
+        let restoredPlan = try fixture.planner.prepareRestoredManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        fixture.sessionRuntimeStore.stopSession(sessionID: restoredPlan.sessionID, at: Date())
+        XCTAssertEqual(resolver.capturedRestoredResolutions, [.empty])
+    }
+
+    func testAsyncManagedLaunchPreparesOneUserSnapshotAndPassesItToCodexResolver() async throws {
+        let snapshot = makeUserSkillSnapshotFixture()
+        let provider = RecordingUserSkillSnapshotProvider(snapshot: snapshot)
+        let resolver = SnapshotCapturingCodexSkillsResolver()
+        let fixture = try makePlannerFixture(
+            codexSkillsResolver: resolver,
+            userSkillSnapshotProvider: provider
+        )
+
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        // The snapshot is built exactly once per launch preparation and the
+        // same value reaches the Codex host.
+        XCTAssertEqual(provider.prepareSnapshotCallCount, 1)
+        XCTAssertEqual(provider.existingSnapshotCallCount, 0)
+        XCTAssertEqual(resolver.capturedManagedResolutions, [.snapshot(snapshot)])
+        // The Codex argv itself gains nothing from the user plugin.
+        XCTAssertFalse(plan.argv.contains("--plugin-dir"))
+    }
+
+    func testAsyncClaudeManagedLaunchInjectsPreparedUserSnapshotPluginDir() async throws {
+        let snapshot = makeUserSkillSnapshotFixture()
+        let provider = RecordingUserSkillSnapshotProvider(snapshot: snapshot)
+        let fixture = try makePlannerFixture(userSkillSnapshotProvider: provider)
+
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        XCTAssertEqual(provider.prepareSnapshotCallCount, 1)
+        let pluginDirIndex = try XCTUnwrap(plan.argv.firstIndex(of: "--plugin-dir"))
+        XCTAssertEqual(plan.argv[safe: pluginDirIndex + 1], snapshot.pluginRootURL.path)
+    }
+
+    func testSyncManagedLaunchUsesExistingSnapshotWithoutBuilding() throws {
+        let snapshot = makeUserSkillSnapshotFixture()
+        let provider = RecordingUserSkillSnapshotProvider(snapshot: snapshot)
+        let fixture = try makePlannerFixture(userSkillSnapshotProvider: provider)
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .claude,
+                panelID: fixture.panelID,
+                argv: ["claude"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        // Synchronous preparation never builds a snapshot; it reuses the
+        // existing on-disk one.
+        XCTAssertEqual(provider.prepareSnapshotCallCount, 0)
+        XCTAssertEqual(provider.existingSnapshotCallCount, 1)
+        let pluginDirIndex = try XCTUnwrap(plan.argv.firstIndex(of: "--plugin-dir"))
+        XCTAssertEqual(plan.argv[safe: pluginDirIndex + 1], snapshot.pluginRootURL.path)
+    }
+
+    func testRestoredManagedLaunchPassesExistingSnapshotToCodexResolverWithoutBuilding() throws {
+        let snapshot = makeUserSkillSnapshotFixture()
+        let provider = RecordingUserSkillSnapshotProvider(snapshot: snapshot)
+        let resolver = SnapshotCapturingCodexSkillsResolver()
+        let fixture = try makePlannerFixture(
+            codexSkillsResolver: resolver,
+            userSkillSnapshotProvider: provider
+        )
+
+        let plan = try fixture.planner.prepareRestoredManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        XCTAssertEqual(provider.prepareSnapshotCallCount, 0)
+        XCTAssertEqual(provider.existingSnapshotCallCount, 1)
+        XCTAssertEqual(resolver.capturedRestoredResolutions, [.snapshot(snapshot)])
+        XCTAssertEqual(resolver.capturedManagedResolutions, [])
+    }
+
+    func testSyncManagedLaunchDeliversStagedAndUserSkillsToAdditiveRuntimes() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        defer { AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil }
+        let configuration = makeStagedSkillsConfigurationFixture()
+        let snapshot = makeUserSkillSnapshotFixture()
+
+        for agent in [AgentKind.pi, .opencode, .mimocode] {
+            let provider = RecordingUserSkillSnapshotProvider(snapshot: snapshot)
+            let fixture = try makePlannerFixture(
+                claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: configuration),
+                userSkillSnapshotProvider: provider
+            )
+            let plan = try fixture.planner.prepareManagedLaunch(
+                ManagedAgentLaunchRequest(
+                    agent: agent,
+                    panelID: fixture.panelID,
+                    argv: [agent.rawValue],
+                    cwd: "/tmp/repo"
+                )
+            )
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+
+            // Synchronous preparation reuses the existing on-disk snapshot.
+            XCTAssertEqual(provider.prepareSnapshotCallCount, 0)
+            XCTAssertEqual(provider.existingSnapshotCallCount, 1)
+            XCTAssertEqual(plan.environment["TOASTTY_SKILLS_ROOT"], configuration.skillsRootPath)
+
+            guard agent != .pi else {
+                XCTAssertEqual(
+                    plan.argv,
+                    [
+                        "pi",
+                        "--extension",
+                        "/toastty/pi-extension.js",
+                        "--skill",
+                        configuration.skillsRootPath,
+                        "--skill",
+                        snapshot.skillsRootURL.path,
+                    ]
+                )
+                continue
+            }
+
+            let configContentKey = agent == .opencode ? "OPENCODE_CONFIG_CONTENT" : "MIMOCODE_CONFIG_CONTENT"
+            let configContent = try XCTUnwrap(plan.environment[configContentKey])
+            let configObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any]
+            )
+            let skills = try XCTUnwrap(configObject["skills"] as? [String: Any])
+            XCTAssertEqual(
+                skills["paths"] as? [String],
+                [configuration.skillsRootPath, snapshot.skillsRootURL.path]
+            )
+        }
+    }
+
+    func testRestoredManagedLaunchReusesExistingSnapshotForAdditiveRuntimes() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        defer { AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil }
+        let snapshot = makeUserSkillSnapshotFixture()
+        let provider = RecordingUserSkillSnapshotProvider(snapshot: snapshot)
+        let fixture = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(
+                configuration: makeStagedSkillsConfigurationFixture()
+            ),
+            userSkillSnapshotProvider: provider
+        )
+
+        let plan = try fixture.planner.prepareRestoredManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .pi,
+                panelID: fixture.panelID,
+                argv: ["pi"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        XCTAssertEqual(provider.prepareSnapshotCallCount, 0)
+        XCTAssertEqual(provider.existingSnapshotCallCount, 1)
+        XCTAssertEqual(plan.argv.last, snapshot.skillsRootURL.path)
+    }
+
+    func testAsyncAdditiveRuntimeLaunchBuildsSnapshotAndFallsBackWhenPreparationFails() async throws {
+        let snapshot = makeUserSkillSnapshotFixture()
+        let configuration = makeStagedSkillsConfigurationFixture()
+
+        let provider = RecordingUserSkillSnapshotProvider(snapshot: snapshot)
+        let fixture = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: configuration),
+            userSkillSnapshotProvider: provider
+        )
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .opencode,
+                panelID: fixture.panelID,
+                argv: ["opencode"],
+                cwd: "/tmp/repo"
+            )
+        )
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        XCTAssertEqual(provider.prepareSnapshotCallCount, 1)
+        XCTAssertEqual(
+            try skillsPaths(in: plan, configContentKey: "OPENCODE_CONFIG_CONTENT"),
+            [configuration.skillsRootPath, snapshot.skillsRootURL.path]
+        )
+
+        // `.unavailable` falls back to the newest verified on-disk snapshot
+        // instead of silently dropping user skills for the launch.
+        let fallbackFixture = try makePlannerFixture(
+            claudeSkillsBundleManager: TestClaudeSkillsBundleManager(configuration: configuration),
+            userSkillSnapshotProvider: ThrowingPrepareUserSkillSnapshotProvider(existing: snapshot)
+        )
+        let fallbackPlan = try await fallbackFixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .opencode,
+                panelID: fallbackFixture.panelID,
+                argv: ["opencode"],
+                cwd: "/tmp/repo"
+            )
+        )
+        fallbackFixture.sessionRuntimeStore.stopSession(sessionID: fallbackPlan.sessionID, at: Date())
+        XCTAssertEqual(
+            try skillsPaths(in: fallbackPlan, configContentKey: "OPENCODE_CONFIG_CONTENT"),
+            [configuration.skillsRootPath, snapshot.skillsRootURL.path]
+        )
+    }
+
+    func testAsyncManagedLaunchPostsSkillsNoticeForAdditiveRuntimes() async throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        defer { AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil }
+        let snapshot = makeUserSkillSnapshotFixture()
+
+        for agent in [AgentKind.pi, .opencode, .mimocode] {
+            let recorder = SkillsProvisionedNoticeRecorder()
+            let observer = NotificationCenter.default.addObserver(
+                forName: .toasttyManagedAgentSkillsProvisioned,
+                object: nil,
+                queue: nil
+            ) { notification in
+                recorder.record(notification.object as? ManagedAgentSkillsProvisionedNotice)
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+
+            let fixture = try makePlannerFixture(
+                claudeSkillsBundleManager: TestClaudeSkillsBundleManager(
+                    configuration: makeStagedSkillsConfigurationFixture()
+                ),
+                userSkillSnapshotProvider: RecordingUserSkillSnapshotProvider(snapshot: snapshot)
+            )
+            let plan = try await fixture.planner.prepareManagedLaunchAsync(
+                ManagedAgentLaunchRequest(
+                    agent: agent,
+                    panelID: fixture.panelID,
+                    argv: [agent.rawValue],
+                    cwd: "/tmp/repo"
+                )
+            )
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+
+            XCTAssertEqual(
+                recorder.notices,
+                [
+                    ManagedAgentSkillsProvisionedNotice(
+                        windowID: try XCTUnwrap(fixture.store.state.windows.first?.id),
+                        agent: agent,
+                        shippedSkillCount: ToasttyAgentPluginBundle.skills.count,
+                        deliveredUserSkillCount: snapshot.acceptedPackageNames.count
+                    ),
+                ]
+            )
+        }
+    }
+
+    func testAsyncManagedLaunchSkipsSkillsNoticeForAdditiveRuntimeWithoutStagedConfiguration() async throws {
+        let recorder = SkillsProvisionedNoticeRecorder()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .toasttyManagedAgentSkillsProvisioned,
+            object: nil,
+            queue: nil
+        ) { notification in
+            recorder.record(notification.object as? ManagedAgentSkillsProvisionedNotice)
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let fixture = try makePlannerFixture(
+            userSkillSnapshotProvider: RecordingUserSkillSnapshotProvider(
+                snapshot: makeUserSkillSnapshotFixture()
+            )
+        )
+        let plan = try await fixture.planner.prepareManagedLaunchAsync(
+            ManagedAgentLaunchRequest(
+                agent: .opencode,
+                panelID: fixture.panelID,
+                argv: ["opencode"],
+                cwd: "/tmp/repo"
+            )
+        )
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+
+        XCTAssertEqual(recorder.notices, [])
+    }
+
+    func testAsyncManagedLaunchSkipsSkillsNoticeWhenPiCallerOptsOut() async throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        defer { AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil }
+
+        for optOutArguments in [["--no-skills"], ["-ns"], ["--no-extensions"], ["-ne"]] {
+            let recorder = SkillsProvisionedNoticeRecorder()
+            let observer = NotificationCenter.default.addObserver(
+                forName: .toasttyManagedAgentSkillsProvisioned,
+                object: nil,
+                queue: nil
+            ) { notification in
+                recorder.record(notification.object as? ManagedAgentSkillsProvisionedNotice)
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+
+            let fixture = try makePlannerFixture(
+                claudeSkillsBundleManager: TestClaudeSkillsBundleManager(
+                    configuration: makeStagedSkillsConfigurationFixture()
+                ),
+                userSkillSnapshotProvider: RecordingUserSkillSnapshotProvider(
+                    snapshot: makeUserSkillSnapshotFixture()
+                )
+            )
+            let plan = try await fixture.planner.prepareManagedLaunchAsync(
+                ManagedAgentLaunchRequest(
+                    agent: .pi,
+                    panelID: fixture.panelID,
+                    argv: ["pi"] + optOutArguments,
+                    cwd: "/tmp/repo"
+                )
+            )
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+
+            XCTAssertEqual(recorder.notices, [], "expected no notice for pi \(optOutArguments)")
+        }
+    }
+
+    func testDeliveredUserSkillCountCoversEveryAdditiveRuntime() {
+        let snapshot = makeUserSkillSnapshotFixture()
+
+        for agent in [AgentKind.claude, .pi, .opencode, .mimocode] {
+            XCTAssertEqual(
+                ManagedAgentLaunchPlanner.deliveredUserSkillCount(
+                    agent: agent,
+                    codexUserSkills: nil,
+                    userSkillSnapshot: snapshot
+                ),
+                snapshot.acceptedPackageNames.count,
+                agent.rawValue
+            )
+        }
+        XCTAssertEqual(
+            ManagedAgentLaunchPlanner.deliveredUserSkillCount(
+                agent: .processWatch,
+                codexUserSkills: nil,
+                userSkillSnapshot: snapshot
+            ),
+            0
+        )
+    }
+
     func testClaudeArtifactsRemainAfterSessionStops() async throws {
         let fixture = try makePlannerFixture()
         let claudePlan = try fixture.planner.prepareManagedLaunch(
@@ -90,6 +613,92 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
             plan.environment["TOASTTY_PANEL_ID"],
             fixture.panelID.uuidString
         )
+    }
+
+    func testManagedLaunchAdvertisesUserSkillsRootForEveryAgentKind() throws {
+        AgentLaunchInstrumentation.piExtensionPathProviderForTesting = { "/toastty/pi-extension.js" }
+        defer { AgentLaunchInstrumentation.piExtensionPathProviderForTesting = nil }
+        let fixture = try makePlannerFixture()
+        let expectedPath = ToasttyRuntimePaths.resolve().userSkillsDirectoryURL.path
+
+        for (agent, argv) in [
+            (AgentKind.codex, ["codex"]),
+            (.claude, ["claude"]),
+            (.opencode, ["opencode"]),
+            (.mimocode, ["mimocode"]),
+            (.pi, ["pi"]),
+        ] {
+            let plan = try fixture.planner.prepareManagedLaunch(
+                ManagedAgentLaunchRequest(
+                    agent: agent,
+                    panelID: fixture.panelID,
+                    argv: argv,
+                    cwd: "/tmp/repo"
+                )
+            )
+            defer {
+                fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+            }
+
+            XCTAssertEqual(
+                plan.environment["TOASTTY_USER_SKILLS_ROOT"],
+                expectedPath,
+                "\(agent.rawValue) launch must advertise the user skills root"
+            )
+        }
+    }
+
+    /// User skills are user state: a runtime-home override in the launch
+    /// request no longer redirects the advertised source directory.
+    func testRequestRuntimeHomeNoLongerRedirectsAdvertisedUserSkillsRoot() throws {
+        let fixture = try makePlannerFixture()
+        let isolatedRuntimeHome = "/tmp/toastty-planner-user-skills-tests/runtime-home"
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo",
+                environment: ["TOASTTY_RUNTIME_HOME": isolatedRuntimeHome]
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        }
+
+        XCTAssertNotEqual(
+            plan.environment["TOASTTY_USER_SKILLS_ROOT"],
+            "\(isolatedRuntimeHome)/skills"
+        )
+        XCTAssertEqual(
+            plan.environment["TOASTTY_USER_SKILLS_ROOT"],
+            ToasttyRuntimePaths.resolve().userSkillsDirectoryURL.path
+        )
+    }
+
+    /// `TOASTTY_USER_SKILLS_ROOT` in the app's own process environment (the
+    /// hermetic harness override) is honored and re-advertised to children;
+    /// per-launch callers remain unable to set it (reserved at the service).
+    func testProcessEnvironmentUserSkillsRootOverrideIsAdvertised() throws {
+        let overridePath = "/tmp/toastty-planner-user-skills-tests/hermetic-skills"
+        let fixture = try makePlannerFixture(
+            processEnvironmentProvider: { ["TOASTTY_USER_SKILLS_ROOT": overridePath] }
+        )
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer {
+            fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        }
+
+        XCTAssertEqual(plan.environment["TOASTTY_USER_SKILLS_ROOT"], overridePath)
     }
 
     func testPendingPanelParentClaimAdoptsLiveParentForManagedLaunch() throws {
@@ -885,6 +1494,7 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
 
         XCTAssertEqual(plan.repoRoot, repoRoot)
         XCTAssertEqual(plan.environment[ToasttyLaunchContextEnvironment.repoRootKey], repoRoot)
+        XCTAssertEqual(plan.environment[ToasttyLaunchContextEnvironment.agentKey], AgentKind.claude.rawValue)
         XCTAssertEqual(
             fixture.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: plan.sessionID)?.repoRoot,
             repoRoot
@@ -1840,7 +2450,11 @@ private func makePlannerFixture(
     codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
     codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
         .sessionLogFallback(reason: "test")
-    }
+    },
+    codexSkillsResolver: (any CodexManagedLaunchSkillsResolving)? = nil,
+    claudeSkillsBundleManager: (any ClaudeSkillsBundleManaging)? = nil,
+    userSkillSnapshotProvider: (any ToasttyUserSkillSnapshotProviding)? = nil,
+    processEnvironmentProvider: (@Sendable () -> [String: String])? = nil
 ) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
@@ -1864,6 +2478,10 @@ private func makePlannerFixture(
     let sessionRuntimeStore = SessionRuntimeStore()
     sessionRuntimeStore.bind(store: store)
 
+    let resolvedCodexSkillsResolver = codexSkillsResolver
+        ?? TestCodexManagedLaunchSkillsResolver(
+            decision: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+        )
     let planner = ManagedAgentLaunchPlanner(
         store: store,
         sessionRuntimeStore: sessionRuntimeStore,
@@ -1876,10 +2494,232 @@ private func makePlannerFixture(
         readVisibleText: { _ in nil },
         promptState: { _ in .unavailable },
         nativeSessionObserverRegistry: nativeSessionObserverRegistry,
-        codexResumeResolver: codexResumeResolver
+        codexResumeResolver: codexResumeResolver,
+        codexSkillsResolver: resolvedCodexSkillsResolver,
+        claudeSkillsBundleManager: claudeSkillsBundleManager ?? TestClaudeSkillsBundleManager(configuration: nil),
+        userSkillSnapshotProvider: userSkillSnapshotProvider
+            ?? RecordingUserSkillSnapshotProvider(snapshot: nil),
+        processEnvironmentProvider: processEnvironmentProvider
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
+}
+
+private final class RecordingUserSkillSnapshotProvider: ToasttyUserSkillSnapshotProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private let snapshot: UserSkillPluginSnapshot?
+    private var preparedCount = 0
+    private var existingCount = 0
+
+    init(snapshot: UserSkillPluginSnapshot?) {
+        self.snapshot = snapshot
+    }
+
+    var prepareSnapshotCallCount: Int { lock.withLock { preparedCount } }
+    var existingSnapshotCallCount: Int { lock.withLock { existingCount } }
+
+    func prepareSnapshot() throws -> UserSkillPluginSnapshot? {
+        lock.withLock { preparedCount += 1 }
+        return snapshot
+    }
+
+    func existingSnapshot() -> UserSkillPluginSnapshot? {
+        lock.withLock { existingCount += 1 }
+        return snapshot
+    }
+}
+
+private final class ThrowingPrepareUserSkillSnapshotProvider: ToasttyUserSkillSnapshotProviding, @unchecked Sendable {
+    private let existing: UserSkillPluginSnapshot?
+
+    init(existing: UserSkillPluginSnapshot?) {
+        self.existing = existing
+    }
+
+    func prepareSnapshot() throws -> UserSkillPluginSnapshot? {
+        throw ToasttyUserSkillCatalogError.snapshotWriteFailed("/tmp/fixture-staging")
+    }
+
+    func existingSnapshot() -> UserSkillPluginSnapshot? { existing }
+}
+
+private final class HangingUserSkillSnapshotProvider: ToasttyUserSkillSnapshotProviding, @unchecked Sendable {
+    private let hangSeconds: TimeInterval
+
+    init(hangSeconds: TimeInterval) {
+        self.hangSeconds = hangSeconds
+    }
+
+    func prepareSnapshot() throws -> UserSkillPluginSnapshot? {
+        Thread.sleep(forTimeInterval: hangSeconds)
+        return nil
+    }
+
+    func existingSnapshot() -> UserSkillPluginSnapshot? { nil }
+}
+
+private final class SnapshotCapturingCodexSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
+    private let lock = NSLock()
+    private var managedResolutions: [UserSkillSnapshotResolution] = []
+    private var restoredResolutions: [UserSkillSnapshotResolution] = []
+
+    var capturedManagedResolutions: [UserSkillSnapshotResolution] { lock.withLock { managedResolutions } }
+    var capturedRestoredResolutions: [UserSkillSnapshotResolution] { lock.withLock { restoredResolutions } }
+
+    func resolve(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+    }
+
+    func resolveForManagedLaunch(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?,
+        userSkillResolution: UserSkillSnapshotResolution
+    ) async -> CodexManagedLaunchSkillsDecision {
+        lock.withLock { managedResolutions.append(userSkillResolution) }
+        return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+    }
+
+    func resolveForRestoredManagedLaunch(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?,
+        userSkillResolution: UserSkillSnapshotResolution
+    ) -> CodexManagedLaunchSkillsDecision {
+        lock.withLock { restoredResolutions.append(userSkillResolution) }
+        return CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
+    }
+}
+
+private func makeUserSkillSnapshotFixture(
+    rootPath: String = "/tmp/toastty-user-snapshot-fixture"
+) -> UserSkillPluginSnapshot {
+    let rootURL = URL(fileURLWithPath: rootPath, isDirectory: true)
+    let marketplaceRootURL = rootURL.appendingPathComponent("marketplace", isDirectory: true)
+    let pluginRootURL = marketplaceRootURL
+        .appendingPathComponent("plugins", isDirectory: true)
+        .appendingPathComponent("toastty-user", isDirectory: true)
+    return UserSkillPluginSnapshot(
+        pluginName: "toastty-user",
+        version: "0.1.0-abcdefabcdef",
+        sourceDigest: "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        pluginContentDigest: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        pluginRootURL: pluginRootURL,
+        marketplaceRootURL: marketplaceRootURL,
+        skillsRootURL: pluginRootURL.appendingPathComponent("skills", isDirectory: true),
+        receiptURL: rootURL.appendingPathComponent("receipt.json"),
+        acceptedPackageNames: ["alpha-skill"]
+    )
+}
+
+private func makeStagedSkillsConfigurationFixture() -> ClaudeSkillsLaunchConfiguration {
+    ClaudeSkillsLaunchConfiguration(
+        pluginRootPath: "/tmp/toastty-staged-plugin",
+        skillsRootPath: "/tmp/toastty-staged-plugin/skills",
+        version: "1.0.0",
+        contentDigest: "abc123"
+    )
+}
+
+@MainActor
+private func skillsPaths(
+    in plan: ManagedAgentLaunchPlan,
+    configContentKey: String
+) throws -> [String] {
+    let configContent = try XCTUnwrap(plan.environment[configContentKey])
+    let configObject = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: Data(configContent.utf8)) as? [String: Any]
+    )
+    let skills = try XCTUnwrap(configObject["skills"] as? [String: Any])
+    return try XCTUnwrap(skills["paths"] as? [String])
+}
+
+private final class SkillsProvisionedNoticeRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [ManagedAgentSkillsProvisionedNotice] = []
+
+    var notices: [ManagedAgentSkillsProvisionedNotice] { lock.withLock { storage } }
+
+    func record(_ notice: ManagedAgentSkillsProvisionedNotice?) {
+        guard let notice else { return }
+        lock.withLock { storage.append(notice) }
+    }
+}
+
+private final class TestClaudeSkillsBundleManager: ClaudeSkillsBundleManaging, @unchecked Sendable {
+    private let configuration: ClaudeSkillsLaunchConfiguration?
+
+    init(configuration: ClaudeSkillsLaunchConfiguration?) {
+        self.configuration = configuration
+    }
+
+    func existingVerifiedConfiguration() -> ClaudeSkillsLaunchConfiguration? {
+        configuration
+    }
+
+    func deliveryStatus() async -> ClaudeSkillsDeliveryStatus {
+        if let configuration {
+            return .providedAtLaunch(configuration)
+        }
+        return .unavailable(detail: "test")
+    }
+
+    func prepareForManagedLaunch() async -> ClaudeSkillsLaunchConfiguration? {
+        configuration
+    }
+}
+
+private final class TestCodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
+    private let decision: CodexManagedLaunchSkillsDecision
+
+    init(decision: CodexManagedLaunchSkillsDecision) {
+        self.decision = decision
+    }
+
+    func resolve(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        decision
+    }
+}
+
+private final class RecordingCodexManagedLaunchSkillsResolver: CodexManagedLaunchSkillsResolving, @unchecked Sendable {
+    private let lock = NSLock()
+    private let decision: CodexManagedLaunchSkillsDecision
+    private var managedCount = 0
+    private var restoredCount = 0
+
+    init(decision: CodexManagedLaunchSkillsDecision) {
+        self.decision = decision
+    }
+
+    var managedResolveCount: Int { lock.withLock { managedCount } }
+    var restoredResolveCount: Int { lock.withLock { restoredCount } }
+
+    func resolve(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        decision
+    }
+
+    func resolveForManagedLaunch(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) async -> CodexManagedLaunchSkillsDecision {
+        lock.withLock { managedCount += 1 }
+        return decision
+    }
+
+    func resolveForRestoredManagedLaunch(
+        request _: ManagedAgentLaunchRequest,
+        workingDirectory _: String?
+    ) -> CodexManagedLaunchSkillsDecision {
+        lock.withLock { restoredCount += 1 }
+        return decision
+    }
 }
 
 @MainActor
@@ -1905,11 +2745,12 @@ private func startManagedSession(
     panelID: UUID,
     store: AppStore,
     workspaceID: UUID,
-    at now: Date = Date(timeIntervalSince1970: 1_700_000_000)
+    at now: Date = Date(timeIntervalSince1970: 1_700_000_000),
+    agent: AgentKind = .claude
 ) throws {
     sessionRuntimeStore.startSession(
         sessionID: sessionID,
-        agent: .claude,
+        agent: agent,
         panelID: panelID,
         windowID: try XCTUnwrap(store.state.windows.first?.id),
         workspaceID: workspaceID,

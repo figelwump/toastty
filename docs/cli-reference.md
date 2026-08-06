@@ -445,14 +445,23 @@ use `session start`, `session status`, `session update-files`, and
 `session stop` directly.
 
 ```
-toastty agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive]
+toastty agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>] [--preflight-policy skip|interactive] [--resolved-codex-executable <path>] [--codex-home <path>]
 toastty agent managed-launch-preflight-decision --token <id>
 ```
 
 `agent prepare-managed-launch` asks the running app to build the managed launch
 plan for a built-in agent command. `--arg` is repeatable and supplies the exact
 agent command argv. `--preflight-policy` defaults to `skip`; `interactive`
-allows the app to pause a Codex launch for status-hook setup or trust warnings.
+allows the app to pause a Codex launch for status-hook setup guidance.
+Unsupported, untrusted, or unresolvable hooks can continue with Toastty's
+notify/session-recording fallback; skills preparation remains automatic and
+fail-open.
+
+Toastty's own command shim may add `--resolved-codex-executable` and
+`--codex-home` after resolving a direct `codex` or `cdx` launch. These optional
+hints let the app prepare skills against the same executable and Codex home
+without guessing. Older shims omit them, and opaque wrappers still launch with
+fallback telemetry but without managed skills.
 
 When interactive preflight is required, the response reports
 `kind: "preflightRequired"` with a token. The shim then calls
@@ -646,7 +655,7 @@ toastty session ingest-agent-event --source <source> [--session <id>] [--panel <
 
 This command is not intended for third-party integrations. Custom agents should use `session status` and `session stop` directly.
 
-Toastty's built-in Claude, Codex, OpenCode, MiMo Code, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If a helper cannot reach the app, it keeps the agent process alive and logs the CLI failure details. Installed Codex status hooks write to `~/.toastty/codex-hooks/telemetry-failures.log`; per-session helpers write to `telemetry-failures.log` in that session's temporary launch artifacts directory. Codex, OpenCode, MiMo Code, and Pi keep per-session artifacts only while the session is active; Claude can retain hook artifacts briefly after session stop so late hooks fail softly instead of hitting missing-file shell errors.
+Toastty's built-in Claude, Codex, OpenCode, MiMo Code, and Pi launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If a helper cannot reach the app, it keeps the agent process alive and logs the CLI failure details. Codex's installed status-hook forwarder writes to `~/.toastty/codex-hooks/telemetry-failures.log`; per-session helpers write to `telemetry-failures.log` in that session's temporary launch artifacts directory. Codex, OpenCode, MiMo Code, and Pi keep per-session artifacts only while the session is active; Claude can retain hook artifacts briefly after session stop so late hooks fail softly instead of hitting missing-file shell errors.
 
 ## Environment variables
 
