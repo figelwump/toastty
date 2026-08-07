@@ -19,16 +19,21 @@ enum CodexUserSkillsContract {
     static let pluginSelector = "\(pluginName)@\(marketplaceName)"
 }
 
-/// The Toastty-owned Codex profile overlay file. It contains only plugin
-/// enablement entries: always the shipped skills plugin, plus the user skills
-/// plugin while a verified user cache is delivered. Combined with the
+/// The Toastty-managed region of the Codex profile overlay. Toastty owns only
+/// its marker and plugin tables; Codex may persist other profile preferences
+/// in the same file. Combined with the
 /// populated plugin cache and the injected `--profile` flag it activates the
 /// skills for exactly the flagged managed process (see
 /// docs/plans/evidence/codex-session-scoped-skills-2026-08-04.md).
 enum CodexManagedProfileConfig {
-    /// First line of every Toastty-written overlay. A file at the profile path
-    /// without this marker is foreign and must never be overwritten.
-    static let ownershipMarker = "# managed by Toastty — do not edit; safe to delete"
+    /// Marker attached to Toastty's managed plugin entries. Codex may prepend
+    /// its own profile-scoped preferences, so ownership is not position-based
+    /// after Toastty has a receipt for this Codex home.
+    static let ownershipMarker = "# managed by Toastty — other profile settings are preserved"
+    static let legacyOwnershipMarker = "# managed by Toastty — do not edit; safe to delete"
+
+    private static let shippedPluginHeader = #"[plugins."toastty@toastty"]"#
+    private static let userPluginHeader = #"[plugins."toastty-user@toastty-user"]"#
 
     static var fileContents: String {
         fileContents(includeUserPlugin: false)
@@ -37,14 +42,14 @@ enum CodexManagedProfileConfig {
     static func fileContents(includeUserPlugin: Bool) -> String {
         var contents = """
         \(ownershipMarker)
-        [plugins."\(CodexSkillsContract.pluginSelector)"]
+        \(shippedPluginHeader)
         enabled = true
 
         """
         if includeUserPlugin {
             contents += """
 
-            [plugins."\(CodexUserSkillsContract.pluginSelector)"]
+            \(userPluginHeader)
             enabled = true
 
             """
@@ -52,21 +57,175 @@ enum CodexManagedProfileConfig {
         return contents
     }
 
-    /// Ownership requires the marker as the FIRST line (a leading UTF-8 BOM
-    /// and surrounding whitespace are tolerated). A marker appearing later in
-    /// the file — for example pasted into a user-authored overlay — does not
-    /// make the file Toastty's to overwrite or delete.
-    static func isToasttyOwned(_ contents: String) -> Bool {
+    /// The current marker is a full-line ownership declaration wherever Codex
+    /// moves it. The unreleased legacy marker is accepted only with a matching
+    /// receipt so migration cannot claim a coincidental user-authored file.
+    static func isToasttyOwned(
+        _ contents: String,
+        allowLegacyMarker: Bool = false
+    ) -> Bool {
+        let lines = profileLines(in: contents)
+        guard lines.isEmpty == false else { return false }
+        if lines.enumerated().contains(where: { index, line in
+            isCurrentOwnershipMarker(line.body, toleratingLeadingBOM: index == 0)
+        }) {
+            return true
+        }
+        return allowLegacyMarker && lines.enumerated().contains { index, line in
+            isLegacyOwnershipMarker(line.body, toleratingLeadingBOM: index == 0)
+        }
+    }
+
+    /// Replaces only Toastty's marker and plugin tables. Every other byte is
+    /// retained, including preferences Codex persisted into the active
+    /// profile, comments, unknown keys, and unrelated plugin entries.
+    static func mergedFileContents(
+        preserving contents: String,
+        includeUserPlugin: Bool
+    ) -> String {
+        appendingManagedContents(
+            to: removingManagedContents(from: contents),
+            includeUserPlugin: includeUserPlugin
+        )
+    }
+
+    /// Removes Toastty-owned content for uninstall while preserving any
+    /// profile preferences written by Codex or the user.
+    static func removingManagedContents(from contents: String) -> String {
+        let lines = profileLines(in: contents)
+        var kept: [ProfileLine] = []
+        var index = 0
+
+        while index < lines.count {
+            let line = lines[index]
+            if isOwnershipMarker(line.body, toleratingLeadingBOM: index == 0) {
+                index += 1
+                continue
+            }
+            if isManagedPluginHeader(line.body) {
+                index += 1
+                while index < lines.count,
+                      isTOMLTableHeader(lines[index].body) == false {
+                    index += 1
+                }
+                continue
+            }
+            kept.append(line)
+            index += 1
+        }
+
+        return trimmingManagedBoundaryWhitespace(kept.map(\.serialized).joined())
+    }
+
+    private struct ProfileLine {
+        let body: String
+        let terminator: String
+
+        var serialized: String { body + terminator }
+    }
+
+    private static func profileLines(in contents: String) -> [ProfileLine] {
+        guard contents.isEmpty == false else { return [] }
+        let value = contents as NSString
+        var lines: [ProfileLine] = []
+        var location = 0
+        while location < value.length {
+            var start = 0
+            var end = 0
+            var contentsEnd = 0
+            value.getLineStart(
+                &start,
+                end: &end,
+                contentsEnd: &contentsEnd,
+                for: NSRange(location: location, length: 0)
+            )
+            lines.append(
+                ProfileLine(
+                    body: value.substring(with: NSRange(location: start, length: contentsEnd - start)),
+                    terminator: value.substring(with: NSRange(location: contentsEnd, length: end - contentsEnd))
+                )
+            )
+            location = end
+        }
+        return lines
+    }
+
+    private static func isOwnershipMarker(
+        _ line: String,
+        toleratingLeadingBOM: Bool
+    ) -> Bool {
+        var candidate = line
+        if toleratingLeadingBOM, candidate.hasPrefix("\u{FEFF}") {
+            candidate.removeFirst()
+        }
+        let trimmed = candidate.trimmingCharacters(in: .whitespaces)
+        return trimmed == ownershipMarker || trimmed == legacyOwnershipMarker
+    }
+
+    private static func isCurrentOwnershipMarker(
+        _ line: String,
+        toleratingLeadingBOM: Bool
+    ) -> Bool {
+        var candidate = line
+        if toleratingLeadingBOM, candidate.hasPrefix("\u{FEFF}") {
+            candidate.removeFirst()
+        }
+        return candidate.trimmingCharacters(in: .whitespaces) == ownershipMarker
+    }
+
+    private static func isLegacyOwnershipMarker(
+        _ line: String,
+        toleratingLeadingBOM: Bool
+    ) -> Bool {
+        var candidate = line
+        if toleratingLeadingBOM, candidate.hasPrefix("\u{FEFF}") {
+            candidate.removeFirst()
+        }
+        return candidate.trimmingCharacters(in: .whitespaces) == legacyOwnershipMarker
+    }
+
+    private static func isManagedPluginHeader(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed == shippedPluginHeader || trimmed == userPluginHeader
+    }
+
+    private static func isTOMLTableHeader(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let closingToken = trimmed.hasPrefix("[[") ? "]]" : "]"
+        guard trimmed.hasPrefix("["),
+              let closingRange = trimmed.range(of: closingToken) else { return false }
+        let remainder = trimmed[closingRange.upperBound...]
+            .trimmingCharacters(in: .whitespaces)
+        return remainder.isEmpty || remainder.hasPrefix("#")
+    }
+
+    private static func trimmingManagedBoundaryWhitespace(_ contents: String) -> String {
         var contents = contents
-        if contents.hasPrefix("\u{FEFF}") {
-            contents.removeFirst()
+        while contents.hasSuffix("\n\n") || contents.hasSuffix("\r\n\r\n") {
+            if contents.hasSuffix("\r\n\r\n") {
+                contents.removeLast(2)
+            } else {
+                contents.removeLast()
+            }
         }
-        guard let firstLine = contents
-            .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-            .first else {
-            return false
+        return contents
+    }
+
+    private static func appendingManagedContents(
+        to preservedContents: String,
+        includeUserPlugin: Bool
+    ) -> String {
+        var result = preservedContents
+        if result.isEmpty == false {
+            if result.hasSuffix("\n") == false && result.hasSuffix("\r") == false {
+                result += "\n"
+            }
+            if result.hasSuffix("\n\n") == false {
+                result += "\n"
+            }
         }
-        return firstLine.trimmingCharacters(in: .whitespaces) == ownershipMarker
+        result += fileContents(includeUserPlugin: includeUserPlugin)
+        return result
     }
 }
 

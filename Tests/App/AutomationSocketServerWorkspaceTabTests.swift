@@ -105,6 +105,9 @@ final class AutomationSocketServerWorkspaceTabTests: AutomationSocketServerWindo
             XCTAssertEqual((rightPanel["panelIDs"] as? [String])?.count, 1)
             XCTAssertEqual((rightPanel["tabIDs"] as? [String])?.count, 1)
             XCTAssertEqual(rightPanel["focusedPanelID"] as? String, focusedRightPanelID.uuidString)
+            let tabs = try XCTUnwrap(rightPanel["tabs"] as? [[String: Any]])
+            XCTAssertEqual(tabs.first?["url"] as? String, "https://example.com/docs")
+            XCTAssertTrue(tabs.first?["filePath"] is NSNull)
         }
     }
 

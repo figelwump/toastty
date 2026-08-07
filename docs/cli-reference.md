@@ -398,6 +398,13 @@ Prefer `query list --json` to discover the current canonical IDs. Common queries
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.state`
 
+`workspace.snapshot` includes the selected workspace tab's right-panel tabs at
+`rightPanel.tabs`. Each tab includes `panelID`, `panelKind`, `webDefinition`,
+and `title`, plus `filePath` for local documents, `url` for browsers, and
+`scratchpadDocumentID`, `scratchpadRevision`, and `scratchpadSessionID` for
+Scratchpads. Fields that do not apply are null. Right-panel tabs belonging to
+unselected workspace tabs are not included.
+
 `panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 
 `panel.scratchpad.lookup` requires `sessionID` and returns metadata for the

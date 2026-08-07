@@ -22,6 +22,8 @@ struct AppWindowView: View {
     @State private var showsSkillsManagementSheet = false
     @State private var skillsProvisionedNotice: ManagedAgentSkillsProvisionedNotice?
     @State private var queuedSkillsProvisionedNotices: [ManagedAgentSkillsProvisionedNotice] = []
+    @State private var codexSkillsUnavailableNotice: ManagedCodexSkillsUnavailableNotice?
+    @State private var lastCodexSkillsUnavailableReasonCode: String?
     @State private var appIsActive = true
 
     static let sidebarResizeHandleHitWidth: CGFloat = 10
@@ -122,6 +124,27 @@ struct AppWindowView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .zIndex(20)
             }
+
+            if let codexSkillsUnavailableNotice {
+                ManagedCodexSkillsUnavailableBanner(
+                    notice: codexSkillsUnavailableNotice,
+                    manage: {
+                        self.codexSkillsUnavailableNotice = nil
+                        showsSkillsManagementSheet = true
+                    },
+                    dismiss: {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            self.codexSkillsUnavailableNotice = nil
+                        }
+                    }
+                )
+                .frame(maxWidth: 680)
+                .padding(.top, 42)
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(21)
+            }
         }
         .alert(
             "Close this workspace?",
@@ -215,6 +238,12 @@ struct AppWindowView: View {
             showsSkillsManagementSheet = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedAgentSkillsProvisioned)) { notification in
+            if let notice = notification.object as? ManagedAgentSkillsProvisionedNotice,
+               notice.windowID == windowID,
+               notice.agent == .codex {
+                codexSkillsUnavailableNotice = nil
+                lastCodexSkillsUnavailableReasonCode = nil
+            }
             guard let notice = ManagedAgentSkillsProvisionedNoticeStore.claim(
                 for: windowID,
                 notificationObject: notification.object
@@ -225,6 +254,15 @@ struct AppWindowView: View {
                 } else if queuedSkillsProvisionedNotices.contains(where: { $0.agent == notice.agent }) == false {
                     queuedSkillsProvisionedNotices.append(notice)
                 }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyManagedCodexSkillsUnavailable)) { notification in
+            guard let notice = notification.object as? ManagedCodexSkillsUnavailableNotice,
+                  notice.windowID == windowID,
+                  notice.reasonCode != lastCodexSkillsUnavailableReasonCode else { return }
+            lastCodexSkillsUnavailableReasonCode = notice.reasonCode
+            withAnimation(.easeOut(duration: 0.15)) {
+                codexSkillsUnavailableNotice = notice
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

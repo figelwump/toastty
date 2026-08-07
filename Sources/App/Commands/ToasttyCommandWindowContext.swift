@@ -29,4 +29,7 @@ extension Notification.Name {
     static let toasttyManagedAgentSkillsProvisioned = Notification.Name(
         "dev.toastty.managed-agent-skills-provisioned"
     )
+    static let toasttyManagedCodexSkillsUnavailable = Notification.Name(
+        "dev.toastty.managed-codex-skills-unavailable"
+    )
 }

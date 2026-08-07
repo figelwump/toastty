@@ -11,8 +11,10 @@ Use this skill to drive Toastty from an agent session. Toastty provides a bundle
 
 In a Toastty-launched agent terminal, expect:
 
-- `TOASTTY_SKILLS_ROOT`: stable absolute path to the copied Toastty plugin's
-  `skills` directory. Read-only; never write into it.
+- `TOASTTY_SKILLS_ROOT`: stable absolute path to the delivered Toastty plugin's
+  `skills` directory when the runtime uses launch-scoped delivery. Read-only;
+  never write into it. Project discovery may load this skill without setting
+  this variable, so it is not proof of a managed session.
 - `TOASTTY_USER_SKILLS_ROOT`: absolute path to the user's Toastty skill-package
   source directory. It may not exist yet.
 - `TOASTTY_CLI_PATH`: absolute path to the bundled `toastty` CLI.
@@ -22,11 +24,12 @@ In a Toastty-launched agent terminal, expect:
 - `TOASTTY_CWD`: launch working directory when Toastty knows it.
 - `TOASTTY_REPO_ROOT`: repository root when Toastty inferred one.
 
-Before using this skill, require the managed skill root and injected CLI. Do not
-guess a repository checkout, global skill directory, or versioned Codex cache:
+Before using this skill, require the injected CLI and current panel identity. Do
+not guess a repository checkout, global skill directory, versioned Codex cache,
+or Toastty instance:
 
 ```bash
-if [[ -z "${TOASTTY_SKILLS_ROOT:-}" || ! -d "$TOASTTY_SKILLS_ROOT/toastty-capabilities" ]]; then
+if [[ -z "${TOASTTY_CLI_PATH:-}" || ! -x "$TOASTTY_CLI_PATH" || -z "${TOASTTY_PANEL_ID:-}" ]]; then
   echo "error: toastty-capabilities must run inside a Toastty-managed agent session" >&2
   exit 1
 fi
@@ -54,6 +57,17 @@ Use the returned descriptors for canonical IDs, selectors, parameters, aliases, 
 ## Workspace, Panel, And Session Model
 
 Toastty has windows, workspaces, workspace tabs, and panels. A terminal panel can host a managed agent session. App-control selectors target `windowID`, `workspaceID`, and `panelID`; many commands can infer a target, but robust workflows should pass explicit IDs from `terminal.state`, `workspace.snapshot`, or action results.
+
+To find an already-open browser, local document, or Scratchpad in the current
+workspace, query `terminal.state` to obtain the `workspaceID`, then query
+`workspace.snapshot` for that workspace. The snapshot's `rightPanel.tabs`
+describes the selected workspace tab's right-panel tabs and includes `panelID`,
+`title`, `webDefinition`, plus model-backed identity where applicable:
+`filePath` for local documents, `url` for browsers, and
+`scratchpadDocumentID`/`scratchpadRevision`/`scratchpadSessionID` for
+Scratchpads. Match the strongest identity available (path or URL before title),
+then use the returned `panelID` for the next action or query. Do not assume this
+list includes right-panel tabs belonging to unselected workspace tabs.
 
 Common workflow families:
 

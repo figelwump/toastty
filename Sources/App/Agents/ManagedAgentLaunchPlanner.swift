@@ -438,6 +438,13 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             stagedSkillsIntegration: stagedSkillsConfiguration,
             deliveredUserSkillsRootPath: deliveredUserSkillsRootPath
         )
+        reportMissingCodexSkillsIfNeeded(
+            request: request,
+            target: target,
+            decision: codexSkillsDecision,
+            effectiveConfiguration: effectiveCodexSkillsConfiguration,
+            injectionResult: preparedLaunch.codexSkillsInjectionResult
+        )
         let launchStart = nowProvider()
         let parentSessionID = resolvedParentSessionID(
             for: request,
@@ -690,10 +697,74 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     codexStatusTrackingSource: codexStatusTrackingSource,
                     codexSkillsIntegration: nil
                ) {
-                return fallback
+                return PreparedAgentLaunchCommand(
+                    argv: fallback.argv,
+                    environment: fallback.environment,
+                    artifacts: fallback.artifacts,
+                    codexSkillsInjectionResult: .refused(
+                        reason: "instrumentation_preparation_failed"
+                    )
+                )
             }
-            return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
+            return PreparedAgentLaunchCommand(
+                argv: argv,
+                environment: [:],
+                artifacts: nil,
+                codexSkillsInjectionResult: agent == .codex
+                    ? .refused(reason: "instrumentation_preparation_failed")
+                    : .notRequested
+            )
         }
+    }
+
+    private func reportMissingCodexSkillsIfNeeded(
+        request: ManagedAgentLaunchRequest,
+        target: ManagedLaunchTarget,
+        decision: CodexManagedLaunchSkillsDecision?,
+        effectiveConfiguration: CodexSkillsLaunchConfiguration?,
+        injectionResult: CodexSkillsInjectionResult
+    ) {
+        guard request.agent == .codex, injectionResult != .injected else { return }
+
+        let reasonCode: String
+        let detail: String
+        switch injectionResult {
+        case .refused(let reason):
+            reasonCode = reason
+            detail = "Toastty could not safely add the managed Codex profile. Open Skills to inspect or repair delivery."
+        case .notRequested where effectiveConfiguration == nil:
+            if let status = decision?.status {
+                reasonCode = "skills_\(status.availability.rawValue)"
+                detail = status.detail
+            } else {
+                reasonCode = "configuration_unavailable"
+                detail = "Toastty could not prepare its managed Codex profile. Open Skills to inspect or repair delivery."
+            }
+        case .notRequested:
+            reasonCode = "injection_not_requested"
+            detail = "Toastty prepared its Codex skills but could not add the managed profile to this launch."
+        case .injected:
+            return
+        }
+
+        ToasttyLog.warning(
+            "Managed Codex launch is proceeding without Toastty skills",
+            category: .automation,
+            metadata: [
+                "reason": reasonCode,
+                "panel_id": target.panelID.uuidString,
+                "window_id": target.windowID.uuidString,
+                "status": decision?.status?.availability.rawValue ?? "unavailable",
+            ]
+        )
+        NotificationCenter.default.post(
+            name: .toasttyManagedCodexSkillsUnavailable,
+            object: ManagedCodexSkillsUnavailableNotice(
+                windowID: target.windowID,
+                reasonCode: reasonCode,
+                detail: detail
+            )
+        )
     }
 
     private func statusTrackingSource(for agent: AgentKind) -> CodexStatusTrackingSource {

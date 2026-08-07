@@ -380,6 +380,84 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertEqual(firstTab.string("title"), "Live Right Panel")
     }
 
+    func testWorkspaceSnapshotRightPanelWebTabsExposePersistedModelIdentity() throws {
+        let documentID = UUID()
+        let sourcePanelID = UUID()
+        let sourceWorkspaceID = UUID()
+        let fixture = try TerminalAppControlFixture { state, workspaceID in
+            var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+            var tab = try XCTUnwrap(workspace.selectedTab)
+            let localTabID = UUID()
+            let browserTabID = UUID()
+            let scratchpadTabID = UUID()
+            tab.rightAuxPanel = RightAuxPanelState(
+                isVisible: true,
+                activeTabID: localTabID,
+                tabIDs: [localTabID, browserTabID, scratchpadTabID],
+                tabsByID: [
+                    localTabID: RightAuxPanelTabState(
+                        id: localTabID,
+                        identity: .localDocument(path: "/tmp/notes.md"),
+                        panelID: UUID(),
+                        panelState: .web(WebPanelState(
+                            definition: .localDocument,
+                            filePath: "/tmp/notes.md"
+                        ))
+                    ),
+                    browserTabID: RightAuxPanelTabState(
+                        id: browserTabID,
+                        identity: .browserSession(UUID()),
+                        panelID: UUID(),
+                        panelState: .web(WebPanelState(
+                            definition: .browser,
+                            initialURL: "https://example.com/initial",
+                            currentURL: "https://example.com/current"
+                        ))
+                    ),
+                    scratchpadTabID: RightAuxPanelTabState(
+                        id: scratchpadTabID,
+                        identity: .scratchpad(id: documentID),
+                        panelID: UUID(),
+                        panelState: .web(WebPanelState(
+                            definition: .scratchpad,
+                            scratchpad: ScratchpadState(
+                                documentID: documentID,
+                                sessionLink: ScratchpadSessionLink(
+                                    sessionID: "managed-session",
+                                    agent: .codex,
+                                    sourcePanelID: sourcePanelID,
+                                    sourceWorkspaceID: sourceWorkspaceID
+                                ),
+                                revision: 7
+                            )
+                        ))
+                    ),
+                ]
+            )
+            workspace.tabsByID[tab.id] = tab
+            state.workspacesByID[workspaceID] = workspace
+        }
+
+        let result = try fixture.executor.runQuery(
+            id: AppControlQueryID.workspaceSnapshot.rawValue,
+            args: ["workspaceID": .string(fixture.workspaceID.uuidString)]
+        )
+
+        guard case .object(let rightPanel)? = result["rightPanel"],
+              case .array(let tabs)? = rightPanel["tabs"],
+              tabs.count == 3,
+              case .object(let local) = tabs[0],
+              case .object(let browser) = tabs[1],
+              case .object(let scratchpad) = tabs[2] else {
+            return XCTFail("expected three right-panel tab snapshots")
+        }
+        XCTAssertEqual(local.string("filePath"), "/tmp/notes.md")
+        XCTAssertEqual(browser.string("url"), "https://example.com/current")
+        XCTAssertEqual(scratchpad.string("scratchpadDocumentID"), documentID.uuidString)
+        XCTAssertEqual(scratchpad.int("scratchpadRevision"), 7)
+        XCTAssertEqual(scratchpad.string("scratchpadSessionID"), "managed-session")
+    }
+
     func testScopedCallerCannotReadTerminalStateOutsideWorkspaceScope() throws {
         let fixture = try TerminalAppControlFixture()
         let existingWorkspaceIDs = Set(fixture.store.state.window(id: fixture.windowID)?.workspaceIDs ?? [])

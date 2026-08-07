@@ -12,6 +12,12 @@ struct ManagedAgentSkillsProvisionedNotice: Equatable, Sendable {
     let deliveredUserSkillCount: Int
 }
 
+struct ManagedCodexSkillsUnavailableNotice: Equatable, Sendable {
+    let windowID: UUID
+    let reasonCode: String
+    let detail: String
+}
+
 enum ManagedAgentSkillsProvisionedNoticeStore {
     static func didShowKey(for agent: AgentKind) -> String {
         "toastty.\(agent.rawValue)SkillsProvisionedNoticeDidShow"
@@ -947,5 +953,59 @@ struct ManagedAgentSkillsProvisionedBanner: View {
         }
         text += ". Global and project skill folders were not changed."
         return text
+    }
+}
+
+struct ManagedCodexSkillsUnavailableBanner: View {
+    let notice: ManagedCodexSkillsUnavailableNotice
+    let manage: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(ToastyTheme.sessionNeedsApprovalText)
+                .frame(width: 38, height: 38)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Codex launched without Toastty skills")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.primaryText)
+                Text(notice.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            Button("View Skills…", action: manage)
+                .buttonStyle(.borderedProminent)
+                .tint(ToastyTheme.accent)
+                .foregroundStyle(ToastyTheme.accentDark)
+                .controlSize(.small)
+
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(ToastyTheme.inactiveText)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
+        .padding(.vertical, 14)
+        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(ToastyTheme.sessionNeedsApprovalText.opacity(0.65), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.48), radius: 18, y: 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("banner.managed-codex-skills-unavailable")
     }
 }

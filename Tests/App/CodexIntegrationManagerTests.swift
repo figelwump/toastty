@@ -330,7 +330,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         let runtime = fixture.runtime()
         _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
         let profileURL = fixture.profileConfigURL(runtime: runtime)
-        try "\(CodexManagedProfileConfig.ownershipMarker)\n# drifted\n"
+        try "\(CodexManagedProfileConfig.ownershipMarker)\n# retained preference comment\n"
             .write(to: profileURL, atomically: true, encoding: .utf8)
         fixture.recorder.reset()
 
@@ -338,10 +338,41 @@ final class CodexSkillsManagerTests: XCTestCase {
 
         XCTAssertNotNil(preparation.configuration)
         XCTAssertEqual(fixture.recorder.operations, [])
-        XCTAssertEqual(
-            try String(contentsOf: profileURL, encoding: .utf8),
-            CodexManagedProfileConfig.fileContents
-        )
+        let contents = try String(contentsOf: profileURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("# retained preference comment"))
+        XCTAssertTrue(contents.contains(#"[plugins."toastty@toastty"]"#))
+    }
+
+    func testCodexPrependedSettingsAndLegacyMarkerAreMigratedWithReceipt() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+        let profileURL = fixture.profileConfigURL(runtime: runtime)
+        let codexRewritten = """
+        model = "gpt-5.6-luna"
+        model_reasoning_effort = "medium"
+        \(CodexManagedProfileConfig.legacyOwnershipMarker)
+        [plugins."toastty@toastty"]
+        enabled = true
+
+        [plugins."example@example"]
+        enabled = true
+
+        """
+        try codexRewritten.write(to: profileURL, atomically: true, encoding: .utf8)
+        fixture.recorder.reset()
+
+        let preparation = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(fixture.recorder.operations, [])
+        let migrated = try String(contentsOf: profileURL, encoding: .utf8)
+        XCTAssertTrue(migrated.contains("model = \"gpt-5.6-luna\""))
+        XCTAssertTrue(migrated.contains("model_reasoning_effort = \"medium\""))
+        XCTAssertTrue(migrated.contains(#"[plugins."example@example"]"#))
+        XCTAssertTrue(migrated.contains(CodexManagedProfileConfig.ownershipMarker))
+        XCTAssertFalse(migrated.contains(CodexManagedProfileConfig.legacyOwnershipMarker))
     }
 
     func testLegacyStateTriggersOneShotCleanupBeforeInstall() throws {
@@ -569,6 +600,37 @@ final class CodexSkillsManagerTests: XCTestCase {
 
         XCTAssertEqual(try String(contentsOf: profileURL, encoding: .utf8), foreignContents)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.cacheRootURL(runtime: runtime).path))
+    }
+
+    func testUninstallPreservesCodexSettingsAndRemovesOnlyToasttyProfileEntries() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let runtime = fixture.runtime()
+        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
+        let profileURL = fixture.profileConfigURL(runtime: runtime)
+        let coauthored = """
+        model = "gpt-5.6-luna"
+        \(CodexManagedProfileConfig.legacyOwnershipMarker)
+        [plugins."toastty@toastty"]
+        enabled = true
+
+        [plugins."example@example"]
+        enabled = true
+
+        """
+        try coauthored.write(to: profileURL, atomically: true, encoding: .utf8)
+
+        _ = try fixture.manager.uninstall(
+            runtime: runtime,
+            hasActiveManagedCodexSession: false
+        )
+
+        let preserved = try String(contentsOf: profileURL, encoding: .utf8)
+        XCTAssertTrue(preserved.contains("model = \"gpt-5.6-luna\""))
+        XCTAssertTrue(preserved.contains(#"[plugins."example@example"]"#))
+        XCTAssertFalse(preserved.contains("toastty@toastty"))
+        XCTAssertFalse(preserved.contains(CodexManagedProfileConfig.legacyOwnershipMarker))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.receiptURL(runtime: runtime).path))
     }
 
     func testUninstallRejectsActiveManagedCodexSession() throws {

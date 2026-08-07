@@ -87,6 +87,7 @@ enum CodexSkillsManagerError: LocalizedError, Equatable {
     case invalidCodexHome(String)
     case operationTimedOut
     case profileConfigConflict(String)
+    case profileConfigChanged(String)
     case ownedStateMismatch(String)
     case pluginInstallMismatch
     case pluginNotInstalled
@@ -110,6 +111,8 @@ enum CodexSkillsManagerError: LocalizedError, Equatable {
             return "Codex skills provisioning timed out."
         case .profileConfigConflict(let path):
             return "A Codex profile file Toastty does not own exists at \(path). Toastty preserved it; managed sessions launch without Toastty skills until it is moved or removed."
+        case .profileConfigChanged(let path):
+            return "The Codex profile changed while Toastty was updating it at \(path). Toastty preserved the newer contents; try again."
         case .ownedStateMismatch(let path):
             return "Toastty cannot verify ownership of the Codex skills state at \(path)."
         case .pluginInstallMismatch:
@@ -691,8 +694,16 @@ final class CodexSkillsManager: @unchecked Sendable {
             record: record,
             requireBundledDigest: false
         )
+        let profileOwnershipIsReceiptBacked = hasMatchingProfileReceipt(runtime)
 
         do {
+            let profileURL = profileConfigURL(for: runtime)
+            try Self.withProfileOverlayLock {
+                try removeManagedProfileContentsForUninstall(
+                    at: profileURL,
+                    allowLegacyMarker: profileOwnershipIsReceiptBacked
+                )
+            }
             let cacheRoot = pluginCacheRootURL(for: runtime)
             if fileManager.fileExists(atPath: cacheRoot.path) {
                 try fileManager.removeItem(at: cacheRoot)
@@ -700,13 +711,6 @@ final class CodexSkillsManager: @unchecked Sendable {
             removeDirectoryIfEmpty(cacheRoot.deletingLastPathComponent())
             // The user plugin cache and receipt are Toastty-owned state too.
             try removeUserPluginState(runtime: runtime)
-            let profileURL = profileConfigURL(for: runtime)
-            try Self.withProfileOverlayLock {
-                if let contents = try? String(contentsOf: profileURL, encoding: .utf8),
-                   CodexManagedProfileConfig.isToasttyOwned(contents) {
-                    try fileManager.removeItem(at: profileURL)
-                }
-            }
             if fileManager.fileExists(atPath: receiptURL.path) {
                 try fileManager.removeItem(at: receiptURL)
             }
@@ -866,13 +870,17 @@ private extension CodexSkillsManager {
         let url = profileConfigURL(for: runtime)
         guard fileManager.fileExists(atPath: url.path) else { return }
         guard let contents = try? String(contentsOf: url, encoding: .utf8),
-              CodexManagedProfileConfig.isToasttyOwned(contents) else {
+              CodexManagedProfileConfig.isToasttyOwned(
+                  contents,
+                  allowLegacyMarker: hasMatchingProfileReceipt(runtime)
+              ) else {
             throw CodexSkillsManagerError.profileConfigConflict(url.path)
         }
     }
 
-    /// Writes the canonical Toastty overlay when it is missing or drifted.
-    /// A foreign file at the profile path is never overwritten. By default
+    /// Ensures Toastty's marker and plugin tables while retaining every other
+    /// profile setting. A foreign file at the profile path is never
+    /// overwritten. By default
     /// the user entry is included exactly while a user receipt points at an
     /// existing cache subtree (the cheap probe); the user-plugin phase can
     /// pass an explicit `includeUserPlugin` decision instead — used to force
@@ -890,18 +898,71 @@ private extension CodexSkillsManager {
         defer { Self.profileOverlayLock.unlock() }
         try checkProfileConfigOwnership(runtime: runtime)
         let url = profileConfigURL(for: runtime)
-        let expected = Data(
-            CodexManagedProfileConfig.fileContents(
-                includeUserPlugin: includeUserPlugin
-                    ?? userPluginStateLooksDeliverable(runtime: runtime)
-            ).utf8
-        )
-        if (try? Data(contentsOf: url)) == expected { return }
-        try fileManager.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try expected.write(to: url, options: .atomic)
+        let shouldIncludeUserPlugin = includeUserPlugin
+            ?? userPluginStateLooksDeliverable(runtime: runtime)
+        for _ in 0..<3 {
+            let original = try? Data(contentsOf: url)
+            let expectedContents: String
+            if let original, let existing = String(data: original, encoding: .utf8) {
+                expectedContents = CodexManagedProfileConfig.mergedFileContents(
+                    preserving: existing,
+                    includeUserPlugin: shouldIncludeUserPlugin
+                )
+            } else {
+                expectedContents = CodexManagedProfileConfig.fileContents(
+                    includeUserPlugin: shouldIncludeUserPlugin
+                )
+            }
+            let expected = Data(expectedContents.utf8)
+            if original == expected { return }
+            guard (try? Data(contentsOf: url)) == original else { continue }
+            try fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try expected.write(to: url, options: .atomic)
+            return
+        }
+        throw CodexSkillsManagerError.profileConfigChanged(url.path)
+    }
+
+    func removeManagedProfileContentsForUninstall(
+        at url: URL,
+        allowLegacyMarker: Bool
+    ) throws {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        for _ in 0..<3 {
+            let original = try Data(contentsOf: url)
+            guard let contents = String(data: original, encoding: .utf8) else { return }
+            guard CodexManagedProfileConfig.isToasttyOwned(
+                contents,
+                allowLegacyMarker: allowLegacyMarker
+            ) else { return }
+            let preserved = CodexManagedProfileConfig.removingManagedContents(from: contents)
+            guard (try? Data(contentsOf: url)) == original else { continue }
+            if preserved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try fileManager.removeItem(at: url)
+            } else {
+                try Data(preserved.utf8).write(to: url, options: .atomic)
+            }
+            return
+        }
+        throw CodexSkillsManagerError.profileConfigChanged(url.path)
+    }
+
+    /// A displaced marker is trusted only when the receipt belongs to this
+    /// Codex home and describes the current profile/cache layout. This keeps
+    /// the first-install collision rule strict while allowing Codex to persist
+    /// root-level preferences into an already-managed profile.
+    func hasMatchingProfileReceipt(_ runtime: CodexIntegrationRuntime) -> Bool {
+        guard let record = readReceipt(runtime),
+              record.schemaVersion == 1,
+              record.profileName == CodexSkillsContract.profileName else {
+            return false
+        }
+        let recordedCacheURL = URL(fileURLWithPath: record.cachePath, isDirectory: true)
+        return standardizedPath(recordedCacheURL.deletingLastPathComponent().path)
+            == standardizedPath(pluginCacheRootURL(for: runtime).path)
     }
 
     /// Cheap existence-only probe deciding profile contents; full byte

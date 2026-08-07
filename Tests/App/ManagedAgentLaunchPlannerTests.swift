@@ -4,6 +4,36 @@ import XCTest
 
 @MainActor
 final class ManagedAgentLaunchPlannerTests: XCTestCase {
+    func testCodexLaunchWithoutSkillsPostsActionableUnavailableNotice() throws {
+        let fixture = try makePlannerFixture()
+        let recorder = CodexSkillsUnavailableNoticeRecorder()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .toasttyManagedCodexSkillsUnavailable,
+            object: nil,
+            queue: nil
+        ) { notification in
+            recorder.record(notification.object as? ManagedCodexSkillsUnavailableNotice)
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: fixture.panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        XCTAssertEqual(recorder.notices.count, 1)
+        XCTAssertEqual(recorder.notices.first?.reasonCode, "configuration_unavailable")
+        XCTAssertEqual(
+            recorder.notices.first?.windowID,
+            fixture.store.state.windows.first?.id
+        )
+    }
+
     func testRestoredCodexPreparationUsesBoundedRestoreProvisioning() throws {
         let resolver = RecordingCodexManagedLaunchSkillsResolver(
             decision: CodexManagedLaunchSkillsDecision(configuration: nil, status: nil)
@@ -2642,6 +2672,18 @@ private final class SkillsProvisionedNoticeRecorder: @unchecked Sendable {
     var notices: [ManagedAgentSkillsProvisionedNotice] { lock.withLock { storage } }
 
     func record(_ notice: ManagedAgentSkillsProvisionedNotice?) {
+        guard let notice else { return }
+        lock.withLock { storage.append(notice) }
+    }
+}
+
+private final class CodexSkillsUnavailableNoticeRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [ManagedCodexSkillsUnavailableNotice] = []
+
+    var notices: [ManagedCodexSkillsUnavailableNotice] { lock.withLock { storage } }
+
+    func record(_ notice: ManagedCodexSkillsUnavailableNotice?) {
         guard let notice else { return }
         lock.withLock { storage.append(notice) }
     }

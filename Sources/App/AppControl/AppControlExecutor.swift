@@ -2005,6 +2005,11 @@ private extension AppControlExecutor {
             let panelKind: String
             let webDefinition: AutomationJSONValue
             let panelTitle: String
+            var filePath: AutomationJSONValue = .null
+            var url: AutomationJSONValue = .null
+            var scratchpadDocumentID: AutomationJSONValue = .null
+            var scratchpadRevision: AutomationJSONValue = .null
+            var scratchpadSessionID: AutomationJSONValue = .null
             switch tab.panelState {
             case .terminal(let terminalState):
                 panelKind = "terminal"
@@ -2014,6 +2019,16 @@ private extension AppControlExecutor {
                 panelKind = "web"
                 webDefinition = .string(webState.definition.rawValue)
                 panelTitle = webState.title
+                if webState.definition == .localDocument {
+                    filePath = webState.filePath.map(AutomationJSONValue.string) ?? .null
+                } else if webState.definition == .browser {
+                    url = webState.restorableURL.map(AutomationJSONValue.string) ?? .null
+                } else if webState.definition == .scratchpad, let scratchpad = webState.scratchpad {
+                    scratchpadDocumentID = .string(scratchpad.documentID.uuidString)
+                    scratchpadRevision = .int(scratchpad.revision)
+                    scratchpadSessionID = scratchpad.sessionLink
+                        .map { .string($0.sessionID) } ?? .null
+                }
             }
             return .object([
                 "tabID": .string(tab.id.uuidString),
@@ -2021,6 +2036,11 @@ private extension AppControlExecutor {
                 "panelKind": .string(panelKind),
                 "webDefinition": webDefinition,
                 "title": .string(panelTitle),
+                "filePath": filePath,
+                "url": url,
+                "scratchpadDocumentID": scratchpadDocumentID,
+                "scratchpadRevision": scratchpadRevision,
+                "scratchpadSessionID": scratchpadSessionID,
             ])
         }
         let rightPanel: AutomationJSONValue = .object([
