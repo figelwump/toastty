@@ -210,11 +210,11 @@
     </nav>
 
     <section id="onboarding">
-      <p class="lede">Copy the onboarding prompt and paste it into an agent of your choice. The prompt walks your agent through setting up agents, skills, and profiles in Toastty.</p>
+      <p class="lede">Copy the onboarding prompt and paste it into an agent of your choice. The prompt walks your agent through setting up tracking and profiles, then shows the skills Toastty provides automatically.</p>
 
       <div class="benefits">
         <div class="benefit"><b><span class="dot">●</span>Live status</b><i>Track agent work and completion.</i></div>
-        <div class="benefit"><b><span class="dot">●</span>Starter skills</b><i>Install only what fits your workflow.</i></div>
+        <div class="benefit"><b><span class="dot">●</span>Automatic skills</b><i>Four shipped skills, plus your own.</i></div>
         <div class="benefit"><b><span class="dot">●</span>Profiles</b><i>Add launchers for terminals you use.</i></div>
       </div>
 
@@ -228,7 +228,7 @@
 
 "$TOASTTY_CLI_PATH" setup guide
 
-Read the guide, narrate each step, dry-run every setup command first (pass --dry-run), show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.</pre>
+Read the guide, narrate each step, dry-run every setup installer first (pass --dry-run), show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.</pre>
     </section>
 
     <section id="manual-setup">
@@ -256,11 +256,12 @@ Read the guide, narrate each step, dry-run every setup command first (pass --dry
 
       <div class="setup">
         <div class="rowhead">
-          <div><b>Starter skills</b>
-          <div class="why">Install only what fits your workflow.</div></div>
+          <div><b>Toastty skills</b>
+          <div class="why">Review the four shipped skills and accepted user skills from <span style="font-family:var(--mono);font-size:11px">~/.toastty/skills</span>. New managed launches receive the current set automatically.</div></div>
           <button class="copy" data-copy-target="cmd-skill">Copy</button>
         </div>
-        <pre class="snippet" id="cmd-skill">"$TOASTTY_CLI_PATH" setup install-skill &lt;name&gt; --dry-run</pre>
+        <pre class="snippet" id="cmd-skill">"$TOASTTY_CLI_PATH" setup skills list</pre>
+        <p class="small"><a class="actionlink" href="toastty://action/open-skills-management" data-action="open-skills-management">Manage Toastty Skills… →</a></p>
       </div>
 
       <div class="setup">
@@ -271,7 +272,7 @@ Read the guide, narrate each step, dry-run every setup command first (pass --dry
         </div>
       </div>
 
-      <p class="small">Every command defaults to <span style="font-family:var(--mono)">--dry-run</span>; rerun with <span style="font-family:var(--mono)">--apply</span> once the planned writes look right.</p>
+      <p class="small">Setup installers default to <span style="font-family:var(--mono)">--dry-run</span>; rerun with <span style="font-family:var(--mono)">--apply</span> once the planned writes look right.</p>
     </section>
 
     <section id="shortcuts">

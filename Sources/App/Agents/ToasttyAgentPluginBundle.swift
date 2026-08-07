@@ -1,10 +1,8 @@
+import CoreState
 import CryptoKit
 import Foundation
 
-struct ToasttyAgentSkillDescriptor: Equatable, Sendable {
-    let name: String
-    let summary: String
-}
+typealias ToasttyAgentSkillDescriptor = ToasttyShippedSkillDescriptor
 
 struct ToasttyAgentPluginDescriptor: Equatable, Sendable {
     let name: String
@@ -25,24 +23,7 @@ struct ToasttyAgentPluginDescriptor: Equatable, Sendable {
 
 enum ToasttyAgentPluginBundle {
     static let pluginName = "toastty"
-    static let skills = [
-        ToasttyAgentSkillDescriptor(
-            name: "toastty-capabilities",
-            summary: "Control Toastty workspaces, panels, terminals, and managed agents."
-        ),
-        ToasttyAgentSkillDescriptor(
-            name: "toastty-open-markdown",
-            summary: "Open plans and Markdown files for review inside Toastty."
-        ),
-        ToasttyAgentSkillDescriptor(
-            name: "toastty-scratchpad",
-            summary: "Create and update visual diagrams, mockups, and summaries."
-        ),
-        ToasttyAgentSkillDescriptor(
-            name: "worktree-create",
-            summary: "Move work into an isolated Git worktree and Toastty workspace."
-        ),
-    ]
+    static let skills = ToasttyShippedSkillCatalog.skills
 
     static func bundledPluginURL(bundle: Bundle = .main) -> URL? {
         bundle.resourceURL?

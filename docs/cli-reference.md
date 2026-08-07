@@ -62,33 +62,34 @@ when another agent or tool should preserve Markdown headings and code fences.
 
 ### `setup skills list`
 
-List starter skills bundled with Toastty.
+List the skills Toastty can make available to new supported managed agent launches.
 
 ```
 toastty setup skills list
 ```
 
-The v1 starter set includes `toastty-capabilities`, `toastty-scratchpad`, and
-`toastty-open-markdown`.
+The read-only inventory includes Toastty's four shipped skills and accepted
+user-authored packages under `~/.toastty/skills`. Invalid user packages appear
+in an excluded section with the same diagnostic used by `Toastty > Manage
+Toastty Skills…`. A missing user-skills directory is an empty catalog and is
+not created by this command.
+
+Running sessions keep the skills they launched with. Supported managed Codex,
+Claude Code, OpenCode, MiMo Code, and Pi launches receive the current inventory
+when they start; unsupported launch shapes or provisioning failures proceed
+without Toastty skills.
 
 ```bash
 "$TOASTTY_CLI_PATH" setup skills list
 ```
 
-### `setup print-skill`
-
-Preview a bundled starter skill's `SKILL.md`.
-
-```
-toastty setup print-skill <name>
-```
-
-This command is read-only. It prints the skill instructions only; companion
-scripts are installed later by `setup install-skill`.
-
-```bash
-"$TOASTTY_CLI_PATH" setup print-skill toastty-capabilities
-```
+With `--json`, the response is a versioned object containing
+`schemaVersion`, `userSkillsRoot`, `skills`, and `globalDiagnostics`. Every
+skill entry includes `name`, `source` (`shipped` or `user`), and `inclusion`
+(`included` or `excluded`). Shipped entries include `summary`; excluded user
+entries include `diagnosticCode` and `diagnosticMessage`. Exclusions do not
+change the successful exit status. Text output is intended for people and is
+not a stable parsing contract.
 
 ### `setup install-shell-integration`
 
@@ -120,36 +121,6 @@ and Toastty forwarder script; `--dry-run` names that default explicitly and is
 a usage error combined with `--apply`. With `--apply`, it writes those files
 directly.
 Codex may ask the user to trust updated hooks the next time it starts.
-
-### `setup install-skill`
-
-Dry-run or install a bundled starter skill.
-
-```
-toastty setup install-skill <name> [--runtime agents|claude|codex|all] [--dry-run | --apply]
-```
-
-Without `--apply`, the command reports planned file writes only; `--dry-run`
-names that default explicitly and is a usage error combined with `--apply`.
-
-`--runtime agents` installs under the preferred shared user root
-`~/.agents/skills` and is the default. `--runtime claude` installs under
-`~/.claude/skills`, while `--runtime codex` installs under the Codex-specific
-`~/.codex/skills`. `--runtime all` covers shared Agent Skills plus Claude by
-installing to `~/.agents/skills` and `~/.claude/skills`; it does not create a
-duplicate Codex-specific copy because Codex discovers the shared root. Existing
-Codex-specific installs are left intact; choose `--runtime codex` to manage one
-explicitly.
-
-The command reports each physical target with its runtime coverage,
-availability, management state, planned action, and apply outcome. It stages and
-atomically replaces a managed skill directory, preserves executable helper
-scripts, rewrites bundled helper paths for the target runtime, and writes
-`.toastty-skill.json` with a content hash.
-Existing skill-directory symlinks are reported as discoverable but externally
-managed and are never modified. If an owned install has local edits, lacks
-Toastty metadata, contains nested symlinks, or otherwise conflicts, `--apply`
-refuses to overwrite it and reports next steps.
 
 ### `diagnostics collect`
 

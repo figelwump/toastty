@@ -3,11 +3,9 @@ import Foundation
 import XCTest
 
 final class SetupResourcesDriftTests: XCTestCase {
-    func testStarterSkillSetMatchesM1Bundle() throws {
-        let starterSkillsURL = setupResourcesURL()
-            .appendingPathComponent("starter-skills", isDirectory: true)
+    func testShippedSkillSetMatchesSharedCatalog() throws {
         let entries = try FileManager.default.contentsOfDirectory(
-            at: starterSkillsURL,
+            at: shippedSkillsURL(),
             includingPropertiesForKeys: nil
         )
         let names = entries
@@ -17,11 +15,13 @@ final class SetupResourcesDriftTests: XCTestCase {
 
         XCTAssertEqual(
             names,
-            [
-                "toastty-capabilities",
-                "toastty-open-markdown",
-                "toastty-scratchpad",
-            ]
+            ToasttyAgentPluginBundle.skills.map(\.name).sorted()
+        )
+        XCTAssertEqual(ToasttyAgentPluginBundle.skills.count, 4)
+        XCTAssertTrue(
+            (try? regularFiles(
+                under: setupResourcesURL().appendingPathComponent("starter-skills", isDirectory: true)
+            ))?.isEmpty ?? true
         )
     }
 
@@ -39,8 +39,7 @@ final class SetupResourcesDriftTests: XCTestCase {
     }
 
     func testSkillScriptReferencesStayInsideTheirSkillDirectory() throws {
-        let starterSkillsURL = setupResourcesURL()
-            .appendingPathComponent("starter-skills", isDirectory: true)
+        let starterSkillsURL = shippedSkillsURL()
         let regex = try NSRegularExpression(
             pattern: #"(?:~/)?\.agents/skills/([A-Za-z0-9_-]+)/scripts/([A-Za-z0-9._-]+)"#
         )
@@ -74,8 +73,7 @@ final class SetupResourcesDriftTests: XCTestCase {
 
     func testCapabilitiesSkillMentionsOnlyKnownActionAndQueryIDs() throws {
         let content = try String(
-            contentsOf: setupResourcesURL()
-                .appendingPathComponent("starter-skills", isDirectory: true)
+            contentsOf: shippedSkillsURL()
                 .appendingPathComponent("toastty-capabilities", isDirectory: true)
                 .appendingPathComponent("SKILL.md", isDirectory: false),
             encoding: .utf8
@@ -98,8 +96,7 @@ final class SetupResourcesDriftTests: XCTestCase {
 
     func testCapabilitiesSkillDocumentsBoundedChildLaunchHandoff() throws {
         let content = try String(
-            contentsOf: setupResourcesURL()
-                .appendingPathComponent("starter-skills", isDirectory: true)
+            contentsOf: shippedSkillsURL()
                 .appendingPathComponent("toastty-capabilities", isDirectory: true)
                 .appendingPathComponent("SKILL.md", isDirectory: false),
             encoding: .utf8
@@ -192,12 +189,13 @@ final class SetupResourcesDriftTests: XCTestCase {
         for command in [
             "toastty setup guide",
             "toastty setup skills list",
-            "toastty setup print-skill",
             "toastty setup install-shell-integration",
             "toastty setup install-hooks",
-            "toastty setup install-skill",
         ] {
             XCTAssertTrue(guide.contains(command), "Guide is missing \(command)")
+        }
+        for retiredCommand in ["toastty setup print-skill", "toastty setup install-skill"] {
+            XCTAssertFalse(guide.contains(retiredCommand), "Guide still mentions \(retiredCommand)")
         }
     }
 
@@ -218,8 +216,10 @@ final class SetupResourcesDriftTests: XCTestCase {
             "Terminal profiles as optional manual setup",
             "fresh Toastty pane",
             "--resume",
-            "Install `toastty-capabilities` first",
-            "one explicit OK before `--apply`",
+            "No skills installation is required",
+            "~/.toastty/skills/<name>/SKILL.md",
+            "Running sessions keep the skills they launched with",
+            "Wait for an explicit OK before every `--apply`",
             "Scratchpad: managed sessions only",
             "panel.create.local-document",
             "panel.create.browser",
@@ -237,7 +237,6 @@ final class SetupResourcesDriftTests: XCTestCase {
         )
 
         for supersededText in [
-            "Worktree-Create",
             "toastty-orchestrator-builder",
             "interview-and-tailor",
             "interview-and-tailor matrix",
@@ -261,6 +260,11 @@ final class SetupResourcesDriftTests: XCTestCase {
     private func setupResourcesURL() -> URL {
         repoRootURL()
             .appendingPathComponent("Sources/App/Resources/Setup", isDirectory: true)
+    }
+
+    private func shippedSkillsURL() -> URL {
+        repoRootURL()
+            .appendingPathComponent("plugins/toastty/skills", isDirectory: true)
     }
 
     private func repoRootURL() -> URL {

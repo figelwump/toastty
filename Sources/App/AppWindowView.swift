@@ -350,6 +350,9 @@ struct AppWindowView: View {
         switch action {
         case .openAgentProfiles:
             result = openAgentProfilesConfigurationResult()
+        case .openSkillsManagement:
+            showsSkillsManagementSheet = true
+            result = .success(())
         case .openShortcutReference:
             result = openKeyboardShortcutsReferenceResult()
         }

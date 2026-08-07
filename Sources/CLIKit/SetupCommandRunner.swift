@@ -9,28 +9,12 @@ enum SetupGuideFormat: String, CaseIterable, Codable, Equatable {
 enum SetupCommand: Equatable {
     case guide(format: SetupGuideFormat)
     case skillsList
-    case printSkill(name: String)
     case installShellIntegration(shell: ProfileShellIntegrationShell?, apply: Bool)
     case installHooks(agent: AgentKind, apply: Bool)
-    case installSkill(name: String, runtime: SetupSkillRuntime, apply: Bool)
-}
-
-enum StarterSkill: String, CaseIterable, Codable, Equatable {
-    case toasttyCapabilities = "toastty-capabilities"
-    case toasttyScratchpad = "toastty-scratchpad"
-    case toasttyOpenMarkdown = "toastty-open-markdown"
-}
-
-enum SetupSkillRuntime: String, CaseIterable, Codable, Equatable {
-    case agents
-    case claude
-    case codex
-    case all
 }
 
 struct SetupResourceStore {
     let setupDirectoryURL: URL
-    var fileManager: FileManager = .default
 
     static func live(environment: [String: String]) -> Self {
         SetupResourceStore(
@@ -50,29 +34,6 @@ struct SetupResourceStore {
         case .text:
             return SetupGuideTextRenderer.render(markdown: markdown)
         }
-    }
-
-    func listSkillNames() throws -> [String] {
-        let starterSkillsURL = setupDirectoryURL.appendingPathComponent("starter-skills", isDirectory: true)
-        return try StarterSkill.allCases.map { skill in
-            let skillURL = starterSkillsURL.appendingPathComponent(skill.rawValue, isDirectory: true)
-            let skillMarkdownURL = skillURL.appendingPathComponent("SKILL.md", isDirectory: false)
-            guard fileManager.fileExists(atPath: skillMarkdownURL.path) else {
-                throw ToasttyCLIError.runtime("missing bundled starter skill: \(skill.rawValue)")
-            }
-            return skill.rawValue
-        }
-    }
-
-    func skillMarkdown(name: String) throws -> String {
-        guard StarterSkill(rawValue: name) != nil else {
-            throw ToasttyCLIError.usage("unknown starter skill: \(name)")
-        }
-        let skillMarkdownURL = setupDirectoryURL
-            .appendingPathComponent("starter-skills", isDirectory: true)
-            .appendingPathComponent(name, isDirectory: true)
-            .appendingPathComponent("SKILL.md", isDirectory: false)
-        return try readUTF8(skillMarkdownURL)
     }
 
     private func readUTF8(_ url: URL) throws -> String {
@@ -95,7 +56,6 @@ enum SetupCommandRunner {
                 command: command,
                 jsonOutput: jsonOutput,
                 environment: environment,
-                store: .live(environment: environment)
             )
             writeStdout(execution.output)
             return execution.exitCode
@@ -104,7 +64,8 @@ enum SetupCommandRunner {
         let output = try render(
             command: command,
             jsonOutput: jsonOutput,
-            store: .live(environment: environment)
+            store: .live(environment: environment),
+            environment: environment
         )
         writeStdout(output)
         return 0
@@ -113,7 +74,9 @@ enum SetupCommandRunner {
     static func render(
         command: SetupCommand,
         jsonOutput: Bool,
-        store: SetupResourceStore
+        store: SetupResourceStore,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
     ) throws -> String {
         switch command {
         case .guide(let format):
@@ -124,20 +87,16 @@ enum SetupCommandRunner {
             return content
 
         case .skillsList:
-            let skills = try store.listSkillNames()
+            let inventory = SetupSkillsInventory(
+                environment: environment,
+                fileManager: fileManager
+            )
             if jsonOutput {
-                return try renderJSON(SkillsListPayload(skills: skills))
+                return try renderJSON(inventory.payload)
             }
-            return skills.joined(separator: "\n")
+            return inventory.renderText()
 
-        case .printSkill(let name):
-            let content = try store.skillMarkdown(name: name)
-            if jsonOutput {
-                return try renderJSON(SkillPayload(name: name, content: content))
-            }
-            return content
-
-        case .installShellIntegration, .installHooks, .installSkill:
+        case .installShellIntegration, .installHooks:
             throw ToasttyCLIError.runtime("setup installer commands require a launch environment")
         }
     }
@@ -161,9 +120,9 @@ enum SetupCommandRunner {
 private extension SetupCommand {
     var isInstallerCommand: Bool {
         switch self {
-        case .installShellIntegration, .installHooks, .installSkill:
+        case .installShellIntegration, .installHooks:
             return true
-        case .guide, .skillsList, .printSkill:
+        case .guide, .skillsList:
             return false
         }
     }
@@ -200,11 +159,114 @@ private struct GuidePayload: Codable {
     var content: String
 }
 
-private struct SkillsListPayload: Codable {
-    var skills: [String]
+private enum SetupSkillSource: String, Codable {
+    case shipped
+    case user
 }
 
-private struct SkillPayload: Codable {
-    var name: String
-    var content: String
+private enum SetupSkillInclusion: String, Codable {
+    case included
+    case excluded
+}
+
+private struct SetupSkillListItem: Codable {
+    let name: String
+    let source: SetupSkillSource
+    let inclusion: SetupSkillInclusion
+    let summary: String?
+    let diagnosticCode: String?
+    let diagnosticMessage: String?
+}
+
+private struct SetupSkillsListPayload: Codable {
+    let schemaVersion: Int
+    let userSkillsRoot: String
+    let skills: [SetupSkillListItem]
+    let globalDiagnostics: [String]
+}
+
+private struct SetupSkillsInventory {
+    let payload: SetupSkillsListPayload
+
+    init(environment: [String: String], fileManager: FileManager) {
+        let runtimePaths = ToasttyRuntimePaths.resolve(environment: environment)
+        let rootURL = runtimePaths.userSkillsDirectoryURL
+        let state = ToasttyUserSkillValidator(fileManager: fileManager)
+            .scan(userSkillsDirectoryURL: rootURL)
+            .state
+        let shipped = ToasttyShippedSkillCatalog.skills.map { skill in
+            SetupSkillListItem(
+                name: skill.name,
+                source: .shipped,
+                inclusion: .included,
+                summary: skill.summary,
+                diagnosticCode: nil,
+                diagnosticMessage: nil
+            )
+        }
+        let user = state.packages.map { package in
+            switch package.status {
+            case .accepted:
+                return SetupSkillListItem(
+                    name: package.name,
+                    source: .user,
+                    inclusion: .included,
+                    summary: nil,
+                    diagnosticCode: nil,
+                    diagnosticMessage: nil
+                )
+            case .excluded(let diagnostic):
+                return SetupSkillListItem(
+                    name: package.name,
+                    source: .user,
+                    inclusion: .excluded,
+                    summary: nil,
+                    diagnosticCode: diagnostic.code,
+                    diagnosticMessage: diagnostic.displayMessage
+                )
+            }
+        }
+        payload = SetupSkillsListPayload(
+            schemaVersion: 1,
+            userSkillsRoot: rootURL.path,
+            skills: shipped + user,
+            globalDiagnostics: state.globalDiagnostics.map(\.code)
+        )
+    }
+
+    func renderText() -> String {
+        let shipped = payload.skills.filter { $0.source == .shipped }
+        let includedUser = payload.skills.filter {
+            $0.source == .user && $0.inclusion == .included
+        }
+        let excludedUser = payload.skills.filter {
+            $0.source == .user && $0.inclusion == .excluded
+        }
+
+        var lines = [
+            "Skills available to new supported managed launches",
+            "",
+            "Shipped skills:",
+        ]
+        lines.append(contentsOf: shipped.map { item in
+            "- toastty:\(item.name) — \(item.summary ?? "")"
+        })
+        lines.append("")
+        lines.append("User skills (\(payload.userSkillsRoot)):")
+        if includedUser.isEmpty {
+            lines.append("- None found")
+        } else {
+            lines.append(contentsOf: includedUser.map { "- \($0.name)" })
+        }
+        if excludedUser.isEmpty == false {
+            lines.append("")
+            lines.append("Excluded user packages:")
+            lines.append(contentsOf: excludedUser.map { item in
+                "- \(item.name): \(item.diagnosticMessage ?? "Excluded")"
+            })
+        }
+        lines.append("")
+        lines.append("Running sessions keep the skills they launched with. Unsupported or failed managed delivery proceeds without Toastty skills.")
+        return lines.joined(separator: "\n")
+    }
 }

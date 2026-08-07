@@ -1,6 +1,6 @@
 # Toastty Agent Setup Guide
 
-This guide is meant to be read by an agent running in a Toastty pane. Narrate each step, dry-run every setup command first, show the planned writes, and wait for an explicit OK before rerunning anything with `--apply`.
+This guide is meant to be read by an agent running in a Toastty pane. Narrate each step, dry-run every setup installer first, show the planned writes, and wait for an explicit OK before rerunning anything with `--apply`.
 
 If the user cancels, stop cleanly. Completed steps stay valid; do not undo work unless the user asks.
 
@@ -21,17 +21,15 @@ Tell the user what will happen:
 - Shell integration comes first because it keeps Toastty's launcher shim ahead of later shell startup changes.
 - You will dry-run, show the plan, then ask before writing files.
 - Codex may need global status hooks; other supported managed agents get status integration at launch.
-- Skills are installed as pristine starters. Tailoring can happen later, organically.
+- Toastty makes four shipped skills available automatically to new supported managed agent launches. User-authored skills can be added under `~/.toastty/skills`.
 
 ## Available Setup Commands In This Build
 
 - `toastty setup guide` prints this guide as readable text.
 - `toastty setup guide --format md` prints this guide as Markdown.
-- `toastty setup skills list` lists starter skills bundled with Toastty.
-- `toastty setup print-skill <name>` previews a bundled skill's `SKILL.md`.
+- `toastty setup skills list` lists the shipped and user-authored skills available to new supported managed launches, including diagnostics for excluded user packages.
 - `toastty setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]` installs shell integration.
 - `toastty setup install-hooks --agent codex [--dry-run | --apply]` installs Codex status hooks.
-- `toastty setup install-skill <name> [--runtime agents|claude|codex|all] [--dry-run | --apply]` installs bundled starter skills.
 
 Prefer `"$TOASTTY_CLI_PATH"` over a shell-resolved `toastty`; it targets the running app that launched the pane. Add `--json` when structured output is more useful than text.
 
@@ -59,35 +57,19 @@ Offer Terminal profiles as optional manual setup. Ask whether the user wants qui
 
 Confirm that setup is live by launching an agent in a fresh Toastty pane. Supported agents can usually use their own resume option, such as `--resume`, to continue the conversation after the fresh launch. A tracked agent should appear in Toastty with live status.
 
-## Phase 2: Install Starter Skills
+## Phase 2: Review Automatic Skills
 
-List the bundled skills and preview the centerpiece:
+No skills installation is required. List what Toastty will make available to new supported managed Codex, Claude Code, OpenCode, MiMo Code, and Pi launches:
 
 ```bash
 "$TOASTTY_CLI_PATH" setup skills list
-"$TOASTTY_CLI_PATH" setup print-skill toastty-capabilities
 ```
 
-Install `toastty-capabilities` first into the runtime or runtimes the user chooses. Dry-run the selected install, show files and conflicts, ask for approval, then apply:
+The shipped set is `toastty-capabilities`, `toastty-open-markdown`, `toastty-scratchpad`, and `worktree-create`. Toastty delivers these only for the new managed process and does not write them into `~/.codex/skills`, `~/.claude/skills`, or `~/.agents/skills`.
 
-```bash
-"$TOASTTY_CLI_PATH" setup install-skill toastty-capabilities --runtime all --dry-run
-```
+To add a user skill, create `~/.toastty/skills/<name>/SKILL.md` with `name` and `description` YAML frontmatter, then rerun `setup skills list`. Fix any exclusion diagnostic before launching a new agent. `Toastty > Manage Toastty Skills…` offers the same inventory plus folder and rescan controls.
 
-Use `agents` for the preferred shared `~/.agents/skills` target; it is the default and is discovered by Codex and other Agent Skills-compatible runtimes. Use `claude` for `~/.claude/skills` and `codex` only when the user specifically wants a Codex-only copy under `~/.codex/skills`. `all` installs to the shared Agents target plus Claude without creating a duplicate Codex-specific copy.
-
-Read the installer's `Skill targets` section instead of inferring runtime availability from a path. A target reported as externally managed is already discoverable through a symlink and must remain untouched. After `--apply`, verify that every requested runtime is represented by an available target and has an apply outcome of `applied` or `notNeeded` before claiming installation succeeded.
-
-When you ask for the OK to apply, restate in one or two plain sentences what the skill does and why the user would want it — a new user will not remember the list from earlier. For `toastty-capabilities`, say something like: "This skill teaches agents like me how to drive Toastty itself — creating workspaces and panels, launching agents, showing visual output, and notifying you — so agents can automate your Toastty workflows for you."
-
-After approval, rerun with `--apply`.
-
-Offer these optional convenience skills after capabilities is handled:
-
-- `toastty-scratchpad`: publish visual HTML artifacts into the current Toastty workspace.
-- `toastty-open-markdown`: open local Markdown files as Toastty document panels.
-
-Install each chosen skill the same way: one `--dry-run`, one visible plan, a one-sentence reminder of what the skill does, one explicit OK before `--apply`. Do not build a custom skill matrix during setup; install the pristine starter and let the user tailor it later if a real workflow emerges.
+Running sessions keep the skills they launched with; editing or adding a skill takes effect on the next supported managed launch. Unsupported launch shapes and provisioning failures deliberately proceed without Toastty skills. If old unnamespaced Toastty copies appear alongside the `toastty:` skills, remove those separately installed copies manually; Toastty never inspects or changes global skill folders.
 
 ## Phase 3: Optional Tour
 
@@ -112,7 +94,7 @@ Use action descriptors for current parameters. Do not copy a stale catalog into 
 
 - Narrate what you are about to do before doing it.
 - Show planned file writes before applying setup changes.
-- Pass `--dry-run` explicitly on install commands when previewing, even though it is the default.
+- Pass `--dry-run` explicitly on setup installer commands when previewing, even though it is the default.
 - Wait for an explicit OK before every `--apply`.
 - Prefer `"$TOASTTY_CLI_PATH"` for all Toastty commands.
 - Treat `scope_denied` as a cooperative workspace boundary, not an error to work around.

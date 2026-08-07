@@ -328,7 +328,9 @@ Codex, Claude Code, OpenCode, MiMo Code, and Pi sessions.
   a folder depth of 8, with `SKILL.md` itself capped at 256 KB. Catalog-wide
   caps are 32 accepted packages, 10 MB, and 500 files; breaching a catalog-wide
   cap excludes all user packages until the total shrinks. Excluded packages
-  never affect the shipped Toastty skills.
+  never affect the shipped Toastty skills. Run
+  `"$TOASTTY_CLI_PATH" setup skills list` for the same read-only inventory and
+  exclusion diagnostics shown in the management sheet.
 - **Delivery**: accepted packages are snapshotted into an immutable,
   content-addressed `toastty-user` plugin under `~/.toastty/agent-plugins/user/`
   (version `0.1.0-<hex12>`). Managed Codex launches receive it through the same

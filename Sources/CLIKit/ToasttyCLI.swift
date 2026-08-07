@@ -674,10 +674,8 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
       toastty [--json] setup guide [--format text|md]
       toastty [--json] setup skills list
-      toastty [--json] setup print-skill <name>
       toastty [--json] setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
       toastty [--json] setup install-hooks --agent <id> [--dry-run | --apply]
-      toastty [--json] setup install-skill <name> [--runtime agents|claude|codex|all] [--dry-run | --apply]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session background-activity start|finish --session <id> --activity <id> --kind child_agent|subagent [--panel <id>] [--display-name <text>] [--command <text>] [--pid <pid>]
@@ -788,13 +786,6 @@ public enum ToasttyCLI {
                 throw ToasttyCLIError.usage("unknown setup skills subcommand: \(skillsSubcommand)\n\n\(usage)")
             }
 
-        case "print-skill":
-            let parsed = try parseCommandArguments(remainingArguments, valueOptions: [])
-            guard parsed.positionals.count == 1 else {
-                throw ToasttyCLIError.usage("setup print-skill requires <name>\n\n\(usage)")
-            }
-            return .setup(.printSkill(name: parsed.positionals[0]))
-
         case "install-shell-integration":
             let parsed = try parseCommandArguments(
                 remainingArguments,
@@ -829,27 +820,6 @@ public enum ToasttyCLI {
                 .installHooks(
                     agent: agent,
                     apply: try parseSetupApplyFlag(parsed, subcommand: "install-hooks")
-                )
-            )
-
-        case "install-skill":
-            let parsed = try parseCommandArguments(
-                remainingArguments,
-                valueOptions: ["--runtime"],
-                flagOptions: ["--dry-run", "--apply"]
-            )
-            guard parsed.positionals.count == 1 else {
-                throw ToasttyCLIError.usage("setup install-skill requires <name>\n\n\(usage)")
-            }
-            let runtimeValue = parsed.singleValue("--runtime") ?? SetupSkillRuntime.agents.rawValue
-            guard let runtime = SetupSkillRuntime(rawValue: runtimeValue) else {
-                throw ToasttyCLIError.usage("--runtime must be one of: agents, claude, codex, all")
-            }
-            return .setup(
-                .installSkill(
-                    name: parsed.positionals[0],
-                    runtime: runtime,
-                    apply: try parseSetupApplyFlag(parsed, subcommand: "install-skill")
                 )
             )
 

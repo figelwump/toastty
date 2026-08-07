@@ -66,6 +66,14 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         )
         XCTAssertEqual(
             GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://action/open-skills-management")),
+                sourceFrameURL: trustedSourceURL,
+                sourceFrameIsMainFrame: true
+            ),
+            .dispatch(.openSkillsManagement)
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
                 for: try XCTUnwrap(URL(string: "toastty://action/delete-everything")),
                 sourceFrameURL: trustedSourceURL,
                 sourceFrameIsMainFrame: true

@@ -4,7 +4,7 @@ import Foundation
 /// Typed reason a user skill package (or the whole catalog) was excluded.
 /// Display messages never include skill file contents; callers pair them with
 /// the package name or path only.
-enum UserSkillDiagnostic: String, Equatable, Sendable, CaseIterable {
+public enum UserSkillDiagnostic: String, Equatable, Sendable, CaseIterable {
     case invalidName
     case nameMismatch
     case duplicateName
@@ -18,9 +18,9 @@ enum UserSkillDiagnostic: String, Equatable, Sendable, CaseIterable {
     case missingSkillFile
     case invalidFrontmatter
 
-    var code: String { rawValue }
+    public var code: String { rawValue }
 
-    var displayMessage: String {
+    public var displayMessage: String {
         switch self {
         case .invalidName:
             return "The skill name must start with a lowercase letter or digit and use only lowercase letters, digits, and hyphens (64 characters max)."
@@ -50,61 +50,77 @@ enum UserSkillDiagnostic: String, Equatable, Sendable, CaseIterable {
     }
 }
 
-struct UserSkillPackage: Equatable, Sendable {
-    enum Status: Equatable, Sendable {
+public struct UserSkillPackage: Equatable, Sendable {
+    public enum Status: Equatable, Sendable {
         case accepted
         case excluded(UserSkillDiagnostic)
     }
 
     /// Canonical (NFC-normalized) package name derived from the directory
     /// basename.
-    let name: String
-    let sourceURL: URL
-    let status: Status
+    public let name: String
+    public let sourceURL: URL
+    public let status: Status
 
-    var isAccepted: Bool { status == .accepted }
+    public var isAccepted: Bool { status == .accepted }
+
+    public init(name: String, sourceURL: URL, status: Status) {
+        self.name = name
+        self.sourceURL = sourceURL
+        self.status = status
+    }
 }
 
-struct UserSkillCatalogState: Equatable, Sendable {
-    let packages: [UserSkillPackage]
-    let globalDiagnostics: [UserSkillDiagnostic]
+public struct UserSkillCatalogState: Equatable, Sendable {
+    public let packages: [UserSkillPackage]
+    public let globalDiagnostics: [UserSkillDiagnostic]
     /// Cheap change-detection roll-up over the scanned sources (sorted names
     /// plus per-package file-count/size/mtime aggregates). Not a content
     /// digest.
-    let sourceFingerprint: String
+    public let sourceFingerprint: String
 
-    var acceptedPackages: [UserSkillPackage] {
+    public var acceptedPackages: [UserSkillPackage] {
         packages.filter(\.isAccepted)
+    }
+
+    public init(
+        packages: [UserSkillPackage],
+        globalDiagnostics: [UserSkillDiagnostic],
+        sourceFingerprint: String
+    ) {
+        self.packages = packages
+        self.globalDiagnostics = globalDiagnostics
+        self.sourceFingerprint = sourceFingerprint
     }
 }
 
 /// Scan output consumed by the snapshot builder: the public state plus the
 /// exact per-file payload inventory of every accepted package.
-struct ToasttyUserSkillScanResult {
-    struct PayloadFile: Equatable, Sendable {
-        let relativePath: String
-        let sourceURL: URL
-        let isExecutable: Bool
-        let size: Int
+public struct ToasttyUserSkillScanResult {
+    public struct PayloadFile: Equatable, Sendable {
+        public let relativePath: String
+        public let sourceURL: URL
+        public let isExecutable: Bool
+        public let size: Int
     }
 
-    struct PackagePayload: Equatable, Sendable {
+    public struct PackagePayload: Equatable, Sendable {
         /// Canonical NFC name; also the destination directory name, so NFD
         /// source directories produce byte-identical snapshots.
-        let name: String
-        let sourceURL: URL
+        public let name: String
+        public let sourceURL: URL
         /// Sorted by `relativePath`.
-        let files: [PayloadFile]
+        public let files: [PayloadFile]
     }
 
-    let state: UserSkillCatalogState
+    public let state: UserSkillCatalogState
     /// Sorted by package name. Empty whenever a global limit tripped.
-    let acceptedPayloads: [PackagePayload]
+    public let acceptedPayloads: [PackagePayload]
 }
 
 /// Read-only validation of `~/.toastty/skills` (or its runtime-isolated
 /// equivalent). Performs no writes.
-struct ToasttyUserSkillValidator {
+public struct ToasttyUserSkillValidator {
     static let maxNameLength = 64
     static let maxSkillFileBytes = 256 * 1024
     static let maxPackageBytes = 5 * 1024 * 1024
@@ -113,9 +129,13 @@ struct ToasttyUserSkillValidator {
     static let maxAcceptedTotalBytes = 10 * 1024 * 1024
     static let maxAcceptedTotalFiles = 500
 
-    let fileManager: FileManager
+    public let fileManager: FileManager
 
-    func scan(userSkillsDirectoryURL: URL) -> ToasttyUserSkillScanResult {
+    public init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    public func scan(userSkillsDirectoryURL: URL) -> ToasttyUserSkillScanResult {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: userSkillsDirectoryURL.path, isDirectory: &isDirectory),
               isDirectory.boolValue,

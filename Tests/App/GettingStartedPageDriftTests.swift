@@ -10,7 +10,7 @@ final class GettingStartedPageDriftTests: XCTestCase {
         for command in [
             GettingStartedContent.shellIntegrationCommand,
             GettingStartedContent.codexStatusHooksCommand,
-            GettingStartedContent.starterSkillCommand,
+            GettingStartedContent.skillsListCommand,
         ] {
             XCTAssertTrue(pageSource.contains(htmlEscaped(command)), "Page is missing \(command)")
         }
@@ -21,6 +21,10 @@ final class GettingStartedPageDriftTests: XCTestCase {
 
         XCTAssertTrue(pageSource.contains(GettingStartedContent.shellIntegrationManualRowBody))
         XCTAssertTrue(pageSource.contains(GettingStartedContent.shellIntegrationRestartNotice))
+        XCTAssertTrue(pageSource.contains("toastty://action/open-skills-management"))
+        XCTAssertTrue(pageSource.contains("~/.toastty/skills"))
+        XCTAssertFalse(pageSource.contains("setup print-skill"))
+        XCTAssertFalse(pageSource.contains("setup install-skill"))
     }
 
     func testPageHasRequiredAnchorsAndSelfContainedContentPolicy() throws {
