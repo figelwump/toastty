@@ -4,7 +4,7 @@ Toastty's shell integration emits `OSC 2` title sequences so panel headers show 
 
 On restore, Toastty imports that pane's journal into the shell's in-memory history. That means `Up` starts with the last commands from that pane, while reverse-search and normal history traversal can still see the broader shared shell history.
 
-The easiest way to install is either `Toastty > Install Shell Integration…` or the top-bar `Get Started…` flow in Toastty. Both write the snippet and source it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
+The easiest automatic install is `Toastty > Install Shell Integration…`, which writes the snippet and sources it from your shell init file. The top-bar `Get Started…` button opens the Getting Started panel, where you can copy a CLI command for manual setup. This page covers manual setup for users who manage their own dotfiles.
 
 For automatic installs, Toastty first prefers the live shell executable path
 for the current Toastty terminal window when it resolves to `zsh`, `bash`, or

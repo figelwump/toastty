@@ -219,26 +219,26 @@ recommended first candidate is:
 
 Why this is the best v1 candidate:
 
-- It exercises a real multi-step modal sheet inside Toastty rather than a
+- It exercises a real multi-section browser panel inside Toastty rather than a
   shortcut-injection path that deterministic smoke automation already targets.
 - It is grounded in an existing UI flow: the top-bar `Get Started…` path and
-  the Agent onboarding sheet.
-- It avoids real shell dotfile writes and avoids secrets if the flow stops on
-  the `Keyboard Shortcuts` step instead of performing shell integration.
+  the Getting Started browser panel.
+- It avoids real shell dotfile writes and avoids secrets if the flow stops at
+  the page's `#shortcuts` section instead of performing shell integration.
 
 Proposed user journey:
 
 1. Launch Toastty in an isolated runtime home on the Mini.
 2. Click the top-bar `Get Started…` entry point.
-3. Navigate to the `Keyboard Shortcuts` step in the onboarding sheet.
-4. End with the sheet still open on that step.
+3. Navigate to the `#shortcuts` section in the Getting Started browser panel.
+4. End with that right-panel browser tab still visible.
 
 Deterministic assertion for v1:
 
 - The run should not self-grade based only on the model's summary.
 - Add or reuse a narrow app-side probe that records whether the
-  `sheet.agent.get-started` sheet is visible and whether the active step is
-  `keyboardShortcuts`.
+  Getting Started browser tab is visible and whether its current URL has the
+  `#shortcuts` fragment.
 - Store that probe output in `remote/assertions.json` and use it to decide
   pass/fail.
 
@@ -253,10 +253,10 @@ guess the contract:
 
 ```text
 Test ID: agent-get-started-keyboard-shortcuts
-Intent: Navigate the Agent onboarding sheet to the Keyboard Shortcuts step.
+Intent: Navigate the Getting Started browser panel to the Keyboard Shortcuts section.
 Launch Preconditions: Fresh isolated runtime home; no shell integration writes.
 Prompt Instructions: <plain-language Computer Use prompt>
-Expected End State: Agent Get Started sheet is visible on the Keyboard Shortcuts step.
+Expected End State: The Getting Started browser panel is visible at the Keyboard Shortcuts section.
 Assertions:
 - assertion ID + machine-check source
 Timeout Seconds: 300
@@ -334,7 +334,7 @@ understand the full remote session.
 ```json
 {"ts":"2026-04-20T10:00:05-07:00","type":"model_message","text":"Opening Toastty and looking for Get Started"}
 {"ts":"2026-04-20T10:00:12-07:00","type":"computer_use_action","action":"click","target":"Get Started… button"}
-{"ts":"2026-04-20T10:00:20-07:00","type":"computer_use_observation","text":"Agent Get Started sheet is visible"}
+{"ts":"2026-04-20T10:00:20-07:00","type":"computer_use_observation","text":"The Getting Started browser panel is visible"}
 {"ts":"2026-04-20T10:02:18-07:00","type":"verification","assertionID":"agent-get-started-step","passed":true}
 ```
 
@@ -359,7 +359,7 @@ future tooling.
   environment rather than from the spec text.
 - The first spec should avoid secrets entirely.
 - The first spec should also avoid user-dotfile mutation, which is another
-  reason to stop the onboarding flow at the `Keyboard Shortcuts` step.
+  reason to stop the Getting Started flow at the `Keyboard Shortcuts` section.
 
 ## non-goals for v1
 

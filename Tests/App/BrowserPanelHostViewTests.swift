@@ -257,7 +257,7 @@ final class BrowserPanelHostViewTests: XCTestCase {
         let webView = try XCTUnwrap(firstContainer.subviews.first as? WKWebView)
 
         runtime.detachHost(attachment: firstAttachment)
-        try await Task.sleep(nanoseconds: 50_000_000)
+        try await waitForDetachment(of: webView, from: firstContainer)
 
         XCTAssertNil(webView.superview)
         XCTAssertTrue(firstContainer.subviews.isEmpty)
@@ -275,6 +275,15 @@ final class BrowserPanelHostViewTests: XCTestCase {
             ObjectIdentifier(try XCTUnwrap(webView.uiDelegate as AnyObject?)),
             ObjectIdentifier(runtime)
         )
+    }
+
+    private func waitForDetachment(of webView: WKWebView, from container: NSView) async throws {
+        let deadline = Date().addingTimeInterval(2)
+
+        while webView.superview != nil || !container.subviews.isEmpty {
+            guard Date() < deadline else { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 }
 

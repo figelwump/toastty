@@ -69,6 +69,7 @@ final class AppStore: ObservableObject {
     /// once. It originally tracked agent launches, but process-watch rows
     /// should opt into the same expanded session-status treatment.
     @Published private(set) var hasEverLaunchedAgent: Bool
+    @Published private(set) var hasAutoOpenedGettingStartedPanelThisLaunch = false
     @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
     @Published private(set) var localDocumentRoutingPreferences = LocalDocumentRoutingPreferences()
@@ -424,6 +425,55 @@ final class AppStore: ObservableObject {
             panelID: createdPanelID
         )
         return true
+    }
+
+    @discardableResult
+    func openGettingStartedPanel(workspaceID: UUID, anchor: String? = nil) -> Bool {
+        guard let workspace = state.workspacesByID[workspaceID] else {
+            return false
+        }
+        let requestedAnchor = Self.normalizedGettingStartedAnchor(anchor)
+
+        if let tab = workspace.rightAuxPanel.orderedTabs.first(where: Self.isGettingStartedPanel) {
+            var didNavigateToAnchor = true
+            if let requestedAnchor,
+               case .web(let webState) = tab.panelState {
+                let anchoredURL = Self.gettingStartedPanelURL(anchor: requestedAnchor)
+                if webState.restorableURL != anchoredURL {
+                    didNavigateToAnchor = send(
+                        .updateWebPanelMetadata(
+                            panelID: tab.panelID,
+                            title: webState.title,
+                            url: anchoredURL
+                        )
+                    )
+                }
+            }
+
+            _ = send(
+                .selectRightAuxPanelTab(
+                    workspaceID: workspaceID,
+                    tabID: tab.id,
+                    focus: true
+                )
+            )
+            guard let selectedWorkspace = state.workspacesByID[workspaceID] else {
+                return false
+            }
+            let selectedPanel = selectedWorkspace.rightAuxPanel
+            return didNavigateToAnchor &&
+                selectedPanel.activeTabID == tab.id &&
+                selectedPanel.focusedPanelID == tab.panelID &&
+                selectedPanel.isVisible
+        }
+
+        return createBrowserPanel(
+            workspaceID: workspaceID,
+            request: BrowserPanelCreateRequest(
+                initialURL: Self.gettingStartedPanelURL(anchor: requestedAnchor),
+                placementOverride: .rightPanel
+            )
+        )
     }
 
     @discardableResult
@@ -1640,6 +1690,14 @@ final class AppStore: ObservableObject {
         recordSessionStatusSidebarExpansionEligibility()
     }
 
+    @discardableResult
+    func autoOpenGettingStartedPanelIfNeeded(workspaceID: UUID) -> Bool {
+        guard hasAutoOpenedGettingStartedPanelThisLaunch == false else { return false }
+        guard openGettingStartedPanel(workspaceID: workspaceID) else { return false }
+        hasAutoOpenedGettingStartedPanelThisLaunch = true
+        return true
+    }
+
     func setAskBeforeQuitting(_ askBeforeQuitting: Bool) {
         guard self.askBeforeQuitting != askBeforeQuitting else { return }
         self.askBeforeQuitting = askBeforeQuitting
@@ -1931,6 +1989,42 @@ final class AppStore: ObservableObject {
             tabID: tabID,
             panelID: panelID
         )
+    }
+
+    private static func isGettingStartedPanel(_ tab: RightAuxPanelTabState) -> Bool {
+        guard case .web(let webState) = tab.panelState,
+              webState.definition == .browser else {
+            return false
+        }
+
+        // `currentURL` takes precedence so a tab navigated away from the page
+        // is not repurposed when the user opens Getting Started again.
+        return isGettingStartedURL(webState.currentURL ?? webState.initialURL)
+    }
+
+    private static func isGettingStartedURL(_ value: String?) -> Bool {
+        guard let value,
+              let url = URL(string: value),
+              url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
+              url.host?.caseInsensitiveCompare("getting-started") == .orderedSame else {
+            return false
+        }
+        return true
+    }
+
+    private static func gettingStartedPanelURL(anchor: String?) -> String {
+        guard let anchor else {
+            return "toastty://getting-started/"
+        }
+        return "toastty://getting-started/#\(anchor)"
+    }
+
+    private static func normalizedGettingStartedAnchor(_ anchor: String?) -> String? {
+        guard let anchor = anchor?.trimmingCharacters(in: .whitespacesAndNewlines),
+              anchor.isEmpty == false else {
+            return nil
+        }
+        return anchor
     }
 
     private func createdBrowserPanelID(

@@ -20,6 +20,17 @@ enum ToasttySettingsStore {
         )
     }
 
+    static func hasPersistedSettings(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> Bool {
+        for key in [
+            terminalFontSizeKey,
+            hasEverLaunchedAgentKey,
+            askBeforeQuittingKey,
+        ] where userDefaults.object(forKey: key) != nil {
+            return true
+        }
+        return false
+    }
+
     static func legacyTerminalFontSizePoints(
         userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) -> Double? {

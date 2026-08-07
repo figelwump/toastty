@@ -1,24 +1,24 @@
 import Foundation
 
-enum CodexStatusHookInstallState: String, Equatable, Sendable {
+public enum CodexStatusHookInstallState: String, Equatable, Sendable {
     case notInstalled
     case needsUpdate
     case installed
 }
 
-enum CodexStatusHookSetupRequirement: String, Equatable, Sendable {
+public enum CodexStatusHookSetupRequirement: String, Equatable, Sendable {
     case none
     case automaticMaintenance
     case userSetup
 }
 
-struct CodexStatusHookInstallStatus: Equatable, Sendable {
-    let hooksFileURL: URL
-    let forwarderScriptURL: URL
-    let state: CodexStatusHookInstallState
-    let setupRequirement: CodexStatusHookSetupRequirement
+public struct CodexStatusHookInstallStatus: Equatable, Sendable {
+    public let hooksFileURL: URL
+    public let forwarderScriptURL: URL
+    public let state: CodexStatusHookInstallState
+    public let setupRequirement: CodexStatusHookSetupRequirement
 
-    init(
+    public init(
         hooksFileURL: URL,
         forwarderScriptURL: URL,
         state: CodexStatusHookInstallState,
@@ -30,15 +30,15 @@ struct CodexStatusHookInstallStatus: Equatable, Sendable {
         self.setupRequirement = setupRequirement ?? Self.defaultSetupRequirement(for: state)
     }
 
-    var isInstalled: Bool {
+    public var isInstalled: Bool {
         state == .installed
     }
 
-    var requiresLaunchPreflightWarning: Bool {
+    public var requiresLaunchPreflightWarning: Bool {
         setupRequirement == .userSetup
     }
 
-    var needsAutomaticMaintenance: Bool {
+    public var needsAutomaticMaintenance: Bool {
         setupRequirement == .automaticMaintenance
     }
 
@@ -54,20 +54,30 @@ struct CodexStatusHookInstallStatus: Equatable, Sendable {
     }
 }
 
-struct CodexStatusHookInstallResult: Equatable, Sendable {
-    let status: CodexStatusHookInstallStatus
-    let hooksFileChanged: Bool
-    let forwarderScriptChanged: Bool
+public struct CodexStatusHookInstallResult: Equatable, Sendable {
+    public let status: CodexStatusHookInstallStatus
+    public let hooksFileChanged: Bool
+    public let forwarderScriptChanged: Bool
+
+    public init(
+        status: CodexStatusHookInstallStatus,
+        hooksFileChanged: Bool,
+        forwarderScriptChanged: Bool
+    ) {
+        self.status = status
+        self.hooksFileChanged = hooksFileChanged
+        self.forwarderScriptChanged = forwarderScriptChanged
+    }
 }
 
-enum CodexStatusHookInstallerError: LocalizedError, Equatable {
+public enum CodexStatusHookInstallerError: LocalizedError, Equatable {
     case unsupportedCodexHome(String)
     case hooksFileNotJSONObject(String)
     case unableToReadHooksFile(String)
     case unableToWriteHooksFile(String)
     case unableToWriteForwarder(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .unsupportedCodexHome(let path):
             return "Codex home must be an absolute path: \(path)"
@@ -83,7 +93,7 @@ enum CodexStatusHookInstallerError: LocalizedError, Equatable {
     }
 }
 
-final class CodexStatusHookInstaller {
+public final class CodexStatusHookInstaller {
     private static let installLock = NSLock()
     private static let toasttyStatusMessage = "Toastty Agent Status"
     private static let hookTimeoutSeconds = 5
@@ -108,7 +118,7 @@ final class CodexStatusHookInstaller {
     private let codexHomePath: String?
     private let fileManager: FileManager
 
-    init(
+    public init(
         homeDirectoryPath: String = NSHomeDirectory(),
         codexHomePath: String? = nil,
         fileManager: FileManager = .default
@@ -118,7 +128,7 @@ final class CodexStatusHookInstaller {
         self.fileManager = fileManager
     }
 
-    func installationStatus() throws -> CodexStatusHookInstallStatus {
+    public func installationStatus() throws -> CodexStatusHookInstallStatus {
         let hooksFileURL = try self.hooksFileURL()
         let forwarderScriptURL = forwarderScriptURL()
         let expectedForwarder = Self.forwarderScriptContents(logFilePath: telemetryFailureLogURL().path)
@@ -161,13 +171,13 @@ final class CodexStatusHookInstaller {
         )
     }
 
-    func install() throws -> CodexStatusHookInstallResult {
+    public func install() throws -> CodexStatusHookInstallResult {
         try Self.withInstallLock {
             try installWithLockHeld()
         }
     }
 
-    func performAutomaticMaintenanceIfNeeded() throws -> CodexStatusHookInstallResult? {
+    public func performAutomaticMaintenanceIfNeeded() throws -> CodexStatusHookInstallResult? {
         let status = try installationStatus()
         guard status.needsAutomaticMaintenance else {
             return nil
@@ -213,7 +223,7 @@ final class CodexStatusHookInstaller {
         )
     }
 
-    func uninstall() throws -> CodexStatusHookInstallStatus {
+    public func uninstall() throws -> CodexStatusHookInstallStatus {
         let hooksFileURL = try self.hooksFileURL()
         guard fileManager.fileExists(atPath: hooksFileURL.path) else {
             return try installationStatus()

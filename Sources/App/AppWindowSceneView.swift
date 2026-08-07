@@ -13,11 +13,12 @@ struct AppWindowSceneView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
-    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
-    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let onWindowCloseInitiated: @MainActor () -> Void
+    let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
 
     @State private var fontHUDValue: FontHUDValue?
@@ -175,6 +176,25 @@ struct AppWindowSceneView: View {
         guard windowState != nil else { return }
         _ = store.send(.selectWindow(windowID: windowID))
         scheduleWindowFocusRestore()
+        openGettingStartedPanelIfNeeded()
+    }
+
+    private func openGettingStartedPanelIfNeeded() {
+        guard Self.shouldAutoOpenGettingStartedPanel(
+            allowsAutoPresentation: allowsGettingStartedAutoPresentation,
+            hasAutoOpenedThisLaunch: store.hasAutoOpenedGettingStartedPanelThisLaunch
+        ),
+        let workspaceID = store.selectedWorkspace(in: windowID)?.id else {
+            return
+        }
+        _ = store.autoOpenGettingStartedPanelIfNeeded(workspaceID: workspaceID)
+    }
+
+    static func shouldAutoOpenGettingStartedPanel(
+        allowsAutoPresentation: Bool,
+        hasAutoOpenedThisLaunch: Bool
+    ) -> Bool {
+        allowsAutoPresentation && hasAutoOpenedThisLaunch == false
     }
 
     private func handleWindowFrameChange(_ frame: CGRectCodable) {

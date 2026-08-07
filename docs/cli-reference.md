@@ -44,6 +44,84 @@ agents and scripts.
 The command does not write a diagnostics bundle, upload anything, or attempt
 automatic fixes. It exits non-zero only when at least one check fails.
 
+### `setup guide`
+
+Print the bundled agent-guided Getting Started guide.
+
+```
+toastty setup guide [--format text|md]
+```
+
+The default `text` format is optimized for terminal reading. Use `--format md`
+when another agent or tool should preserve Markdown headings and code fences.
+
+```bash
+"$TOASTTY_CLI_PATH" setup guide
+"$TOASTTY_CLI_PATH" setup guide --format md
+```
+
+### `setup skills list`
+
+List the skills Toastty can make available to new supported managed agent launches.
+
+```
+toastty setup skills list
+```
+
+The read-only inventory includes Toastty's four shipped skills and accepted
+user-authored packages under `~/.toastty/skills`. Invalid user packages appear
+in an excluded section with the same diagnostic used by `Toastty > Manage
+Toastty Skills…`. A missing user-skills directory is an empty catalog and is
+not created by this command.
+
+Running sessions keep the skills they launched with. Supported managed Codex,
+Claude Code, OpenCode, MiMo Code, and Pi launches receive the current inventory
+when they start; unsupported launch shapes or provisioning failures proceed
+without Toastty skills.
+
+```bash
+"$TOASTTY_CLI_PATH" setup skills list
+```
+
+With `--json`, the response is a versioned object containing
+`schemaVersion`, `userSkillsRoot`, `skills`, and `globalDiagnostics`. Every
+skill entry includes `name`, `source` (`shipped` or `user`), and `inclusion`
+(`included` or `excluded`). Shipped entries include `summary`; excluded user
+entries include `diagnosticCode` and `diagnosticMessage`. Exclusions do not
+change the successful exit status. Text output is intended for people and is
+not a stable parsing contract.
+
+### `setup install-shell-integration`
+
+Dry-run or install Toastty's shell integration for zsh, bash, or fish.
+
+```
+toastty setup install-shell-integration [--shell zsh|bash|fish] [--dry-run | --apply]
+```
+
+Without `--apply`, the command reports planned file writes only; `--dry-run`
+names that default explicitly so agent-composed commands carry visible
+read-only intent, and it is a usage error combined with `--apply`. With
+`--apply`, it writes Toastty's managed shell snippet and updates the selected
+shell init file. Run this from a Toastty terminal pane so the CLI can verify the
+Toastty launch context.
+
+### `setup install-hooks`
+
+Dry-run or install agent status hooks. Codex is the only agent that needs a
+global hook file; other supported agents receive status integration through
+Toastty-managed launches.
+
+```
+toastty setup install-hooks --agent codex [--dry-run | --apply]
+```
+
+Without `--apply`, the command reports planned writes to the Codex hooks file
+and Toastty forwarder script; `--dry-run` names that default explicitly and is
+a usage error combined with `--apply`. With `--apply`, it writes those files
+directly.
+Codex may ask the user to trust updated hooks the next time it starts.
+
 ### `diagnostics collect`
 
 Collect a local redacted diagnostics JSON bundle. This command reads local disk

@@ -13,7 +13,8 @@ struct AppBootstrapResult {
 enum AppBootstrap {
     static func make(
         processInfo: ProcessInfo = .processInfo,
-        defaultTerminalProfileID: String? = nil
+        defaultTerminalProfileID: String? = nil,
+        createAgentProfilesTemplate: Bool = true
     ) -> AppBootstrapResult {
         ToasttyLog.info(
             "Bootstrapping app",
@@ -24,7 +25,9 @@ enum AppBootstrap {
             arguments: processInfo.arguments,
             environment: processInfo.environment
         ) else {
-            ensureAgentProfilesTemplateExists()
+            if createAgentProfilesTemplate {
+                ensureAgentProfilesTemplateExists()
+            }
             let layoutPersistenceContext = WorkspaceLayoutPersistenceContext.resolve(processInfo: processInfo)
             var state: AppState
             let restoredTerminalPanelIDs: Set<UUID>

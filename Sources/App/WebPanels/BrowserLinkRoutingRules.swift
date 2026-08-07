@@ -12,6 +12,47 @@ enum BrowserPopupRoutingDecision: Equatable {
     case awaitCapturedURL
 }
 
+enum GettingStartedActionNavigationDecision: Equatable {
+    case allow
+    case dispatch(GettingStartedPanelNativeAction)
+    case ignore
+}
+
+enum GettingStartedActionNavigationPolicy {
+    static func decision(
+        for url: URL?,
+        sourceFrameURL: URL?,
+        sourceFrameIsMainFrame: Bool
+    ) -> GettingStartedActionNavigationDecision {
+        guard let url,
+              url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
+              url.host?.caseInsensitiveCompare("action") == .orderedSame else {
+            return .allow
+        }
+
+        guard sourceFrameIsMainFrame,
+              isTrustedGettingStartedPage(sourceFrameURL) else {
+            return .ignore
+        }
+
+        let pathComponents = url.pathComponents.filter { $0 != "/" }
+        guard pathComponents.count == 1,
+              let action = GettingStartedPanelNativeAction(rawValue: pathComponents[0]) else {
+            return .ignore
+        }
+        return .dispatch(action)
+    }
+
+    private static func isTrustedGettingStartedPage(_ url: URL?) -> Bool {
+        guard let url,
+              url.scheme?.caseInsensitiveCompare("toastty") == .orderedSame,
+              url.host?.caseInsensitiveCompare("getting-started") == .orderedSame else {
+            return false
+        }
+        return url.path.isEmpty || url.path == "/"
+    }
+}
+
 enum BrowserLinkRoutingRules {
     static func navigationPolicyDecision(
         url: URL?,
@@ -65,6 +106,6 @@ enum BrowserLinkRoutingRules {
             return false
         }
 
-        return scheme == "http" || scheme == "https"
+        return scheme == "http" || scheme == "https" || scheme == "toastty"
     }
 }

@@ -1,8 +1,7 @@
-import CoreState
 import Darwin
 import Foundation
 
-enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
+public enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
     static let defaultPaneJournalEntryCount = 5_000
     static let paneJournalCompactionInterval = 250
 
@@ -10,7 +9,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
     case bash
     case fish
 
-    var displayName: String {
+    public var displayName: String {
         switch self {
         case .zsh:
             return "Zsh"
@@ -21,7 +20,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
         }
     }
 
-    var managedSnippetFileName: String {
+    public var managedSnippetFileName: String {
         switch self {
         case .zsh:
             return "toastty-profile-shell-integration.zsh"
@@ -32,11 +31,11 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
         }
     }
 
-    var managedSnippetRelativePath: String {
+    public var managedSnippetRelativePath: String {
         ToasttyShellIntegrationMarkers.managedSnippetRelativePath(fileName: managedSnippetFileName)
     }
 
-    var defaultInitFileName: String {
+    public var defaultInitFileName: String {
         switch self {
         case .zsh:
             return ".zshrc"
@@ -47,7 +46,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
         }
     }
 
-    var candidateInitFileNames: [String] {
+    public var candidateInitFileNames: [String] {
         switch self {
         case .zsh:
             return [".zshrc"]
@@ -58,11 +57,11 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
         }
     }
 
-    var sourceLine: String {
+    public var sourceLine: String {
         ToasttyShellIntegrationMarkers.sourceLine(managedSnippetFileName: managedSnippetFileName)
     }
 
-    var managedSnippetContents: String {
+    public var managedSnippetContents: String {
         switch self {
         case .zsh:
             return """
@@ -715,7 +714,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
         }
     }
 
-    func preferredInitFileURL(homeDirectoryURL: URL, fileManager: FileManager) -> URL {
+    public func preferredInitFileURL(homeDirectoryURL: URL, fileManager: FileManager) -> URL {
         switch self {
         case .zsh:
             return homeDirectoryURL.appendingPathComponent(defaultInitFileName)
@@ -737,46 +736,80 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
         }
     }
 
-    func candidateInitFileURLs(homeDirectoryURL: URL) -> [URL] {
+    public func candidateInitFileURLs(homeDirectoryURL: URL) -> [URL] {
         candidateInitFileNames.map { homeDirectoryURL.appendingPathComponent($0) }
     }
 }
 
-struct ProfileShellIntegrationInstallPlan: Equatable, Sendable {
-    let shell: ProfileShellIntegrationShell
-    let initFileURL: URL
-    let managedSnippetURL: URL
+public struct ProfileShellIntegrationInstallPlan: Equatable, Sendable {
+    public let shell: ProfileShellIntegrationShell
+    public let initFileURL: URL
+    public let managedSnippetURL: URL
 
-    var sourceLine: String {
+    public init(
+        shell: ProfileShellIntegrationShell,
+        initFileURL: URL,
+        managedSnippetURL: URL
+    ) {
+        self.shell = shell
+        self.initFileURL = initFileURL
+        self.managedSnippetURL = managedSnippetURL
+    }
+
+    public var sourceLine: String {
         shell.sourceLine
     }
 }
 
-struct ProfileShellIntegrationInstallStatus: Equatable, Sendable {
-    let plan: ProfileShellIntegrationInstallPlan
-    let needsManagedSnippetWrite: Bool
-    let needsInitFileUpdate: Bool
-    let createsInitFile: Bool
+public struct ProfileShellIntegrationInstallStatus: Equatable, Sendable {
+    public let plan: ProfileShellIntegrationInstallPlan
+    public let needsManagedSnippetWrite: Bool
+    public let needsInitFileUpdate: Bool
+    public let createsInitFile: Bool
 
-    var isInstalled: Bool {
+    public init(
+        plan: ProfileShellIntegrationInstallPlan,
+        needsManagedSnippetWrite: Bool,
+        needsInitFileUpdate: Bool,
+        createsInitFile: Bool
+    ) {
+        self.plan = plan
+        self.needsManagedSnippetWrite = needsManagedSnippetWrite
+        self.needsInitFileUpdate = needsInitFileUpdate
+        self.createsInitFile = createsInitFile
+    }
+
+    public var isInstalled: Bool {
         needsManagedSnippetWrite == false && needsInitFileUpdate == false
     }
 }
 
-struct ProfileShellIntegrationInstallResult: Equatable, Sendable {
-    let plan: ProfileShellIntegrationInstallPlan
-    let updatedManagedSnippet: Bool
-    let updatedInitFile: Bool
-    let createdInitFile: Bool
+public struct ProfileShellIntegrationInstallResult: Equatable, Sendable {
+    public let plan: ProfileShellIntegrationInstallPlan
+    public let updatedManagedSnippet: Bool
+    public let updatedInitFile: Bool
+    public let createdInitFile: Bool
+
+    public init(
+        plan: ProfileShellIntegrationInstallPlan,
+        updatedManagedSnippet: Bool,
+        updatedInitFile: Bool,
+        createdInitFile: Bool
+    ) {
+        self.plan = plan
+        self.updatedManagedSnippet = updatedManagedSnippet
+        self.updatedInitFile = updatedInitFile
+        self.createdInitFile = createdInitFile
+    }
 }
 
-enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable, Sendable {
+public enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable, Sendable {
     case unsupportedShell(shellPath: String?)
     case runtimeHomeUnsupported(path: String)
     case unableToReadFile(path: String, reason: String)
     case unableToWriteFile(path: String, reason: String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .unsupportedShell(let shellPath):
             let resolvedShell = shellPath?.isEmpty == false ? shellPath! : "unknown"
@@ -799,7 +832,7 @@ enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable, Sendable 
     }
 }
 
-enum ProfileShellIntegrationResolvedShellSource: String, Sendable {
+public enum ProfileShellIntegrationResolvedShellSource: String, Sendable {
     case debugOverride = "debug_override"
     case preferredShellPath = "preferred_shell_path"
     case liveTerminalShell = "live_terminal_shell"
@@ -812,10 +845,10 @@ private struct ProfileShellIntegrationResolvedShellPath: Equatable, Sendable {
     let source: ProfileShellIntegrationResolvedShellSource
 }
 
-final class ProfileShellIntegrationInstaller {
+public final class ProfileShellIntegrationInstaller {
     private static let managedSourceCommentLines = ToasttyShellIntegrationMarkers.managedSourceCommentLines
     #if DEBUG
-    static let debugAllowRealInstallEnvironmentKey = "TOASTTY_DEBUG_ALLOW_REAL_SHELL_INTEGRATION_INSTALL"
+    public static let debugAllowRealInstallEnvironmentKey = "TOASTTY_DEBUG_ALLOW_REAL_SHELL_INTEGRATION_INSTALL"
     #endif
 
     private let fileManager: FileManager
@@ -825,7 +858,7 @@ final class ProfileShellIntegrationInstaller {
     private let preferredShellPath: String?
     private let preferredShellSource: ProfileShellIntegrationResolvedShellSource
 
-    init(
+    public init(
         homeDirectoryPath: String? = nil,
         fileManager: FileManager = .default,
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -845,7 +878,7 @@ final class ProfileShellIntegrationInstaller {
         self.preferredShellSource = preferredShellSource
     }
 
-    func installationPlan() throws -> ProfileShellIntegrationInstallPlan {
+    public func installationPlan() throws -> ProfileShellIntegrationInstallPlan {
         let runtimePaths = ToasttyRuntimePaths.resolve(
             homeDirectoryPath: homeDirectoryURL.path,
             environment: environment
@@ -904,11 +937,11 @@ final class ProfileShellIntegrationInstaller {
         )
     }
 
-    func install() throws -> ProfileShellIntegrationInstallResult {
+    public func install() throws -> ProfileShellIntegrationInstallResult {
         try install(plan: installationPlan())
     }
 
-    func refreshManagedSnippetIfInstalled() throws -> Bool {
+    public func refreshManagedSnippetIfInstalled() throws -> Bool {
         var updated = false
 
         for shell in ProfileShellIntegrationShell.allCases {
@@ -930,11 +963,11 @@ final class ProfileShellIntegrationInstaller {
         return updated
     }
 
-    func installationStatus() throws -> ProfileShellIntegrationInstallStatus {
+    public func installationStatus() throws -> ProfileShellIntegrationInstallStatus {
         try installationStatus(plan: installationPlan())
     }
 
-    func installationStatus(
+    public func installationStatus(
         plan: ProfileShellIntegrationInstallPlan
     ) throws -> ProfileShellIntegrationInstallStatus {
         let initFileExists = fileManager.fileExists(atPath: plan.initFileURL.path)
@@ -949,7 +982,7 @@ final class ProfileShellIntegrationInstaller {
         )
     }
 
-    func install(plan: ProfileShellIntegrationInstallPlan) throws -> ProfileShellIntegrationInstallResult {
+    public func install(plan: ProfileShellIntegrationInstallPlan) throws -> ProfileShellIntegrationInstallResult {
         try ensureDirectoryExists(at: plan.managedSnippetURL.deletingLastPathComponent())
         let updatedManagedSnippet = try writeManagedSnippet(for: plan)
         let initFileUpdate = try installSourceLine(for: plan)
@@ -979,7 +1012,7 @@ final class ProfileShellIntegrationInstaller {
         return false
     }
 
-    static func resolvedShellPath(
+    public static func resolvedShellPath(
         environment: [String: String],
         loginShellPath: String?,
         preferredShellPath: String? = nil,
@@ -1034,7 +1067,7 @@ final class ProfileShellIntegrationInstaller {
         return nil
     }
 
-    static func debugRealInstallBypassNotice(environment: [String: String]) -> String? {
+    public static func debugRealInstallBypassNotice(environment: [String: String]) -> String? {
         guard debugAllowsRealInstall(environment: environment),
               ToasttyRuntimePaths.resolve(environment: environment).runtimeHomeURL != nil else {
             return nil

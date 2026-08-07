@@ -188,7 +188,10 @@ enum AgentLaunchUI {
         guard let windowID else { return }
         NotificationCenter.default.post(
             name: .toasttyShowAgentGetStartedFlow,
-            object: AgentGetStartedPresentationRequest(windowID: windowID, initialStep: .agentStatusHooks)
+            object: GettingStartedPanelRequest.open(
+                windowID: windowID,
+                anchor: "codex-hooks"
+            )
         )
     }
 

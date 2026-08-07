@@ -147,7 +147,7 @@ For full details see [docs/running-agents.md](docs/running-agents.md).
 
 ### Agent profiles
 
-Toastty loads launchable agent profiles from `~/.toastty/agents.toml`. Open the file inside Toastty from `Agent > Manage Agents…`, or use the top-bar `Get Started…` button when no agent profiles are configured; Toastty creates a commented template automatically if the file does not exist yet. After editing `agents.toml`, use `Toastty > Reload Configuration` to pick up new buttons and shortcuts without relaunching.
+Toastty loads launchable agent profiles from `~/.toastty/agents.toml`. Open the file inside Toastty from `Agent > Manage Agents…`, or use the Getting Started panel's `Open agents.toml` link; the top-bar `Get Started…` button opens that page in the right panel. Toastty creates a commented template when opening the file if it does not exist yet. After editing `agents.toml`, use `Toastty > Reload Configuration` to pick up new buttons and shortcuts without relaunching.
 
 Each profile defines the menu label and the exact command Toastty should launch:
 
@@ -201,7 +201,7 @@ argv = ["codex"]              # (ID is "my-codex", not "codex")
 
 For Pi, Toastty adds its own `--extension <toastty-pi-extension.js>` argument after the actual `pi` executable. User `--extension` arguments remain additive; `pi --no-extensions` or `pi -ne` disables Toastty's injected extension for that launch too. Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
 
-No skills setup is required. Supported managed Codex launches receive Toastty's four-skill plugin through a Toastty-owned plugin cache and profile overlay inside `CODEX_HOME` plus an injected `--profile toastty-managed` flag; the user's `config.toml` is never written and ordinary Codex sessions see no Toastty skills. Claude Code receives an immutable Toastty plugin copy through a session-only `--plugin-dir` argument, without changing Claude's user configuration. You can also add your own skills under `~/.toastty/skills/<name>/SKILL.md`; accepted packages are delivered to newly launched managed sessions alongside the shipped skills — see [User-created skills](docs/running-agents.md#user-created-skills). After an app update, Toastty prepares the current bundled skills before submitting restored Codex or Claude resume commands. Provisioning remains capped at four seconds and failures never block launch. Each agent shows a one-time nonblocking notice with `View Skills…`; the shared sheet lists the shipped and user skills, explains both delivery models, and provides Codex status, repair, and uninstall controls.
+No skills setup is required. Supported managed Codex launches receive Toastty's four-skill plugin through a Toastty-owned plugin cache and profile overlay inside `CODEX_HOME` plus an injected `--profile toastty-managed` flag; the user's `config.toml` is never written and ordinary Codex sessions see no Toastty skills. Claude Code receives an immutable Toastty plugin copy through a session-only `--plugin-dir` argument, without changing Claude's user configuration. You can also add your own skills under `~/.toastty/skills/<name>/SKILL.md`; accepted packages are delivered to newly launched managed sessions alongside the shipped skills — see [User-created skills](docs/running-agents.md#user-created-skills). Run `"$TOASTTY_CLI_PATH" setup skills list` for a read-only inventory and exclusion diagnostics. After an app update, Toastty prepares the current bundled skills before submitting restored Codex or Claude resume commands. Provisioning remains capped at four seconds and failures never block launch. Each agent shows a one-time nonblocking notice with `View Skills…`; the shared sheet lists the shipped and user skills, explains both delivery models, and provides Codex status, repair, and uninstall controls.
 
 Toastty never changes separately installed skills under `~/.codex/skills`, `~/.claude/skills`, or `~/.agents/skills`. If old unnamespaced Toastty skills appear alongside the `toastty:` plugin entries, remove those global copies manually.
 
@@ -319,7 +319,7 @@ their current profile bindings.
 
 #### Shell integration
 
-Use `Toastty > Install Shell Integration…` to set up live pane titles and restored-pane command recall for `zsh`, `bash`, and `fish` automatically while preserving shared shell history. The `Get Started…` flow is available both from the empty agent top bar and from `Toastty > Get Started with Toastty…`, where it also offers `agents.toml` setup and the keyboard shortcut reference.
+Use `Toastty > Install Shell Integration…` to set up live pane titles and restored-pane command recall for `zsh`, `bash`, and `fish` automatically while preserving shared shell history. The top-bar `Get Started…` button and `Toastty > Get Started with Toastty…` open the Getting Started page in the right panel, where you can copy manual setup commands, open `agents.toml`, or open the full shortcut reference.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the detected shell init file.

@@ -2,6 +2,14 @@ import AppKit
 import CoreState
 import SwiftUI
 
+struct ToasttyMenuActionError: LocalizedError, Equatable, Sendable {
+    let message: String
+
+    var errorDescription: String? {
+        message
+    }
+}
+
 enum KeyboardShortcutsReferenceLocator {
     private static let fileName = "keyboard-shortcuts"
     private static let fileExtension = "md"
@@ -32,14 +40,14 @@ enum KeyboardShortcutsReferenceLocator {
         fileManager: FileManager = .default,
         bundledReferenceURL: URL? = bundledReferenceURL(),
         openURL: (URL) -> Bool
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         guard let referenceURL = referenceURL(
             worktreeRootURL: runtimePaths.worktreeRootURL,
             bundledReferenceURL: bundledReferenceURL,
             fileManager: fileManager
         ) else {
             return .failure(
-                AgentGetStartedActionError(
+                ToasttyMenuActionError(
                     message: "Toastty couldn't find the keyboard shortcuts reference."
                 )
             )
@@ -47,7 +55,7 @@ enum KeyboardShortcutsReferenceLocator {
 
         guard openURL(referenceURL) else {
             return .failure(
-                AgentGetStartedActionError(
+                ToasttyMenuActionError(
                     message: "Toastty couldn't open the keyboard shortcuts reference."
                 )
             )
@@ -129,7 +137,7 @@ enum ToasttyMenuActions {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         openConfigurationFile(
             prepareFile: {
                 try TerminalProfilesFile.ensureTemplateExists(
@@ -153,7 +161,7 @@ enum ToasttyMenuActions {
         homeDirectoryPath: String = NSHomeDirectory(),
         openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         openConfigurationFile(
             prepareFile: {
                 try AgentProfilesFile.ensureTemplateExists(
@@ -174,7 +182,7 @@ enum ToasttyMenuActions {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         openConfigurationFile(
             prepareFile: {
                 try ToasttyConfigStore.ensureTemplateExists(
@@ -199,7 +207,7 @@ enum ToasttyMenuActions {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         openConfigurationFile(
             prepareFile: {
                 try ToasttyConfigStore.writeConfigReference(
@@ -223,7 +231,7 @@ enum ToasttyMenuActions {
         fileManager: FileManager = .default,
         bundledReferenceURL: URL? = KeyboardShortcutsReferenceLocator.bundledReferenceURL(),
         openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         KeyboardShortcutsReferenceLocator.openReferenceResult(
             runtimePaths: runtimePaths,
             fileManager: fileManager,
@@ -299,11 +307,11 @@ enum ToasttyMenuActions {
         fileFormat: LocalDocumentFormat,
         openManagedLocalDocument: ManagedLocalDocumentOpener,
         openExternally: (URL) -> Bool
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         do {
             try prepareFile()
         } catch {
-            return .failure(AgentGetStartedActionError(message: error.localizedDescription))
+            return .failure(ToasttyMenuActionError(message: error.localizedDescription))
         }
 
         if openManagedLocalDocument(fileURL, fileFormat) {
@@ -316,10 +324,10 @@ enum ToasttyMenuActions {
     private static func openExistingFile(
         _ fileURL: URL,
         openExternally: (URL) -> Bool
-    ) -> Result<Void, AgentGetStartedActionError> {
+    ) -> Result<Void, ToasttyMenuActionError> {
         guard openExternally(fileURL) else {
             return .failure(
-                AgentGetStartedActionError(message: "Toastty couldn't open \(fileURL.path).")
+                ToasttyMenuActionError(message: "Toastty couldn't open \(fileURL.path).")
             )
         }
         return .success(())
@@ -654,6 +662,7 @@ struct ToasttyApp: App {
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
+    private let allowsGettingStartedAutoPresentation: Bool
     private let disableAnimations: Bool
     private let runtimePaths: ToasttyRuntimePaths
     private let agentLaunchSocketPath: String
@@ -691,14 +700,29 @@ struct ToasttyApp: App {
         let processInfo = ProcessInfo.processInfo
         let runtimePaths = ToasttyRuntimePaths.resolve(environment: processInfo.environment)
         let isInteractiveSession = AppLifecycleDelegate.isInteractiveSession(processInfo)
-        Self.prepareRuntimeEnvironment(processInfo: processInfo)
-        Self.ensureTerminalProfilesTemplateExists()
-        Self.refreshManagedShellIntegrationSnippetIfInstalled(processInfo: processInfo)
-        Self.configureWindowPersistenceDefaults()
-        let usesPersistentPreferences = AutomationConfig.parse(
+        let automationConfig = AutomationConfig.parse(
             arguments: processInfo.arguments,
             environment: processInfo.environment
-        ) == nil
+        )
+        let usesPersistentPreferences = automationConfig == nil
+        let initialGettingStartedSetupFootprint = usesPersistentPreferences
+            ? GettingStartedEligibility.setupFootprint(
+                runtimePaths: runtimePaths,
+                userDefaults: ToasttyAppDefaults.current,
+                homeDirectoryPath: NSHomeDirectory(),
+                environment: processInfo.environment
+            )
+            : GettingStartedSetupFootprint()
+        let shouldCreateStartupSetupTemplates = GettingStartedEligibility.shouldCreateStartupSetupTemplates(
+            usesPersistentPreferences: usesPersistentPreferences,
+            setupFootprint: initialGettingStartedSetupFootprint
+        )
+        Self.prepareRuntimeEnvironment(processInfo: processInfo)
+        if shouldCreateStartupSetupTemplates {
+            Self.ensureTerminalProfilesTemplateExists()
+        }
+        Self.refreshManagedShellIntegrationSnippetIfInstalled(processInfo: processInfo)
+        Self.configureWindowPersistenceDefaults()
         let terminalProfileStore = TerminalProfileStore()
         let initialToasttyConfig = usesPersistentPreferences ? ToasttyConfigStore.load() : ToasttyConfig()
         let initialToasttySettings = usesPersistentPreferences ? ToasttySettingsStore.load() : ToasttySettings()
@@ -714,7 +738,8 @@ struct ToasttyApp: App {
             : nil
         let bootstrap = AppBootstrap.make(
             processInfo: processInfo,
-            defaultTerminalProfileID: initialDefaultTerminalProfileID
+            defaultTerminalProfileID: initialDefaultTerminalProfileID,
+            createAgentProfilesTemplate: shouldCreateStartupSetupTemplates
         )
         if usesPersistentPreferences {
             Self.prunePaneRestoreFiles(
@@ -734,7 +759,7 @@ struct ToasttyApp: App {
             automationConfig: bootstrap.automationConfig,
             socketPathOverride: socketPath
         )
-        let persistUserSettings = bootstrap.automationConfig == nil
+        let persistUserSettings = usesPersistentPreferences
         let store = AppStore(
             state: bootstrap.state,
             persistTerminalFontPreference: persistUserSettings,
@@ -1088,6 +1113,10 @@ struct ToasttyApp: App {
         _webPanelRuntimeRegistry = StateObject(wrappedValue: webPanelRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
+        allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
+            usesPersistentPreferences: persistUserSettings,
+            setupFootprint: initialGettingStartedSetupFootprint
+        )
         disableAnimations = bootstrap.disableAnimations
         self.runtimePaths = runtimePaths
         agentLaunchSocketPath = socketPath
@@ -1241,6 +1270,41 @@ struct ToasttyApp: App {
             .path
     }
 
+    nonisolated static func baseLaunchEnvironment(
+        panelID: UUID,
+        runtimePaths: ToasttyRuntimePaths,
+        socketPath: String,
+        cliExecutablePath: String?,
+        appResourcesPath: String?,
+        shimDirectoryPath: String?,
+        basePath: String?,
+        agentBasePath: String?
+    ) -> [String: String] {
+        let paneJournalFilePath = runtimePaths.paneJournalFileURL(for: panelID).path
+        var environment: [String: String] = [
+            ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
+            ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
+            ToasttyLaunchContextEnvironment.paneJournalFileKey: paneJournalFilePath,
+        ]
+        if let cliExecutablePath {
+            environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
+        }
+        if let appResourcesPath {
+            environment[ToasttyLaunchContextEnvironment.appResourcesPathKey] = appResourcesPath
+        }
+        if let agentBasePath {
+            environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = agentBasePath
+        }
+        if let shimDirectoryPath {
+            environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryPath
+            environment["PATH"] = AgentCommandShimInstaller.pathValue(
+                prepending: shimDirectoryPath,
+                to: basePath
+            )
+        }
+        return environment
+    }
+
     private static func configureBaseLaunchEnvironmentProvider(
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         runtimePaths: ToasttyRuntimePaths,
@@ -1253,6 +1317,7 @@ struct ToasttyApp: App {
         let launchPath = shimDirectoryPath.map {
             AgentCommandShimInstaller.pathValue(prepending: $0, to: basePath)
         } ?? basePath
+        let appResourcesPath = Bundle.main.resourceURL?.path
         ToasttyLog.info(
             "Configured terminal launch context environment",
             category: .bootstrap,
@@ -1260,6 +1325,8 @@ struct ToasttyApp: App {
                 "socket_path": socketPath,
                 "cli_path": cliExecutablePath ?? "none",
                 "cli_path_present": cliExecutablePath == nil ? "false" : "true",
+                "app_resources_path": appResourcesPath ?? "none",
+                "app_resources_path_present": appResourcesPath == nil ? "false" : "true",
                 "agent_shim_directory": shimDirectoryPath ?? "none",
                 "agent_shim_directory_present": shimDirectoryPath == nil ? "false" : "true",
                 "agent_base_path_present": agentBasePath == nil ? "false" : "true",
@@ -1278,26 +1345,16 @@ struct ToasttyApp: App {
             ]
         )
         terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
-            let paneJournalFilePath = runtimePaths.paneJournalFileURL(for: panelID).path
-            var environment: [String: String] = [
-                ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
-                ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
-                ToasttyLaunchContextEnvironment.paneJournalFileKey: paneJournalFilePath,
-            ]
-            if let cliExecutablePath {
-                environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
-            }
-            if let agentBasePath {
-                environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = agentBasePath
-            }
-            if let shimDirectoryPath {
-                environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryPath
-                environment["PATH"] = AgentCommandShimInstaller.pathValue(
-                    prepending: shimDirectoryPath,
-                    to: basePath
-                )
-            }
-            return environment
+            baseLaunchEnvironment(
+                panelID: panelID,
+                runtimePaths: runtimePaths,
+                socketPath: socketPath,
+                cliExecutablePath: cliExecutablePath,
+                appResourcesPath: appResourcesPath,
+                shimDirectoryPath: shimDirectoryPath,
+                basePath: basePath,
+                agentBasePath: agentBasePath
+            )
         }
     }
 
@@ -1357,6 +1414,7 @@ struct ToasttyApp: App {
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
+                allowsGettingStartedAutoPresentation: allowsGettingStartedAutoPresentation,
                 disableAnimations: disableAnimations
             )
             .frame(minWidth: 980, minHeight: 620)
@@ -1605,7 +1663,7 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+    private func openAgentProfilesConfigurationResult() -> Result<Void, ToasttyMenuActionError> {
         ToasttyMenuActions.openAgentProfilesConfigurationResult(
             openManagedLocalDocument: { [store] fileURL, format in
                 openManagedLocalDocumentInToastty(
@@ -1619,7 +1677,7 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private func openKeyboardShortcutsReferenceResult() -> Result<Void, AgentGetStartedActionError> {
+    private func openKeyboardShortcutsReferenceResult() -> Result<Void, ToasttyMenuActionError> {
         ToasttyMenuActions.openKeyboardShortcutsReferenceResult(
             runtimePaths: runtimePaths,
             openURL: { [store] url in

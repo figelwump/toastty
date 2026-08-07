@@ -117,54 +117,38 @@ final class AppWindowViewTests: XCTestCase {
         )
     }
 
-    func testShouldPresentAgentGetStartedFlowMatchesWindowID() {
-        let windowID = UUID()
-
+    func testFirstRunAutoOpenGatingAllowsOneFreshPersistentLaunchPresentation() {
         XCTAssertTrue(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: windowID
+            AppWindowSceneView.shouldAutoOpenGettingStartedPanel(
+                allowsAutoPresentation: true,
+                hasAutoOpenedThisLaunch: false
+            )
+        )
+        XCTAssertFalse(
+            AppWindowSceneView.shouldAutoOpenGettingStartedPanel(
+                allowsAutoPresentation: false,
+                hasAutoOpenedThisLaunch: false
+            )
+        )
+        XCTAssertFalse(
+            AppWindowSceneView.shouldAutoOpenGettingStartedPanel(
+                allowsAutoPresentation: true,
+                hasAutoOpenedThisLaunch: true
             )
         )
     }
 
-    func testAgentGetStartedPresentationRequestPreservesInitialStep() throws {
-        let windowID = UUID()
-        let request = AgentGetStartedPresentationRequest(
-            windowID: windowID,
-            initialStep: .agentStatusHooks
-        )
+    func testStoreRecordsGettingStartedPanelAutoOpenOnlyAfterSuccessfulOpen() throws {
+        let initialState = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(initialState.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: initialState, persistTerminalFontPreference: false)
 
-        let resolvedRequest = try XCTUnwrap(
-            AppWindowView.agentGetStartedPresentationRequest(
-                windowID: windowID,
-                notificationObject: request
-            )
-        )
+        XCTAssertFalse(store.hasAutoOpenedGettingStartedPanelThisLaunch)
+        XCTAssertFalse(store.autoOpenGettingStartedPanelIfNeeded(workspaceID: UUID()))
+        XCTAssertFalse(store.hasAutoOpenedGettingStartedPanelThisLaunch)
 
-        XCTAssertEqual(resolvedRequest, request)
-    }
-
-    func testShouldPresentAgentGetStartedFlowIgnoresMismatchedOrMissingWindowIDs() {
-        let windowID = UUID()
-
-        XCTAssertFalse(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: UUID()
-            )
-        )
-        XCTAssertFalse(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: "not-a-window-id"
-            )
-        )
-        XCTAssertFalse(
-            AppWindowView.shouldPresentAgentGetStartedFlow(
-                windowID: windowID,
-                notificationObject: nil
-            )
-        )
+        XCTAssertTrue(store.autoOpenGettingStartedPanelIfNeeded(workspaceID: workspaceID))
+        XCTAssertTrue(store.hasAutoOpenedGettingStartedPanelThisLaunch)
+        XCTAssertFalse(store.autoOpenGettingStartedPanelIfNeeded(workspaceID: workspaceID))
     }
 }

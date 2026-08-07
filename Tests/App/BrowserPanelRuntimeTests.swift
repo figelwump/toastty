@@ -39,6 +39,101 @@ final class BrowserPanelRuntimeTests: XCTestCase {
             BrowserPanelRuntime.normalizedUserEnteredURLString("obsidian://open?vault=toastty"),
             "obsidian://open?vault=toastty"
         )
+        XCTAssertEqual(
+            BrowserPanelRuntime.normalizedUserEnteredURLString("toastty://getting-started/#onboarding"),
+            "toastty://getting-started/#onboarding"
+        )
+    }
+
+    func testGettingStartedActionNavigationPolicyWhitelistsNativeActions() throws {
+        let trustedSourceURL = try XCTUnwrap(URL(string: "toastty://getting-started/#onboarding"))
+
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://action/open-agent-profiles")),
+                sourceFrameURL: trustedSourceURL,
+                sourceFrameIsMainFrame: true
+            ),
+            .dispatch(.openAgentProfiles)
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://action/open-shortcut-reference")),
+                sourceFrameURL: trustedSourceURL,
+                sourceFrameIsMainFrame: true
+            ),
+            .dispatch(.openShortcutReference)
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://action/open-skills-management")),
+                sourceFrameURL: trustedSourceURL,
+                sourceFrameIsMainFrame: true
+            ),
+            .dispatch(.openSkillsManagement)
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://action/delete-everything")),
+                sourceFrameURL: trustedSourceURL,
+                sourceFrameIsMainFrame: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: try XCTUnwrap(URL(string: "toastty://getting-started/#shortcuts")),
+                sourceFrameURL: try XCTUnwrap(URL(string: "https://example.com")),
+                sourceFrameIsMainFrame: true
+            ),
+            .allow
+        )
+        XCTAssertEqual(
+            BrowserLinkRoutingRules.navigationPolicyDecision(
+                url: try XCTUnwrap(URL(string: "toastty://getting-started/#shortcuts")),
+                navigationType: .linkActivated,
+                modifierFlags: [],
+                targetFrameIsNil: false
+            ),
+            .allow
+        )
+    }
+
+    func testGettingStartedActionNavigationPolicyRejectsUntrustedSources() throws {
+        let actionURL = try XCTUnwrap(URL(string: "toastty://action/open-agent-profiles"))
+
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: actionURL,
+                sourceFrameURL: try XCTUnwrap(URL(string: "https://example.com")),
+                sourceFrameIsMainFrame: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: actionURL,
+                sourceFrameURL: nil,
+                sourceFrameIsMainFrame: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: actionURL,
+                sourceFrameURL: try XCTUnwrap(URL(string: "toastty://getting-started/asset.js")),
+                sourceFrameIsMainFrame: true
+            ),
+            .ignore
+        )
+        XCTAssertEqual(
+            GettingStartedActionNavigationPolicy.decision(
+                for: actionURL,
+                sourceFrameURL: try XCTUnwrap(URL(string: "toastty://getting-started/")),
+                sourceFrameIsMainFrame: false
+            ),
+            .ignore
+        )
     }
 
     func testDefaultStartPageUsesToasttyCopyWithoutExternalDemoLinks() {

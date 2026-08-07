@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>Get Started with Toastty</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --page-bg: linear-gradient(180deg, #0f1319 0%, #0a0d12 100%);
+    --text: #eeeae4;
+    --body: #cbc2b7;
+    --muted: #9c8e81;
+    --code: #d9d2c9;
+    --accent: #f5a623;
+    --accent-dark: #0d0d0d;
+    --accent-soft: rgba(245, 166, 35, 0.12);
+    --card: rgba(255, 255, 255, 0.028);
+    --border: rgba(255, 255, 255, 0.09);
+    --border-soft: rgba(255, 255, 255, 0.055);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #07090c;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: 18px 14px 40px;
+  }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 30px 30px 34px;
+    background: var(--page-bg);
+  }
+  @media (max-width: 560px) { .page { padding: 22px 18px 26px; } }
+
+  .masthead { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+  h1 {
+    font-size: 21px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .pagenav {
+    margin: 10px 0 26px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .pagenav a { color: var(--code); text-decoration: none; }
+  .pagenav a:hover { color: var(--accent); }
+  .pagenav span { margin: 0 7px; color: var(--muted); }
+
+  .toast-mini { position: relative; width: 40px; height: 36px; flex: none; }
+  .toast-mini .slice {
+    position: absolute; inset: 2px 4px 0 4px;
+    border-radius: 7px 7px 5px 5px;
+    background: #4a3425;
+  }
+  .toast-mini .slice::before {
+    content: ""; position: absolute; inset: 3px;
+    border-radius: 5px 5px 3px 3px; background: #6b4e38;
+  }
+  .toast-mini .butter {
+    position: absolute; left: 50%; top: 11px;
+    width: 11px; height: 7px; transform: translateX(-50%);
+    border-radius: 2px; background: var(--accent); z-index: 2;
+  }
+  .toast-mini .eye {
+    position: absolute; top: 20px; width: 3.5px; height: 2px;
+    border-radius: 99px; background: #2a1a10; z-index: 2;
+  }
+  .toast-mini .eye.l { left: 12px; } .toast-mini .eye.r { right: 12px; }
+  .toast-mini .smile {
+    position: absolute; left: 50%; top: 23px; width: 9px; height: 5px;
+    transform: translateX(-50%);
+    border: 1.5px solid #2a1a10; border-top: 0;
+    border-left-color: transparent; border-right-color: transparent;
+    border-radius: 0 0 8px 8px; z-index: 2;
+  }
+
+  section { margin-bottom: 30px; }
+  h2 {
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: 0.005em;
+    margin: 0 0 6px;
+  }
+  p.lede { font-size: 13px; line-height: 1.55; color: var(--body); margin: 0 0 16px; }
+  p.small { font-size: 12px; line-height: 1.5; color: var(--body); margin: 10px 0 0; }
+
+  .agents { font-size: 12px; color: var(--body); margin: 0 0 16px; }
+  .agents code {
+    font-family: var(--mono); font-size: 11px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+    border-radius: 4px; padding: 1.5px 6px; margin: 0 1px;
+    color: var(--code);
+  }
+
+  .btn-primary {
+    display: block; width: 100%;
+    background: var(--accent); color: var(--accent-dark);
+    border: 0; border-radius: 8px;
+    font: 600 13px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 12px 16px; cursor: pointer;
+  }
+  .btn-primary:hover { filter: brightness(1.06); }
+
+  pre.snippet {
+    position: relative;
+    margin: 12px 0 0;
+    padding: 13px 14px;
+    background: rgba(0, 0, 0, 0.32);
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--code);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .benefits { display: flex; gap: 10px; margin: 0 0 16px; }
+  @media (max-width: 560px) { .benefits { flex-direction: column; } }
+  .benefit {
+    flex: 1;
+    border: 1px solid var(--border-soft);
+    background: var(--card);
+    border-radius: 8px;
+    padding: 11px 12px;
+  }
+  .benefit b { display: block; font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+  .benefit i { font-style: normal; font-size: 12px; line-height: 1.45; color: var(--body); display: block; }
+  .benefit .dot { color: var(--accent); margin-right: 5px; }
+
+  .setup {
+    border: 1px solid var(--border-soft);
+    background: var(--card);
+    border-radius: 8px;
+    padding: 14px 15px;
+    margin-top: 10px;
+  }
+  .setup .rowhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .setup b { font-size: 12.5px; font-weight: 600; }
+  .setup .why { font-size: 12px; color: var(--body); margin-top: 2px; line-height: 1.45; }
+  .copy {
+    flex: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--code);
+    border-radius: 6px;
+    font: 500 11px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  .copy:hover { border-color: var(--accent); color: var(--accent); }
+  .copy.done { border-color: var(--accent); color: var(--accent); }
+  .actionlink { font-size: 12px; color: var(--accent); text-decoration: none; }
+  .actionlink:hover { text-decoration: underline; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  td {
+    padding: 7px 2px;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: 12px;
+    color: var(--body);
+  }
+  tr:last-child td { border-bottom: 0; }
+  td.keys { text-align: right; white-space: nowrap; }
+  kbd {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 2px 6px;
+  }
+
+  footer.note {
+    margin-top: 4px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-soft);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--body);
+  }
+  footer.note b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="masthead">
+      <div class="toast-mini" aria-hidden="true">
+        <div class="slice"></div><div class="butter"></div>
+        <div class="eye l"></div><div class="eye r"></div><div class="smile"></div>
+      </div>
+      <h1>Get Started with Toastty</h1>
+    </div>
+    <nav class="pagenav">
+      <a href="#onboarding">Onboarding</a><span>·</span><a href="#manual-setup">Manual setup</a><span>·</span><a href="#shortcuts">Shortcuts</a>
+    </nav>
+
+    <section id="onboarding">
+      <p class="lede">Copy the onboarding prompt and paste it into an agent of your choice. The prompt walks your agent through setting up tracking and profiles, then shows the skills Toastty provides automatically.</p>
+
+      <div class="benefits">
+        <div class="benefit"><b><span class="dot">●</span>Live status</b><i>Track agent work and completion.</i></div>
+        <div class="benefit"><b><span class="dot">●</span>Automatic skills</b><i>Four shipped skills, plus your own.</i></div>
+        <div class="benefit"><b><span class="dot">●</span>Profiles</b><i>Add launchers for terminals you use.</i></div>
+      </div>
+
+      <p class="agents">Need an agent first? Open a pane and start
+        <code>codex</code> <code>claude</code> <code>pi</code> <code>opencode</code> <code>mimo</code>
+      </p>
+
+      <button class="btn-primary" id="copy-prompt">Copy onboarding prompt</button>
+
+      <pre class="snippet" id="prompt-text">You are helping me set up Toastty. Please run:
+
+"$TOASTTY_CLI_PATH" setup guide
+
+Read the guide, narrate each step, dry-run every setup installer first (pass --dry-run), show me the planned writes, and wait for my explicit OK before rerunning anything with --apply.</pre>
+    </section>
+
+    <section id="manual-setup">
+      <h2>Manual setup</h2>
+      <p class="lede" style="margin-bottom:4px">Prefer to set things up yourself, or hit issues with the prompt? Run each step from any terminal.</p>
+
+      <div class="setup">
+        <div class="rowhead">
+          <div><b>Shell integration</b>
+          <div class="why">Enable live titles, restored pane history, and manually started agent tracking—including inside tmux and zmx.</div></div>
+          <button class="copy" data-copy-target="cmd-shell">Copy</button>
+        </div>
+        <pre class="snippet" id="cmd-shell">"$TOASTTY_CLI_PATH" setup install-shell-integration --dry-run</pre>
+        <p class="small">After applying, open a new Toastty pane to load the integration; existing nested shells and tmux or zmx sessions may need to restart first.</p>
+      </div>
+
+      <div class="setup" id="codex-hooks">
+        <div class="rowhead">
+          <div><b>Codex status hooks</b>
+          <div class="why">Codex may ask you to trust the hook once. Claude Code hooks are automatic for Toastty launches.</div></div>
+          <button class="copy" data-copy-target="cmd-hooks">Copy</button>
+        </div>
+        <pre class="snippet" id="cmd-hooks">"$TOASTTY_CLI_PATH" setup install-hooks --agent codex --dry-run</pre>
+      </div>
+
+      <div class="setup">
+        <div class="rowhead">
+          <div><b>Toastty skills</b>
+          <div class="why">Review the four shipped skills and accepted user skills from <span style="font-family:var(--mono);font-size:11px">~/.toastty/skills</span>. New managed launches receive the current set automatically.</div></div>
+          <button class="copy" data-copy-target="cmd-skill">Copy</button>
+        </div>
+        <pre class="snippet" id="cmd-skill">"$TOASTTY_CLI_PATH" setup skills list</pre>
+        <p class="small"><a class="actionlink" href="toastty://action/open-skills-management" data-action="open-skills-management">Manage Toastty Skills… →</a></p>
+      </div>
+
+      <div class="setup">
+        <div class="rowhead">
+          <div><b>Terminal profiles</b>
+          <div class="why">Launchers for tmux, ssh, REPLs, and more — defined in <span style="font-family:var(--mono);font-size:11px">~/.toastty/agents.toml</span></div></div>
+          <a class="actionlink" href="toastty://action/open-agent-profiles" data-action="open-agent-profiles">Open agents.toml →</a>
+        </div>
+      </div>
+
+      <p class="small">Setup installers default to <span style="font-family:var(--mono)">--dry-run</span>; rerun with <span style="font-family:var(--mono)">--apply</span> once the planned writes look right.</p>
+    </section>
+
+    <section id="shortcuts">
+      <h2>Keyboard shortcuts</h2>
+      <table>
+        <tr><td>Show or hide the sidebar</td><td class="keys"><kbd>⌘B</kbd></td></tr>
+        <tr><td>Show or hide this right panel</td><td class="keys"><kbd>⇧⌘B</kbd></td></tr>
+        <tr><td>Create a new workspace</td><td class="keys"><kbd>⇧⌘N</kbd></td></tr>
+        <tr><td>Split horizontally / vertically</td><td class="keys"><kbd>⌘D</kbd> <kbd>⇧⌘D</kbd></td></tr>
+        <tr><td>Focus the previous / next pane</td><td class="keys"><kbd>⌘[</kbd> <kbd>⌘]</kbd></td></tr>
+        <tr><td>Jump to next active or unread panel</td><td class="keys"><kbd>⇧⌘A</kbd></td></tr>
+        <tr><td>Close the focused panel</td><td class="keys"><kbd>⌘W</kbd></td></tr>
+        <tr><td>Toggle focused panel mode</td><td class="keys"><kbd>⇧⌘F</kbd></td></tr>
+      </table>
+      <p class="small"><a class="actionlink" href="toastty://action/open-shortcut-reference" data-action="open-shortcut-reference">Open the full shortcut reference →</a></p>
+    </section>
+
+    <footer class="note">
+      Done here? <b>Close this panel</b> (⌘W) — reopen it anytime from <b>Help ▸ Get Started with Toastty</b> or the command palette.
+    </footer>
+  </div>
+
+<script>
+try {
+  function flash(btn, label) {
+    var prev = btn.textContent;
+    btn.textContent = label;
+    btn.classList.add("done");
+    setTimeout(function () { btn.textContent = prev; btn.classList.remove("done"); }, 1600);
+  }
+
+  function copyText(text, btn, doneLabel) {
+    function fallback() {
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        flash(btn, ok ? doneLabel : "Select text and press ⌘C");
+      } catch (e) {
+        flash(btn, "Select text and press ⌘C");
+      }
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { flash(btn, doneLabel); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  var promptBtn = document.getElementById("copy-prompt");
+  promptBtn.addEventListener("click", function () {
+    copyText(document.getElementById("prompt-text").textContent, promptBtn, "Copied onboarding prompt");
+  });
+
+  var copies = document.querySelectorAll(".copy[data-copy-target]");
+  for (var i = 0; i < copies.length; i++) {
+    (function (btn) {
+      btn.addEventListener("click", function () {
+        copyText(document.getElementById(btn.getAttribute("data-copy-target")).textContent, btn, "Copied");
+      });
+    })(copies[i]);
+  }
+} catch (e) {
+}
+</script>
+</body>
+</html>

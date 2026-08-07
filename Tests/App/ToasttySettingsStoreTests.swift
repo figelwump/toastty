@@ -11,6 +11,7 @@ final class ToasttySettingsStoreTests: XCTestCase {
 
         XCTAssertFalse(settings.hasEverLaunchedAgent)
         XCTAssertTrue(settings.askBeforeQuitting)
+        XCTAssertFalse(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testPersistHasEverLaunchedAgentStoresAndLoadsFlag() {
@@ -21,6 +22,7 @@ final class ToasttySettingsStoreTests: XCTestCase {
 
         XCTAssertTrue(settings.hasEverLaunchedAgent)
         XCTAssertTrue(settings.askBeforeQuitting)
+        XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testPersistAskBeforeQuittingStoresAndLoadsFlag() {
@@ -31,6 +33,15 @@ final class ToasttySettingsStoreTests: XCTestCase {
 
         XCTAssertFalse(settings.askBeforeQuitting)
         XCTAssertFalse(settings.hasEverLaunchedAgent)
+        XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
+    }
+
+    func testAppKitDefaultPreferencesDoNotCountAsToasttyPersistedSettings() {
+        let userDefaults = makeUserDefaults()
+
+        AppKitDefaultPreferences.apply(to: userDefaults, standardDefaults: userDefaults)
+
+        XCTAssertFalse(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testLegacyTerminalFontSizePointsLoadsStoredOverride() {
@@ -41,6 +52,7 @@ final class ToasttySettingsStoreTests: XCTestCase {
             ToasttySettingsStore.legacyTerminalFontSizePoints(userDefaults: userDefaults),
             13.5
         )
+        XCTAssertTrue(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testClearLegacyTerminalFontSizePointsRemovesStoredOverride() {
@@ -50,6 +62,7 @@ final class ToasttySettingsStoreTests: XCTestCase {
         ToasttySettingsStore.clearLegacyTerminalFontSizePoints(userDefaults: userDefaults)
 
         XCTAssertNil(ToasttySettingsStore.legacyTerminalFontSizePoints(userDefaults: userDefaults))
+        XCTAssertFalse(ToasttySettingsStore.hasPersistedSettings(userDefaults: userDefaults))
     }
 
     func testLegacyTerminalFontSizePointsClampsStoredOverride() {

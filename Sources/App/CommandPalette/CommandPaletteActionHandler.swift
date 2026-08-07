@@ -558,7 +558,10 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         }
         NotificationCenter.default.post(
             name: .toasttyShowAgentGetStartedFlow,
-            object: AgentGetStartedPresentationRequest(windowID: originWindowID, initialStep: .agentStatusHooks)
+            object: GettingStartedPanelRequest.open(
+                windowID: originWindowID,
+                anchor: "codex-hooks"
+            )
         )
         return true
     }

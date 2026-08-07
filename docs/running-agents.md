@@ -4,10 +4,10 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 ## Quick start
 
-1. If you want to type `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
+1. If you want to type `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, or supported wrappers directly into Toastty terminals, open the Getting Started panel with the top-bar `Get Started…` button, then use `Toastty > Install Shell Integration…` for automatic setup or copy the panel's manual setup command
 2. Toastty automatically exposes four session-only skills to supported managed Codex, Claude Code, OpenCode, MiMo Code, and Pi launches; no skills setup is required. You can also add your own skills under `~/.toastty/skills` (see [User-created skills](#user-created-skills))
-3. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…` or open `Get Started…` and choose `Set Up Agent Status Hooks`
-4. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
+3. If you use Codex and want the most complete status updates, choose `Toastty > Set Up Agent Status Hooks…`; it opens the Getting Started panel's Codex hooks section
+4. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or use the Getting Started panel's `Open agents.toml` link
 5. Uncomment or add a profile in `~/.toastty/agents.toml`
 6. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
 7. Click the agent name in the `Agent` menu, top bar, or command palette, or press its keyboard shortcut
@@ -52,7 +52,7 @@ Top-level options:
 
 | Option | Default | Description |
 |---|---|---|
-| `showTopBarButtons` | `true` | Set to `false` to hide dedicated agent buttons from the top bar, including the empty-state `Get Started…` button. Agent menu entries, command palette results, keyboard shortcuts, and typed-command shims still work. |
+| `showTopBarButtons` | `true` | Set to `false` to hide dedicated agent launch buttons from the top bar. Agent menu entries, command palette results, keyboard shortcuts, and typed-command shims still work. |
 
 Profile fields:
 
@@ -143,7 +143,7 @@ argv = ["codex"]
 
 The profile ID is stored as an `AgentKind` internally. When a launch resolves to `AgentKind.codex`, `AgentKind.claude`, `AgentKind.opencode`, `AgentKind.mimocode`, or `AgentKind.pi`, Toastty activates the corresponding instrumentation path. When the ID is anything else, the command runs as-is with only the base session context injected.
 
-Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. Add `showTopBarButtons = false` before any profile table to keep agent launch buttons out of the top bar while preserving the menu, command palette, and shortcuts.
+Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. Add `showTopBarButtons = false` before any profile table to keep configured agent launch buttons out of the top bar while preserving the menu, command palette, and shortcuts.
 
 ### Wrapper-compatible launch commands
 
@@ -328,7 +328,9 @@ Codex, Claude Code, OpenCode, MiMo Code, and Pi sessions.
   a folder depth of 8, with `SKILL.md` itself capped at 256 KB. Catalog-wide
   caps are 32 accepted packages, 10 MB, and 500 files; breaching a catalog-wide
   cap excludes all user packages until the total shrinks. Excluded packages
-  never affect the shipped Toastty skills.
+  never affect the shipped Toastty skills. Run
+  `"$TOASTTY_CLI_PATH" setup skills list` for the same read-only inventory and
+  exclusion diagnostics shown in the management sheet.
 - **Delivery**: accepted packages are snapshotted into an immutable,
   content-addressed `toastty-user` plugin under `~/.toastty/agent-plugins/user/`
   (version `0.1.0-<hex12>`). Managed Codex launches receive it through the same
@@ -408,8 +410,8 @@ runs automatically in the background.
 names Toastty should intercept; it does not control status-hook setup.
 
 If you are setting this up from inside the app, the top-bar `Get Started…`
-button, when visible, routes to the same shell-integration flow as
-`Toastty > Install Shell Integration…`.
+button opens the Getting Started panel. Use `Toastty > Install Shell
+Integration…` for automatic setup, or copy the panel's manual setup command.
 
 If a built-in `[codex]`, `[claude]`, `[opencode]`, `[mimocode]`, or `[pi]` profile uses extra wrapper executables for
 typed launches, list those wrapper basenames in `manualCommandNames`. Entries

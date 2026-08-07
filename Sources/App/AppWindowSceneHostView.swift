@@ -63,13 +63,14 @@ struct AppWindowSceneHostView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
-    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
-    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, ToasttyMenuActionError>
     let toggleCommandPalette: @MainActor (UUID) -> Void
     let presentCommandPalette: @MainActor (UUID, String?) -> Void
     let sceneCoordinator: AppWindowSceneCoordinator
     let automationLifecycle: AutomationLifecycle?
     let automationStartupError: String?
+    let allowsGettingStartedAutoPresentation: Bool
     let disableAnimations: Bool
 
     @Environment(\.dismiss) private var dismiss
@@ -109,6 +110,7 @@ struct AppWindowSceneHostView: View {
                     toggleCommandPalette: toggleCommandPalette,
                     presentCommandPalette: presentCommandPalette,
                     onWindowCloseInitiated: handleWindowCloseInitiated,
+                    allowsGettingStartedAutoPresentation: allowsGettingStartedAutoPresentation,
                     disableAnimations: disableAnimations
                 )
             } else {

@@ -77,13 +77,18 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertFalse(model.showsTopBarButtons)
         XCTAssertTrue(model.actions.isEmpty)
         XCTAssertFalse(model.showsAddAgentsButton)
+    }
 
+    func testWorkspaceAgentTopBarModelShowsGetStartedWhenAgentButtonsDisabled() {
         let emptyHiddenCatalog = AgentCatalog(profiles: [], showsTopBarButtons: false)
         let emptyHiddenModel = WorkspaceAgentTopBarModel(
             catalog: emptyHiddenCatalog,
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: emptyHiddenCatalog)
         )
-        XCTAssertFalse(emptyHiddenModel.showsAddAgentsButton)
+
+        XCTAssertFalse(emptyHiddenModel.showsTopBarButtons)
+        XCTAssertTrue(emptyHiddenModel.actions.isEmpty)
+        XCTAssertTrue(emptyHiddenModel.showsAddAgentsButton)
     }
 
     func testWorkspaceTabTrailingAccessoryUsesCloseButtonWhenHovered() {
@@ -2355,7 +2360,7 @@ final class WorkspaceViewTests: XCTestCase {
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: .empty),
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
-            showAgentGetStartedFlow: {},
+            openGettingStartedPanel: {},
             toggleCommandPalette: { _ in },
             presentCommandPalette: { _, _ in },
             terminalRuntimeContext: TerminalWindowRuntimeContext(
