@@ -401,7 +401,7 @@ struct ToasttySkillsManagementSheet: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Toastty Skills")
                     .font(.system(size: 20, weight: .semibold))
-                Text("Toastty provides its four shipped skills, plus your user-created skills, to managed Codex, Claude Code, Pi, OpenCode, and MiMo Code sessions. Ordinary sessions are unaffected.")
+                Text("Toastty provides its four built-in skills, plus your user-created skills, to managed Codex, Claude Code, Pi, OpenCode, and MiMo Code sessions. Ordinary sessions are unaffected.")
                     .font(.system(size: 12))
                     .foregroundStyle(ToastyTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -563,7 +563,7 @@ struct ToasttySkillsManagementSheet: View {
 
     private var skillsList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Shipped Skills")
+            Text("Built-in Skills")
                 .font(.system(size: 13, weight: .semibold))
             ForEach(ToasttyAgentPluginBundle.skills, id: \.name) { skill in
                 VStack(alignment: .leading, spacing: 3) {
