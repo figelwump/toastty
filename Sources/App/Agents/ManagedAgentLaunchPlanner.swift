@@ -408,7 +408,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let managedArtifacts = ManagedLaunchArtifacts(
             directoryURL: preparedArtifacts.directoryURL,
             codexSessionLogWatcher: watcher,
-            cleanupPolicy: preparedArtifacts.cleanupPolicy
+            cleanupPolicy: preparedArtifacts.cleanupPolicy,
+            additionalCleanupURLs: preparedArtifacts.additionalCleanupURLs
         )
         watcher?.start()
         managedArtifactsBySessionID[sessionID] = managedArtifacts
@@ -888,6 +889,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
 
     private func cleanup(_ managedArtifacts: ManagedLaunchArtifacts) async {
         await managedArtifacts.codexSessionLogWatcher?.stop()
+        // Paths outside the artifacts directory (e.g. Grok hook JSON under
+        // $GROK_HOME/hooks) must always be removed, even when the directory
+        // itself is retained after session stop.
+        for url in managedArtifacts.additionalCleanupURLs {
+            try? fileManager.removeItem(at: url)
+        }
         // Claude hook files need to outlive session bookkeeping so late stop
         // hooks turn into no-op telemetry delivery instead of missing-file
         // shell errors.
@@ -978,6 +985,7 @@ private struct ManagedLaunchArtifacts {
     let directoryURL: URL
     let codexSessionLogWatcher: CodexSessionLogWatcher?
     let cleanupPolicy: LaunchArtifactsCleanupPolicy
+    let additionalCleanupURLs: [URL]
 }
 
 private struct CodexRolloutSessionLogWatcherRegistration {

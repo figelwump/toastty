@@ -44,6 +44,52 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testGrokHookJSONDeletesEvenWhenArtifactsDirectoryIsRetained() async throws {
+        let fileManager = FileManager.default
+        let grokHome = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-planner-cleanup-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: grokHome, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: grokHome) }
+
+        let fixture = try makePlannerFixture()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .grok,
+                panelID: fixture.panelID,
+                argv: ["grok"],
+                cwd: "/tmp/repo",
+                environment: ["GROK_HOME": grokHome.path]
+            )
+        )
+        let artifactsDirectoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-launch-\(plan.sessionID)", isDirectory: true)
+        let hookURL = GrokManagedHookCleanup.hookFileURL(
+            grokHome: grokHome,
+            sessionID: plan.sessionID
+        )
+        defer {
+            try? fileManager.removeItem(at: artifactsDirectoryURL)
+            try? fileManager.removeItem(at: hookURL)
+        }
+
+        XCTAssertTrue(fileManager.fileExists(atPath: artifactsDirectoryURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: hookURL.path))
+
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        await waitUntil {
+            fileManager.fileExists(atPath: hookURL.path) == false
+        }
+
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: hookURL.path),
+            "Grok session-scoped hook JSON must be removed on session stop"
+        )
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: artifactsDirectoryURL.path),
+            "Grok launch artifacts directory should remain after session stop"
+        )
+    }
+
     func testCodexArtifactsDeleteImmediatelyAfterSessionStops() async throws {
         let fixture = try makePlannerFixture()
         let plan = try fixture.planner.prepareManagedLaunch(

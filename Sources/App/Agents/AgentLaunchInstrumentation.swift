@@ -363,9 +363,9 @@ enum AgentLaunchInstrumentation {
             sessionID: sessionID,
             fileManager: fileManager
         )
-        let hookJSONURL = hooksDirectoryURL.appendingPathComponent(
-            "toastty-\(sessionID).json",
-            isDirectory: false
+        let hookJSONURL = GrokManagedHookCleanup.hookFileURL(
+            grokHome: grokHomeURL,
+            sessionID: sessionID
         )
 
         do {
