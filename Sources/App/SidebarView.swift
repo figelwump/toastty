@@ -186,6 +186,9 @@ struct SidebarView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    // Observed so a color-only global style change immediately restyles every
+    // visible chip with that key.
+    @ObservedObject var annotationStyleStore: AnnotationStyleStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Test seam for asserting scroll requests without depending on AppKit's
     /// NSScrollView behavior inside unit-test hosting views.
@@ -297,6 +300,7 @@ struct SidebarView: View {
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
+        annotationStyleStore: AnnotationStyleStore,
         terminalRuntimeContext: TerminalWindowRuntimeContext,
         scrollRequestObserver: ((UUID, Bool) -> Void)? = nil,
         workspaceRowFrameObserver: (([UUID: CGRect]) -> Void)? = nil,
@@ -306,6 +310,7 @@ struct SidebarView: View {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
+        self.annotationStyleStore = annotationStyleStore
         self.terminalRuntimeContext = terminalRuntimeContext
         self.scrollRequestObserver = scrollRequestObserver
         self.workspaceRowFrameObserver = workspaceRowFrameObserver
@@ -671,6 +676,11 @@ struct SidebarView: View {
                     SidebarSemanticTextBridge(text: accessibilityLabel)
                 }
 
+                // Rendered below and outside the title header's AppKit
+                // pointer-interaction overlay: workspace drag keeps starting
+                // from the title region while link chips stay real buttons.
+                workspaceAnnotationChipsRow(workspace: workspace)
+
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
                         .padding(.horizontal, 10)
@@ -722,6 +732,7 @@ struct SidebarView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                workspaceAnnotationChipsRow(workspace: workspace)
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
                         .padding(.horizontal, 10)
@@ -729,6 +740,89 @@ struct SidebarView: View {
                 }
             }
         }
+    }
+
+    /// One clipped row of annotation chips in deterministic bytewise key
+    /// order. Chips with a URL are real buttons; text-only chips fold their
+    /// content into the workspace row's accessibility summary instead.
+    @ViewBuilder
+    private func workspaceAnnotationChipsRow(workspace: WorkspaceState) -> some View {
+        let sortedAnnotations = workspace.annotations.sorted { $0.key < $1.key }
+        if sortedAnnotations.isEmpty == false {
+            HStack(spacing: 4) {
+                ForEach(sortedAnnotations, id: \.key) { key, annotation in
+                    workspaceAnnotationChip(key: key, annotation: annotation)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
+            .padding(.horizontal, 10)
+            .padding(.top, -6)
+            .padding(.bottom, 10)
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceAnnotationChip(key: String, annotation: WorkspaceAnnotation) -> some View {
+        let chipColors = ToastyTheme.annotationChipColors(
+            for: annotationStyleStore.effectiveColorToken(forKey: key)
+        )
+        if let url = annotation.url {
+            Button {
+                openWorkspaceAnnotationURL(url)
+            } label: {
+                workspaceAnnotationChipLabel(annotation: annotation, chipColors: chipColors, isLink: true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(key): \(annotation.text), link")
+            .background {
+                SidebarSemanticTextBridge(text: "\(key): \(annotation.text)")
+            }
+        } else {
+            workspaceAnnotationChipLabel(annotation: annotation, chipColors: chipColors, isLink: false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func workspaceAnnotationChipLabel(
+        annotation: WorkspaceAnnotation,
+        chipColors: ToastyTheme.AnnotationChipColors,
+        isLink: Bool
+    ) -> some View {
+        HStack(spacing: 3) {
+            Text(annotation.text)
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if isLink {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 7, weight: .semibold))
+            }
+        }
+        .foregroundStyle(chipColors.foreground)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .frame(maxWidth: 160, alignment: .leading)
+        .background(chipColors.background)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay {
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(chipColors.border, lineWidth: 1)
+        }
+    }
+
+    private func openWorkspaceAnnotationURL(_ urlString: String) {
+        // Persisted layout files are user-editable; revalidate the scheme
+        // immediately before opening rather than trusting stored state.
+        guard let validated = WorkspaceAnnotation.validatedURLString(urlString),
+              let url = URL(string: validated) else {
+            return
+        }
+        _ = AppURLRouter.open(
+            url,
+            preferredWindowID: windowID,
+            appStore: store
+        )
     }
 
     private func workspaceRowChrome<Content: View>(

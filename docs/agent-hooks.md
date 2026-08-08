@@ -128,8 +128,9 @@ including runtime-isolated dev instances.
 ## Calling back into Toastty
 
 Hook scripts may call Toastty CLI actions; per-session serialization prevents
-overlapping invocations for the same session. Example: annotate workspace names
-with the latest completion state.
+overlapping invocations for the same session. Example: keep a status chip
+under the workspace name in sync with the latest session state using
+workspace annotations, and rename the workspace on approval waits.
 
 ```bash
 #!/bin/bash
@@ -140,19 +141,32 @@ payload=$(cat)
 
 case "$TOASTTY_HOOK_EVENT" in
 turn-complete)
-    "$TOASTTY_CLI_PATH" action run workspace.rename \
+    "$TOASTTY_CLI_PATH" action run workspace.set-annotation \
         --workspace "$TOASTTY_WORKSPACE_ID" \
-        title="$TOASTTY_AGENT done"
+        key=agent \
+        text="$TOASTTY_AGENT done" \
+        color=green
     ;;
 needs-approval)
+    "$TOASTTY_CLI_PATH" action run workspace.set-annotation \
+        --workspace "$TOASTTY_WORKSPACE_ID" \
+        key=agent \
+        text="$TOASTTY_AGENT waiting on you" \
+        color=amber
     "$TOASTTY_CLI_PATH" action run workspace.rename \
         --workspace "$TOASTTY_WORKSPACE_ID" \
-        title="$TOASTTY_AGENT waiting on you"
+        title="Waiting on approval"
+    ;;
+session-stop)
+    "$TOASTTY_CLI_PATH" action run workspace.clear-annotation \
+        --workspace "$TOASTTY_WORKSPACE_ID" \
+        key=agent
     ;;
 esac
 ```
 
-See [CLI Reference](cli-reference.md) for the full action catalog.
+See [CLI Reference](cli-reference.md) for the full action catalog and the
+annotation validation rules.
 
 ## Related docs
 

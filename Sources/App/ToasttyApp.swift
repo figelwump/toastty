@@ -659,6 +659,7 @@ struct ToasttyApp: App {
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @StateObject private var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
+    @StateObject private var annotationStyleStore: AnnotationStyleStore
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
@@ -868,6 +869,7 @@ struct ToasttyApp: App {
         }
         let sessionRuntimeStore = SessionRuntimeStore(agentHookDispatcher: agentHookDispatcher)
         sessionRuntimeStore.bind(store: store)
+        let annotationStyleStore = AnnotationStyleStore(runtimePaths: runtimePaths)
         terminalRuntimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
         terminalRuntimeRegistry.setTerminalProfileProvider(
             terminalProfileStore,
@@ -1131,6 +1133,7 @@ struct ToasttyApp: App {
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _webPanelRuntimeRegistry = StateObject(wrappedValue: webPanelRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
+        _annotationStyleStore = StateObject(wrappedValue: annotationStyleStore)
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
             usesPersistentPreferences: persistUserSettings,
@@ -1186,6 +1189,7 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
+                annotationStyleStore: annotationStyleStore,
                 reloadConfigurationAction: {
                     Self.reloadConfiguration(
                         store: store,
@@ -1421,6 +1425,7 @@ struct ToasttyApp: App {
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
+                annotationStyleStore: annotationStyleStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,

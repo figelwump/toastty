@@ -402,6 +402,12 @@ enum SidebarSessionPresentation {
         if let agentSummary, agentSummary.hasRunning {
             components.append(workspaceAgentSummaryAccessibilityLabel(agentSummary))
         }
+        // Text-only annotation chips fold into this summary; chips with URLs
+        // remain independently actionable link buttons and are excluded here.
+        components.append(contentsOf: workspace.annotations
+            .filter { $0.value.url == nil }
+            .sorted { $0.key < $1.key }
+            .map { key, annotation in "\(key): \(annotation.text)" })
         return components.joined(separator: ", ")
     }
 

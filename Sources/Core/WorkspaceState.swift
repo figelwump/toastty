@@ -1,5 +1,124 @@
 import Foundation
 
+/// One structured `key -> (text, url?)` chip shown under a workspace name.
+/// Keys are canonicalized identifiers; text and URL pass the shared
+/// validation helpers below so CLI writes and persisted-file decodes cannot
+/// diverge.
+public struct WorkspaceAnnotation: Codable, Equatable, Sendable {
+    public var text: String
+    public var url: String?
+
+    public init(text: String, url: String? = nil) {
+        self.text = text
+        self.url = url
+    }
+}
+
+public extension WorkspaceAnnotation {
+    static let maximumKeyLength = 32
+    static let maximumTextCharacterCount = 80
+    static let maximumAnnotationsPerWorkspace = 12
+
+    /// Trims and lowercases a raw key. Returns nil unless the result is 1-32
+    /// characters drawn from ASCII letters, digits, `.`, `_`, and `-`.
+    /// Overlong or invalid keys are rejected, never truncated.
+    static func canonicalKey(_ rawKey: String) -> String? {
+        let candidate = rawKey
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard candidate.isEmpty == false,
+              candidate.count <= maximumKeyLength else {
+            return nil
+        }
+        let allowedScalars = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
+        guard candidate.unicodeScalars.allSatisfy(allowedScalars.contains) else {
+            return nil
+        }
+        return candidate
+    }
+
+    /// Trims and NFC-normalizes chip text. Returns nil when the result is
+    /// empty, longer than 80 user-perceived characters, or contains control,
+    /// line/paragraph separator, or bidi override/isolate scalars. Valid
+    /// emoji, including zero-width-joiner sequences, remain allowed.
+    static func normalizedText(_ rawText: String) -> String? {
+        let normalized = rawText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .precomposedStringWithCanonicalMapping
+        guard normalized.isEmpty == false,
+              normalized.count <= maximumTextCharacterCount else {
+            return nil
+        }
+        guard normalized.unicodeScalars.allSatisfy({ isAllowedTextScalar($0) }) else {
+            return nil
+        }
+        return normalized
+    }
+
+    /// Accepts only absolute `http` / `https` URLs with a host.
+    static func validatedURLString(_ rawURL: String) -> String? {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false,
+              let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host, host.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    /// Whole-value validation shared by the reducer and defensive decoding.
+    static func validated(text: String, url: String?) -> WorkspaceAnnotation? {
+        guard let normalizedText = normalizedText(text) else { return nil }
+        if let url {
+            guard let validatedURL = validatedURLString(url) else { return nil }
+            return WorkspaceAnnotation(text: normalizedText, url: validatedURL)
+        }
+        return WorkspaceAnnotation(text: normalizedText, url: nil)
+    }
+
+    /// Retains only entries whose stored key is already canonical and whose
+    /// value passes validation. Persisted files are user-editable, so invalid
+    /// entries are dropped and logged individually instead of failing the
+    /// whole decode.
+    static func sanitizedAnnotations(
+        _ rawAnnotations: [String: WorkspaceAnnotation],
+        workspaceID: UUID
+    ) -> [String: WorkspaceAnnotation] {
+        rawAnnotations.reduce(into: [:]) { partialResult, entry in
+            guard canonicalKey(entry.key) == entry.key,
+                  let validated = validated(text: entry.value.text, url: entry.value.url),
+                  validated == entry.value else {
+                ToasttyLog.warning(
+                    "Dropped invalid persisted workspace annotation",
+                    category: .state,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "key_length": String(entry.key.count),
+                    ]
+                )
+                return
+            }
+            partialResult[entry.key] = validated
+        }
+    }
+
+    private static func isAllowedTextScalar(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.generalCategory == .control {
+            return false
+        }
+        switch scalar.value {
+        case 0x2028, 0x2029, // line / paragraph separators
+             0x202A...0x202E, // bidi embedding and override controls
+             0x2066...0x2069: // bidi isolate controls
+            return false
+        default:
+            return true
+        }
+    }
+}
+
 public struct ClosedPanelRecord: Codable, Equatable, Sendable {
     public let panelState: PanelState
     public let closedAt: Date
@@ -43,6 +162,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var selectedTabID: UUID?
     public var tabIDs: [UUID]
     public var tabsByID: [UUID: WorkspaceTabState]
+    public var annotations: [String: WorkspaceAnnotation]
     public var unreadWorkspaceNotificationCount: Int
     public var unreadNotificationCount: Int {
         tabsByID.values.reduce(unreadWorkspaceNotificationCount) { partialResult, tab in
@@ -63,6 +183,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         tabIDs: [UUID],
         tabsByID: [UUID: WorkspaceTabState],
         rightAuxPanel: RightAuxPanelState? = nil,
+        annotations: [String: WorkspaceAnnotation] = [:],
         unreadWorkspaceNotificationCount: Int = 0
     ) {
         let sanitizedTabs = Self.sanitizedTabs(
@@ -82,6 +203,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.selectedTabID = sanitizedTabs.selectedTabID
         self.tabIDs = sanitizedTabs.tabIDs
         self.tabsByID = seededTabsByID
+        self.annotations = annotations
         self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
     }
 
@@ -98,7 +220,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         unreadPanelIDs: Set<UUID> = [],
         unreadWorkspaceNotificationCount: Int = 0,
         recentlyClosedPanels: [ClosedPanelRecord] = [],
-        rightAuxPanel: RightAuxPanelState? = nil
+        rightAuxPanel: RightAuxPanelState? = nil,
+        annotations: [String: WorkspaceAnnotation] = [:]
     ) {
         let tab = WorkspaceTabState(
             id: UUID(),
@@ -119,6 +242,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             selectedTabID: tab.id,
             tabIDs: [tab.id],
             tabsByID: [tab.id: tab],
+            annotations: annotations,
             unreadWorkspaceNotificationCount: unreadWorkspaceNotificationCount
         )
     }
@@ -374,6 +498,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case selectedTabID
         case tabIDs
         case tabsByID
+        case annotations
         case layoutTree
         case panels
         case focusedPanelID
@@ -421,6 +546,10 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             tabIDs = [legacyTab.id]
             tabsByID = [legacyTab.id: legacyTab]
         }
+        annotations = WorkspaceAnnotation.sanitizedAnnotations(
+            try container.decodeIfPresent([String: WorkspaceAnnotation].self, forKey: .annotations) ?? [:],
+            workspaceID: id
+        )
         let decodedWorkspaceUnread = try container.decodeIfPresent(Int.self, forKey: .unreadWorkspaceNotificationCount)
         let legacyUnreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadNotificationCount)
         unreadWorkspaceNotificationCount = max(0, decodedWorkspaceUnread ?? legacyUnreadCount ?? 0)
@@ -434,6 +563,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(resolvedSelectedTabID, forKey: .selectedTabID)
         try container.encode(tabIDs, forKey: .tabIDs)
         try container.encode(tabsByID, forKey: .tabsByID)
+        try container.encode(annotations, forKey: .annotations)
         // Preserve a best-effort legacy mirror of the selected tab for older
         // persisted-state readers while the multi-tab shape rolls out.
         try container.encode(layoutTree, forKey: .layoutTree)

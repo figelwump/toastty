@@ -266,6 +266,70 @@ enum ToastyTheme {
         }
     }
 
+    struct AnnotationChipColors: Equatable {
+        let foreground: Color
+        let background: Color
+        let border: Color
+    }
+
+    /// Chip styling for one workspace-annotation color token. Named tokens
+    /// use fixed palette hues; arbitrary hex values derive a readable
+    /// foreground for the dark sidebar instead of assuming the raw color is
+    /// legible as text.
+    static func annotationChipColors(for token: AnnotationColorToken) -> AnnotationChipColors {
+        let baseHex: UInt32
+        switch token {
+        case .named(let named):
+            switch named {
+            case .neutral:
+                baseHex = 0xB7AEA5
+            case .green:
+                baseHex = 0x5BA08A
+            case .amber:
+                baseHex = 0xE8A635
+            case .red:
+                baseHex = 0xE55C5C
+            case .violet:
+                baseHex = 0xA78BFA
+            case .blue:
+                baseHex = 0x7AA2F7
+            }
+        case .hex(let value):
+            baseHex = Self.parsedAnnotationHex(value) ?? 0xB7AEA5
+        }
+
+        let foregroundHex = readableAnnotationForegroundHex(baseHex)
+        return AnnotationChipColors(
+            foreground: Color(hex: foregroundHex),
+            background: Color(hex: baseHex, alpha: 0.14),
+            border: Color(hex: foregroundHex, alpha: 0.42)
+        )
+    }
+
+    private static func parsedAnnotationHex(_ value: String) -> UInt32? {
+        guard value.hasPrefix("#"), value.count == 7 else { return nil }
+        return UInt32(value.dropFirst(), radix: 16)
+    }
+
+    /// Blends dark hues toward white until chip text stays readable on the
+    /// dark sidebar background.
+    private static func readableAnnotationForegroundHex(_ hex: UInt32) -> UInt32 {
+        let red = Double((hex >> 16) & 0xFF) / 255
+        let green = Double((hex >> 8) & 0xFF) / 255
+        let blue = Double(hex & 0xFF) / 255
+        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        let minimumLuminance = 0.45
+        guard luminance < minimumLuminance else { return hex }
+
+        // Blend factor grows as the color gets darker; a pure-black chip text
+        // becomes a mid gray rather than staying invisible.
+        let blend = min(0.85, (minimumLuminance - luminance) / minimumLuminance + 0.25)
+        func lightened(_ component: Double) -> UInt32 {
+            UInt32((component + (1 - component) * blend) * 255)
+        }
+        return (lightened(red) << 16) | (lightened(green) << 8) | lightened(blue)
+    }
+
     static func panelHeaderBackgroundColor(
         for treatment: PanelHeaderTreatment,
         appIsActive: Bool
