@@ -10,8 +10,19 @@ const sessionsView = document.getElementById("sessions-view");
 const sessionGroups = document.getElementById("session-groups");
 const emptyState = document.getElementById("empty-state");
 
+const chatView = document.getElementById("chat-view");
+const chatBack = document.getElementById("chat-back");
+const chatTitle = document.getElementById("chat-title");
+const chatState = document.getElementById("chat-state");
+const chatMessages = document.getElementById("chat-messages");
+const chatEmpty = document.getElementById("chat-empty");
+
 let socket = null;
 let reconnectDelayMs = 1000;
+let latestSnapshot = null;
+// Non-null while the chat view is open:
+// { conversationID, run, generation, lastSequence, loading }
+let openConversation = null;
 
 function setConnectionState(state) {
   connectionBadge.dataset.state = state;
@@ -48,6 +59,13 @@ function stateLabel(state) {
 }
 
 function renderSnapshot(snapshot) {
+  latestSnapshot = snapshot;
+  if (openConversation) {
+    const current = (snapshot.conversations || []).find(
+      (conversation) => conversation.conversationID === openConversation.conversationID
+    );
+    if (current) renderChatHeader(current);
+  }
   const conversations = snapshot.conversations || [];
   sessionGroups.replaceChildren();
   emptyState.hidden = conversations.length > 0;
@@ -92,11 +110,169 @@ function renderSnapshot(snapshot) {
       info.appendChild(meta);
 
       card.appendChild(info);
+      card.addEventListener("click", () => openChat(conversation));
       group.appendChild(card);
     }
     sessionGroups.appendChild(group);
   }
 }
+
+function renderChatHeader(conversation) {
+  chatTitle.textContent = conversation.title;
+  chatState.textContent = conversation.provider + " · " + stateLabel(conversation.state);
+}
+
+function appendEventNode(event) {
+  const kind = event.kind;
+  const payload = event.payload || {};
+  let node = null;
+  if (kind === "user_message") {
+    node = document.createElement("div");
+    node.className = "bubble user";
+    node.textContent = payload.text || "";
+  } else if (kind === "assistant_message") {
+    node = document.createElement("div");
+    node.className = "bubble assistant" + (payload.phase === "commentary" ? " commentary" : "");
+    node.textContent = payload.text || "";
+  } else if (kind === "tool_started") {
+    node = document.createElement("div");
+    node.className = "chip";
+    node.textContent = "▸ " + (payload.toolName || "tool") + (payload.detail ? ": " + payload.detail : "");
+  } else if (kind === "tool_finished") {
+    if (payload.outcome === "failed") {
+      node = document.createElement("div");
+      node.className = "chip";
+      node.textContent = "✗ tool failed" + (payload.detail ? ": " + payload.detail : "");
+    }
+    // Successful completions stay quiet; the started chip covers them.
+  } else if (kind === "subagent_summary") {
+    node = document.createElement("div");
+    node.className = "chip";
+    node.textContent = "⧉ " + (payload.displayName || "subagent") + " " + (payload.phase || "");
+  } else if (kind === "interaction_presented") {
+    node = document.createElement("div");
+    node.className = "chip status";
+    node.textContent = "⚠︎ " + (payload.prompt || "waiting for input on the Mac");
+  } else if (kind === "session_binding_changed") {
+    node = document.createElement("div");
+    node.className = "chip status";
+    node.textContent = "— session " + ((payload.reason || "").replace(/_/g, " ")) + " —";
+  }
+  // status_changed / interaction_resolved rows are intentionally silent;
+  // unknown kinds are ignored by design.
+  if (node) chatMessages.appendChild(node);
+}
+
+function applyEvents(events) {
+  let appended = false;
+  for (const event of events) {
+    if (event.sequence <= openConversation.lastSequence) continue;
+    if (event.sequence > openConversation.lastSequence + 1) {
+      // Gap: re-page from the confirmed cursor rather than guessing.
+      void loadMoreEvents();
+      return;
+    }
+    openConversation.lastSequence = event.sequence;
+    appendEventNode(event);
+    appended = true;
+  }
+  if (appended) {
+    chatEmpty.hidden = chatMessages.children.length > 0;
+    chatMessages.lastElementChild?.scrollIntoView({ block: "end" });
+  }
+}
+
+async function fetchEventsPage(cursor) {
+  const body = {
+    conversationID: openConversation.conversationID,
+    limit: 200,
+  };
+  if (cursor) body.cursor = cursor;
+  const response = await fetch("/api/conversation.events.get", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) return null;
+  return response.json();
+}
+
+async function loadMoreEvents() {
+  if (!openConversation || openConversation.loading) return;
+  openConversation.loading = true;
+  try {
+    while (openConversation) {
+      const cursor = openConversation.run
+        ? {
+            projectionRunID: openConversation.run,
+            projectionGeneration: openConversation.generation,
+            afterSequence: openConversation.lastSequence,
+          }
+        : null;
+      const result = await fetchEventsPage(cursor);
+      if (!result || !openConversation) return;
+      if (result.outcome === "resnapshot_required") {
+        resetChatTranscript();
+        continue;
+      }
+      if (result.outcome !== "page") {
+        chatEmpty.hidden = false;
+        return;
+      }
+      const page = result.page;
+      openConversation.run = page.projectionRunID;
+      openConversation.generation = page.projectionGeneration;
+      for (const event of page.events) {
+        if (event.sequence > openConversation.lastSequence) {
+          openConversation.lastSequence = event.sequence;
+          appendEventNode(event);
+        }
+      }
+      chatEmpty.hidden = chatMessages.children.length > 0;
+      if (page.events.length === 0 || openConversation.lastSequence >= page.latestSequence) {
+        chatMessages.lastElementChild?.scrollIntoView({ block: "end" });
+        return;
+      }
+    }
+  } finally {
+    if (openConversation) openConversation.loading = false;
+  }
+}
+
+function resetChatTranscript() {
+  chatMessages.replaceChildren();
+  if (openConversation) {
+    openConversation.run = null;
+    openConversation.generation = 0;
+    openConversation.lastSequence = 0;
+  }
+}
+
+function openChat(conversation) {
+  openConversation = {
+    conversationID: conversation.conversationID,
+    run: null,
+    generation: 0,
+    lastSequence: 0,
+    loading: false,
+  };
+  chatMessages.replaceChildren();
+  chatEmpty.hidden = true;
+  renderChatHeader(conversation);
+  sessionsView.hidden = true;
+  chatView.hidden = false;
+  void loadMoreEvents();
+}
+
+function closeChat() {
+  openConversation = null;
+  chatView.hidden = true;
+  sessionsView.hidden = false;
+  if (latestSnapshot) renderSnapshot(latestSnapshot);
+}
+
+chatBack.addEventListener("click", closeChat);
 
 async function fetchSessions() {
   let response;
@@ -142,6 +318,21 @@ function connectSocket() {
     }
     if (message.type === "session_list" && message.snapshot) {
       renderSnapshot(message.snapshot);
+    } else if (message.type === "conversation_events" && message.page && openConversation
+               && message.page.conversationID === openConversation.conversationID) {
+      const page = message.page;
+      if (openConversation.run
+          && (page.projectionRunID !== openConversation.run
+              || page.projectionGeneration !== openConversation.generation)) {
+        resetChatTranscript();
+        void loadMoreEvents();
+      } else if (openConversation.run) {
+        applyEvents(page.events);
+      }
+    } else if (message.type === "resnapshot_required" && openConversation
+               && message.conversationID === openConversation.conversationID) {
+      resetChatTranscript();
+      void loadMoreEvents();
     }
     // Unknown message types are ignored by design.
   };

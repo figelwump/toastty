@@ -82,6 +82,8 @@ public final class RemoteGatewayRequestHandler {
             return handleSubscribe(request, at: date)
         case ("POST", "/api/pair"):
             return handlePair(request, at: date)
+        case ("POST", "/api/conversation.events.get"):
+            return handleConversationEvents(request, at: date)
         case ("GET", let path):
             return handleStatic(path: path)
         default:
@@ -139,6 +141,40 @@ public final class RemoteGatewayRequestHandler {
             let body = (try? encoder.encode(RemoteGatewaySessionListResponse(snapshot: snapshot))) ?? Data()
             return .respond(.json(body: body))
         }
+    }
+
+    private func handleConversationEvents(_ request: RemoteGatewayHTTPRequest, at date: Date) -> Outcome {
+        // Browsers attach Origin to POSTs; require and verify it like pairing.
+        guard let origin = request.header("origin"),
+              configuration.allowedOrigins.contains(origin) else {
+            return .respond(errorResponse(status: 403, reason: "Forbidden", code: "origin_required", message: "Origin required"))
+        }
+        switch authenticate(request, at: date) {
+        case .failure(let response):
+            return .respond(response)
+        case .success:
+            break
+        }
+        guard let eventsRequest = try? ConversationEventCoding.makeDecoder().decode(RemoteGatewayEventsRequest.self, from: request.body) else {
+            return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected events request JSON"))
+        }
+
+        let outcome = facade.conversationEvents(
+            for: eventsRequest.conversationID,
+            after: eventsRequest.cursor,
+            limit: eventsRequest.limit ?? 200
+        )
+        let response: RemoteGatewayEventsResponse
+        switch outcome {
+        case .page(let page):
+            response = .page(page)
+        case .resnapshotRequired:
+            response = .resnapshotRequired
+        case .conversationNotFound:
+            response = .conversationNotFound
+        }
+        let body = (try? encoder.encode(response)) ?? Data()
+        return .respond(.json(body: body))
     }
 
     private func handleSubscribe(_ request: RemoteGatewayHTTPRequest, at date: Date) -> Outcome {

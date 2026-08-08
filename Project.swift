@@ -536,7 +536,11 @@ let project = Project(
             bundleId: "com.GiantThings.toastty.app.tests",
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
-            sources: ["Tests/App/**"],
+            sources: [
+                "Tests/App/**",
+                // Shared Codex rollout fixtures, also compiled into CoreStateTests.
+                "Tests/Core/RemoteAccess/CodexRolloutFixtures.swift",
+            ],
             dependencies: appTestDependencies,
             settings: appTestTargetSettings
         ),

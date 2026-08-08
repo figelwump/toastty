@@ -46,6 +46,7 @@ public final class RemoteConversationProjectionStore {
         _ conversationID: RemoteConversationID,
         descriptor: ConversationDescriptor,
         bindingID: UUID,
+        runtimeBound: Bool = true,
         at date: Date
     ) {
         guard projectorsByID[conversationID] == nil else {
@@ -56,10 +57,19 @@ public final class RemoteConversationProjectionStore {
             conversationID: conversationID,
             provider: descriptor.provider,
             bindingID: bindingID,
+            runtimeBound: runtimeBound,
             at: date
         )
         descriptorsByID[conversationID] = descriptor
         conversationOrder.append(conversationID)
+    }
+
+    public func isConversationRegistered(_ conversationID: RemoteConversationID) -> Bool {
+        projectorsByID[conversationID] != nil
+    }
+
+    public func projectorState(for conversationID: RemoteConversationID) -> ConversationProjector? {
+        projectorsByID[conversationID]
     }
 
     public func updateDescriptor(
@@ -123,6 +133,7 @@ public final class RemoteConversationProjectionStore {
             provider: descriptor.provider,
             generation: previous.generation + 1,
             bindingID: bindingID,
+            runtimeBound: previous.isRuntimeBound,
             at: date
         )
         replacement.noteBinding(reason: .projectionRebuilt, bindingID: bindingID, at: date)

@@ -64,20 +64,93 @@ public struct RemoteGatewaySessionListResponse: Codable, Equatable, Sendable {
     }
 }
 
-/// Server-to-client message on the v0 subscription stream. v0 rebroadcasts
-/// full session-list snapshots; per-conversation ordered event streaming
-/// arrives with the v0.5 transcript work.
+/// Body of `POST /api/conversation.events.get`.
+public struct RemoteGatewayEventsRequest: Codable, Equatable, Sendable {
+    public var conversationID: RemoteConversationID
+    public var cursor: ConversationEventCursor?
+    public var limit: Int?
+
+    public init(conversationID: RemoteConversationID, cursor: ConversationEventCursor? = nil, limit: Int? = nil) {
+        self.conversationID = conversationID
+        self.cursor = cursor
+        self.limit = limit
+    }
+}
+
+/// Response for `conversation.events.get`. `resnapshot_required` tells the
+/// client its cursor belongs to a discarded sequence space: drop the rendered
+/// transcript and reload from the start of the current run/generation.
+public enum RemoteGatewayEventsResponse: Equatable, Sendable {
+    case page(ConversationEventPage)
+    case resnapshotRequired
+    case conversationNotFound
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion
+        case outcome
+        case page
+    }
+
+    private enum Outcome: String, Codable {
+        case page
+        case resnapshotRequired = "resnapshot_required"
+        case conversationNotFound = "not_found"
+    }
+}
+
+extension RemoteGatewayEventsResponse: Codable {
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Outcome.self, forKey: .outcome) {
+        case .page:
+            self = .page(try container.decode(ConversationEventPage.self, forKey: .page))
+        case .resnapshotRequired:
+            self = .resnapshotRequired
+        case .conversationNotFound:
+            self = .conversationNotFound
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(RemoteGatewayProtocol.version, forKey: .protocolVersion)
+        switch self {
+        case .page(let page):
+            try container.encode(Outcome.page, forKey: .outcome)
+            try container.encode(page, forKey: .page)
+        case .resnapshotRequired:
+            try container.encode(Outcome.resnapshotRequired, forKey: .outcome)
+        case .conversationNotFound:
+            try container.encode(Outcome.conversationNotFound, forKey: .outcome)
+        }
+    }
+}
+
+/// Server-to-client message on the subscription stream.
+///
+/// `session_list` rebroadcasts full list snapshots. `conversation_events`
+/// carries newly appended ordered events for one conversation (page-shaped,
+/// same sequence space as `conversation.events.get`); a client that sees a
+/// sequence gap re-pages from its last confirmed cursor.
+/// `resnapshot_required` tells subscribers one conversation's sequence space
+/// was discarded mid-run. Clients must ignore unknown message types.
 public enum RemoteGatewayStreamMessage: Equatable, Sendable {
     case sessionList(RemoteSessionListSnapshot)
+    case conversationEvents(ConversationEventPage)
+    case resnapshotRequired(conversationID: RemoteConversationID)
 
     private enum CodingKeys: String, CodingKey {
         case protocolVersion
         case type
         case snapshot
+        case page
+        case conversationID
     }
 
     private enum MessageType: String, Codable {
         case sessionList = "session_list"
+        case conversationEvents = "conversation_events"
+        case resnapshotRequired = "resnapshot_required"
     }
 }
 
@@ -87,6 +160,10 @@ extension RemoteGatewayStreamMessage: Codable {
         switch try container.decode(MessageType.self, forKey: .type) {
         case .sessionList:
             self = .sessionList(try container.decode(RemoteSessionListSnapshot.self, forKey: .snapshot))
+        case .conversationEvents:
+            self = .conversationEvents(try container.decode(ConversationEventPage.self, forKey: .page))
+        case .resnapshotRequired:
+            self = .resnapshotRequired(conversationID: try container.decode(RemoteConversationID.self, forKey: .conversationID))
         }
     }
 
@@ -97,6 +174,12 @@ extension RemoteGatewayStreamMessage: Codable {
         case .sessionList(let snapshot):
             try container.encode(MessageType.sessionList, forKey: .type)
             try container.encode(snapshot, forKey: .snapshot)
+        case .conversationEvents(let page):
+            try container.encode(MessageType.conversationEvents, forKey: .type)
+            try container.encode(page, forKey: .page)
+        case .resnapshotRequired(let conversationID):
+            try container.encode(MessageType.resnapshotRequired, forKey: .type)
+            try container.encode(conversationID, forKey: .conversationID)
         }
     }
 }

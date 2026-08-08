@@ -233,6 +233,41 @@ struct ConversationProjectorTests {
         #expect(projector.pendingInteractions.isEmpty)
     }
 
+    @Test func offlineProjectionNeverPublishesOpenPrompt() {
+        var projector = ConversationProjector(
+            conversationID: Self.conversationID,
+            provider: .codex,
+            bindingID: Self.bindingID,
+            runtimeBound: false,
+            at: Self.epochDate
+        )
+        #expect(projector.state == .offline)
+
+        for observation in Self.observations(CodexRolloutFixtures.basicSession) {
+            projector.ingest(observation)
+        }
+        // The transcript is fully readable...
+        #expect(projector.events.contains { $0.kind == .userMessage })
+        #expect(projector.events.contains { $0.kind == .assistantMessage })
+        // ...but the historical task_complete records never surface a live
+        // prompt: no runtime exists to honor it.
+        #expect(projector.state == .offline)
+        #expect(projector.inputAvailability == .unavailable(reason: .offline))
+        let publishedOpenPrompt = projector.events.contains { event in
+            guard case .statusChanged(let payload) = event.payload else { return false }
+            return payload.inputAvailability.allowsRemoteSend
+        }
+        #expect(publishedOpenPrompt == false)
+
+        // Binding a runtime re-enables live transitions.
+        projector.noteBinding(reason: .runtimeResumed, bindingID: Self.resumedBindingID, at: Self.epochDate.addingTimeInterval(60))
+        for observation in Self.observations(CodexRolloutFixtures.resumeContinuation) {
+            projector.ingest(observation)
+        }
+        #expect(projector.state == .awaitingInput)
+        #expect(projector.inputAvailability.allowsRemoteSend)
+    }
+
     @Test func providerDerivedEventsRebuildDeterministically() {
         func buildEvents() -> [ConversationEvent] {
             var projector = Self.makeProjector()

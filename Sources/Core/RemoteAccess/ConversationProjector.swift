@@ -22,6 +22,11 @@ public struct ConversationProjector: Sendable {
     public private(set) var providerSessionID: String?
     public private(set) var providerSessionFilePath: String?
     public private(set) var updatedAt: Date
+    /// Whether a live managed runtime is currently bound. While false, every
+    /// transition is forced to offline/read-only: replaying a historical
+    /// provider log for an offline conversation must never publish an open
+    /// prompt no runtime can honor.
+    public private(set) var isRuntimeBound: Bool
 
     private var currentEpoch: RemoteInputEpoch
     private var seenFingerprints: Set<String>
@@ -37,14 +42,16 @@ public struct ConversationProjector: Sendable {
         provider: AgentKind,
         generation: UInt64 = 0,
         bindingID: UUID,
+        runtimeBound: Bool = true,
         at date: Date
     ) {
         self.conversationID = conversationID
         self.provider = provider
         self.generation = generation
         self.events = []
-        self.state = .starting
-        self.inputAvailability = .unavailable(reason: .starting)
+        self.isRuntimeBound = runtimeBound
+        self.state = runtimeBound ? .starting : .offline
+        self.inputAvailability = .unavailable(reason: runtimeBound ? .starting : .offline)
         self.pendingInteractions = []
         self.providerSessionID = nil
         self.providerSessionFilePath = nil
@@ -159,8 +166,10 @@ public struct ConversationProjector: Sendable {
 
         switch reason {
         case .runtimeBound, .runtimeResumed:
+            isRuntimeBound = true
             transition(to: .starting, availability: .unavailable(reason: .unknownProviderState), at: date, emitting: &emitted)
         case .runtimeEnded:
+            isRuntimeBound = false
             supersedePendingInteractions(at: date, emitting: &emitted)
             transition(to: .offline, availability: .unavailable(reason: .offline), at: date, emitting: &emitted)
         case .projectionRebuilt:
@@ -216,6 +225,12 @@ public struct ConversationProjector: Sendable {
         at date: Date,
         emitting emitted: inout [ConversationEvent]
     ) {
+        var newState = newState
+        var newAvailability = newAvailability
+        if isRuntimeBound == false {
+            newState = .offline
+            newAvailability = .unavailable(reason: .offline)
+        }
         guard newState != state || Self.availabilityMateriallyDiffers(inputAvailability, newAvailability) else {
             return
         }

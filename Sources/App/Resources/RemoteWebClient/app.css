@@ -103,3 +103,62 @@ h2 { font-size: 17px; }
   text-overflow: ellipsis;
 }
 #empty-state { color: var(--muted); text-align: center; margin-top: 40px; }
+#chat-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+#chat-back {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 17px;
+  padding: 6px 4px;
+}
+#chat-title { font-weight: 600; }
+#chat-title-block { min-width: 0; }
+#chat-title, #chat-state {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta { font-size: 13px; color: var(--muted); }
+#chat-messages { display: flex; flex-direction: column; gap: 8px; }
+.bubble {
+  max-width: 85%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-size: 15px;
+  line-height: 1.35;
+}
+.bubble.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: white;
+}
+.bubble.assistant {
+  align-self: flex-start;
+  background: var(--card);
+}
+.bubble.assistant.commentary { opacity: 0.75; font-size: 14px; }
+.chip {
+  align-self: flex-start;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--card);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-family: ui-monospace, monospace;
+  max-width: 90%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip.status { font-family: -apple-system, system-ui, sans-serif; font-style: italic; background: none; }
+#chat-empty { color: var(--muted); text-align: center; margin-top: 40px; }

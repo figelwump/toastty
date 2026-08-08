@@ -119,6 +119,7 @@ struct RemoteWebSocketFramingTests {
 
 private struct StubFacade: RemoteSessionFacade {
     var snapshot: RemoteSessionListSnapshot
+    var eventsOutcome: ConversationEventPageOutcome = .conversationNotFound
 
     func sessionList(at date: Date) -> RemoteSessionListSnapshot {
         snapshot
@@ -133,7 +134,7 @@ private struct StubFacade: RemoteSessionFacade {
         after cursor: ConversationEventCursor?,
         limit: Int
     ) -> ConversationEventPageOutcome {
-        .conversationNotFound
+        eventsOutcome
     }
 }
 
@@ -143,7 +144,8 @@ struct RemoteGatewayRequestHandlerTests {
 
     static func makeHandler(
         deviceStore: RemoteDeviceStore = RemoteDeviceStore(fileURL: nil),
-        pairingLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 2, windowDuration: 60, lockoutDuration: 300)
+        pairingLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 2, windowDuration: 60, lockoutDuration: 300),
+        eventsOutcome: ConversationEventPageOutcome = .conversationNotFound
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
         let audit = RemoteAccessAuditLog(fileURL: nil)
         let snapshot = RemoteSessionListSnapshot(
@@ -154,7 +156,7 @@ struct RemoteGatewayRequestHandlerTests {
         let handler = RemoteGatewayRequestHandler(
             deviceStore: deviceStore,
             auditLog: audit,
-            facade: StubFacade(snapshot: snapshot),
+            facade: StubFacade(snapshot: snapshot, eventsOutcome: eventsOutcome),
             configuration: RemoteGatewayConfiguration(
                 allowedOrigins: [origin],
                 staticResources: [
@@ -350,6 +352,95 @@ struct RemoteGatewayRequestHandlerTests {
         #expect(upgradeText.contains("101 Switching Protocols"))
         #expect(upgradeText.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="))
         #expect(audit.recentEntries().contains { $0.action == .sessionSubscribed })
+    }
+
+    @Test func eventsEndpointRequiresOriginAndCredential() {
+        let (handler, store, _) = Self.makeHandler()
+        let cookie = Self.pairedDeviceCookie(store)
+        let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111"}"#
+
+        guard case .respond(let noOrigin) = handler.handle(
+            Self.request("POST", "/api/conversation.events.get", cookie: cookie, body: body),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(noOrigin.status == 403)
+
+        guard case .respond(let noAuth) = handler.handle(
+            Self.request("POST", "/api/conversation.events.get", origin: Self.origin, body: body),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(noAuth.status == 401)
+    }
+
+    @Test func eventsEndpointReturnsFacadeOutcomes() throws {
+        let conversationID = RemoteConversationID(rawValue: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+        let page = ConversationEventPage(
+            conversationID: conversationID,
+            projectionRunID: RemoteProjectionRunID(),
+            projectionGeneration: 1,
+            events: [
+                ConversationEvent(
+                    conversationID: conversationID,
+                    sequence: 1,
+                    eventID: "codex:test",
+                    timestamp: Self.now,
+                    provider: .codex,
+                    payload: .userMessage(ConversationUserMessagePayload(text: "hi"))
+                ),
+            ],
+            latestSequence: 1
+        )
+        let decoder = ConversationEventCoding.makeDecoder()
+        let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","limit":50}"#
+
+        for (outcome, expectation) in [
+            (ConversationEventPageOutcome.page(page), RemoteGatewayEventsResponse.page(page)),
+            (.resnapshotRequired, .resnapshotRequired),
+            (.conversationNotFound, .conversationNotFound),
+        ] {
+            let (handler, store, _) = Self.makeHandler(eventsOutcome: outcome)
+            let cookie = Self.pairedDeviceCookie(store)
+            guard case .respond(let response) = handler.handle(
+                Self.request("POST", "/api/conversation.events.get", origin: Self.origin, cookie: cookie, body: body),
+                at: Self.now
+            ) else {
+                Issue.record("Expected response")
+                return
+            }
+            #expect(response.status == 200)
+            let decoded = try decoder.decode(RemoteGatewayEventsResponse.self, from: response.body)
+            #expect(decoded == expectation)
+        }
+    }
+
+    @Test func streamMessagesForEventsAndResnapshotRoundTrip() throws {
+        let conversationID = RemoteConversationID()
+        let page = ConversationEventPage(
+            conversationID: conversationID,
+            projectionRunID: RemoteProjectionRunID(),
+            projectionGeneration: 0,
+            events: [],
+            latestSequence: 12
+        )
+        let encoder = ConversationEventCoding.makeEncoder()
+        let decoder = ConversationEventCoding.makeDecoder()
+
+        let eventsData = try encoder.encode(RemoteGatewayStreamMessage.conversationEvents(page))
+        let eventsJSON = try #require(String(data: eventsData, encoding: .utf8))
+        #expect(eventsJSON.contains(#""type":"conversation_events""#))
+        #expect(try decoder.decode(RemoteGatewayStreamMessage.self, from: eventsData) == .conversationEvents(page))
+
+        let resnapshotData = try encoder.encode(RemoteGatewayStreamMessage.resnapshotRequired(conversationID: conversationID))
+        let resnapshotJSON = try #require(String(data: resnapshotData, encoding: .utf8))
+        #expect(resnapshotJSON.contains(#""type":"resnapshot_required""#))
+        #expect(try decoder.decode(RemoteGatewayStreamMessage.self, from: resnapshotData)
+            == .resnapshotRequired(conversationID: conversationID))
     }
 
     @Test func subscribeWithoutOriginOrUpgradeIsRejected() {

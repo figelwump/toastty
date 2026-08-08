@@ -2,40 +2,29 @@ import Combine
 import CoreState
 import Foundation
 
-/// Thread-safe value box implementing the read facade for v0.
-///
-/// The main-actor service rebuilds the conversation summaries from the session
-/// registry and pushes them here; the gateway reads snapshots through the
-/// facade protocol. v0 summaries are presentation-derived and therefore always
-/// read-only (`unknownProviderState`) — display status never authorizes input.
-final class RemoteSessionListSnapshotFacade: RemoteSessionFacade, @unchecked Sendable {
-    let runID = RemoteProjectionRunID()
-    private let lock = NSLock()
-    private var conversations: [RemoteConversationSummary] = []
-
-    func update(conversations: [RemoteConversationSummary]) {
-        lock.lock()
-        defer { lock.unlock() }
-        self.conversations = conversations
-    }
+/// Facade handed to the gateway request handler. The gateway server is
+/// main-actor bound, so every call arrives on the main actor; this bridge
+/// makes that contract explicit and forwards into the service's isolated
+/// state. `assumeIsolated` traps loudly if a future transport ever calls the
+/// facade off the main actor.
+final class RemoteAccessFacadeBridge: RemoteSessionFacade, @unchecked Sendable {
+    weak var service: RemoteAccessService?
 
     func sessionList(at date: Date) -> RemoteSessionListSnapshot {
-        lock.lock()
-        defer { lock.unlock() }
-        return RemoteSessionListSnapshot(
-            projectionRunID: runID,
-            conversations: conversations,
-            generatedAt: date
-        )
+        MainActor.assumeIsolated {
+            service?.facadeSessionList(at: date)
+                ?? RemoteSessionListSnapshot(
+                    projectionRunID: RemoteProjectionRunID(),
+                    conversations: [],
+                    generatedAt: date
+                )
+        }
     }
 
     func conversationSnapshot(for conversationID: RemoteConversationID, at date: Date) -> RemoteConversationSnapshot? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let summary = conversations.first(where: { $0.conversationID == conversationID }) else {
-            return nil
+        MainActor.assumeIsolated {
+            service?.facadeConversationSnapshot(for: conversationID, at: date)
         }
-        return RemoteConversationSnapshot(summary: summary, pendingInteractions: [])
     }
 
     func conversationEvents(
@@ -43,8 +32,10 @@ final class RemoteSessionListSnapshotFacade: RemoteSessionFacade, @unchecked Sen
         after cursor: ConversationEventCursor?,
         limit: Int
     ) -> ConversationEventPageOutcome {
-        // Transcript paging arrives with the v0.5 projection wiring.
-        .conversationNotFound
+        MainActor.assumeIsolated {
+            service?.facadeConversationEvents(for: conversationID, after: cursor, limit: limit)
+                ?? .conversationNotFound
+        }
     }
 }
 
@@ -86,8 +77,9 @@ enum RemoteAccessPreferences {
 }
 
 /// Long-lived host service composing the remote-access gateway: device store,
-/// audit log, request handler, loopback listener, and the session-registry
-/// adapter feeding the read facade.
+/// audit log, request handler, loopback listener, the session-registry
+/// adapter, and — for Codex conversations — the live transcript projection
+/// fed by rollout-file tailers.
 @MainActor
 final class RemoteAccessService: ObservableObject {
     @Published private(set) var isEnabled: Bool = false
@@ -107,11 +99,15 @@ final class RemoteAccessService: ObservableObject {
     private let sessionRuntimeStore: SessionRuntimeStore
     private let deviceStore: RemoteDeviceStore
     private let auditLog: RemoteAccessAuditLog
-    private let facade = RemoteSessionListSnapshotFacade()
+    private let projectionStore = RemoteConversationProjectionStore()
+    private let facadeBridge = RemoteAccessFacadeBridge()
     private let handler: RemoteGatewayRequestHandler
     private let server: RemoteAccessGatewayServer
     private let port: UInt16
     private var cancellables: Set<AnyCancellable> = []
+
+    private var tailersByConversationID: [RemoteConversationID: RemoteTranscriptTailer] = [:]
+    private var activeSessionIDByConversationID: [RemoteConversationID: String] = [:]
 
     init(
         store: AppStore,
@@ -127,11 +123,12 @@ final class RemoteAccessService: ObservableObject {
         self.handler = RemoteGatewayRequestHandler(
             deviceStore: deviceStore,
             auditLog: auditLog,
-            facade: facade,
+            facade: facadeBridge,
             configuration: RemoteGatewayConfiguration(allowedOrigins: [])
         )
         self.server = RemoteAccessGatewayServer(handler: handler)
         self.devices = deviceStore.devices
+        facadeBridge.service = self
 
         server.onWebSocketCountChanged = { [weak self] count in
             guard let self else { return }
@@ -140,18 +137,31 @@ final class RemoteAccessService: ObservableObject {
             if count > previousCount {
                 // A fresh subscriber gets the current snapshot immediately
                 // instead of waiting for the next registry change.
-                self.publishSessionList()
+                self.broadcastSessionList()
             }
         }
 
         sessionRuntimeStore.$sessionRegistry
             .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
             .sink { [weak self] _ in
-                self?.publishSessionList()
+                self?.syncConversations()
             }
             .store(in: &cancellables)
 
+        // Resume-record and conversation-identity changes mutate panel state
+        // without touching the session registry; without this observer a
+        // rollout-path change would never restart the transcript tailer.
+        store.addActionAppliedObserver { [weak self] action, _, _ in
+            switch action {
+            case .updateTerminalPanelResumeRecord, .updateTerminalPanelRemoteConversationID:
+                self?.syncConversations()
+            default:
+                break
+            }
+        }
+
         refreshHandlerConfiguration()
+        syncConversations(broadcast: false)
         if RemoteAccessPreferences.loadEnabled() {
             setEnabled(true, persist: false)
         }
@@ -165,7 +175,7 @@ final class RemoteAccessService: ObservableObject {
         }
         startupError = nil
         if enabled {
-            publishSessionList(broadcast: false)
+            syncConversations(broadcast: false)
             do {
                 try server.start(port: port)
                 isEnabled = true
@@ -224,62 +234,244 @@ final class RemoteAccessService: ObservableObject {
         auditLog.recentEntries(limit: limit)
     }
 
-    // MARK: - Session list adapter
+    // MARK: - Facade surface (main-actor entry points for the bridge)
 
-    private func publishSessionList(broadcast: Bool = true) {
-        let conversations = buildConversationSummaries()
-        facade.update(conversations: conversations)
-        guard broadcast, isEnabled else { return }
-        server.broadcast(.sessionList(facade.sessionList(at: Date())))
+    func facadeSessionList(at date: Date) -> RemoteSessionListSnapshot {
+        RemoteSessionListSnapshot(
+            projectionRunID: projectionStore.runID,
+            conversations: buildConversationSummaries(),
+            generatedAt: date
+        )
+    }
+
+    func facadeConversationSnapshot(for conversationID: RemoteConversationID, at date: Date) -> RemoteConversationSnapshot? {
+        if let snapshot = projectionStore.conversationSnapshot(for: conversationID, at: date) {
+            var snapshot = snapshot
+            // The projection store has no descriptor context for placement
+            // titles; overlay the registry-derived summary when available.
+            if let summary = buildConversationSummaries().first(where: { $0.conversationID == conversationID }) {
+                snapshot.summary = summary
+            }
+            return snapshot
+        }
+        guard let summary = buildConversationSummaries().first(where: { $0.conversationID == conversationID }) else {
+            return nil
+        }
+        return RemoteConversationSnapshot(summary: summary, pendingInteractions: [])
+    }
+
+    func facadeConversationEvents(
+        for conversationID: RemoteConversationID,
+        after cursor: ConversationEventCursor?,
+        limit: Int
+    ) -> ConversationEventPageOutcome {
+        projectionStore.conversationEvents(for: conversationID, after: cursor, limit: limit)
+    }
+
+    // MARK: - Conversation sync
+
+    /// One row of the panel scan: a panel that currently represents (or last
+    /// represented) a managed agent conversation.
+    private struct ConversationCandidate {
+        var conversationID: RemoteConversationID
+        var provider: AgentKind
+        var title: String
+        var workspaceID: UUID
+        var workspaceTitle: String
+        var panelID: UUID
+        var cwd: String?
+        var activeSessionID: String?
+        var registryState: RemoteSessionState
+        var updatedAt: Date
+        var codexRolloutPath: String?
+    }
+
+    private func syncConversations(broadcast: Bool = true) {
+        let candidates = scanConversationCandidates(mintingIDs: true)
+        var seenConversationIDs: Set<RemoteConversationID> = []
+        var listChanged = false
+
+        for candidate in candidates {
+            seenConversationIDs.insert(candidate.conversationID)
+            guard candidate.provider == .codex, let rolloutPath = candidate.codexRolloutPath else {
+                // Non-Codex conversations stay registry-derived for now
+                // (v0.75 adds the Claude parser against the same schema).
+                continue
+            }
+
+            let isNewRegistration = projectionStore.isConversationRegistered(candidate.conversationID) == false
+            if isNewRegistration {
+                projectionStore.registerConversation(
+                    candidate.conversationID,
+                    descriptor: RemoteConversationProjectionStore.ConversationDescriptor(
+                        provider: candidate.provider,
+                        title: candidate.title,
+                        placement: RemoteConversationPlacement(
+                            workspaceID: candidate.workspaceID,
+                            workspaceTitle: candidate.workspaceTitle,
+                            panelID: candidate.panelID
+                        ),
+                        cwd: candidate.cwd
+                    ),
+                    bindingID: UUID(),
+                    runtimeBound: false,
+                    at: Date()
+                )
+                listChanged = true
+            }
+
+            let previousActiveSessionID = activeSessionIDByConversationID[candidate.conversationID]
+            if let activeSessionID = candidate.activeSessionID {
+                if previousActiveSessionID != activeSessionID {
+                    // A runtime (newly or re-)bound to this conversation.
+                    let reason: ConversationBindingChangeReason =
+                        (previousActiveSessionID == nil && isNewRegistration == false) || previousActiveSessionID != nil
+                            ? .runtimeResumed
+                            : .runtimeBound
+                    let emitted = projectionStore.noteBinding(
+                        for: candidate.conversationID,
+                        reason: reason,
+                        providerSessionFilePath: rolloutPath,
+                        bindingID: UUID(),
+                        at: Date()
+                    )
+                    broadcastEvents(emitted, for: candidate.conversationID)
+                    activeSessionIDByConversationID[candidate.conversationID] = activeSessionID
+                    listChanged = true
+                }
+            } else if previousActiveSessionID != nil {
+                let emitted = projectionStore.noteBinding(
+                    for: candidate.conversationID,
+                    reason: .runtimeEnded,
+                    bindingID: UUID(),
+                    at: Date()
+                )
+                broadcastEvents(emitted, for: candidate.conversationID)
+                activeSessionIDByConversationID[candidate.conversationID] = nil
+                listChanged = true
+            }
+
+            ensureTailer(for: candidate.conversationID, path: rolloutPath)
+        }
+
+        // Conversations whose panels disappeared: delete their cache entries.
+        for conversationID in tailersByConversationID.keys where seenConversationIDs.contains(conversationID) == false {
+            tailersByConversationID[conversationID]?.stop()
+            tailersByConversationID[conversationID] = nil
+            projectionStore.removeConversation(conversationID)
+            activeSessionIDByConversationID[conversationID] = nil
+            listChanged = true
+        }
+
+        if broadcast, listChanged || candidates.isEmpty == false {
+            broadcastSessionList()
+        }
+    }
+
+    private func scanConversationCandidates(mintingIDs: Bool) -> [ConversationCandidate] {
+        let registry = sessionRuntimeStore.sessionRegistry
+        var candidates: [ConversationCandidate] = []
+        var seenPanelIDs: Set<UUID> = []
+
+        for workspace in store.state.workspacesByID.values {
+            for (panelID, panelState) in workspace.panels {
+                guard case .terminal(let terminalState) = panelState else { continue }
+
+                let activeSessionID = registry.activeSessionIDByPanelID[panelID]
+                let activeRecord = activeSessionID.flatMap { registry.sessionsByID[$0] }
+                let hasLiveAgent = activeRecord.map { $0.isActive && $0.agent != .processWatch } ?? false
+                let hasRestorableTranscript = terminalState.remoteConversationID != nil
+                    && terminalState.resumeRecord?.agent == .codex
+                guard hasLiveAgent || hasRestorableTranscript else { continue }
+                guard seenPanelIDs.insert(panelID).inserted else { continue }
+
+                let conversationID: RemoteConversationID
+                if let existing = terminalState.remoteConversationID {
+                    conversationID = existing
+                } else if mintingIDs {
+                    let minted = RemoteConversationID()
+                    guard store.send(.updateTerminalPanelRemoteConversationID(
+                        panelID: panelID,
+                        remoteConversationID: minted
+                    )) else {
+                        continue
+                    }
+                    conversationID = minted
+                } else {
+                    continue
+                }
+
+                let provider = activeRecord?.agent ?? terminalState.resumeRecord?.agent ?? .codex
+                let rolloutPath: String?
+                if provider == .codex {
+                    rolloutPath = terminalState.resumeRecord?.sessionFilePath
+                } else {
+                    rolloutPath = nil
+                }
+
+                candidates.append(ConversationCandidate(
+                    conversationID: conversationID,
+                    provider: provider,
+                    title: activeRecord?.displayTitleOverride ?? terminalState.displayPanelLabel,
+                    workspaceID: workspace.id,
+                    workspaceTitle: workspace.title,
+                    panelID: panelID,
+                    cwd: activeRecord?.cwd ?? terminalState.resumeRecord?.cwd,
+                    activeSessionID: hasLiveAgent ? activeSessionID : nil,
+                    registryState: activeRecord.flatMap { record in
+                        record.status.map { Self.remoteState(for: $0.kind) }
+                    } ?? (hasLiveAgent ? .starting : .offline),
+                    updatedAt: activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? Date(),
+                    codexRolloutPath: rolloutPath
+                ))
+            }
+        }
+
+        return candidates.sorted { lhs, rhs in
+            (lhs.workspaceTitle, lhs.title, lhs.conversationID.rawValue.uuidString)
+                < (rhs.workspaceTitle, rhs.title, rhs.conversationID.rawValue.uuidString)
+        }
     }
 
     private func buildConversationSummaries() -> [RemoteConversationSummary] {
-        let registry = sessionRuntimeStore.sessionRegistry
-        var summaries: [RemoteConversationSummary] = []
-
-        for sessionID in registry.sessionOrder {
-            guard let record = registry.sessionsByID[sessionID],
-                  record.isActive,
-                  record.agent != .processWatch,
-                  registry.activeSessionIDByPanelID[record.panelID] == sessionID else {
-                continue
+        scanConversationCandidates(mintingIDs: false).map { candidate in
+            // Codex conversations with a live projection report
+            // transcript-derived state; everything else stays
+            // presentation-derived and read-only.
+            if let projector = projectionStore.projectorState(for: candidate.conversationID) {
+                return RemoteConversationSummary(
+                    conversationID: candidate.conversationID,
+                    provider: candidate.provider,
+                    title: candidate.title,
+                    placement: RemoteConversationPlacement(
+                        workspaceID: candidate.workspaceID,
+                        workspaceTitle: candidate.workspaceTitle,
+                        panelID: candidate.panelID
+                    ),
+                    cwd: candidate.cwd,
+                    state: projector.state,
+                    inputAvailability: projector.inputAvailability,
+                    projectionGeneration: projector.generation,
+                    latestSequence: projector.latestSequence,
+                    updatedAt: max(projector.updatedAt, candidate.updatedAt)
+                )
             }
-            guard let workspace = store.state.workspacesByID[record.workspaceID],
-                  case .terminal(let terminalState) = workspace.panels[record.panelID] else {
-                continue
-            }
-
-            let conversationID: RemoteConversationID
-            if let existing = terminalState.remoteConversationID {
-                conversationID = existing
-            } else {
-                let minted = RemoteConversationID()
-                guard store.send(.updateTerminalPanelRemoteConversationID(
-                    panelID: record.panelID,
-                    remoteConversationID: minted
-                )) else {
-                    continue
-                }
-                conversationID = minted
-            }
-
-            summaries.append(RemoteConversationSummary(
-                conversationID: conversationID,
-                provider: record.agent,
-                title: record.displayTitleOverride ?? terminalState.displayPanelLabel,
+            return RemoteConversationSummary(
+                conversationID: candidate.conversationID,
+                provider: candidate.provider,
+                title: candidate.title,
                 placement: RemoteConversationPlacement(
-                    workspaceID: record.workspaceID,
-                    workspaceTitle: workspace.title,
-                    panelID: record.panelID
+                    workspaceID: candidate.workspaceID,
+                    workspaceTitle: candidate.workspaceTitle,
+                    panelID: candidate.panelID
                 ),
-                cwd: record.cwd,
-                state: record.status.map { Self.remoteState(for: $0.kind) } ?? .starting,
+                cwd: candidate.cwd,
+                state: candidate.registryState,
                 inputAvailability: .unavailable(reason: .unknownProviderState),
                 latestSequence: 0,
-                updatedAt: record.updatedAt
-            ))
+                updatedAt: candidate.updatedAt
+            )
         }
-        return summaries
     }
 
     private static func remoteState(for kind: SessionStatusKind) -> RemoteSessionState {
@@ -293,6 +485,78 @@ final class RemoteAccessService: ObservableObject {
         case .error:
             return .error
         }
+    }
+
+    // MARK: - Transcript tailers
+
+    private func ensureTailer(for conversationID: RemoteConversationID, path: String) {
+        if let existing = tailersByConversationID[conversationID] {
+            if existing.fileURL.path == path {
+                return
+            }
+            existing.stop()
+            tailersByConversationID[conversationID] = nil
+        }
+        startTailer(for: conversationID, path: path)
+    }
+
+    private func startTailer(for conversationID: RemoteConversationID, path: String) {
+        let tailer = RemoteTranscriptTailer(
+            conversationID: conversationID,
+            fileURL: URL(filePath: path)
+        ) { [weak self] conversationID, event in
+            self?.handleTailerEvent(conversationID, event)
+        }
+        tailersByConversationID[conversationID] = tailer
+        tailer.start()
+    }
+
+    private func handleTailerEvent(_ conversationID: RemoteConversationID, _ event: RemoteTranscriptTailer.Event) {
+        switch event {
+        case .observations(let observations):
+            let emitted = projectionStore.ingest(observations, for: conversationID)
+            broadcastEvents(emitted, for: conversationID)
+
+        case .fileReplaced:
+            // Unreconcilable rewrite: discard this conversation's sequence
+            // space and re-read the file from the start under a fresh
+            // generation.
+            guard let tailer = tailersByConversationID[conversationID] else { return }
+            let path = tailer.fileURL.path
+            tailer.stop()
+            tailersByConversationID[conversationID] = nil
+            projectionStore.forceResnapshot(for: conversationID, bindingID: UUID(), at: Date())
+            if isEnabled {
+                server.broadcast(.resnapshotRequired(conversationID: conversationID))
+            }
+            startTailer(for: conversationID, path: path)
+            broadcastSessionList()
+        }
+    }
+
+    // MARK: - Broadcasting
+
+    private func broadcastEvents(_ events: [ConversationEvent], for conversationID: RemoteConversationID) {
+        guard events.isEmpty == false else { return }
+        guard isEnabled, let projector = projectionStore.projectorState(for: conversationID) else {
+            return
+        }
+        server.broadcast(.conversationEvents(ConversationEventPage(
+            conversationID: conversationID,
+            projectionRunID: projectionStore.runID,
+            projectionGeneration: projector.generation,
+            events: events,
+            latestSequence: projector.latestSequence
+        )))
+        // Status-bearing events change the list rows too.
+        if events.contains(where: { $0.kind == .statusChanged || $0.kind == .sessionBindingChanged }) {
+            broadcastSessionList()
+        }
+    }
+
+    private func broadcastSessionList() {
+        guard isEnabled else { return }
+        server.broadcast(.sessionList(facadeSessionList(at: Date())))
     }
 
     // MARK: - Configuration
