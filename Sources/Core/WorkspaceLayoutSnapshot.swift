@@ -45,17 +45,20 @@ public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable
     public var launchWorkingDirectory: String
     public var profileBinding: TerminalProfileBinding?
     public var resumeRecord: ManagedAgentResumeRecord?
+    public var remoteConversationID: RemoteConversationID?
 
     public init(
         shell: String,
         launchWorkingDirectory: String,
         profileBinding: TerminalProfileBinding? = nil,
-        resumeRecord: ManagedAgentResumeRecord? = nil
+        resumeRecord: ManagedAgentResumeRecord? = nil,
+        remoteConversationID: RemoteConversationID? = nil
     ) {
         self.shell = shell
         self.launchWorkingDirectory = launchWorkingDirectory
         self.profileBinding = profileBinding
         self.resumeRecord = resumeRecord
+        self.remoteConversationID = remoteConversationID
     }
 
     init(terminalState: TerminalPanelState) {
@@ -63,6 +66,7 @@ public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable
         launchWorkingDirectory = terminalState.workingDirectorySeed
         profileBinding = terminalState.profileBinding
         resumeRecord = terminalState.resumeRecord
+        remoteConversationID = terminalState.remoteConversationID
     }
 }
 
@@ -72,6 +76,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         case launchWorkingDirectory
         case profileBinding
         case resumeRecord
+        case remoteConversationID
         case cwd
     }
 
@@ -85,6 +90,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         }
         profileBinding = try container.decodeIfPresent(TerminalProfileBinding.self, forKey: .profileBinding)
         resumeRecord = try container.decodeIfPresent(ManagedAgentResumeRecord.self, forKey: .resumeRecord)
+        remoteConversationID = try container.decodeIfPresent(RemoteConversationID.self, forKey: .remoteConversationID)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -93,6 +99,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         try container.encode(launchWorkingDirectory, forKey: .launchWorkingDirectory)
         try container.encodeIfPresent(profileBinding, forKey: .profileBinding)
         try container.encodeIfPresent(resumeRecord, forKey: .resumeRecord)
+        try container.encodeIfPresent(remoteConversationID, forKey: .remoteConversationID)
         // Preserve downgrade compatibility while older builds still decode the
         // legacy terminal snapshot schema from `cwd`.
         try container.encode(launchWorkingDirectory, forKey: .cwd)
@@ -393,7 +400,8 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
                         cwd: "",
                         launchWorkingDirectory: terminalSnapshot.launchWorkingDirectory,
                         profileBinding: terminalSnapshot.profileBinding,
-                        resumeRecord: terminalSnapshot.resumeRecord
+                        resumeRecord: terminalSnapshot.resumeRecord,
+                        remoteConversationID: terminalSnapshot.remoteConversationID
                     )
                 )
             case .web(let webState):

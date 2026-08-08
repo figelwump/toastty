@@ -7,6 +7,12 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
     public var launchWorkingDirectory: String?
     public var profileBinding: TerminalProfileBinding?
     public var resumeRecord: ManagedAgentResumeRecord?
+    /// Durable remote-access conversation identity for this panel's managed
+    /// agent sessions. Deliberately a sibling of `resumeRecord`: resume records
+    /// are cleared and replaced as native sessions rotate, while the
+    /// user-visible conversation (and any remote client following it) survives
+    /// those transitions.
+    public var remoteConversationID: RemoteConversationID?
     private static let homeDirectory = (NSHomeDirectory() as NSString).standardizingPath
 
     public init(
@@ -15,7 +21,8 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         cwd: String,
         launchWorkingDirectory: String? = nil,
         profileBinding: TerminalProfileBinding? = nil,
-        resumeRecord: ManagedAgentResumeRecord? = nil
+        resumeRecord: ManagedAgentResumeRecord? = nil,
+        remoteConversationID: RemoteConversationID? = nil
     ) {
         self.title = title
         self.shell = shell
@@ -23,6 +30,7 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         self.launchWorkingDirectory = Self.normalizedWorkingDirectoryValue(launchWorkingDirectory)
         self.profileBinding = profileBinding
         self.resumeRecord = resumeRecord
+        self.remoteConversationID = remoteConversationID
     }
 
     /// The cwd we should use when launching or re-launching a shell surface.
