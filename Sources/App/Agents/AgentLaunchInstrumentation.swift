@@ -39,6 +39,20 @@ struct PreparedAgentLaunchArtifacts {
     let directoryURL: URL
     let codexSessionLogURL: URL?
     let cleanupPolicy: LaunchArtifactsCleanupPolicy
+    /// Paths outside `directoryURL` that must be removed on cleanup (e.g. Grok hook JSON).
+    let additionalCleanupURLs: [URL]
+
+    init(
+        directoryURL: URL,
+        codexSessionLogURL: URL?,
+        cleanupPolicy: LaunchArtifactsCleanupPolicy,
+        additionalCleanupURLs: [URL] = []
+    ) {
+        self.directoryURL = directoryURL
+        self.codexSessionLogURL = codexSessionLogURL
+        self.cleanupPolicy = cleanupPolicy
+        self.additionalCleanupURLs = additionalCleanupURLs
+    }
 }
 
 enum AgentLaunchInstrumentationError: LocalizedError {
@@ -120,6 +134,16 @@ enum AgentLaunchInstrumentation {
 
         if agent == .pi {
             return try preparePiLaunch(argv: argv, sessionID: sessionID, fileManager: fileManager)
+        }
+
+        if agent == .grok {
+            return try prepareGrokLaunch(
+                argv: argv,
+                cliExecutablePath: cliExecutablePath,
+                sessionID: sessionID,
+                fileManager: fileManager,
+                launchEnvironment: launchEnvironment
+            )
         }
 
         return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
@@ -309,6 +333,78 @@ enum AgentLaunchInstrumentation {
             )
         } catch {
             try? fileManager.removeItem(at: artifactsDirectoryURL)
+            throw error
+        }
+    }
+
+    private static func prepareGrokLaunch(
+        argv: [String],
+        cliExecutablePath: String,
+        sessionID: String,
+        fileManager: FileManager,
+        launchEnvironment: [String: String]
+    ) throws -> PreparedAgentLaunchCommand {
+        let grokHomeURL: URL
+        if let grokHomePath = normalizedNonEmptyValue(launchEnvironment["GROK_HOME"]) {
+            grokHomeURL = URL(
+                fileURLWithPath: (grokHomePath as NSString).expandingTildeInPath,
+                isDirectory: true
+            )
+        } else {
+            grokHomeURL = fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent(".grok", isDirectory: true)
+        }
+
+        let hooksDirectoryURL = grokHomeURL.appendingPathComponent("hooks", isDirectory: true)
+        try fileManager.createDirectory(at: hooksDirectoryURL, withIntermediateDirectories: true)
+
+        let artifactsDirectoryURL = try makeArtifactsDirectory(
+            prefix: "toastty-grok-launch",
+            sessionID: sessionID,
+            fileManager: fileManager
+        )
+        let hookJSONURL = hooksDirectoryURL.appendingPathComponent(
+            "toastty-\(sessionID).json",
+            isDirectory: false
+        )
+
+        do {
+            let hookScriptURL = artifactsDirectoryURL.appendingPathComponent("grok-hook.sh", isDirectory: false)
+            let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
+            try writeExecutableScript(
+                makeTelemetryForwarderScript(
+                    cliExecutablePath: cliExecutablePath,
+                    source: "grok-hooks",
+                    telemetryErrorLogURL: telemetryErrorLogURL,
+                    stderrFallbackURL: artifactsDirectoryURL.appendingPathComponent(
+                        "grok-hook.stderr",
+                        isDirectory: false
+                    ),
+                    inputMode: .stdinOrFirstArgument,
+                    expectedSessionID: sessionID
+                ),
+                to: hookScriptURL,
+                fileManager: fileManager
+            )
+
+            let command = "/bin/sh \(shellQuote(hookScriptURL.path))"
+            try writeJSONObject(makeGrokHooksConfig(command: command), to: hookJSONURL)
+
+            return PreparedAgentLaunchCommand(
+                argv: argv,
+                environment: [:],
+                artifacts: PreparedAgentLaunchArtifacts(
+                    directoryURL: artifactsDirectoryURL,
+                    codexSessionLogURL: nil,
+                    // Grok can still invoke hooks after Toastty has already
+                    // stopped tracking the managed session.
+                    cleanupPolicy: .retainAfterSessionStop,
+                    additionalCleanupURLs: [hookJSONURL]
+                )
+            )
+        } catch {
+            try? fileManager.removeItem(at: artifactsDirectoryURL)
+            try? fileManager.removeItem(at: hookJSONURL)
             throw error
         }
     }
@@ -1372,7 +1468,8 @@ private extension AgentLaunchInstrumentation {
         source: String,
         telemetryErrorLogURL: URL,
         stderrFallbackURL: URL,
-        inputMode: TelemetryInputMode
+        inputMode: TelemetryInputMode,
+        expectedSessionID: String? = nil
     ) -> String {
         let stderrTemplateURL = stderrFallbackURL.deletingLastPathComponent()
             .appendingPathComponent("telemetry-stderr.XXXXXX", isDirectory: false)
@@ -1404,34 +1501,75 @@ private extension AgentLaunchInstrumentation {
             ]
         }
 
-        return (
-            [
-                "#!/bin/sh",
-                "log_file=\(shellQuote(telemetryErrorLogURL.path))",
-                "stderr_file=\"$(mktemp \(shellQuote(stderrTemplateURL.path)) 2>/dev/null)\"",
-                "if [ -z \"$stderr_file\" ]; then",
-                "  stderr_file=\(shellQuote(stderrFallbackURL.path))",
+        var scriptLines = ["#!/bin/sh"]
+        if let expectedSessionID {
+            // Grok loads every file under $GROK_HOME/hooks. Concurrent Toastty
+            // sessions each install a forwarder; no-op unless env matches this
+            // launch's embedded session id.
+            scriptLines += [
+                "expected_session=\(shellQuote(expectedSessionID))",
+                "if [ -z \"${TOASTTY_SESSION_ID:-}\" ] || [ \"$TOASTTY_SESSION_ID\" != \"$expected_session\" ]; then",
+                "  exit 0",
                 "fi",
-                "rm -f \"$stderr_file\"",
                 "",
-                "append_telemetry_failure() {",
-                "  status=\"$1\"",
-                "  timestamp=\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\" 2>/dev/null || date)\"",
-                "  {",
-                "    printf '[%s] source=%s exit_code=%s socket_path=%s session_id=%s panel_id=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
-                "    if [ -s \"$stderr_file\" ]; then",
-                "      sed 's/^/stderr: /' \"$stderr_file\"",
-                "    else",
-                "      printf 'stderr: <empty>\\n'",
-                "    fi",
-                "  } >> \"$log_file\"",
-                "}",
-                "",
-            ] + commandInvocationLines + [
-                "rm -f \"$stderr_file\"",
-                "exit 0",
             ]
-        ).joined(separator: "\n")
+        }
+
+        scriptLines += [
+            "log_file=\(shellQuote(telemetryErrorLogURL.path))",
+            "stderr_file=\"$(mktemp \(shellQuote(stderrTemplateURL.path)) 2>/dev/null)\"",
+            "if [ -z \"$stderr_file\" ]; then",
+            "  stderr_file=\(shellQuote(stderrFallbackURL.path))",
+            "fi",
+            "rm -f \"$stderr_file\"",
+            "",
+            "append_telemetry_failure() {",
+            "  status=\"$1\"",
+            "  timestamp=\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\" 2>/dev/null || date)\"",
+            "  {",
+            "    printf '[%s] source=%s exit_code=%s socket_path=%s session_id=%s panel_id=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
+            "    if [ -s \"$stderr_file\" ]; then",
+            "      sed 's/^/stderr: /' \"$stderr_file\"",
+            "    else",
+            "      printf 'stderr: <empty>\\n'",
+            "    fi",
+            "  } >> \"$log_file\"",
+            "}",
+            "",
+        ]
+        scriptLines += commandInvocationLines
+        scriptLines += [
+            "rm -f \"$stderr_file\"",
+            "exit 0",
+        ]
+        return scriptLines.joined(separator: "\n")
+    }
+
+    static func makeGrokHooksConfig(command: String) -> [String: Any] {
+        let commandHook: [String: Any] = [
+            "type": "command",
+            "command": command,
+            "timeout": 5,
+        ]
+        let entry: [String: Any] = [
+            "hooks": [commandHook],
+        ]
+        // Grok discovery files use PascalCase event keys (wire payloads are snake_case).
+        let eventNames = [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "Stop",
+            "StopFailure",
+            "Notification",
+            "SubagentStart",
+            "SubagentStop",
+        ]
+        var hooks: [String: Any] = [:]
+        for eventName in eventNames {
+            hooks[eventName] = [entry]
+        }
+        return ["hooks": hooks]
     }
 
     static func jsonStringLiteral(_ value: String) -> String {

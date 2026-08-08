@@ -1014,6 +1014,143 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(telemetryLog.contains("stderr: "))
     }
 
+    func testPrepareGrokLaunchWritesSessionScopedHookAndGatedForwarder() throws {
+        let fileManager = FileManager.default
+        let grokHome = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-home-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: grokHome, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: grokHome) }
+
+        let sessionID = UUID().uuidString
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .grok,
+            argv: ["grok"],
+            cliExecutablePath: "/bin/echo",
+            sessionID: sessionID,
+            workingDirectory: "/tmp/repo",
+            fileManager: fileManager,
+            launchEnvironment: ["GROK_HOME": grokHome.path]
+        )
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+                for url in artifacts.additionalCleanupURLs {
+                    try? fileManager.removeItem(at: url)
+                }
+            }
+        }
+
+        XCTAssertEqual(preparedLaunch.argv, ["grok"])
+        XCTAssertEqual(preparedLaunch.environment, [:])
+        XCTAssertEqual(preparedLaunch.artifacts?.cleanupPolicy, .retainAfterSessionStop)
+
+        let hookURL = grokHome.appendingPathComponent("hooks/toastty-\(sessionID).json")
+        XCTAssertTrue(fileManager.fileExists(atPath: hookURL.path))
+        XCTAssertEqual(preparedLaunch.artifacts?.additionalCleanupURLs.map(\.path), [hookURL.path])
+
+        let hookData = try Data(contentsOf: hookURL)
+        let hookObject = try XCTUnwrap(JSONSerialization.jsonObject(with: hookData) as? [String: Any])
+        let hooks = try XCTUnwrap(hookObject["hooks"] as? [String: Any])
+        for name in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "Stop",
+            "StopFailure",
+            "Notification",
+            "SubagentStart",
+            "SubagentStop",
+        ] {
+            XCTAssertNotNil(hooks[name], "missing \(name)")
+        }
+
+        let scriptURL = try XCTUnwrap(
+            preparedLaunch.artifacts?.directoryURL.appendingPathComponent("grok-hook.sh")
+        )
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+        XCTAssertTrue(script.contains(sessionID), "expected-session gate should embed session id")
+        XCTAssertTrue(script.contains("grok-hooks"))
+        XCTAssertTrue(script.contains("TOASTTY_SESSION_ID"))
+
+        let sessionStartEntries = try XCTUnwrap(hooks["SessionStart"] as? [[String: Any]])
+        let firstEntry = try XCTUnwrap(sessionStartEntries.first)
+        let commandHooks = try XCTUnwrap(firstEntry["hooks"] as? [[String: Any]])
+        let command = try XCTUnwrap(commandHooks.first?["command"] as? String)
+        XCTAssertTrue(command.contains(scriptURL.path))
+        XCTAssertTrue(command.hasPrefix("/bin/sh ") || command == scriptURL.path)
+    }
+
+    func testGrokForwarderNoopsWhenSessionIdMismatch() throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-forward-gate-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let grokHome = rootURL.appendingPathComponent("grok-home", isDirectory: true)
+        try fileManager.createDirectory(at: grokHome, withIntermediateDirectories: true)
+
+        let markerURL = rootURL.appendingPathComponent("cli-invoked", isDirectory: false)
+        let fakeCLIURL = rootURL.appendingPathComponent("toastty-cli", isDirectory: false)
+        try Data(
+            """
+            #!/bin/sh
+            printf 'invoked\\n' > '\(markerURL.path)'
+            cat >/dev/null
+            exit 0
+
+            """.utf8
+        ).write(to: fakeCLIURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCLIURL.path)
+
+        let sessionID = "session-\(UUID().uuidString)"
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .grok,
+            argv: ["grok"],
+            cliExecutablePath: fakeCLIURL.path,
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager,
+            launchEnvironment: ["GROK_HOME": grokHome.path]
+        )
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+                for url in artifacts.additionalCleanupURLs {
+                    try? fileManager.removeItem(at: url)
+                }
+            }
+        }
+
+        let scriptURL = try XCTUnwrap(
+            preparedLaunch.artifacts?.directoryURL.appendingPathComponent("grok-hook.sh")
+        )
+        let payload = #"{"hook_event_name":"SessionStart","session_id":"native"}"#
+
+        let mismatch = try runScript(
+            at: scriptURL,
+            environment: [
+                "TOASTTY_SESSION_ID": "wrong-session",
+                "TOASTTY_SOCKET_PATH": "/tmp/test-grok-hooks.sock",
+            ],
+            standardInput: Data(payload.utf8)
+        )
+        XCTAssertEqual(mismatch.exitCode, 0)
+        XCTAssertEqual(mismatch.stdout, "")
+        XCTAssertFalse(fileManager.fileExists(atPath: markerURL.path))
+
+        let match = try runScript(
+            at: scriptURL,
+            environment: [
+                "TOASTTY_SESSION_ID": sessionID,
+                "TOASTTY_SOCKET_PATH": "/tmp/test-grok-hooks.sock",
+            ],
+            standardInput: Data(payload.utf8)
+        )
+        XCTAssertEqual(match.exitCode, 0)
+        XCTAssertTrue(fileManager.fileExists(atPath: markerURL.path))
+    }
+
     func testTomlBasicStringLiteralEscapesSpecialCharacters() {
         let literal = AgentLaunchInstrumentation.tomlBasicStringLiteralForTesting("line\n\t\"\\\u{7F}\u{0001}")
 
