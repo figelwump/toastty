@@ -60,7 +60,7 @@ enum ManagedAgentResumeResolver {
         switch agent {
         case .codex:
             resumeToken = "resume"
-        case .claude:
+        case .claude, .grok:
             resumeToken = "--resume"
         default:
             return nil
@@ -83,7 +83,7 @@ enum ManagedAgentResumeResolver {
         switch record.agent {
         case .codex:
             resumeArguments = ["resume", record.nativeSessionID]
-        case .claude:
+        case .claude, .grok:
             resumeArguments = ["--resume", record.nativeSessionID]
         case .opencode, .mimocode:
             resumeArguments = ["--session", record.nativeSessionID]
