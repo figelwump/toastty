@@ -269,6 +269,18 @@ Launch (menu / shim / agent.launch)
 3. Whether `SessionStart` includes a transcript/session path or only `sessionId` + cwd (derive path if needed).
 4. Grace window length for late hooks (start from Claude retain policy).
 
+### Spike findings (2026-08-08 live capture)
+
+Full redacted notes: `artifacts/manual/grok-hook-spike/CATALOG.md` (gitignored dumps).
+
+- **Wire `hookEventName` values are snake_case** (`session_start`, `user_prompt_submit`, `pre_tool_use`, `post_tool_use`, `permission_denied`, `stop`, `notification`, `subagent_start`, `subagent_stop`, `session_end`). Field names stay camelCase (`sessionId`, `transcriptPath`, …). Parser must normalize; do not require PascalCase event values.
+- **Needs approval: YES.** Map `notification` + `notificationType == "permission_prompt"` (message observed: `Tool permission requested`, `level`: `info`). No Claude-style `PermissionRequest` lifecycle event.
+- Also observed `notificationType == "task_complete"` for background task completion — not an approval signal.
+- `permission_denied` is post-deny (deny rules), not waiting-for-user.
+- `SessionStart` has `sessionId`, `cwd`, `workspaceRoot`, `source` (`new`); **no** `transcriptPath`. Later events include `transcriptPath` under `~/.grok/sessions/<urlencoded-cwd>/<sessionId>/updates.jsonl`.
+- `Stop.reason`: `end_turn` (turn complete) and `shutdown` (session-end observe fire). Gate Ready on `end_turn`.
+- Subagent identity: `subagentId`, `subagentType` (e.g. `general-purpose`), `description`; `SubagentStop.phase` was `gate`.
+
 ## Phased delivery
 
 1. **Spike** — catch-all hook capture for SessionStart, Stop, and a real permission prompt.
