@@ -283,7 +283,7 @@ final class RemoteAccessService: ObservableObject {
         var activeSessionID: String?
         var registryState: RemoteSessionState
         var updatedAt: Date
-        var codexRolloutPath: String?
+        var transcriptPath: String?
     }
 
     private func syncConversations(broadcast: Bool = true) {
@@ -293,9 +293,9 @@ final class RemoteAccessService: ObservableObject {
 
         for candidate in candidates {
             seenConversationIDs.insert(candidate.conversationID)
-            guard candidate.provider == .codex, let rolloutPath = candidate.codexRolloutPath else {
-                // Non-Codex conversations stay registry-derived for now
-                // (v0.75 adds the Claude parser against the same schema).
+            guard ProviderTranscriptSupport.isSupported(candidate.provider),
+                  let rolloutPath = candidate.transcriptPath else {
+                // Providers without a transcript parser stay registry-derived.
                 continue
             }
 
@@ -351,7 +351,7 @@ final class RemoteAccessService: ObservableObject {
                 listChanged = true
             }
 
-            ensureTailer(for: candidate.conversationID, path: rolloutPath)
+            ensureTailer(for: candidate.conversationID, provider: candidate.provider, path: rolloutPath)
         }
 
         // Conversations whose panels disappeared: delete their cache entries.
@@ -380,8 +380,9 @@ final class RemoteAccessService: ObservableObject {
                 let activeSessionID = registry.activeSessionIDByPanelID[panelID]
                 let activeRecord = activeSessionID.flatMap { registry.sessionsByID[$0] }
                 let hasLiveAgent = activeRecord.map { $0.isActive && $0.agent != .processWatch } ?? false
+                let restorableProvider = terminalState.resumeRecord?.agent
                 let hasRestorableTranscript = terminalState.remoteConversationID != nil
-                    && terminalState.resumeRecord?.agent == .codex
+                    && restorableProvider.map(ProviderTranscriptSupport.isSupported) == true
                 guard hasLiveAgent || hasRestorableTranscript else { continue }
                 guard seenPanelIDs.insert(panelID).inserted else { continue }
 
@@ -402,12 +403,11 @@ final class RemoteAccessService: ObservableObject {
                 }
 
                 let provider = activeRecord?.agent ?? terminalState.resumeRecord?.agent ?? .codex
-                let rolloutPath: String?
-                if provider == .codex {
-                    rolloutPath = terminalState.resumeRecord?.sessionFilePath
-                } else {
-                    rolloutPath = nil
-                }
+                // Both Codex rollout files and Claude transcript files are
+                // recorded as the resume record's sessionFilePath.
+                let transcriptPath = ProviderTranscriptSupport.isSupported(provider)
+                    ? terminalState.resumeRecord?.sessionFilePath
+                    : nil
 
                 candidates.append(ConversationCandidate(
                     conversationID: conversationID,
@@ -422,7 +422,7 @@ final class RemoteAccessService: ObservableObject {
                         record.status.map { Self.remoteState(for: $0.kind) }
                     } ?? (hasLiveAgent ? .starting : .offline),
                     updatedAt: activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? Date(),
-                    codexRolloutPath: rolloutPath
+                    transcriptPath: transcriptPath
                 ))
             }
         }
@@ -489,7 +489,7 @@ final class RemoteAccessService: ObservableObject {
 
     // MARK: - Transcript tailers
 
-    private func ensureTailer(for conversationID: RemoteConversationID, path: String) {
+    private func ensureTailer(for conversationID: RemoteConversationID, provider: AgentKind, path: String) {
         if let existing = tailersByConversationID[conversationID] {
             if existing.fileURL.path == path {
                 return
@@ -497,13 +497,17 @@ final class RemoteAccessService: ObservableObject {
             existing.stop()
             tailersByConversationID[conversationID] = nil
         }
-        startTailer(for: conversationID, path: path)
+        startTailer(for: conversationID, provider: provider, path: path)
     }
 
-    private func startTailer(for conversationID: RemoteConversationID, path: String) {
+    private func startTailer(for conversationID: RemoteConversationID, provider: AgentKind, path: String) {
         let tailer = RemoteTranscriptTailer(
             conversationID: conversationID,
-            fileURL: URL(filePath: path)
+            fileURL: URL(filePath: path),
+            provider: provider,
+            makeParser: {
+                ProviderTranscriptSupport.makeParser(for: provider) ?? CodexRolloutTranscriptParser()
+            }
         ) { [weak self] conversationID, event in
             self?.handleTailerEvent(conversationID, event)
         }
@@ -523,13 +527,14 @@ final class RemoteAccessService: ObservableObject {
             // generation.
             guard let tailer = tailersByConversationID[conversationID] else { return }
             let path = tailer.fileURL.path
+            let provider = tailer.provider
             tailer.stop()
             tailersByConversationID[conversationID] = nil
             projectionStore.forceResnapshot(for: conversationID, bindingID: UUID(), at: Date())
             if isEnabled {
                 server.broadcast(.resnapshotRequired(conversationID: conversationID))
             }
-            startTailer(for: conversationID, path: path)
+            startTailer(for: conversationID, provider: provider, path: path)
             broadcastSessionList()
         }
     }

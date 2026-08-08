@@ -43,6 +43,8 @@ struct RemoteTranscriptTailerTests {
         let tailer = RemoteTranscriptTailer(
             conversationID: Self.conversationID,
             fileURL: fileURL,
+            provider: .codex,
+            makeParser: { CodexRolloutTranscriptParser() },
             pollIntervalNanoseconds: 50_000_000
         ) { _, event in
             switch event {
@@ -79,6 +81,41 @@ struct RemoteTranscriptTailerTests {
         #expect(collector.fileReplacedCount == 0)
     }
 
+    @Test func tailsClaudeTranscriptThroughProviderFactory() async throws {
+        let fileURL = try Self.makeTemporaryFile()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        try ClaudeTranscriptFixtures.basicSession.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let collector = EventCollector()
+        let tailer = RemoteTranscriptTailer(
+            conversationID: Self.conversationID,
+            fileURL: fileURL,
+            provider: .claude,
+            makeParser: {
+                ProviderTranscriptSupport.makeParser(for: .claude) ?? CodexRolloutTranscriptParser()
+            },
+            pollIntervalNanoseconds: 50_000_000
+        ) { _, event in
+            if case .observations(let observations) = event {
+                collector.observationBatches.append(observations)
+            }
+        }
+        tailer.start()
+        defer { tailer.stop() }
+
+        let expected = ClaudeTranscriptParser.parseContents(ClaudeTranscriptFixtures.basicSession).observations
+        await Self.waitUntil { collector.allObservations.count == expected.count }
+        #expect(collector.allObservations == expected)
+
+        // A Claude transcript never carries a completed-turn signal, so the
+        // provider-agnostic tailer path stays read-only.
+        let sawCompletedTurn = collector.allObservations.contains { observation in
+            if case .turnEnded(_, reason: .completed) = observation.payload { return true }
+            return false
+        }
+        #expect(sawCompletedTurn == false)
+    }
+
     @Test func truncationReportsFileReplaced() async throws {
         let fileURL = try Self.makeTemporaryFile()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
@@ -88,6 +125,8 @@ struct RemoteTranscriptTailerTests {
         let tailer = RemoteTranscriptTailer(
             conversationID: Self.conversationID,
             fileURL: fileURL,
+            provider: .codex,
+            makeParser: { CodexRolloutTranscriptParser() },
             pollIntervalNanoseconds: 50_000_000
         ) { _, event in
             switch event {
@@ -119,6 +158,8 @@ struct RemoteTranscriptTailerTests {
         let tailer = RemoteTranscriptTailer(
             conversationID: Self.conversationID,
             fileURL: fileURL,
+            provider: .codex,
+            makeParser: { CodexRolloutTranscriptParser() },
             pollIntervalNanoseconds: 50_000_000
         ) { _, event in
             if case .observations(let observations) = event {

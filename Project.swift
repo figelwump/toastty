@@ -538,8 +538,9 @@ let project = Project(
             infoPlist: .default,
             sources: [
                 "Tests/App/**",
-                // Shared Codex rollout fixtures, also compiled into CoreStateTests.
+                // Shared provider fixtures, also compiled into CoreStateTests.
                 "Tests/Core/RemoteAccess/CodexRolloutFixtures.swift",
+                "Tests/Core/RemoteAccess/ClaudeTranscriptFixtures.swift",
             ],
             dependencies: appTestDependencies,
             settings: appTestTargetSettings

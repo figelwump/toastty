@@ -1,5 +1,37 @@
 import Foundation
 
+/// A pure, incremental parser from one provider's session-log lines to
+/// normalized observations. Value-type parsers keep per-line state (turn
+/// tracking, occurrence counters) so a resumed tail continues seamlessly.
+public protocol ProviderTranscriptLineParser: Sendable {
+    mutating func parseLine(_ line: String) -> [ProviderTranscriptObservation]
+    var malformedLineCount: Int { get }
+}
+
+extension CodexRolloutTranscriptParser: ProviderTranscriptLineParser {}
+extension ClaudeTranscriptParser: ProviderTranscriptLineParser {}
+
+/// The parser and rollout/transcript path for a provider whose conversations
+/// feed the projection today.
+public enum ProviderTranscriptSupport {
+    /// A fresh line parser for `provider`, or nil when the provider has no
+    /// transcript parser yet.
+    public static func makeParser(for provider: AgentKind) -> (any ProviderTranscriptLineParser)? {
+        switch provider {
+        case .codex:
+            return CodexRolloutTranscriptParser()
+        case .claude:
+            return ClaudeTranscriptParser()
+        default:
+            return nil
+        }
+    }
+
+    public static func isSupported(_ provider: AgentKind) -> Bool {
+        provider == .codex || provider == .claude
+    }
+}
+
 /// How a root provider turn ended.
 public enum ConversationTurnEndReason: String, Codable, Equatable, Sendable {
     case completed

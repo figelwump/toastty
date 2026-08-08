@@ -18,19 +18,25 @@ final class RemoteTranscriptTailer {
 
     let conversationID: RemoteConversationID
     let fileURL: URL
+    let provider: AgentKind
 
     private let pollIntervalNanoseconds: UInt64
+    private let makeParser: @Sendable () -> any ProviderTranscriptLineParser
     private let onEvent: @MainActor (RemoteConversationID, Event) -> Void
     private var task: Task<Void, Never>?
 
     init(
         conversationID: RemoteConversationID,
         fileURL: URL,
+        provider: AgentKind,
+        makeParser: @escaping @Sendable () -> any ProviderTranscriptLineParser,
         pollIntervalNanoseconds: UInt64 = 500_000_000,
         onEvent: @escaping @MainActor (RemoteConversationID, Event) -> Void
     ) {
         self.conversationID = conversationID
         self.fileURL = fileURL
+        self.provider = provider
+        self.makeParser = makeParser
         self.pollIntervalNanoseconds = pollIntervalNanoseconds
         self.onEvent = onEvent
     }
@@ -41,9 +47,10 @@ final class RemoteTranscriptTailer {
         let fileURL = fileURL
         let pollInterval = pollIntervalNanoseconds
         let onEvent = onEvent
+        let makeParser = makeParser
 
         task = Task.detached(priority: .utility) {
-            var parser = CodexRolloutTranscriptParser()
+            var parser = makeParser()
             var offset: UInt64 = 0
             var identity: FileIdentity?
             var remainder = Data()
