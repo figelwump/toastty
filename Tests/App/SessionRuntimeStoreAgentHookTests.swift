@@ -129,6 +129,106 @@ struct SessionRuntimeStoreAgentHookTests {
     }
 
     @Test
+    func successfulProcessWatchCompletionEmitsStatusThenStopAndKeepsCompletedRow() async throws {
+        let fixture = try Self.makeFixture()
+        let panelID = UUID()
+        fixture.sessionStore.startProcessWatch(
+            sessionID: "sess-watch-success",
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            displayTitleOverride: "make build",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Self.baseDate
+        )
+
+        #expect(fixture.sessionStore.handleCommandFinished(
+            panelID: panelID,
+            exitCode: 0,
+            at: Self.baseDate.addingTimeInterval(1)
+        ))
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 3)
+
+        let events = try await Self.recordedEvents(fixture.runner)
+        #expect(events.map(\.event) == ["session-start", "turn-complete", "session-stop"])
+        #expect(fixture.sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .ready)
+        let stopPayload = try AgentHookTestSupport.decodeHookPayload(
+            try #require(await fixture.runner.requests.last)
+        )
+        #expect(stopPayload["previousStatus"] as? String == "ready")
+    }
+
+    @Test
+    func failedProcessWatchCompletionEmitsErrorThenStopExactlyOnce() async throws {
+        let fixture = try Self.makeFixture()
+        let panelID = UUID()
+        fixture.sessionStore.startProcessWatch(
+            sessionID: "sess-watch-failure",
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            displayTitleOverride: "make build",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Self.baseDate
+        )
+
+        #expect(fixture.sessionStore.handleCommandFinished(
+            panelID: panelID,
+            exitCode: 2,
+            at: Self.baseDate.addingTimeInterval(1)
+        ))
+        // A repeated completion signal must not emit a second stop.
+        #expect(fixture.sessionStore.handleCommandFinished(
+            panelID: panelID,
+            exitCode: 2,
+            at: Self.baseDate.addingTimeInterval(2)
+        ))
+        // The completed row remains active for UI purposes, but a later status
+        // update must not deliver a hook event after session-stop.
+        fixture.sessionStore.updateStatus(
+            sessionID: "sess-watch-failure",
+            status: SessionStatus(kind: .ready, summary: "Late update"),
+            at: Self.baseDate.addingTimeInterval(3)
+        )
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 3)
+        await settleNotificationTasks()
+
+        let events = try await Self.recordedEvents(fixture.runner)
+        #expect(events.map(\.event) == ["session-start", "session-error", "session-stop"])
+        #expect(fixture.sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .ready)
+    }
+
+    @Test
+    func processWatchIdlePromptCompletionAlsoEndsHookLifecycle() async throws {
+        let fixture = try Self.makeFixture()
+        let panelID = UUID()
+        fixture.sessionStore.startProcessWatch(
+            sessionID: "sess-watch-idle-prompt",
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            displayTitleOverride: "make build",
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: Self.baseDate
+        )
+
+        #expect(fixture.sessionStore.stopSessionForPanelIfOlderThan(
+            panelID: panelID,
+            minimumRuntime: 0,
+            reason: .idleAtPrompt,
+            at: Self.baseDate.addingTimeInterval(1)
+        ))
+        await AgentHookTestSupport.waitForRequestCount(fixture.runner, expected: 3)
+
+        let events = try await Self.recordedEvents(fixture.runner)
+        #expect(events.map(\.event) == ["session-start", "turn-complete", "session-stop"])
+        #expect(fixture.sessionStore.sessionRegistry.activeSession(for: panelID)?.status?.kind == .ready)
+    }
+
+    @Test
     func injectedSocketAndCLIPathsReachTheHookEnvironmentUnchanged() async throws {
         let fixture = try Self.makeFixture(
             socketPath: "/tmp/injected-instance.sock",

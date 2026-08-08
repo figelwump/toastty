@@ -256,8 +256,9 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         hasBeenVisited = try container.decodeIfPresent(Bool.self, forKey: .hasBeenVisited) ?? true
         // The layout profile file is user-editable; keep only entries that
         // pass the same validation the CLI enforces.
-        annotations = WorkspaceAnnotation.sanitizedAnnotations(
-            try container.decodeIfPresent([String: WorkspaceAnnotation].self, forKey: .annotations) ?? [:],
+        annotations = WorkspaceAnnotation.decodeSanitizedAnnotations(
+            from: container,
+            forKey: .annotations,
             workspaceID: id
         )
 

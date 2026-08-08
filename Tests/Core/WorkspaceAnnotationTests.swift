@@ -74,13 +74,35 @@ struct WorkspaceAnnotationValidationTests {
                 "Bad-Key": WorkspaceAnnotation(text: "kept? no", url: nil),
                 "badurl": WorkspaceAnnotation(text: "x", url: "ftp://example.com"),
                 "badtext": WorkspaceAnnotation(text: "a\nb", url: nil),
+                "normalized": WorkspaceAnnotation(
+                    text: "  caf\u{0065}\u{0301}  ",
+                    url: " https://example.com/normalized "
+                ),
                 "ok": WorkspaceAnnotation(text: "fine", url: nil),
             ],
             workspaceID: UUID()
         )
 
-        #expect(sanitized.keys.sorted() == ["ok", "pr"])
+        #expect(sanitized.keys.sorted() == ["normalized", "ok", "pr"])
         #expect(sanitized["pr"]?.url == "https://example.com")
+        #expect(sanitized["normalized"] == WorkspaceAnnotation(
+            text: "café",
+            url: "https://example.com/normalized"
+        ))
+    }
+
+    @Test
+    func sanitizedAnnotationsEnforcesCountLimitDeterministically() {
+        let raw = Dictionary(uniqueKeysWithValues: (0...WorkspaceAnnotation.maximumAnnotationsPerWorkspace).map {
+            ("key-\(String(format: "%02d", $0))", WorkspaceAnnotation(text: "value \($0)"))
+        })
+
+        let sanitized = WorkspaceAnnotation.sanitizedAnnotations(raw, workspaceID: UUID())
+
+        #expect(sanitized.count == WorkspaceAnnotation.maximumAnnotationsPerWorkspace)
+        #expect(sanitized["key-00"] != nil)
+        #expect(sanitized["key-11"] != nil)
+        #expect(sanitized["key-12"] == nil)
     }
 }
 
@@ -273,14 +295,24 @@ struct WorkspaceAnnotationPersistenceTests {
         ) as! [String: Any]
         workspaceObject["annotations"] = [
             "ok": ["text": "fine"],
+            "normalized": [
+                "text": "  caf\u{0065}\u{0301}  ",
+                "url": " https://example.com/normalized ",
+            ],
             "Bad Key": ["text": "dropped"],
             "badurl": ["text": "x", "url": "javascript:alert(1)"],
             "badtext": ["text": "a\u{202E}b"],
+            "missingtext": ["url": "https://example.com"],
+            "wrongtext": ["text": 42],
         ]
         let tamperedData = try JSONSerialization.data(withJSONObject: workspaceObject)
 
         let decoded = try JSONDecoder().decode(WorkspaceLayoutWorkspaceSnapshot.self, from: tamperedData)
 
-        #expect(decoded.annotations.keys.sorted() == ["ok"])
+        #expect(decoded.annotations.keys.sorted() == ["normalized", "ok"])
+        #expect(decoded.annotations["normalized"] == WorkspaceAnnotation(
+            text: "café",
+            url: "https://example.com/normalized"
+        ))
     }
 }

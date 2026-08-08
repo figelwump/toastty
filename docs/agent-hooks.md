@@ -32,7 +32,12 @@ Event names are stable public strings:
 | `turn-complete` | The session's accepted status becomes `ready` after previously being another kind, once any waiting-on-children or resuming projection clears. |
 | `needs-approval` | The accepted status becomes `needs_approval` from another kind. |
 | `session-error` | The accepted status becomes `error` from another kind. |
-| `session-stop` | The session ends, from any teardown path (explicit stop, panel close, workspace/window close, layout-profile replacement, terminal command exit, replacement launch, or process-watch completion). Emitted exactly once per session. |
+| `session-stop` | The session ends, from any teardown path (explicit stop, panel close, workspace/window close, layout-profile replacement, terminal command exit, replacement launch, or process-watch completion). Generated exactly once per session before queueing; delivery remains subject to the overload policy below. |
+
+For process-watch sessions, command completion emits the final ready/error
+status followed by `session-stop`. The completed row remains visible until it
+is replaced or its panel is torn down; the stop ends hook delivery, not the
+row's UI lifetime.
 
 `idle` and `working` statuses update transition state but do not invoke the
 script. Deduplication is by accepted status kind, not event name:
@@ -57,10 +62,12 @@ long-running child keeps it pending rather than forcing a false completion.
 - Each invocation gets a 10-second execution window, then SIGTERM, then SIGKILL
   after a one-second grace period. Signals target the direct hook process only;
   descendant/background process lifetime is the script's responsibility.
-- Per session, at most 8 events wait in the queue. `session-start` and
-  `session-stop` are never dropped; when the queue is full, the newest status
-  event is dropped, and enqueueing a stop removes the oldest queued status
-  event. A running invocation is never cancelled.
+- Per session, at most 8 events wait in the queue, including an event waiting
+  for a global process slot. Lifecycle events take priority: when the queue is
+  full, a new start or stop first removes the oldest queued status event. In a
+  lifecycle-only overload, the oldest queued lifecycle event is evicted so the
+  queue remains bounded and the newest lifecycle state is retained. Every drop
+  is logged. A running invocation is never cancelled.
 - The event JSON is written to stdin, then stdin is closed. stdout and stderr
   are redirected to `/dev/null`, so the script can write freely without
   deadlocking. Toastty logs invocations, nonzero exits, timeouts, and launch

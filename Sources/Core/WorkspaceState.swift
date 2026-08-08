@@ -81,21 +81,33 @@ public extension WorkspaceAnnotation {
     /// Retains only entries whose stored key is already canonical and whose
     /// value passes validation. Persisted files are user-editable, so invalid
     /// entries are dropped and logged individually instead of failing the
-    /// whole decode.
+    /// whole decode. Valid values are normalized and the public per-workspace
+    /// count limit is enforced deterministically.
     static func sanitizedAnnotations(
         _ rawAnnotations: [String: WorkspaceAnnotation],
         workspaceID: UUID
     ) -> [String: WorkspaceAnnotation] {
-        rawAnnotations.reduce(into: [:]) { partialResult, entry in
+        rawAnnotations.sorted { $0.key < $1.key }.reduce(into: [:]) { partialResult, entry in
             guard canonicalKey(entry.key) == entry.key,
-                  let validated = validated(text: entry.value.text, url: entry.value.url),
-                  validated == entry.value else {
+                  let validated = validated(text: entry.value.text, url: entry.value.url) else {
                 ToasttyLog.warning(
                     "Dropped invalid persisted workspace annotation",
                     category: .state,
                     metadata: [
                         "workspace_id": workspaceID.uuidString,
                         "key_length": String(entry.key.count),
+                    ]
+                )
+                return
+            }
+            guard partialResult.count < maximumAnnotationsPerWorkspace else {
+                ToasttyLog.warning(
+                    "Dropped persisted workspace annotation above count limit",
+                    category: .state,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "key_length": String(entry.key.count),
+                        "maximum_count": String(maximumAnnotationsPerWorkspace),
                     ]
                 )
                 return
@@ -116,6 +128,72 @@ public extension WorkspaceAnnotation {
         default:
             return true
         }
+    }
+}
+
+extension WorkspaceAnnotation {
+    /// Decodes a user-editable annotations object one value at a time. A
+    /// structurally malformed entry must not make the surrounding workspace,
+    /// profile, or complete persistence document undecodable.
+    static func decodeSanitizedAnnotations<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>,
+        forKey key: Key,
+        workspaceID: UUID
+    ) -> [String: WorkspaceAnnotation] {
+        guard container.contains(key) else { return [:] }
+        if (try? container.decodeNil(forKey: key)) == true { return [:] }
+
+        let annotationsContainer: KeyedDecodingContainer<WorkspaceAnnotationCodingKey>
+        do {
+            annotationsContainer = try container.nestedContainer(
+                keyedBy: WorkspaceAnnotationCodingKey.self,
+                forKey: key
+            )
+        } catch {
+            ToasttyLog.warning(
+                "Ignored malformed persisted workspace annotations object",
+                category: .state,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "error": error.localizedDescription,
+                ]
+            )
+            return [:]
+        }
+
+        var decoded: [String: WorkspaceAnnotation] = [:]
+        for annotationKey in annotationsContainer.allKeys {
+            do {
+                decoded[annotationKey.stringValue] = try annotationsContainer.decode(
+                    WorkspaceAnnotation.self,
+                    forKey: annotationKey
+                )
+            } catch {
+                ToasttyLog.warning(
+                    "Dropped malformed persisted workspace annotation",
+                    category: .state,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "key_length": String(annotationKey.stringValue.count),
+                        "error": error.localizedDescription,
+                    ]
+                )
+            }
+        }
+        return sanitizedAnnotations(decoded, workspaceID: workspaceID)
+    }
+}
+
+private struct WorkspaceAnnotationCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(intValue: Int) {
+        return nil
     }
 }
 
@@ -546,8 +624,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             tabIDs = [legacyTab.id]
             tabsByID = [legacyTab.id: legacyTab]
         }
-        annotations = WorkspaceAnnotation.sanitizedAnnotations(
-            try container.decodeIfPresent([String: WorkspaceAnnotation].self, forKey: .annotations) ?? [:],
+        annotations = WorkspaceAnnotation.decodeSanitizedAnnotations(
+            from: container,
+            forKey: .annotations,
             workspaceID: id
         )
         let decodedWorkspaceUnread = try container.decodeIfPresent(Int.self, forKey: .unreadWorkspaceNotificationCount)

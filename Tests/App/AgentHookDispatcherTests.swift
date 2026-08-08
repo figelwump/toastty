@@ -37,13 +37,15 @@ struct AgentHookDispatcherTests {
         runner: any AgentHookProcessRunning,
         scriptPath: String?,
         socketPath: String = "/tmp/toastty-test-socket.sock",
-        cliExecutablePath: String? = "/tmp/toastty-test-cli"
+        cliExecutablePath: String? = "/tmp/toastty-test-cli",
+        maximumConcurrentProcesses: Int = AgentHookDispatcher.defaultMaximumConcurrentProcesses
     ) -> AgentHookDispatcher {
         AgentHookDispatcher(
             socketPath: socketPath,
             cliExecutablePath: cliExecutablePath,
             scriptPath: scriptPath,
-            runner: runner
+            runner: runner,
+            maximumConcurrentProcesses: maximumConcurrentProcesses
         )
     }
 
@@ -328,6 +330,77 @@ struct AgentHookDispatcherTests {
             dispatcher.queuedSessionIDsForTesting.isEmpty
         }
         #expect(dispatcher.queuedSessionIDsForTesting.isEmpty)
+    }
+
+    @Test
+    func lifecycleOnlyFloodRemainsBoundedAndPreservesNewestStop() async throws {
+        let scriptURL = try AgentHookTestSupport.makeTemporaryExecutableScript()
+        let runner = ControlledHookRunner(gated: ())
+        let dispatcher = Self.makeDispatcher(runner: runner, scriptPath: scriptURL.path)
+
+        dispatcher.enqueue(Self.makeEvent(kind: .sessionStart))
+        await AgentHookTestSupport.waitForRequestCount(runner, expected: 1)
+        for _ in 0..<4 {
+            dispatcher.enqueue(Self.makeEvent(kind: .sessionStop))
+            dispatcher.enqueue(Self.makeEvent(kind: .sessionStart, launchReason: .managed))
+        }
+        #expect(dispatcher.queuedEventCountForTesting(sessionID: "sess-hook") == 8)
+
+        // There is no status event to evict. The oldest queued lifecycle event
+        // is discarded so the newest stop is retained without exceeding eight.
+        dispatcher.enqueue(Self.makeEvent(kind: .sessionStop))
+        #expect(dispatcher.queuedEventCountForTesting(sessionID: "sess-hook") == 8)
+
+        await runner.releaseAll(count: 9)
+        await AgentHookTestSupport.waitForRequestCount(runner, expected: 9)
+        let names = try AgentHookTestSupport.recordedEventNames(await runner.requests)
+        #expect(names.count == 9)
+        #expect(names.last == "session-stop")
+    }
+
+    @Test
+    func eventWaitingForGlobalSlotStillCountsTowardSessionQueueLimit() async throws {
+        let scriptURL = try AgentHookTestSupport.makeTemporaryExecutableScript()
+        let runner = ControlledHookRunner(gated: ())
+        let dispatcher = Self.makeDispatcher(
+            runner: runner,
+            scriptPath: scriptURL.path,
+            maximumConcurrentProcesses: 1
+        )
+
+        dispatcher.enqueue(Self.makeEvent(kind: .sessionStart, sessionID: "slot-owner"))
+        await AgentHookTestSupport.waitForRequestCount(runner, expected: 1)
+        dispatcher.enqueue(Self.makeEvent(kind: .sessionStart, sessionID: "slot-waiter"))
+        await settleNotificationTasks()
+
+        // The waiter's first event remains in the bounded queue until a global
+        // process slot is available; it must not disappear into a hidden waiter.
+        #expect(dispatcher.queuedEventCountForTesting(sessionID: "slot-waiter") == 1)
+        for index in 0..<7 {
+            dispatcher.enqueue(Self.makeEvent(
+                kind: .turnComplete,
+                sessionID: "slot-waiter",
+                cwd: "/queued-\(index)",
+                newStatus: .ready
+            ))
+        }
+        dispatcher.enqueue(Self.makeEvent(
+            kind: .sessionError,
+            sessionID: "slot-waiter",
+            cwd: "/dropped",
+            newStatus: .error
+        ))
+        #expect(dispatcher.queuedEventCountForTesting(sessionID: "slot-waiter") == 8)
+
+        await runner.releaseOne()
+        await AgentHookTestSupport.waitForRequestCount(runner, expected: 2)
+        await runner.releaseAll(count: 8)
+        await AgentHookTestSupport.waitForRequestCount(runner, expected: 9)
+        let requests = await runner.requests
+        let cwds = try requests.map {
+            try AgentHookTestSupport.decodeHookPayload($0)["cwd"] as? String
+        }
+        #expect(cwds.contains("/dropped") == false)
     }
 
     @Test

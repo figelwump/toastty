@@ -290,6 +290,7 @@ final class AgentHookDispatcher {
         switch event.kind {
         case .sessionStart:
             // A reused session ID begins a new lifecycle.
+            makeRoomForLifecycleEvent(&queue, incomingEvent: event)
             queue.hasSeenStop = false
             queue.pending.append(PendingInvocation(event: event, scriptPath: scriptPath))
 
@@ -299,14 +300,7 @@ final class AgentHookDispatcher {
                 return
             }
             queue.hasSeenStop = true
-            if queue.pending.count >= Self.maximumQueuedEventsPerSession,
-               let oldestStatusIndex = queue.pending.firstIndex(where: { $0.event.kind.isStatusEvent }) {
-                logDroppedEvent(
-                    queue.pending[oldestStatusIndex].event,
-                    reason: "queue_full_evicted_for_stop"
-                )
-                queue.pending.remove(at: oldestStatusIndex)
-            }
+            makeRoomForLifecycleEvent(&queue, incomingEvent: event)
             queue.pending.append(PendingInvocation(event: event, scriptPath: scriptPath))
 
         case .turnComplete, .needsApproval, .sessionError:
@@ -323,6 +317,31 @@ final class AgentHookDispatcher {
 
         queuesBySessionID[event.sessionID] = queue
         ensureDraining(sessionID: event.sessionID)
+    }
+
+    /// Lifecycle events take priority over queued status updates. A sustained
+    /// lifecycle-only flood still cannot grow memory without bound: once all
+    /// eight waiting slots contain lifecycle events, the oldest one is evicted
+    /// in favor of the newest lifecycle state and the loss is logged.
+    private func makeRoomForLifecycleEvent(
+        _ queue: inout SessionQueue,
+        incomingEvent: AgentHookEvent
+    ) {
+        while queue.pending.count >= Self.maximumQueuedEventsPerSession {
+            if let oldestStatusIndex = queue.pending.firstIndex(where: { $0.event.kind.isStatusEvent }) {
+                logDroppedEvent(
+                    queue.pending[oldestStatusIndex].event,
+                    reason: "queue_full_evicted_status_for_\(incomingEvent.kind.rawValue)"
+                )
+                queue.pending.remove(at: oldestStatusIndex)
+            } else {
+                let evicted = queue.pending.removeFirst()
+                logDroppedEvent(
+                    evicted.event,
+                    reason: "queue_full_evicted_oldest_lifecycle_for_\(incomingEvent.kind.rawValue)"
+                )
+            }
+        }
     }
 
     var queuedSessionIDsForTesting: Set<String> {
@@ -365,8 +384,12 @@ final class AgentHookDispatcher {
     }
 
     private func drainQueue(sessionID: String, token: UUID) async {
-        while let next = dequeueNextInvocation(sessionID: sessionID, token: token) {
+        while queueHasPendingInvocation(sessionID: sessionID, token: token) {
             await acquireProcessSlot()
+            guard let next = dequeueNextInvocation(sessionID: sessionID, token: token) else {
+                releaseProcessSlot()
+                break
+            }
             runningProcessCount += 1
             peakConcurrentProcessCountForTesting = max(
                 peakConcurrentProcessCountForTesting,
@@ -377,6 +400,13 @@ final class AgentHookDispatcher {
             releaseProcessSlot()
         }
         finishDraining(sessionID: sessionID, token: token)
+    }
+
+    private func queueHasPendingInvocation(sessionID: String, token: UUID) -> Bool {
+        guard let queue = queuesBySessionID[sessionID], queue.drainToken == token else {
+            return false
+        }
+        return queue.pending.isEmpty == false
     }
 
     private func dequeueNextInvocation(sessionID: String, token: UUID) -> PendingInvocation? {

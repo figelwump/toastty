@@ -28,6 +28,10 @@ final class SessionRuntimeStore: ObservableObject {
     private let agentHookDispatcher: AgentHookDispatcher?
     private var lastAcceptedHookStatusKindBySessionID: [String: SessionStatusKind] = [:]
     private var pendingHookReadyBySessionID: [String: PendingHookReady] = [:]
+    /// Process-watch rows remain active after command completion so their
+    /// ready/error result stays visible. Track the independently completed hook
+    /// lifecycle so no later status can follow its `session-stop` event.
+    private var completedHookLifecycleSessionIDs: Set<String> = []
     private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
     private var codexSessionReconciliationBySessionID: [String: CodexSessionReconciliationRuntime] = [:]
     private var codexStatusTrackingSourceBySessionID: [String: CodexStatusTrackingSource] = [:]
@@ -140,6 +144,7 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry = SessionRegistry()
         lastAcceptedHookStatusKindBySessionID = [:]
         pendingHookReadyBySessionID = [:]
+        completedHookLifecycleSessionIDs = []
         suppressedCodexVisibleErrorDetailBySessionID = [:]
         codexSessionReconciliationBySessionID = [:]
         codexStatusTrackingSourceBySessionID = [:]
@@ -202,6 +207,7 @@ final class SessionRuntimeStore: ObservableObject {
         backgroundActivityFinishTombstonesBySessionID.removeValue(forKey: sessionID)
         codexSubagentReconcilerBySessionID.removeValue(forKey: sessionID)
         removePendingCodexHookApproval(sessionID: sessionID)
+        completedHookLifecycleSessionIDs.remove(sessionID)
         clearHookTransitionState(sessionID: sessionID)
         if agent == .codex {
             if let codexStatusTrackingSource {
@@ -1466,19 +1472,13 @@ final class SessionRuntimeStore: ObservableObject {
         logSessionStop(record, reason: reason, at: now)
         clearSessionRuntimeState(sessionID: record.sessionID)
         removePendingPanelParentSessionIDs(parentSessionID: record.sessionID)
-        enqueueHookEvent(
-            kind: .sessionStop,
-            record: record,
-            previousStatus: lastAcceptedHookStatusKindBySessionID[record.sessionID],
-            newStatus: nil,
-            at: now
-        )
-        clearHookTransitionState(sessionID: record.sessionID)
+        completeHookLifecycle(record: record, at: now)
         if record.agent == .processWatch {
             registry.removeSession(sessionID: record.sessionID)
         } else {
             registry.stopSession(sessionID: record.sessionID, at: now)
         }
+        completedHookLifecycleSessionIDs.remove(record.sessionID)
     }
 
     private func clearSessionRuntimeState(sessionID: String) {
@@ -1704,7 +1704,10 @@ final class SessionRuntimeStore: ObservableObject {
         registry: SessionRegistry,
         at now: Date
     ) {
-        guard let record = registry.sessionsByID[sessionID], record.isActive else { return }
+        guard completedHookLifecycleSessionIDs.contains(sessionID) == false,
+              let record = registry.sessionsByID[sessionID], record.isActive else {
+            return
+        }
         let previousKind = lastAcceptedHookStatusKindBySessionID[sessionID]
         let isRepeatedKind = previousKind == requestedKind
         lastAcceptedHookStatusKindBySessionID[sessionID] = requestedKind
@@ -1826,6 +1829,22 @@ final class SessionRuntimeStore: ObservableObject {
     private func clearHookTransitionState(sessionID: String) {
         lastAcceptedHookStatusKindBySessionID.removeValue(forKey: sessionID)
         pendingHookReadyBySessionID.removeValue(forKey: sessionID)
+    }
+
+    /// Ends hook delivery exactly once without necessarily removing the UI
+    /// session record. Process watch uses this split lifecycle so its completed
+    /// status can remain visible while hook consumers still receive a terminal
+    /// `session-stop` event.
+    private func completeHookLifecycle(record: SessionRecord, at now: Date) {
+        guard completedHookLifecycleSessionIDs.insert(record.sessionID).inserted else { return }
+        enqueueHookEvent(
+            kind: .sessionStop,
+            record: record,
+            previousStatus: lastAcceptedHookStatusKindBySessionID[record.sessionID],
+            newStatus: nil,
+            at: now
+        )
+        clearHookTransitionState(sessionID: record.sessionID)
     }
 
     private func shouldSuppressProjectedWaitingSideEffects(
@@ -4041,6 +4060,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             status: processWatchCompletionStatus(exitCode: exitCode),
             at: now
         )
+        completeHookLifecycle(record: record, at: now)
         return true
     }
 
@@ -4068,6 +4088,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
                     status: processWatchCompletionStatus(exitCode: nil),
                     at: now
                 )
+                completeHookLifecycle(record: record, at: now)
                 return true
             }
         }
