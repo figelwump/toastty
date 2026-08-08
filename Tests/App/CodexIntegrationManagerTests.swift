@@ -279,9 +279,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.operations, [])
     }
 
-    /// The ownership marker only counts as the first line: a user file that
-    /// merely quotes it mid-file stays foreign — preserved, with a conflict.
-    func testProfileWithMidFileMarkerIsTreatedAsForeign() throws {
+    func testProfileWithDisplacedExactMarkerIsMergedAsOwned() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let runtime = fixture.runtime()
@@ -290,19 +288,26 @@ final class CodexSkillsManagerTests: XCTestCase {
             at: profileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let foreignContents = """
-        # user-authored overlay quoting Toastty's marker:
+        let codexRewritten = """
+        model = "gpt-5.6-luna"
+        model_reasoning_effort = "medium"
         \(CodexManagedProfileConfig.ownershipMarker)
-        model = "gpt-5"
+
+        [plugins."example@example"]
+        enabled = true
 
         """
-        try foreignContents.write(to: profileURL, atomically: true, encoding: .utf8)
+        try codexRewritten.write(to: profileURL, atomically: true, encoding: .utf8)
 
         let preparation = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
 
-        XCTAssertNil(preparation.configuration)
-        XCTAssertEqual(preparation.status.availability, .failed)
-        XCTAssertEqual(try String(contentsOf: profileURL, encoding: .utf8), foreignContents)
+        XCTAssertNotNil(preparation.configuration)
+        XCTAssertEqual(preparation.status.availability, .ready)
+        let merged = try String(contentsOf: profileURL, encoding: .utf8)
+        XCTAssertTrue(merged.contains("model = \"gpt-5.6-luna\""))
+        XCTAssertTrue(merged.contains("model_reasoning_effort = \"medium\""))
+        XCTAssertTrue(merged.contains(#"[plugins."example@example"]"#))
+        XCTAssertTrue(merged.contains(#"[plugins."toastty@toastty"]"#))
     }
 
     func testMissingProfileConfigIsRestoredWithoutSubprocessWork() throws {
@@ -343,16 +348,19 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertTrue(contents.contains(#"[plugins."toastty@toastty"]"#))
     }
 
-    func testCodexPrependedSettingsAndLegacyMarkerAreMigratedWithReceipt() throws {
+    func testCodexPrependedSettingsAndMarkerAreAcceptedWithoutReceipt() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let runtime = fixture.runtime()
-        _ = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
         let profileURL = fixture.profileConfigURL(runtime: runtime)
+        try FileManager.default.createDirectory(
+            at: profileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         let codexRewritten = """
         model = "gpt-5.6-luna"
         model_reasoning_effort = "medium"
-        \(CodexManagedProfileConfig.legacyOwnershipMarker)
+        \(CodexManagedProfileConfig.ownershipMarker)
         [plugins."toastty@toastty"]
         enabled = true
 
@@ -361,18 +369,18 @@ final class CodexSkillsManagerTests: XCTestCase {
 
         """
         try codexRewritten.write(to: profileURL, atomically: true, encoding: .utf8)
-        fixture.recorder.reset()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.receiptURL(runtime: runtime).path))
 
         let preparation = try fixture.manager.prepareForManagedLaunch(runtime: runtime)
 
         XCTAssertNotNil(preparation.configuration)
-        XCTAssertEqual(fixture.recorder.operations, [])
-        let migrated = try String(contentsOf: profileURL, encoding: .utf8)
-        XCTAssertTrue(migrated.contains("model = \"gpt-5.6-luna\""))
-        XCTAssertTrue(migrated.contains("model_reasoning_effort = \"medium\""))
-        XCTAssertTrue(migrated.contains(#"[plugins."example@example"]"#))
-        XCTAssertTrue(migrated.contains(CodexManagedProfileConfig.ownershipMarker))
-        XCTAssertFalse(migrated.contains(CodexManagedProfileConfig.legacyOwnershipMarker))
+        XCTAssertEqual(preparation.status.availability, .ready)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.receiptURL(runtime: runtime).path))
+        let merged = try String(contentsOf: profileURL, encoding: .utf8)
+        XCTAssertTrue(merged.contains("model = \"gpt-5.6-luna\""))
+        XCTAssertTrue(merged.contains("model_reasoning_effort = \"medium\""))
+        XCTAssertTrue(merged.contains(#"[plugins."example@example"]"#))
+        XCTAssertTrue(merged.contains(CodexManagedProfileConfig.ownershipMarker))
     }
 
     func testLegacyStateTriggersOneShotCleanupBeforeInstall() throws {
@@ -610,7 +618,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         let profileURL = fixture.profileConfigURL(runtime: runtime)
         let coauthored = """
         model = "gpt-5.6-luna"
-        \(CodexManagedProfileConfig.legacyOwnershipMarker)
+        \(CodexManagedProfileConfig.ownershipMarker)
         [plugins."toastty@toastty"]
         enabled = true
 
@@ -629,7 +637,7 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertTrue(preserved.contains("model = \"gpt-5.6-luna\""))
         XCTAssertTrue(preserved.contains(#"[plugins."example@example"]"#))
         XCTAssertFalse(preserved.contains("toastty@toastty"))
-        XCTAssertFalse(preserved.contains(CodexManagedProfileConfig.legacyOwnershipMarker))
+        XCTAssertFalse(preserved.contains(CodexManagedProfileConfig.ownershipMarker))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.receiptURL(runtime: runtime).path))
     }
 

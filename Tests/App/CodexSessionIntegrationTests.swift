@@ -26,7 +26,7 @@ final class CodexSkillsIntegrationTests: XCTestCase {
         XCTAssertFalse(CodexManagedProfileConfig.isToasttyOwned(""))
     }
 
-    func testCurrentMarkerCanMoveButLegacyMarkerRequiresReceiptBackedOptIn() {
+    func testExactMarkerCanMoveButNearMatchesRemainForeign() {
         XCTAssertTrue(
             CodexManagedProfileConfig.isToasttyOwned(
                 CodexManagedProfileConfig.fileContents(includeUserPlugin: true)
@@ -45,21 +45,16 @@ final class CodexSkillsIntegrationTests: XCTestCase {
         )
         let displaced = "model = \"gpt-5\"\n\(CodexManagedProfileConfig.ownershipMarker)\n"
         XCTAssertTrue(CodexManagedProfileConfig.isToasttyOwned(displaced))
-        XCTAssertTrue(
+        let windowsLineEndings = "model = \"gpt-5\"\r\n\(CodexManagedProfileConfig.ownershipMarker)\r\n"
+        XCTAssertTrue(CodexManagedProfileConfig.isToasttyOwned(windowsLineEndings))
+        XCTAssertFalse(
             CodexManagedProfileConfig.isToasttyOwned(
-                displaced,
-                allowLegacyMarker: true
+                CodexManagedProfileConfig.ownershipMarker + " extra\n"
             )
         )
         XCTAssertFalse(
             CodexManagedProfileConfig.isToasttyOwned(
-                CodexManagedProfileConfig.legacyOwnershipMarker + "\n"
-            )
-        )
-        XCTAssertTrue(
-            CodexManagedProfileConfig.isToasttyOwned(
-                CodexManagedProfileConfig.legacyOwnershipMarker + "\n",
-                allowLegacyMarker: true
+                "quoted: " + CodexManagedProfileConfig.ownershipMarker + "\n"
             )
         )
     }
@@ -68,7 +63,7 @@ final class CodexSkillsIntegrationTests: XCTestCase {
         let original = """
         model = "gpt-5.6-luna"
         model_reasoning_effort = "medium"
-        \(CodexManagedProfileConfig.legacyOwnershipMarker)
+        \(CodexManagedProfileConfig.ownershipMarker)
         [plugins."toastty@toastty"]
         enabled = false
 
@@ -85,7 +80,6 @@ final class CodexSkillsIntegrationTests: XCTestCase {
         XCTAssertTrue(merged.contains("model = \"gpt-5.6-luna\""))
         XCTAssertTrue(merged.contains("model_reasoning_effort = \"medium\""))
         XCTAssertTrue(merged.contains(#"[plugins."example@example"]"#))
-        XCTAssertFalse(merged.contains(CodexManagedProfileConfig.legacyOwnershipMarker))
         XCTAssertEqual(merged.components(separatedBy: CodexManagedProfileConfig.ownershipMarker).count, 2)
         XCTAssertTrue(merged.contains(#"[plugins."toastty-user@toastty-user"]"#))
     }
