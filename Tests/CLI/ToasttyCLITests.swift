@@ -913,6 +913,28 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func sessionIngestAgentEventAcceptsGrokHooksSource() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "ingest-agent-event",
+                "--source", "grok-hooks",
+            ],
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-env",
+            ]
+        )
+
+        guard case .sessionIngestAgentEvent(let sessionID, let parsedPanelID, let source) = invocation.command else {
+            Issue.record("expected session ingest command")
+            return
+        }
+
+        #expect(sessionID == "sess-env")
+        #expect(parsedPanelID == nil)
+        #expect(source == .grokHooks)
+    }
+
+    @Test
     func sessionStatusRejectsInvalidLaunchContextPanelID() {
         do {
             _ = try ToasttyCLI.parse(

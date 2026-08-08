@@ -1550,4 +1550,488 @@ struct AgentEventParsersTests {
             )
         }
     }
+
+    // MARK: - Grok hooks
+
+    @Test
+    func grokEncodedSessionCwdFolderNamePercentEncodesSlashes() {
+        #expect(
+            GrokHookEventParser.encodedSessionCwdFolderName("/private/tmp/foo")
+                == "%2Fprivate%2Ftmp%2Ffoo"
+        )
+        #expect(
+            GrokHookEventParser.encodedSessionCwdFolderName("/private/tmp/toastty-grok-spike-12593")
+                == "%2Fprivate%2Ftmp%2Ftoastty-grok-spike-12593"
+        )
+    }
+
+    @Test
+    func grokUserPromptSubmitMapsToWorkingStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"user_prompt_submit","sessionId":"native-1","prompt":"summarize the workspace"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "summarize the workspace"
+            ),
+        ])
+    }
+
+    @Test
+    func grokUserPromptSubmitStripsUserQueryWrapper() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"user_prompt_submit","prompt":"<user_query>reply with pong only</user_query>"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "reply with pong only"
+            ),
+        ])
+    }
+
+    @Test
+    func grokUserPromptSubmitFallsBackWithoutPromptText() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(#"{"hookEventName":"user_prompt_submit"}"#.utf8)
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Responding to your prompt"
+            ),
+        ])
+    }
+
+    @Test
+    func grokPreToolUseMapsToWorkingToolStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"pre_tool_use","toolName":"read_file","toolInput":{"target_file":"/tmp/repo/README.md"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Reading README.md"
+            ),
+        ])
+    }
+
+    @Test
+    func grokPreToolUseShellCommandMapsToRunningDetail() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"npm test","description":"Run tests"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Running npm test"
+            ),
+        ])
+    }
+
+    @Test
+    func grokPostToolUseIsIgnoredForStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"post_tool_use","toolName":"read_file","toolInput":{"target_file":"/tmp/x"}}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func grokStopEndTurnMapsToReadyWithAssistantSummary() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"stop","reason":"end_turn","lastAssistantMessage":"pong","backgroundTasks":[]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [],
+                pendingBackgroundTaskCount: 0,
+                preserveUnlistedActivities: false
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "pong"
+            ),
+        ])
+    }
+
+    @Test
+    func grokStopWithRunningSubagentSyncsBeforeReadyStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"stop","reason":"end_turn","lastAssistantMessage":"Agent launched","backgroundTasks":[{"id":"sub-1","type":"subagent","description":"Sleep briefly","agentType":"general-purpose"}]}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivitySync(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .subagent,
+                entries: [
+                    SessionBackgroundActivitySyncEntry(
+                        id: "sub-1",
+                        displayName: "general-purpose",
+                        command: "Sleep briefly"
+                    ),
+                ],
+                pendingBackgroundTaskCount: 0,
+                preserveUnlistedActivities: false
+            ),
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Agent launched"
+            ),
+        ])
+    }
+
+    @Test
+    func grokStopShutdownDoesNotMapToReady() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"stop","reason":"shutdown","lastAssistantMessage":"bye"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func grokStopChannelClosedDoesNotMapToReady() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"stop","reason":"channel_closed"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func grokStopFailureMapsToError() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"stop_failure","lastAssistantMessage":"rate limited"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .error,
+                summary: "Error",
+                detail: "rate limited"
+            ),
+        ])
+    }
+
+    @Test
+    func grokNotificationPermissionPromptMapsToNeedsApproval() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"notification","notificationType":"permission_prompt","message":"Tool permission requested"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .needsApproval,
+                summary: "Needs approval",
+                detail: "Tool permission requested"
+            ),
+        ])
+    }
+
+    @Test
+    func grokNotificationTaskCompleteIsIgnored() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"notification","notificationType":"task_complete","message":"Background task completed: task-1"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func grokSubagentStartMapsToBackgroundActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"subagent_start","subagentId":"sub-abc","subagentType":"general-purpose","description":"Reply with subok only"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .start,
+                activityID: "sub-abc",
+                kind: .subagent,
+                displayName: "general-purpose",
+                command: "Reply with subok only",
+                processID: nil,
+                preserveWhenUnlisted: false
+            ),
+        ])
+    }
+
+    @Test
+    func grokSubagentStopFinishesBackgroundActivity() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"subagent_stop","subagentId":"sub-abc","subagentType":"general-purpose"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionBackgroundActivity(
+                sessionID: "sess-123",
+                panelID: nil,
+                phase: .finish,
+                activityID: "sub-abc",
+                kind: .subagent,
+                displayName: nil,
+                command: nil,
+                processID: nil,
+                preserveWhenUnlisted: false
+            ),
+        ])
+    }
+
+    @Test
+    func grokSessionStartDerivesResumePathWithoutTranscript() throws {
+        let panelID = UUID()
+        let nativeSessionID = "019fe0b5-ab92-7ee2-a2e5-a2d720fe5a43"
+        let cwd = "/private/tmp/toastty-grok-spike-12593"
+        let expectedPath = GrokHookEventParser.derivedSessionFilePath(
+            sessionId: nativeSessionID,
+            cwd: cwd
+        )
+
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hookEventName":"session_start","sessionId":"\#(nativeSessionID)","cwd":"\#(cwd)","workspaceRoot":"\#(cwd)","source":"new"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionUpdateResumeRecord(
+                sessionID: "sess-123",
+                panelID: panelID,
+                agent: .grok,
+                nativeSessionID: nativeSessionID,
+                sessionFilePath: expectedPath,
+                cwd: cwd
+            ),
+        ])
+        #expect(expectedPath.hasSuffix("/summary.json"))
+        #expect(expectedPath.contains("%2Fprivate%2Ftmp%2Ftoastty-grok-spike-12593"))
+    }
+
+    @Test
+    func grokSessionStartPrefersTranscriptPathWhenPresent() throws {
+        let panelID = UUID()
+        let transcript = "/Users/jd/.grok/sessions/%2Ftmp%2Frepo/native-1/updates.jsonl"
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: panelID,
+            payload: Data(
+                #"{"hookEventName":"session_start","sessionId":"native-1","cwd":"/tmp/repo","transcriptPath":"\#(transcript)"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionUpdateResumeRecord(
+                sessionID: "sess-123",
+                panelID: panelID,
+                agent: .grok,
+                nativeSessionID: "native-1",
+                sessionFilePath: transcript,
+                cwd: "/tmp/repo"
+            ),
+        ])
+    }
+
+    @Test
+    func grokSessionStartRequiresPanelID() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"session_start","sessionId":"native-1","cwd":"/tmp/repo"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func grokPermissionDeniedIsIgnored() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"permission_denied","toolName":"run_terminal_command"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func grokSessionEndIsIgnored() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"session_end","reason":"shutdown"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func grokAcceptsPascalCaseEventNamesForResilience() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hookEventName":"UserPromptSubmit","prompt":"hello from pascal"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "hello from pascal"
+            ),
+        ])
+    }
+
+    @Test
+    func grokFallsBackToSnakeCaseFieldNames() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .grokHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"pre_tool_use","tool_name":"read_file","tool_input":{"target_file":"/tmp/a.txt"}}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "Reading a.txt"
+            ),
+        ])
+    }
 }
