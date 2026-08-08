@@ -40,8 +40,8 @@ final class DiagnosticsSnippetGeneratorTests: XCTestCase {
         XCTAssertFalse(snippet.contains("contents of the diagnostics JSON file"))
         XCTAssertFalse(snippet.contains("diagnostics submit --file \"$DIAG\" --yes"))
         XCTAssertTrue(snippet.contains("umask 077"))
-        XCTAssertTrue(snippet.contains("command -v toastty claude codex pi opencode mimo mimocode"))
-        XCTAssertTrue(snippet.contains("type -a claude codex pi opencode mimo mimocode"))
+        XCTAssertTrue(snippet.contains("command -v toastty claude codex grok pi opencode mimo mimocode"))
+        XCTAssertTrue(snippet.contains("type -a claude codex grok pi opencode mimo mimocode"))
         XCTAssertFalse(snippet.contains(" cdx"))
     }
 

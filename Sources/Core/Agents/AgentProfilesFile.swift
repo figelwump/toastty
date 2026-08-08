@@ -75,8 +75,8 @@ public enum AgentProfilesFile {
         #   argv         — the exact command Toastty runs for that profile.
         #   manualCommandNames — (optional) extra executable basenames Toastty
         #                        should shim for typed launches of built-in
-        #                        Codex/Claude/OpenCode/MiMo/Pi wrappers. Use
-        #                        basenames only, with no paths or spaces.
+        #                        Codex/Claude/Grok/OpenCode/MiMo/Pi wrappers.
+        #                        Use basenames only, with no paths or spaces.
         #   initialPromptPlacement — (optional) set to "trailing" only when
         #                            automation may pass the first prompt as
         #                            the final argv argument for this profile.
@@ -94,6 +94,11 @@ public enum AgentProfilesFile {
         # displayName = "Claude Code"
         # argv = ["claude"]
         # manualCommandNames = ["run-sandboxed.sh"]
+        #
+        # [grok]
+        # displayName = "Grok Build"
+        # argv = ["grok"]
+        # manualCommandNames = ["agent-safehouse"]
         #
         # [opencode]
         # displayName = "OpenCode"

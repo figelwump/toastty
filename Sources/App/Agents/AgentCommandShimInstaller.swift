@@ -25,7 +25,16 @@ enum AgentCommandShimInstallerError: LocalizedError, Equatable {
 }
 
 final class AgentCommandShimInstaller {
-    private static let defaultManagedCommandNames: Set<String> = ["codex", "cdx", "claude", "pi"]
+    private static let defaultManagedCommandNames: Set<String> = [
+        "codex",
+        "cdx",
+        "claude",
+        "grok",
+        "mimo",
+        "mimocode",
+        "opencode",
+        "pi",
+    ]
     private static let managedCommandsManifestFileName = ".toastty-managed-agent-commands.json"
 
     private let runtimePaths: ToasttyRuntimePaths
