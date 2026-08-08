@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Toastty</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header>
+    <h1>Toastty</h1>
+    <span id="connection-state" class="badge" data-state="connecting">connecting</span>
+  </header>
+
+  <section id="pair-view" hidden>
+    <h2>Pair this device</h2>
+    <p>Open <strong>Terminal &rsaquo; Remote Access…</strong> on your Mac and enter the pairing code shown there.</p>
+    <form id="pair-form" autocomplete="off">
+      <input id="pair-code" inputmode="text" autocapitalize="characters" spellcheck="false"
+             placeholder="XXXX-XXXX" maxlength="9" required>
+      <input id="pair-name" placeholder="Device name" maxlength="60" required>
+      <button type="submit">Pair</button>
+    </form>
+    <p id="pair-error" class="error" hidden></p>
+  </section>
+
+  <section id="sessions-view" hidden>
+    <div id="session-groups"></div>
+    <p id="empty-state" hidden>No active agent sessions.</p>
+  </section>
+
+  <script src="/app.js"></script>
+</body>
+</html>

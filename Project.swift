@@ -405,10 +405,12 @@ let project = Project(
                     excluding: [
                         "Sources/App/Resources/Setup/**",
                         "Sources/App/Resources/WebPanels/**",
+                        "Sources/App/Resources/RemoteWebClient/**",
                     ]
                 ),
                 .folderReference(path: "Sources/App/Resources/Setup"),
                 .folderReference(path: "Sources/App/Resources/WebPanels"),
+                .folderReference(path: "Sources/App/Resources/RemoteWebClient"),
                 "docs/keyboard-shortcuts.md",
             ],
             copyFiles: [

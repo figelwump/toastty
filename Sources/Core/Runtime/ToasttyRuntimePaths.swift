@@ -194,6 +194,18 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         )
     }
 
+    public var remoteAccessDirectoryURL: URL {
+        configDirectoryURL.appending(path: "remote-access", directoryHint: .isDirectory)
+    }
+
+    public var remoteAccessDevicesFileURL: URL {
+        remoteAccessDirectoryURL.appending(path: "devices.json", directoryHint: .notDirectory)
+    }
+
+    public var remoteAccessAuditFileURL: URL {
+        remoteAccessDirectoryURL.appending(path: "audit.json", directoryHint: .notDirectory)
+    }
+
     public var instanceFileURL: URL? {
         runtimeHomeURL?.appending(path: Self.instanceFileName, directoryHint: .notDirectory)
     }

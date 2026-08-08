@@ -1,0 +1,105 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1c1c1e;
+  --muted: #6e6e73;
+  --card: #f2f2f7;
+  --accent: #0a84ff;
+  --ok: #30d158;
+  --warn: #ff9f0a;
+  --err: #ff453a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --fg: #f2f2f7;
+    --muted: #8e8e93;
+    --card: #1c1c1e;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 0 16px calc(24px + env(safe-area-inset-bottom));
+  font-family: -apple-system, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(12px + env(safe-area-inset-top)) 0 12px;
+}
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 17px; }
+.badge {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--muted);
+}
+.badge[data-state="live"] { color: var(--ok); }
+.badge[data-state="offline"] { color: var(--err); }
+#pair-form { display: grid; gap: 10px; max-width: 320px; }
+#pair-form input, #pair-form button {
+  font-size: 17px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--card);
+  background: var(--card);
+  color: var(--fg);
+}
+#pair-code { text-transform: uppercase; letter-spacing: 2px; }
+#pair-form button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  font-weight: 600;
+}
+.error { color: var(--err); }
+.workspace-group { margin-top: 18px; }
+.workspace-group h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  margin: 0 0 8px 4px;
+}
+.session-card {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.session-card .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  flex-shrink: 0;
+  background: var(--muted);
+}
+.session-card[data-state="working"] .dot { background: var(--accent); }
+.session-card[data-state="ready"] .dot { background: var(--ok); }
+.session-card[data-state="awaiting_input"] .dot { background: var(--warn); }
+.session-card[data-state="error"] .dot,
+.session-card[data-state="offline"] .dot { background: var(--err); }
+.session-card .info { min-width: 0; }
+.session-card .title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-card .meta {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#empty-state { color: var(--muted); text-align: center; margin-top: 40px; }

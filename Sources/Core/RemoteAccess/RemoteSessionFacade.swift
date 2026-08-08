@@ -5,10 +5,12 @@ import Foundation
 /// panel (for example after a workspace layout change while offline).
 public struct RemoteConversationPlacement: Codable, Equatable, Sendable {
     public var workspaceID: UUID?
+    public var workspaceTitle: String?
     public var panelID: UUID?
 
-    public init(workspaceID: UUID? = nil, panelID: UUID? = nil) {
+    public init(workspaceID: UUID? = nil, workspaceTitle: String? = nil, panelID: UUID? = nil) {
         self.workspaceID = workspaceID
+        self.workspaceTitle = workspaceTitle
         self.panelID = panelID
     }
 }

@@ -659,6 +659,7 @@ struct ToasttyApp: App {
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @StateObject private var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
+    @StateObject private var remoteAccessService: RemoteAccessService
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
@@ -1112,6 +1113,11 @@ struct ToasttyApp: App {
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _webPanelRuntimeRegistry = StateObject(wrappedValue: webPanelRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
+        _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            runtimePaths: runtimePaths
+        ))
         automationLifecycle = bootstrap.automationLifecycle
         allowsGettingStartedAutoPresentation = GettingStartedEligibility.allowsAutoPresentation(
             usesPersistentPreferences: persistUserSettings,
@@ -1424,6 +1430,7 @@ struct ToasttyApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
+            RemoteAccessCommands()
             ToasttyCommandMenus(
                 store: store,
                 agentCatalogStore: agentCatalogStore,
@@ -1463,6 +1470,12 @@ struct ToasttyApp: App {
                 }
             )
         }
+
+        Window("Remote Access", id: RemoteAccessWindowSceneID.value) {
+            RemoteAccessSettingsView(service: remoteAccessService)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 520, height: 480)
     }
 
     private var supportsConfigurationReload: Bool {
