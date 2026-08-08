@@ -667,6 +667,7 @@ struct ToasttyApp: App {
     private let runtimePaths: ToasttyRuntimePaths
     private let agentLaunchSocketPath: String
     private let agentLaunchCLIExecutablePath: String?
+    private let agentHookDispatcher: AgentHookDispatcher
     private let agentLaunchShimExecutablePath: String?
     private let codexProcessPathStore: CodexProcessPathStore
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
@@ -848,7 +849,24 @@ struct ToasttyApp: App {
             basePath: processInfo.environment["PATH"],
             agentBasePath: resolvedAgentBasePath
         )
-        let sessionRuntimeStore = SessionRuntimeStore()
+        // The dispatcher receives the authoritative current-instance socket
+        // and staged CLI paths here; it never rediscovers them via
+        // AutomationSocketLocator.
+        let agentHookDispatcher = AgentHookDispatcher(
+            socketPath: socketPath,
+            cliExecutablePath: cliExecutablePath,
+            scriptPath: initialToasttyConfig.agentHookScriptPath
+        )
+        if let issue = AgentHookDispatcher.configuredScriptPathIssue(
+            initialToasttyConfig.agentHookScriptPath
+        ) {
+            ToasttyLog.warning(
+                "Configured agent hook script is not currently usable",
+                category: .automation,
+                metadata: ["issue": issue]
+            )
+        }
+        let sessionRuntimeStore = SessionRuntimeStore(agentHookDispatcher: agentHookDispatcher)
         sessionRuntimeStore.bind(store: store)
         terminalRuntimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
         terminalRuntimeRegistry.setTerminalProfileProvider(
@@ -977,7 +995,8 @@ struct ToasttyApp: App {
                     agentLaunchCLIExecutablePath: cliExecutablePath,
                     agentLaunchShimExecutablePath: agentShimExecutablePath,
                     codexProcessPathStore: codexProcessPathStore,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    agentHookDispatcher: agentHookDispatcher
                 )
             },
             openLocalDocumentAction: { preferredWindowID, placement in
@@ -1122,6 +1141,7 @@ struct ToasttyApp: App {
         agentLaunchSocketPath = socketPath
         agentLaunchCLIExecutablePath = cliExecutablePath
         agentLaunchShimExecutablePath = agentShimExecutablePath
+        self.agentHookDispatcher = agentHookDispatcher
         self.codexProcessPathStore = codexProcessPathStore
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
@@ -1176,7 +1196,8 @@ struct ToasttyApp: App {
                         agentLaunchCLIExecutablePath: cliExecutablePath,
                         agentLaunchShimExecutablePath: agentShimExecutablePath,
                         codexProcessPathStore: codexProcessPathStore,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        agentHookDispatcher: agentHookDispatcher
                     )
                 }
             )
@@ -1480,7 +1501,8 @@ struct ToasttyApp: App {
             agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
             agentLaunchShimExecutablePath: agentLaunchShimExecutablePath,
             codexProcessPathStore: codexProcessPathStore,
-            terminalRuntimeRegistry: terminalRuntimeRegistry
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            agentHookDispatcher: agentHookDispatcher
         )
     }
 
@@ -1494,7 +1516,8 @@ struct ToasttyApp: App {
         agentLaunchCLIExecutablePath: String?,
         agentLaunchShimExecutablePath: String?,
         codexProcessPathStore: CodexProcessPathStore,
-        terminalRuntimeRegistry: TerminalRuntimeRegistry
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        agentHookDispatcher: AgentHookDispatcher
     ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
@@ -1516,6 +1539,14 @@ struct ToasttyApp: App {
         let toasttyConfig = ToasttyConfigStore.load()
         store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         store.setLocalDocumentRoutingPreferences(toasttyConfig.localDocumentRoutingPreferences)
+        // Only newly enqueued hook events observe the reloaded path; queued
+        // and running invocations drain with their captured path.
+        agentHookDispatcher.updateScriptPath(toasttyConfig.agentHookScriptPath)
+        if let agentHookIssue = AgentHookDispatcher.configuredScriptPathIssue(
+            toasttyConfig.agentHookScriptPath
+        ) {
+            warningMessages.append(agentHookIssue)
+        }
         let resolvedAgentBasePath = ManagedAgentBasePathResolver(
             environment: ProcessInfo.processInfo.environment,
             fallbackPath: nil

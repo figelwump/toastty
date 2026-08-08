@@ -241,7 +241,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 for: request.agent,
                 resolution: userSkillResolution
             ),
-            assessedWorkingDirectory: assessedWorkingDirectory
+            assessedWorkingDirectory: assessedWorkingDirectory,
+            launchReason: .restore
         )
         postSkillsProvisionedNoticeIfNeeded(
             request: request,
@@ -401,7 +402,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         codexSkillsDecision: CodexManagedLaunchSkillsDecision?,
         stagedSkillsConfiguration: ClaudeSkillsLaunchConfiguration?,
         deliveredUserSkillsRootPath: String?,
-        assessedWorkingDirectory: String?
+        assessedWorkingDirectory: String?,
+        launchReason: AgentHookLaunchReason = .managed
     ) throws -> ManagedAgentLaunchPlan {
         guard let sessionRuntimeStore else {
             throw AgentLaunchError.serviceUnavailable
@@ -465,6 +467,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             cwd: resolvedCWD,
             repoRoot: repoRoot,
             scopedWorkspaceIDs: inheritedScopedWorkspaceIDs,
+            launchReason: launchReason,
             at: launchStart
         )
         sessionRuntimeStore.updateStatus(

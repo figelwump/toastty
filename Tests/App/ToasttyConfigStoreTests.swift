@@ -76,6 +76,91 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.localDocumentRoutingPreferences, LocalDocumentRoutingPreferences())
     }
 
+    func testLoadParsesAgentHookPathAndExpandsTilde() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let configURL = ToasttyConfigStore.configFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        agent-hook = "~/hooks/agent-hook.sh"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let config = ToasttyConfigStore.load(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+
+        XCTAssertEqual(
+            config.agentHookScriptPath,
+            homeDirectoryURL.appendingPathComponent("hooks/agent-hook.sh").path
+        )
+    }
+
+    func testLoadKeepsAbsoluteAgentHookPathAndDefaultsToNil() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let configURL = ToasttyConfigStore.configFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        agent-hook = /usr/local/bin/toastty-hook
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(
+            ToasttyConfigStore.load(
+                homeDirectoryPath: homeDirectoryURL.path,
+                environment: [:]
+            ).agentHookScriptPath,
+            "/usr/local/bin/toastty-hook"
+        )
+
+        try "terminal-font-size = 14\n".write(to: configURL, atomically: true, encoding: .utf8)
+        XCTAssertNil(
+            ToasttyConfigStore.load(
+                homeDirectoryPath: homeDirectoryURL.path,
+                environment: [:]
+            ).agentHookScriptPath
+        )
+    }
+
+    func testLoadParsesAgentHookPathUnderRuntimeHome() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let runtimeHomeURL = homeDirectoryURL.appendingPathComponent("runtime-home", isDirectory: true)
+        let environment = ["TOASTTY_RUNTIME_HOME": runtimeHomeURL.path]
+        let configURL = ToasttyConfigStore.configFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: environment
+        )
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        agent-hook = "~/hooks/agent-hook.sh"
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let config = ToasttyConfigStore.load(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: environment
+        )
+
+        // Tilde expansion tracks the provided home directory even when the
+        // config file itself lives in an isolated runtime home.
+        XCTAssertEqual(
+            config.agentHookScriptPath,
+            homeDirectoryURL.appendingPathComponent("hooks/agent-hook.sh").path
+        )
+    }
+
     func testLoadDefaultsAgentCommandShimsToEnabledWhenKeyIsMissing() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let configURL = ToasttyConfigStore.configFileURL(
@@ -134,6 +219,14 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # Set this to false if you do not want Toastty intercepting
             # those commands in Toastty terminals.
             # enable-agent-command-shims = false
+
+            # agent-hook runs one user-provided executable for managed-session
+            # lifecycle and status events (session-start, turn-complete,
+            # needs-approval, session-error, session-stop). The executable
+            # receives event JSON on stdin plus TOASTTY_* environment values,
+            # and must exist, be executable, and start with a valid shebang.
+            # See docs/agent-hooks.md for the full contract.
+            # agent-hook = "~/.toastty/hooks/agent-hook"
 
             # url-opening-destination controls where Toastty opens app-owned
             # web URLs such as Toastty Help links.
@@ -229,6 +322,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertTrue(contents.contains("# Edit the live Toastty config file instead of making changes here."))
         XCTAssertTrue(contents.contains("# terminal-font-size"))
         XCTAssertTrue(contents.contains("# default-terminal-profile"))
+        XCTAssertTrue(contents.contains("# agent-hook"))
         XCTAssertTrue(contents.contains("# url-opening-destination"))
         XCTAssertTrue(contents.contains("# url-opening-browser-placement"))
         XCTAssertTrue(contents.contains("# url-opening-alternate-browser-placement"))

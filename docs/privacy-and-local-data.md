@@ -5,7 +5,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 ## What Toastty writes locally
 
 - `~/.toastty/config`
-  - User-authored Toastty defaults such as `terminal-font-size`, `default-terminal-profile`, `enable-agent-command-shims`, and URL-opening preferences.
+  - User-authored Toastty defaults such as `terminal-font-size`, `default-terminal-profile`, `enable-agent-command-shims`, `agent-hook`, and URL-opening preferences.
 - `~/.toastty/config-reference`
   - Generated commented reference for every supported Toastty config key. Toastty rewrites this file on launch and when you open `Toastty > Open Config Reference…`.
 - `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/bin/` when runtime isolation is enabled and agent command shims are enabled
@@ -83,6 +83,20 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/logs/toastty.log`
   - `<runtime-home>/instance.json`
   - a dedicated `UserDefaults` suite derived from that runtime-home path
+
+## What the configured agent hook receives
+
+When `agent-hook` is configured, Toastty executes that user-provided script for
+managed-session lifecycle and status events. Each invocation receives, on stdin
+and in `TOASTTY_*` environment values, session and workspace metadata: the
+event name, session ID, agent ID, workspace and panel UUIDs, the session
+working directory, the accepted previous/next status kinds, the launch reason,
+and the current instance's CLI and automation socket paths. Prompts, terminal
+output, file lists, and file contents are not included. The script runs with
+your user account's full permissions and inherits the app environment; only
+configure a script you trust. Toastty logs hook invocations, nonzero exits,
+timeouts, and launch failures to its structured local log. See
+[Agent Hooks](agent-hooks.md).
 
 ## What Toastty reads locally for agent status
 
