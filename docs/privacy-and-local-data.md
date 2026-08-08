@@ -9,7 +9,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/config-reference`
   - Generated commented reference for every supported Toastty config key. Toastty rewrites this file on launch and when you open `Toastty > Open Config Reference…`.
 - `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/bin/` when runtime isolation is enabled and agent command shims are enabled
-  - Managed `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, and `pi` wrapper symlinks used to track manual agent invocations inside Toastty terminals.
+  - Managed `codex`, `cdx`, `claude`, `grok`, `opencode`, `mimo`, `mimocode`, and `pi` wrapper symlinks used to track manual agent invocations inside Toastty terminals.
 - macOS `UserDefaults` for Toastty
   - Small UI-managed settings such as the post-agent-launch sidebar default latch, plus any one-time legacy migration state.
 - `~/.toastty/terminal-profiles.toml`
@@ -20,7 +20,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Saved workspace and window layout snapshots, including window-local sidebar
     widths, window-local terminal font overrides, window-local local-document
     text-size overrides, per-browser page zoom overrides, and managed agent
-    native-resume metadata for restored Codex, Claude, OpenCode, MiMo Code, and Pi panels. Native-resume
+    native-resume metadata for restored Codex, Claude, Grok, OpenCode, MiMo Code, and Pi panels. Native-resume
     metadata can include the provider, provider-native session ID, provider
     session file path or Toastty-owned marker path, working directory, capture
     timestamp, and any explicit workspace-scope identifiers needed to restore a
@@ -44,8 +44,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - A stable Codex hook forwarder script plus `telemetry-failures.log` when the forwarder cannot deliver hook events back to Toastty.
 - `~/.codex/hooks.json` (updated by `Toastty > Set Up Agent Status Hooks…`)
   - Toastty adds or updates its own Codex hook entries while preserving unrelated hooks.
+- `$GROK_HOME/hooks/toastty-*.json` (default `GROK_HOME` is `~/.grok`) for managed Grok sessions
+  - Ephemeral per-session Grok hook discovery files written at launch. Toastty removes the matching file when the managed session stops, and sweeps leftover `toastty-*.json` orphans under that hooks directory on cold app start. Toastty does not install durable Grok hooks through a Get Started installer.
 - Temporary launch artifact directories under the system temporary directory for managed agent sessions.
   - OpenCode and MiMo Code launches include a Toastty-owned per-session plugin file plus `telemetry-failures.log` when the plugin cannot deliver status events back to Toastty. The failure log records event type, session context, exit status, and CLI stderr, not full provider event payload JSON. These artifacts are removed when the managed session stops.
+  - Grok launches include a temporary forwarder script plus `telemetry-failures.log` under the system temporary directory, alongside the session-scoped hook JSON under `$GROK_HOME/hooks/`. The hook JSON is removed when the managed session stops; temporary launch artifacts may be retained briefly so late hook invocations fail softly.
 - `~/.toastty/history/pane-journals/`
   - Toastty-owned per-pane restore journals used by `zsh`, `bash`, and `fish` shell integration. These are imported into in-memory shell history on restore, but Toastty does not replace the shell's primary shared history file. For fish, Toastty skips pane-journal import and writes when `fish_history=''`.
 - By default, `~/Library/Logs/Toastty/toastty.log`

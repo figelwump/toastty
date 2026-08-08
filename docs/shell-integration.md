@@ -16,7 +16,7 @@ If you keep shell startup files in version control, the installer is still the e
 
 This is command-history restore only. It does not restore running programs, SSH sessions, REPL state, shell-local variables, or half-typed input.
 
-The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `cdx`, `claude`, `opencode`, `mimo`, `mimocode`, `pi`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
+The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `cdx`, `claude`, `grok`, `opencode`, `mimo`, `mimocode`, `pi`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
 
 Source the Toastty snippet after other `PATH`, history, and prompt-hook changes. It does not need to be the literal last line. Toastty reasserts its shim directory from prompt/preexec hooks when possible, but anything that replaces `PROMPT_COMMAND` or overwrites prompt hooks after it can still undo Toastty's journal/title hooks.
 
