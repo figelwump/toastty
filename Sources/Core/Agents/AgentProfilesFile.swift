@@ -495,7 +495,7 @@ private enum AgentProfilesParser {
             guard rawNames.isEmpty else {
                 throw AgentProfilesParseError(
                     line: line,
-                    message: "[\(profileID)] manualCommandNames is supported only for [codex], [claude], [opencode], [mimocode], and [pi]"
+                    message: "[\(profileID)] manualCommandNames is supported only for [codex], [claude], [opencode], [mimocode], [pi], and [grok]"
                 )
             }
             return []
@@ -551,6 +551,7 @@ private enum AgentProfilesParser {
         AgentKind.opencode.rawValue,
         AgentKind.mimocode.rawValue,
         AgentKind.pi.rawValue,
+        AgentKind.grok.rawValue,
     ]
 
     private static let reservedManualCommandNames: Set<String> = builtInAgentIDsSupportingManualCommandNames

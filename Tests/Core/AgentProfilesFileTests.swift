@@ -274,7 +274,7 @@ struct AgentProfilesFileTests {
         #expect(
             throws: AgentProfilesParseError(
                 line: 1,
-                message: "[gemini] manualCommandNames is supported only for [codex], [claude], [opencode], [mimocode], and [pi]"
+                message: "[gemini] manualCommandNames is supported only for [codex], [claude], [opencode], [mimocode], [pi], and [grok]"
             )
         ) {
             _ = try AgentProfilesFile.load(
