@@ -83,6 +83,7 @@ enum AgentLaunchInstrumentation {
         argv: [String],
         cliExecutablePath: String,
         sessionID: String,
+        panelID: UUID? = nil,
         workingDirectory: String?,
         fileManager: FileManager,
         launchEnvironment: [String: String] = [:],
@@ -141,6 +142,7 @@ enum AgentLaunchInstrumentation {
                 argv: argv,
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
+                panelID: panelID,
                 fileManager: fileManager,
                 launchEnvironment: launchEnvironment
             )
@@ -341,6 +343,7 @@ enum AgentLaunchInstrumentation {
         argv: [String],
         cliExecutablePath: String,
         sessionID: String,
+        panelID: UUID?,
         fileManager: FileManager,
         launchEnvironment: [String: String]
     ) throws -> PreparedAgentLaunchCommand {
@@ -371,6 +374,9 @@ enum AgentLaunchInstrumentation {
         do {
             let hookScriptURL = artifactsDirectoryURL.appendingPathComponent("grok-hook.sh", isDirectory: false)
             let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
+            // Bake session + panel into the forwarder CLI args. Grok hooks inherit
+            // process env that can drift (or be wrong for concurrent hook files);
+            // the launch panel id is fixed when the session is created.
             try writeExecutableScript(
                 makeTelemetryForwarderScript(
                     cliExecutablePath: cliExecutablePath,
@@ -381,7 +387,8 @@ enum AgentLaunchInstrumentation {
                         isDirectory: false
                     ),
                     inputMode: .stdinOrFirstArgument,
-                    expectedSessionID: sessionID
+                    expectedSessionID: sessionID,
+                    expectedPanelID: panelID?.uuidString
                 ),
                 to: hookScriptURL,
                 fileManager: fileManager
@@ -1469,11 +1476,19 @@ private extension AgentLaunchInstrumentation {
         telemetryErrorLogURL: URL,
         stderrFallbackURL: URL,
         inputMode: TelemetryInputMode,
-        expectedSessionID: String? = nil
+        expectedSessionID: String? = nil,
+        expectedPanelID: String? = nil
     ) -> String {
         let stderrTemplateURL = stderrFallbackURL.deletingLastPathComponent()
             .appendingPathComponent("telemetry-stderr.XXXXXX", isDirectory: false)
-        let cliCommand = "\(shellQuote(cliExecutablePath)) session ingest-agent-event --source \(source)"
+        var cliCommand =
+            "\(shellQuote(cliExecutablePath)) session ingest-agent-event --source \(source)"
+        if let expectedSessionID {
+            cliCommand += " --session \(shellQuote(expectedSessionID))"
+        }
+        if let expectedPanelID {
+            cliCommand += " --panel \(shellQuote(expectedPanelID))"
+        }
         let commandInvocationLines: [String]
 
         switch inputMode {

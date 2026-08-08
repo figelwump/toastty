@@ -1022,11 +1022,13 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         defer { try? fileManager.removeItem(at: grokHome) }
 
         let sessionID = UUID().uuidString
+        let panelID = UUID()
         let preparedLaunch = try AgentLaunchInstrumentation.prepare(
             agent: .grok,
             argv: ["grok"],
             cliExecutablePath: "/bin/echo",
             sessionID: sessionID,
+            panelID: panelID,
             workingDirectory: "/tmp/repo",
             fileManager: fileManager,
             launchEnvironment: ["GROK_HOME": grokHome.path]
@@ -1069,6 +1071,18 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
         XCTAssertTrue(script.contains(sessionID), "expected-session gate should embed session id")
+        XCTAssertTrue(
+            script.contains("--session"),
+            "forwarder should pass baked --session to ingest"
+        )
+        XCTAssertTrue(
+            script.contains("--panel"),
+            "forwarder should pass baked --panel so ingest ignores drifted TOASTTY_PANEL_ID"
+        )
+        XCTAssertTrue(
+            script.contains(panelID.uuidString),
+            "forwarder should embed launch panel id"
+        )
         XCTAssertTrue(script.contains("grok-hooks"))
         XCTAssertTrue(script.contains("TOASTTY_SESSION_ID"))
 
@@ -1104,11 +1118,13 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCLIURL.path)
 
         let sessionID = "session-\(UUID().uuidString)"
+        let panelID = UUID()
         let preparedLaunch = try AgentLaunchInstrumentation.prepare(
             agent: .grok,
             argv: ["grok"],
             cliExecutablePath: fakeCLIURL.path,
             sessionID: sessionID,
+            panelID: panelID,
             workingDirectory: nil,
             fileManager: fileManager,
             launchEnvironment: ["GROK_HOME": grokHome.path]
@@ -1139,10 +1155,13 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertEqual(mismatch.stdout, "")
         XCTAssertFalse(fileManager.fileExists(atPath: markerURL.path))
 
+        // Even with a drifted/wrong TOASTTY_PANEL_ID in the hook process env,
+        // the forwarder must still invoke the CLI (baked --panel wins).
         let match = try runScript(
             at: scriptURL,
             environment: [
                 "TOASTTY_SESSION_ID": sessionID,
+                "TOASTTY_PANEL_ID": "ADEAD85B-FEDA-4FCD-AA96-DDF53C4ED3D4",
                 "TOASTTY_SOCKET_PATH": "/tmp/test-grok-hooks.sock",
             ],
             standardInput: Data(payload.utf8)

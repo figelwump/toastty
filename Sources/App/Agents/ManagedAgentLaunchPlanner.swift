@@ -110,6 +110,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             argv: request.argv,
             cliExecutablePath: cliExecutablePath,
             sessionID: sessionID,
+            panelID: target.panelID,
             workingDirectory: resolvedCWD,
             launchEnvironment: request.environment,
             codexStatusTrackingSource: codexStatusTrackingSource
@@ -309,6 +310,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         argv: [String],
         cliExecutablePath: String,
         sessionID: String,
+        panelID: UUID,
         workingDirectory: String?,
         launchEnvironment: [String: String],
         codexStatusTrackingSource: CodexStatusTrackingSource
@@ -319,6 +321,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 argv: argv,
                 cliExecutablePath: cliExecutablePath,
                 sessionID: sessionID,
+                panelID: panelID,
                 workingDirectory: workingDirectory,
                 fileManager: fileManager,
                 launchEnvironment: launchEnvironment,
