@@ -1116,6 +1116,7 @@ struct ToasttyApp: App {
         _remoteAccessService = StateObject(wrappedValue: RemoteAccessService(
             store: store,
             sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
             runtimePaths: runtimePaths
         ))
         automationLifecycle = bootstrap.automationLifecycle

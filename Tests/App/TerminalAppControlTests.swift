@@ -107,6 +107,46 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertEqual(capturedFocusPolicy, .focusTarget)
     }
 
+    func testProgrammaticSendInvalidatesLocalInputBeforeDelivery() throws {
+        let fixture = try TerminalAppControlFixture()
+        var callOrder: [String] = []
+        let panelID = fixture.panelID
+        fixture.terminalRuntimeRegistry.localInputObserver = { observedPanelID in
+            XCTAssertEqual(observedPanelID, panelID)
+            callOrder.append("local-input")
+        }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in
+            callOrder.append("delivery")
+            return true
+        }
+
+        XCTAssertTrue(fixture.terminalRuntimeRegistry.sendText(
+            "local automation",
+            submit: true,
+            panelID: panelID,
+            focusPolicy: .preserveFirstResponder
+        ))
+        XCTAssertEqual(callOrder, ["local-input", "delivery"])
+    }
+
+    func testRemoteSendBypassesLocalInputObserver() throws {
+        let fixture = try TerminalAppControlFixture()
+        var localInputCount = 0
+        fixture.terminalRuntimeRegistry.localInputObserver = { _ in localInputCount += 1 }
+        fixture.terminalRuntimeRegistry.setAutomationSendTextHandlerForTesting { _, _, _, _ in true }
+
+        XCTAssertEqual(
+            fixture.terminalRuntimeRegistry.sendRemoteText(
+                "remote reply",
+                submit: true,
+                panelID: fixture.panelID,
+                focusPolicy: .preserveFirstResponder
+            ),
+            .delivered
+        )
+        XCTAssertEqual(localInputCount, 0)
+    }
+
     func testPreserveFirstResponderDeliverySendsWithoutFocusing() {
         var focusCallCount = 0
         var sentText: [String] = []
@@ -165,6 +205,23 @@ final class TerminalAppControlTests: XCTestCase {
         XCTAssertTrue(sentText.isEmpty)
         XCTAssertEqual(submitCallCount, 0)
         XCTAssertEqual(focusFailureLogCount, 1)
+    }
+
+    func testDeliveryIsUncertainWhenTextWasSentButSubmitFails() {
+        var sentText: [String] = []
+        let delivery = TerminalAutomationInputDelivery(
+            focusPolicy: .preserveFirstResponder,
+            focusHostViewIfNeeded: { true },
+            sendText: { sentText.append($0) },
+            sendSubmit: { false },
+            logFocusFailure: {}
+        )
+
+        XCTAssertEqual(
+            delivery.deliverResult(text: "partial", submit: true),
+            .uncertain
+        )
+        XCTAssertEqual(sentText, ["partial"])
     }
 
     func testAgentLaunchActionPassesStructuredCWDEnvironmentAndInitialPrompt() throws {

@@ -40,9 +40,16 @@ public final class RemoteGatewayRequestHandler {
         case upgradeToWebSocket(deviceID: UUID, upgradeResponseData: Data)
     }
 
+    /// Performs a gated free-form send. Supplied by the host (App), which owns
+    /// the input coordinator and terminal delivery. The whole check-and-deliver
+    /// runs synchronously inside this call so no epoch can change mid-flight.
+    /// Absent (nil) means remote send is not wired; the route returns 404.
+    public typealias SendHandler = (RemoteMessageSendRequest, RemoteDeviceRecord) -> RemoteMessageSendResult
+
     private let deviceStore: RemoteDeviceStore
     private let auditLog: RemoteAccessAuditLog
     private let facade: any RemoteSessionFacade
+    private let sendHandler: SendHandler?
     private var configuration: RemoteGatewayConfiguration
     private var pairingRateLimiter: RemoteAccessRateLimiter
     private var authRateLimiter: RemoteAccessRateLimiter
@@ -53,12 +60,14 @@ public final class RemoteGatewayRequestHandler {
         auditLog: RemoteAccessAuditLog,
         facade: any RemoteSessionFacade,
         configuration: RemoteGatewayConfiguration,
+        sendHandler: SendHandler? = nil,
         pairingRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(),
         authRateLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300)
     ) {
         self.deviceStore = deviceStore
         self.auditLog = auditLog
         self.facade = facade
+        self.sendHandler = sendHandler
         self.configuration = configuration
         self.pairingRateLimiter = pairingRateLimiter
         self.authRateLimiter = authRateLimiter
@@ -84,6 +93,8 @@ public final class RemoteGatewayRequestHandler {
             return handlePair(request, at: date)
         case ("POST", "/api/conversation.events.get"):
             return handleConversationEvents(request, at: date)
+        case ("POST", "/api/conversation.message.send"):
+            return handleMessageSend(request, at: date)
         case ("GET", let path):
             return handleStatic(path: path)
         default:
@@ -174,6 +185,50 @@ public final class RemoteGatewayRequestHandler {
             response = .conversationNotFound
         }
         let body = (try? encoder.encode(response)) ?? Data()
+        return .respond(.json(body: body))
+    }
+
+    private func handleMessageSend(_ request: RemoteGatewayHTTPRequest, at date: Date) -> Outcome {
+        guard let origin = request.header("origin"),
+              configuration.allowedOrigins.contains(origin) else {
+            return .respond(errorResponse(status: 403, reason: "Forbidden", code: "origin_required", message: "Origin required"))
+        }
+        let device: RemoteDeviceRecord
+        switch authenticate(request, at: date) {
+        case .failure(let response):
+            return .respond(response)
+        case .success(let authenticated):
+            device = authenticated
+        }
+        guard let sendHandler else {
+            return .respond(errorResponse(status: 404, reason: "Not Found", code: "not_found", message: "Remote send is not available"))
+        }
+        // Fail closed before touching the terminal: a device without send scope
+        // never reaches the coordinator.
+        guard device.scopes.contains(.send) else {
+            auditLog.record(RemoteAccessAuditEntry(at: date, action: .remoteSendRejected, deviceID: device.id, detail: "send_scope_denied"))
+            let body = (try? encoder.encode(RemoteMessageSendResult.rejected(reason: .sendScopeDenied))) ?? Data()
+            return .respond(.json(status: 403, reason: "Forbidden", body: body))
+        }
+        guard let sendRequest = try? ConversationEventCoding.makeDecoder().decode(RemoteMessageSendRequest.self, from: request.body) else {
+            return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected send JSON"))
+        }
+
+        let result = sendHandler(sendRequest, device)
+        switch result {
+        case .accepted:
+            auditLog.record(RemoteAccessAuditEntry(at: date, action: .remoteSendAccepted, deviceID: device.id))
+        case .rejected(let reason):
+            auditLog.record(RemoteAccessAuditEntry(at: date, action: .remoteSendRejected, deviceID: device.id, detail: reason.rawValue))
+        case .uncertain:
+            auditLog.record(RemoteAccessAuditEntry(at: date, action: .remoteSendUncertain, deviceID: device.id))
+        case .duplicate:
+            break
+        }
+        let body = (try? encoder.encode(result)) ?? Data()
+        // A rejection is a normal, expected outcome (stale epoch, local draft);
+        // it is reported 200 with a rejected result, not an HTTP error, so the
+        // client can render the reason without treating it as a transport fault.
         return .respond(.json(body: body))
     }
 

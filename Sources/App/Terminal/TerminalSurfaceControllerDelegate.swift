@@ -21,6 +21,10 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
 
     func handleLocalInterruptKey(for panelID: UUID, kind: TerminalLocalInterruptKind)
 
+    /// Local keyboard/paste input reached the panel's surface. Used by
+    /// remote-access to invalidate an open remote-send epoch. Must be cheap.
+    func handleLocalInput(for panelID: UUID)
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState
     func consumeSplitSource(forNewPanelID panelID: UUID)

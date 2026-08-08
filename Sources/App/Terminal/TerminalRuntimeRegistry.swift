@@ -191,6 +191,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
     }
 
+    /// Notified with a panel ID on any local keyboard/paste input. Remote
+    /// access registers here to invalidate open remote-send epochs. Kept as a
+    /// bare closure so the hot path stays a single optional call.
+    var localInputObserver: ((UUID) -> Void)?
+
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
         self.sessionLifecycleTracker = sessionLifecycleTracker
         #if TOASTTY_HAS_GHOSTTY_KIT
@@ -453,7 +458,34 @@ final class TerminalRuntimeRegistry: ObservableObject {
         panelID: UUID,
         focusPolicy: TerminalInputFocusPolicy
     ) -> Bool {
-        automationSendText(text, submit: submit, panelID: panelID, focusPolicy: focusPolicy)
+        // Every non-remote programmatic input source participates in the same
+        // local-draft gate as keyboard and paste. Notify before delivery so a
+        // remote request cannot observe the old open epoch.
+        localInputObserver?(panelID)
+        return automationSendText(text, submit: submit, panelID: panelID, focusPolicy: focusPolicy)
+    }
+
+    /// Remote delivery bypasses the local-input observer because the caller
+    /// already holds the coordinator lease for this exact prompt epoch.
+    func sendRemoteText(
+        _ text: String,
+        submit: Bool,
+        panelID: UUID,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult {
+        if let automationSendTextHandlerForTesting {
+            return automationSendTextHandlerForTesting(text, submit, panelID, focusPolicy)
+                ? .delivered
+                : .unavailable
+        }
+        guard let controller = runtimeStore.existingController(for: panelID) else {
+            return .unavailable
+        }
+        return controller.automationSendTextResult(
+            text,
+            submit: submit,
+            focusPolicy: focusPolicy
+        )
     }
 
     func readVisibleText(panelID: UUID) -> String? {
@@ -824,6 +856,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return false
         }
 
+        // A file drop inserts a shell-escaped path into the terminal and is a
+        // local draft just like keyboard or paste input.
+        localInputObserver?(drop.targetPanelID)
         let handled = targetController.handleFileDrop(drop.fileURLs)
         let focusActionApplied = handled
             ? focusPanelForFileDropIfPossible(drop.targetPanelID)
@@ -1068,6 +1103,10 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             kind: kind,
             at: Date()
         )
+    }
+
+    func handleLocalInput(for panelID: UUID) {
+        localInputObserver?(panelID)
     }
 
     @discardableResult
@@ -1860,7 +1899,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         if let restoredManagedLaunchSubmitterForTesting {
             return restoredManagedLaunchSubmitterForTesting(commandLine, true, panelID)
         }
-        return automationSendText(commandLine, submit: true, panelID: panelID)
+        return sendText(commandLine, submit: true, panelID: panelID)
     }
 
     func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {

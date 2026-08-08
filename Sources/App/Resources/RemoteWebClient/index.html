@@ -40,6 +40,11 @@
     </div>
     <div id="chat-messages"></div>
     <p id="chat-empty" hidden>No transcript yet.</p>
+    <form id="compose-bar" hidden autocomplete="off">
+      <textarea id="compose-input" rows="1" placeholder="Message" aria-label="Message" enterkeyhint="send"></textarea>
+      <button id="compose-send" type="submit">Send</button>
+    </form>
+    <p id="compose-status" class="meta" aria-live="polite" hidden></p>
   </section>
 
   <script src="/app.js"></script>

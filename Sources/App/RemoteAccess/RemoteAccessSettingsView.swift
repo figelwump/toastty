@@ -15,6 +15,7 @@ struct RemoteAccessSettingsView: View {
                     pairingSection
                 }
                 devicesSection
+                writeControlsSection
                 if showsAudit {
                     auditSection
                 }
@@ -121,12 +122,47 @@ struct RemoteAccessSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
+                        Toggle("Send", isOn: Binding(
+                            get: { device.scopes.contains(.send) },
+                            set: { service.setDeviceSendScope($0, for: device.id) }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .help("Allow this device to send messages to sessions where remote replies are enabled.")
                         Button("Revoke", role: .destructive) {
                             service.revokeDevice(device.id)
                         }
                     }
                 }
                 .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private var writeControlsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Remote replies").font(.headline)
+            Text("Off by default. Enable per session to let a device with Send permission reply while the agent is waiting at an open prompt. Local typing always wins.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            let conversations = service.writeControllableSessions
+            if conversations.isEmpty {
+                Text("No agent sessions available.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(conversations, id: \.conversationID) { conversation in
+                Toggle(isOn: Binding(
+                    get: { service.isSessionWriteEnabled(conversation.conversationID) },
+                    set: { service.setSessionWriteEnabled($0, for: conversation.conversationID) }
+                )) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(conversation.title)
+                        Text("\(conversation.provider.displayName)\(conversation.placement.workspaceTitle.map { " · \($0)" } ?? "")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
             }
         }
     }

@@ -17,6 +17,8 @@ public struct RemoteAccessAuditEntry: Codable, Equatable, Sendable {
         case sessionSubscribed = "session_subscribed"
         case remoteSendAccepted = "remote_send_accepted"
         case remoteSendRejected = "remote_send_rejected"
+        case remoteSendUncertain = "remote_send_uncertain"
+        case sessionWritesChanged = "session_writes_changed"
     }
 
     public var at: Date

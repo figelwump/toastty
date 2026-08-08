@@ -16,6 +16,10 @@ const chatTitle = document.getElementById("chat-title");
 const chatState = document.getElementById("chat-state");
 const chatMessages = document.getElementById("chat-messages");
 const chatEmpty = document.getElementById("chat-empty");
+const composeBar = document.getElementById("compose-bar");
+const composeInput = document.getElementById("compose-input");
+const composeSend = document.getElementById("compose-send");
+const composeStatus = document.getElementById("compose-status");
 
 let socket = null;
 let reconnectDelayMs = 1000;
@@ -120,13 +124,182 @@ function renderSnapshot(snapshot) {
 function renderChatHeader(conversation) {
   chatTitle.textContent = conversation.title;
   chatState.textContent = conversation.provider + " · " + stateLabel(conversation.state);
+  if (openConversation) {
+    openConversation.availability = conversation.inputAvailability || null;
+    updateComposeState();
+  }
 }
+
+function rejectionLabel(reason) {
+  return {
+    epoch_mismatch: "The prompt changed — reopen to send.",
+    local_draft_present: "You're typing on the Mac.",
+    prompt_not_open: "Waiting for the agent.",
+    pending_interaction: "The agent is waiting for input on the Mac.",
+    surface_unavailable: "The terminal isn't ready.",
+    not_bound: "This session isn't running.",
+    session_writes_disabled: "Enable remote replies for this session on the Mac.",
+    send_scope_denied: "This device can't send.",
+    empty_text: "Message is empty.",
+  }[reason] || "Can't send right now.";
+}
+
+function updateComposeState() {
+  if (!openConversation) return;
+  const availability = openConversation.availability;
+  const canSend = availability && availability.kind === "open_prompt";
+  const retryEpochChanged = Boolean(canSend
+    && openConversation.pendingSend
+    && !epochsEqual(openConversation.pendingSend.expectedInputEpoch, availability.epoch));
+  composeBar.hidden = !canSend;
+  composeSend.disabled = !canSend || openConversation.sending || retryEpochChanged;
+  composeInput.disabled = !canSend || openConversation.sending;
+  if (retryEpochChanged && !openConversation.sending) {
+    setComposeStatus(
+      "The prompt changed after an uncertain send. Check the transcript, then edit the message to send again.",
+      "error"
+    );
+  }
+}
+
+function setComposeStatus(message, kind) {
+  if (!message) {
+    composeStatus.hidden = true;
+    composeStatus.removeAttribute("data-kind");
+    return;
+  }
+  composeStatus.hidden = false;
+  composeStatus.textContent = message;
+  if (kind) {
+    composeStatus.dataset.kind = kind;
+  } else {
+    composeStatus.removeAttribute("data-kind");
+  }
+}
+
+function newRequestID() {
+  if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+  return "req-" + Date.now() + "-" + Math.floor(Math.random() * 1e9);
+}
+
+function epochsEqual(left, right) {
+  return Boolean(left && right
+    && left.bindingID === right.bindingID
+    && left.counter === right.counter);
+}
+
+async function submitCompose(event) {
+  event.preventDefault();
+  if (!openConversation || openConversation.sending) return;
+  const availability = openConversation.availability;
+  if (!availability || availability.kind !== "open_prompt") return;
+  const text = composeInput.value;
+  if (!text.trim()) return;
+
+  let sendRequest = openConversation.pendingSend;
+  if (sendRequest && !epochsEqual(sendRequest.expectedInputEpoch, availability.epoch)) {
+    setComposeStatus(
+      "The prompt changed after an uncertain send. Check the transcript, then edit the message to send again.",
+      "error"
+    );
+    updateComposeState();
+    return;
+  }
+  if (!sendRequest || sendRequest.text !== text) {
+    sendRequest = {
+      conversationID: openConversation.conversationID,
+      clientRequestID: newRequestID(),
+      expectedInputEpoch: availability.epoch,
+      text,
+    };
+    openConversation.pendingSend = sendRequest;
+  }
+
+  openConversation.sending = true;
+  updateComposeState();
+  setComposeStatus("Sending…");
+  let result;
+  try {
+    const response = await fetch("/api/conversation.message.send", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sendRequest),
+    });
+    result = await response.json();
+    if (!response.ok) {
+      openConversation.pendingSend = null;
+      openConversation.sending = false;
+      updateComposeState();
+      setComposeStatus(
+        rejectionLabel(response.status === 403 ? "send_scope_denied" : result.reason),
+        "error"
+      );
+      return;
+    }
+  } catch (error) {
+    openConversation.sending = false;
+    updateComposeState();
+    // Keep the exact request ID, text, and epoch. If the host accepted the
+    // request but the response was lost, the next attempt must be a true
+    // idempotent retry rather than a second injection.
+    setComposeStatus("Couldn't reach Toastty.", "error");
+    return;
+  }
+  openConversation.sending = false;
+  if (result.status === "accepted" || result.status === "duplicate") {
+    openConversation.pendingSend = null;
+    composeInput.value = "";
+    composeInput.style.height = "auto";
+    setComposeStatus(null);
+    if (epochsEqual(openConversation.availability?.epoch, sendRequest.expectedInputEpoch)) {
+      openConversation.availability = { kind: "unavailable", reason: "working" };
+    }
+  } else if (result.status === "uncertain") {
+    openConversation.pendingSend = null;
+    if (epochsEqual(openConversation.availability?.epoch, sendRequest.expectedInputEpoch)) {
+      openConversation.availability = { kind: "unavailable", reason: "working" };
+    }
+    setComposeStatus("Delivery is uncertain — check the Mac before sending again.", "error");
+  } else {
+    openConversation.pendingSend = null;
+    setComposeStatus(rejectionLabel(result.reason), "error");
+  }
+  updateComposeState();
+}
+
+composeBar.addEventListener("submit", submitCompose);
+composeInput.addEventListener("input", () => {
+  if (openConversation?.pendingSend
+      && openConversation.pendingSend.text !== composeInput.value) {
+    openConversation.pendingSend = null;
+    setComposeStatus(null);
+    updateComposeState();
+  }
+  composeInput.style.height = "auto";
+  composeInput.style.height = Math.min(composeInput.scrollHeight, 140) + "px";
+});
+composeInput.addEventListener("keydown", (event) => {
+  // Enter sends; Shift+Enter inserts a newline (multi-line send preserved).
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    composeBar.requestSubmit();
+  }
+});
 
 function appendEventNode(event) {
   const kind = event.kind;
   const payload = event.payload || {};
   let node = null;
   if (kind === "user_message") {
+    if (openConversation?.pendingSend
+        && payload.clientRequestID === openConversation.pendingSend.clientRequestID) {
+      openConversation.pendingSend = null;
+      composeInput.value = "";
+      composeInput.style.height = "auto";
+      setComposeStatus(null);
+      updateComposeState();
+    }
     node = document.createElement("div");
     node.className = "bubble user";
     node.textContent = payload.text || "";
@@ -256,9 +429,14 @@ function openChat(conversation) {
     generation: 0,
     lastSequence: 0,
     loading: false,
+    sending: false,
+    availability: null,
+    pendingSend: null,
   };
   chatMessages.replaceChildren();
   chatEmpty.hidden = true;
+  composeInput.value = "";
+  setComposeStatus(null);
   renderChatHeader(conversation);
   sessionsView.hidden = true;
   chatView.hidden = false;
@@ -268,6 +446,8 @@ function openChat(conversation) {
 function closeChat() {
   openConversation = null;
   chatView.hidden = true;
+  composeBar.hidden = true;
+  setComposeStatus(null);
   sessionsView.hidden = false;
   if (latestSnapshot) renderSnapshot(latestSnapshot);
 }

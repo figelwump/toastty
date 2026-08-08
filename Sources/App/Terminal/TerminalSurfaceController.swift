@@ -6,6 +6,15 @@ import GhosttyKit
 #endif
 
 @MainActor
+enum TerminalInputDeliveryResult: Equatable {
+    case delivered
+    case unavailable
+    /// Text may have reached the surface, but submission did not complete.
+    /// Retrying could append or submit twice.
+    case uncertain
+}
+
+@MainActor
 struct TerminalAutomationInputDelivery {
     let focusPolicy: TerminalInputFocusPolicy
     let focusHostViewIfNeeded: () -> Bool
@@ -15,24 +24,29 @@ struct TerminalAutomationInputDelivery {
 
     @discardableResult
     func deliver(text: String, submit: Bool) -> Bool {
+        deliverResult(text: text, submit: submit) == .delivered
+    }
+
+    func deliverResult(text: String, submit: Bool) -> TerminalInputDeliveryResult {
         if focusPolicy == .focusTarget {
             guard focusHostViewIfNeeded() else {
                 logFocusFailure()
-                return false
+                return .unavailable
             }
         }
 
+        let sentText = text.isEmpty == false
         if text.isEmpty == false {
             sendText(text)
         }
 
         if submit {
             guard sendSubmit() else {
-                return false
+                return sentText ? .uncertain : .unavailable
             }
         }
 
-        return true
+        return .delivered
     }
 }
 
@@ -221,6 +235,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         terminalHostView.handleLocalInterruptKey = { [weak self] kind in
             guard let self else { return }
             self.delegate?.handleLocalInterruptKey(for: self.panelID, kind: kind)
+        }
+        terminalHostView.handleLocalInput = { [weak self] in
+            guard let self else { return }
+            self.delegate?.handleLocalInput(for: self.panelID)
         }
         #else
         hostedView = fallbackView
@@ -792,17 +810,25 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         submit: Bool,
         focusPolicy: TerminalInputFocusPolicy
     ) -> Bool {
+        automationSendTextResult(text, submit: submit, focusPolicy: focusPolicy) == .delivered
+    }
+
+    func automationSendTextResult(
+        _ text: String,
+        submit: Bool,
+        focusPolicy: TerminalInputFocusPolicy
+    ) -> TerminalInputDeliveryResult {
         #if TOASTTY_HAS_GHOSTTY_KIT
         // Automation input should follow actual surface/host readiness. Process
         // cwd inference can lag behind fresh split creation and block panels
         // that are already interactive from Ghostty's perspective.
         guard let ghosttySurface else {
             logAutomationInputUnavailable(reason: "no_surface")
-            return false
+            return .unavailable
         }
         guard isReadyForAutomationInput() else {
             logAutomationInputUnavailable(reason: automationInputUnavailableReason())
-            return false
+            return .unavailable
         }
         return TerminalAutomationInputDelivery(
             focusPolicy: focusPolicy,
@@ -819,9 +845,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 self?.logAutomationInputUnavailable(reason: "focus_host_failed")
             }
         )
-        .deliver(text: text, submit: submit)
+        .deliverResult(text: text, submit: submit)
         #else
-        return false
+        return .unavailable
         #endif
     }
 

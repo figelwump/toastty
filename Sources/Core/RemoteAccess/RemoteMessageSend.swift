@@ -56,6 +56,10 @@ public enum RemoteMessageSendResult: Equatable, Sendable {
     case accepted(epoch: RemoteInputEpoch)
     /// Rejected; the client must not retry without re-reading state.
     case rejected(reason: RemoteMessageRejectionReason)
+    /// Text may have reached the terminal, but submission could not be
+    /// confirmed. The host closes the epoch and suppresses retries because a
+    /// second injection could append or submit the message twice.
+    case uncertain
     /// This `clientRequestID` was already accepted; the earlier delivery
     /// stands. Idempotent retries land here rather than injecting twice.
     case duplicate
@@ -76,6 +80,7 @@ extension RemoteMessageSendResult: Codable {
     private enum Status: String, Codable {
         case accepted
         case rejected
+        case uncertain
         case duplicate
     }
 
@@ -86,6 +91,8 @@ extension RemoteMessageSendResult: Codable {
             self = .accepted(epoch: try container.decode(RemoteInputEpoch.self, forKey: .epoch))
         case .rejected:
             self = .rejected(reason: try container.decode(RemoteMessageRejectionReason.self, forKey: .reason))
+        case .uncertain:
+            self = .uncertain
         case .duplicate:
             self = .duplicate
         }
@@ -100,6 +107,8 @@ extension RemoteMessageSendResult: Codable {
         case .rejected(let reason):
             try container.encode(Status.rejected, forKey: .status)
             try container.encode(reason, forKey: .reason)
+        case .uncertain:
+            try container.encode(Status.uncertain, forKey: .status)
         case .duplicate:
             try container.encode(Status.duplicate, forKey: .status)
         }

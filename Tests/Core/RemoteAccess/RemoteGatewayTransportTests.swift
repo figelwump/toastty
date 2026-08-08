@@ -145,7 +145,8 @@ struct RemoteGatewayRequestHandlerTests {
     static func makeHandler(
         deviceStore: RemoteDeviceStore = RemoteDeviceStore(fileURL: nil),
         pairingLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 2, windowDuration: 60, lockoutDuration: 300),
-        eventsOutcome: ConversationEventPageOutcome = .conversationNotFound
+        eventsOutcome: ConversationEventPageOutcome = .conversationNotFound,
+        sendHandler: RemoteGatewayRequestHandler.SendHandler? = nil
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
         let audit = RemoteAccessAuditLog(fileURL: nil)
         let snapshot = RemoteSessionListSnapshot(
@@ -163,6 +164,7 @@ struct RemoteGatewayRequestHandlerTests {
                     "/index.html": RemoteGatewayStaticResource(contentType: "text/html; charset=utf-8", data: Data("<html>app</html>".utf8)),
                 ]
             ),
+            sendHandler: sendHandler,
             pairingRateLimiter: pairingLimiter
         )
         return (handler, deviceStore, audit)
@@ -441,6 +443,108 @@ struct RemoteGatewayRequestHandlerTests {
         #expect(resnapshotJSON.contains(#""type":"resnapshot_required""#))
         #expect(try decoder.decode(RemoteGatewayStreamMessage.self, from: resnapshotData)
             == .resnapshotRequired(conversationID: conversationID))
+    }
+
+    @Test func messageSendRequiresSendScopeBeforeReachingHandler() {
+        let epoch = RemoteInputEpoch(bindingID: UUID(), counter: 1)
+        var handlerCalled = false
+        let (handler, store, audit) = Self.makeHandler(sendHandler: { _, _ in
+            handlerCalled = true
+            return .accepted(epoch: epoch)
+        })
+        // Paired device is read-only by default.
+        let cookie = Self.pairedDeviceCookie(store)
+        let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r1","expectedInputEpoch":{"bindingID":"\#(UUID().uuidString)","counter":1},"text":"hi"}"#
+        guard case .respond(let response) = handler.handle(
+            Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 403)
+        #expect(handlerCalled == false)
+        #expect(audit.recentEntries().contains { $0.action == .remoteSendRejected })
+    }
+
+    @Test func messageSendForwardsToHandlerWithSendScope() throws {
+        let epoch = RemoteInputEpoch(bindingID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, counter: 4)
+        var received: RemoteMessageSendRequest?
+        let (handler, store, audit) = Self.makeHandler(sendHandler: { request, _ in
+            received = request
+            return .accepted(epoch: epoch)
+        })
+        // Grant send scope to the paired device.
+        let cookie = Self.pairedDeviceCookie(store)
+        store.setScopes([.read, .send], forDevice: store.devices[0].id)
+
+        let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r7","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":4},"text":"deploy please"}"#
+        guard case .respond(let response) = handler.handle(
+            Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 200)
+        #expect(received?.clientRequestID == "r7")
+        #expect(received?.text == "deploy please")
+        let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendResult.self, from: response.body)
+        #expect(decoded == .accepted(epoch: epoch))
+        #expect(audit.recentEntries().contains { $0.action == .remoteSendAccepted })
+    }
+
+    @Test func messageSendRejectionIsReported200WithReason() throws {
+        let (handler, store, _) = Self.makeHandler(sendHandler: { _, _ in
+            .rejected(reason: .epochMismatch)
+        })
+        let cookie = Self.pairedDeviceCookie(store)
+        store.setScopes([.read, .send], forDevice: store.devices[0].id)
+        let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r1","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":1},"text":"hi"}"#
+        guard case .respond(let response) = handler.handle(
+            Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        // A stale-epoch rejection is a normal outcome, not a transport error.
+        #expect(response.status == 200)
+        let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendResult.self, from: response.body)
+        #expect(decoded == .rejected(reason: .epochMismatch))
+    }
+
+    @Test func messageSendUncertaintyIsReported200AndAudited() throws {
+        let (handler, store, audit) = Self.makeHandler(sendHandler: { _, _ in .uncertain })
+        let cookie = Self.pairedDeviceCookie(store)
+        store.setScopes([.read, .send], forDevice: store.devices[0].id)
+        let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r1","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":1},"text":"hi"}"#
+        guard case .respond(let response) = handler.handle(
+            Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 200)
+        let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteMessageSendResult.self, from: response.body)
+        #expect(decoded == .uncertain)
+        #expect(audit.recentEntries().contains { $0.action == .remoteSendUncertain })
+    }
+
+    @Test func messageSendReturns404WhenNotWired() {
+        let (handler, store, _) = Self.makeHandler(sendHandler: nil)
+        let cookie = Self.pairedDeviceCookie(store)
+        store.setScopes([.read, .send], forDevice: store.devices[0].id)
+        let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r1","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":1},"text":"hi"}"#
+        guard case .respond(let response) = handler.handle(
+            Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 404)
     }
 
     @Test func subscribeWithoutOriginOrUpgradeIsRejected() {

@@ -55,6 +55,10 @@ public struct RemoteInputCoordinator: Sendable {
 
     private struct ConversationState {
         var availability: RemoteInputAvailability
+        /// The last open-prompt epoch invalidated by local input or a delivery
+        /// attempt. A provider republish at this epoch is stale and must not
+        /// resurrect a consumed prompt.
+        var invalidatedOpenEpoch: RemoteInputEpoch?
         var processedRequestIDs: [String] = []
         var processedRequestSet: Set<String> = []
     }
@@ -75,22 +79,22 @@ public struct RemoteInputCoordinator: Sendable {
         _ availability: RemoteInputAvailability,
         for conversationID: RemoteConversationID
     ) {
-        var state = statesByConversation[conversationID] ?? ConversationState(availability: availability)
+        var state = statesByConversation[conversationID]
+            ?? ConversationState(availability: availability, invalidatedOpenEpoch: nil)
 
-        if case .localDraft(let draftEpoch) = state.availability {
-            // Only a genuinely newer open prompt clears the draft: a new
-            // runtime binding (different bindingID) always establishes a fresh
-            // prompt; within the same binding the counter must have advanced.
-            if case .openPrompt(let newEpoch) = availability,
-               Self.supersedes(newEpoch, draftEpoch) {
-                state.availability = availability
-            } else {
-                // Keep the draft; provider status is reflected elsewhere.
-                state.availability = .localDraft(epoch: draftEpoch)
+        if case .openPrompt(let candidateEpoch) = availability,
+           let invalidatedEpoch = state.invalidatedOpenEpoch {
+            // The projector can briefly republish its old open prompt while a
+            // local draft or delivered send is waiting to appear in the
+            // provider log. Preserve the coordinator's closed state until the
+            // provider advances to a genuinely newer prompt generation.
+            guard Self.supersedes(candidateEpoch, invalidatedEpoch) else {
+                statesByConversation[conversationID] = state
+                return
             }
-        } else {
-            state.availability = availability
+            state.invalidatedOpenEpoch = nil
         }
+        state.availability = availability
         statesByConversation[conversationID] = state
     }
 
@@ -110,6 +114,7 @@ public struct RemoteInputCoordinator: Sendable {
     public mutating func noteLocalInput(for conversationID: RemoteConversationID) {
         guard var state = statesByConversation[conversationID] else { return }
         if case .openPrompt(let epoch) = state.availability {
+            state.invalidatedOpenEpoch = epoch
             state.availability = .localDraft(epoch: epoch.next())
             statesByConversation[conversationID] = state
         }
@@ -165,6 +170,18 @@ public struct RemoteInputCoordinator: Sendable {
     /// prompt consumed. Call exactly once, immediately after a successful
     /// delivery for a request that `evaluate` accepted.
     public mutating func markDelivered(_ request: RemoteMessageSendRequest) {
+        markProcessed(request)
+    }
+
+    /// Closes the prompt and idempotency window after terminal delivery became
+    /// uncertain (for example, text was injected but the submit key failed).
+    /// Retrying could append or submit the text twice, so uncertainty is still
+    /// a processed request for duplicate suppression.
+    public mutating func markUncertain(_ request: RemoteMessageSendRequest) {
+        markProcessed(request)
+    }
+
+    private mutating func markProcessed(_ request: RemoteMessageSendRequest) {
         guard var state = statesByConversation[request.conversationID] else { return }
         if state.processedRequestSet.insert(request.clientRequestID).inserted {
             state.processedRequestIDs.append(request.clientRequestID)
@@ -174,6 +191,7 @@ public struct RemoteInputCoordinator: Sendable {
             }
         }
         // Delivery consumed the prompt; it is no longer open for another send.
+        state.invalidatedOpenEpoch = request.expectedInputEpoch
         state.availability = .unavailable(reason: .working)
         statesByConversation[request.conversationID] = state
     }

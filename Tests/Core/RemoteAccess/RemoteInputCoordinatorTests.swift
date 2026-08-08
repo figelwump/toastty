@@ -115,6 +115,32 @@ struct RemoteInputCoordinatorTests {
         #expect(coordinator.evaluate(second, context: Self.readyContext()) == .reject(.promptNotOpen))
     }
 
+    @Test func staleProviderRepublishDoesNotReopenDeliveredPrompt() {
+        let epoch = Self.openEpoch(1)
+        var coordinator = Self.openCoordinator(epoch: epoch)
+        let request = Self.request(epoch: epoch)
+        coordinator.markDelivered(request)
+
+        // A routine host sync can still see the projector's pre-delivery
+        // availability. It must not resurrect the consumed prompt.
+        coordinator.setProviderAvailability(.openPrompt(epoch: epoch), for: Self.conversationID)
+
+        let second = Self.request(epoch: epoch, id: "second")
+        #expect(coordinator.evaluate(second, context: Self.readyContext()) == .reject(.promptNotOpen))
+    }
+
+    @Test func uncertainDeliveryConsumesThePromptAndSuppressesRetry() {
+        let epoch = Self.openEpoch(1)
+        var coordinator = Self.openCoordinator(epoch: epoch)
+        let request = Self.request(epoch: epoch, id: "uncertain")
+        coordinator.markUncertain(request)
+
+        coordinator.setProviderAvailability(.openPrompt(epoch: epoch), for: Self.conversationID)
+        #expect(coordinator.evaluate(request, context: Self.readyContext()) == .duplicate)
+        #expect(coordinator.evaluate(Self.request(epoch: epoch, id: "different"), context: Self.readyContext())
+            == .reject(.promptNotOpen))
+    }
+
     @Test func surfaceUnavailableIsRejected() {
         let epoch = Self.openEpoch(1)
         let coordinator = Self.openCoordinator(epoch: epoch)
@@ -169,7 +195,7 @@ struct RemoteInputCoordinatorTests {
 
         // A strictly newer open-prompt epoch (local input submitted, new turn)
         // clears the draft and re-enables remote send.
-        let reopened = Self.openEpoch(6)
+        let reopened = epoch.next()
         coordinator.setProviderAvailability(.openPrompt(epoch: reopened), for: Self.conversationID)
         #expect(coordinator.evaluate(Self.request(epoch: reopened), context: Self.readyContext())
             == .accept(epoch: reopened))
@@ -189,11 +215,13 @@ struct RemoteInputCoordinatorTests {
         var coordinator = Self.openCoordinator(epoch: epoch)
         let capacity = RemoteInputCoordinator.idempotencyCapacityPerConversation
 
+        var currentEpoch = epoch
         for index in 0..<(capacity + 5) {
-            coordinator.setProviderAvailability(.openPrompt(epoch: epoch), for: Self.conversationID)
-            let request = Self.request(epoch: epoch, id: "req-\(index)")
+            coordinator.setProviderAvailability(.openPrompt(epoch: currentEpoch), for: Self.conversationID)
+            let request = Self.request(epoch: currentEpoch, id: "req-\(index)")
             #expect(coordinator.evaluate(request, context: Self.readyContext()).isAccepted)
             coordinator.markDelivered(request)
+            currentEpoch = currentEpoch.next()
         }
         // The oldest ids were evicted; the newest are still remembered.
         #expect(coordinator.hasProcessed("req-\(capacity + 4)", for: Self.conversationID))
@@ -206,6 +234,7 @@ struct RemoteInputCoordinatorTests {
         let cases: [RemoteMessageSendResult] = [
             .accepted(epoch: Self.openEpoch(2)),
             .rejected(reason: .epochMismatch),
+            .uncertain,
             .duplicate,
         ]
         for value in cases {

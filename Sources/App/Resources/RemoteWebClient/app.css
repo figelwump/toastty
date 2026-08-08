@@ -162,3 +162,37 @@ h2 { font-size: 17px; }
 }
 .chip.status { font-family: -apple-system, system-ui, sans-serif; font-style: italic; background: none; }
 #chat-empty { color: var(--muted); text-align: center; margin-top: 40px; }
+#compose-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+#compose-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 140px;
+  font: inherit;
+  font-size: 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--card);
+  background: var(--card);
+  color: var(--fg);
+}
+#compose-send {
+  border: none;
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-weight: 600;
+  font-size: 16px;
+  background: var(--accent);
+  color: white;
+}
+#compose-send:disabled { opacity: 0.4; }
+#compose-status { text-align: center; padding: 4px 0; }
+#compose-status[data-kind="error"] { color: var(--err); }

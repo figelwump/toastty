@@ -29,6 +29,10 @@ final class TerminalHostView: NSView {
     /// when the host view finishes attaching or becomes visible again.
     var requestFirstResponderIfNeeded: (() -> Void)?
     var handleLocalInterruptKey: ((TerminalLocalInterruptKind) -> Void)?
+    /// Fired for any local keyboard or paste input so remote-access can
+    /// invalidate an open remote-send epoch. Must stay O(1): the owning
+    /// controller forwards a bare panel identity, no per-keystroke work here.
+    var handleLocalInput: (() -> Void)?
     private var pendingFileDrop: PreparedFileDrop?
     private var pendingVisibilitySyncGeneration = 0
     private var mouseTrackingArea: NSTrackingArea?
@@ -1005,6 +1009,7 @@ final class TerminalHostView: NSView {
 
     @objc func paste(_ sender: Any?) {
         guard let ghosttySurface else { return }
+        handleLocalInput?()
         _ = invokeGhosttyBindingAction("paste_from_clipboard", on: ghosttySurface)
     }
 
@@ -1027,6 +1032,9 @@ final class TerminalHostView: NSView {
     override func keyDown(with event: NSEvent) {
         let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
         notifyLocalInterruptIfNeeded(event, action: action)
+        if action == GHOSTTY_ACTION_PRESS {
+            handleLocalInput?()
+        }
         guard let ghosttySurface else {
             super.keyDown(with: event)
             return
