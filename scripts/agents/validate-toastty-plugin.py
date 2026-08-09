@@ -146,6 +146,7 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
             '$TOASTTY_SKILLS_ROOT/worktree-create/scripts/open-toastty-worktree-session.sh',
         ],
     }
+    skills_requiring_managed_root = set(EXPECTED_SKILLS) - {"toastty-capabilities"}
     for skill_name in EXPECTED_SKILLS:
         skill_path = skills_root / skill_name / "SKILL.md"
         if frontmatter_name(skill_path, errors) != skill_name:
@@ -154,12 +155,13 @@ def validate_plugin(marketplace_path: Path, plugin_root: Path, errors: list[str]
             skill_text = skill_path.read_text(encoding="utf-8")
         except OSError:
             continue
-        if "TOASTTY_SKILLS_ROOT" not in skill_text:
-            errors.append(f"{skill_name} does not require TOASTTY_SKILLS_ROOT")
-        if '${TOASTTY_SKILLS_ROOT:-}' not in skill_text:
-            errors.append(f"{skill_name} lacks an explicit unset-root guard")
-        if f'$TOASTTY_SKILLS_ROOT/{skill_name}' not in skill_text:
-            errors.append(f"{skill_name} does not verify its directory under the managed root")
+        if skill_name in skills_requiring_managed_root:
+            if "TOASTTY_SKILLS_ROOT" not in skill_text:
+                errors.append(f"{skill_name} does not require TOASTTY_SKILLS_ROOT")
+            if '${TOASTTY_SKILLS_ROOT:-}' not in skill_text:
+                errors.append(f"{skill_name} lacks an explicit unset-root guard")
+            if f'$TOASTTY_SKILLS_ROOT/{skill_name}' not in skill_text:
+                errors.append(f"{skill_name} does not verify its directory under the managed root")
         if "must run inside a Toastty-managed agent session" not in skill_text:
             errors.append(f"{skill_name} lacks the run-inside-Toastty error")
         if re.search(r"(?:~?/)?\.agents/skills/[^\s`]+/scripts/", skill_text):
