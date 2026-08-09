@@ -58,6 +58,46 @@ private struct SidebarScrollViewportHeightReporter: NSViewRepresentable {
     }
 }
 
+/// Reports a child's intrinsic width until it reaches either the configured
+/// cap or a tighter parent proposal. Unlike `fixedSize`, the layout stays
+/// compressible so narrow sidebars can truncate chip content normally.
+private struct SidebarCappedIntrinsicWidthLayout: Layout {
+    let maximumWidth: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        assert(subviews.count <= 1, "SidebarCappedIntrinsicWidthLayout expects one subview")
+        guard let subview = subviews.first else { return .zero }
+
+        let cap = max(0, maximumWidth)
+        let idealSize = subview.sizeThatFits(.unspecified)
+        let availableWidth = proposal.width.map { max(0, $0) } ?? cap
+        let width = min(idealSize.width, cap, availableWidth)
+        let constrainedSize = subview.sizeThatFits(
+            ProposedViewSize(width: width, height: nil)
+        )
+        return CGSize(width: width, height: constrainedSize.height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        guard let subview = subviews.first else { return }
+        let width = min(bounds.width, max(0, maximumWidth))
+        subview.place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY),
+            anchor: .leading,
+            proposal: ProposedViewSize(width: width, height: nil)
+        )
+    }
+}
+
 @MainActor
 private final class SidebarScrollViewportHeightReporterView: NSView {
     var onHeightChange: (@MainActor (CGFloat) -> Void)?
@@ -797,30 +837,27 @@ struct SidebarView: View {
         chipColors: ToastyTheme.AnnotationChipColors,
         isLink: Bool
     ) -> some View {
-        HStack(spacing: 3) {
-            Text(annotation.text)
-                .font(ToastyTheme.fontWorkspaceSessionChip)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            if isLink {
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 7, weight: .semibold))
+        SidebarCappedIntrinsicWidthLayout(maximumWidth: 160) {
+            HStack(spacing: 3) {
+                Text(annotation.text)
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if isLink {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 7, weight: .semibold))
+                }
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
         }
         .foregroundStyle(chipColors.foreground)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .frame(maxWidth: 160, alignment: .leading)
         .background(chipColors.background)
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .overlay {
             RoundedRectangle(cornerRadius: 4)
                 .strokeBorder(chipColors.border, lineWidth: 1)
         }
-        // This row intentionally clips overflow. Preserve each chip's ideal,
-        // capped width so short annotations do not expand to 160 points and
-        // long annotations do not shrink unpredictably against their peers.
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func openWorkspaceAnnotationURL(_ urlString: String) {

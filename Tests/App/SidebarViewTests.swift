@@ -773,6 +773,27 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(longWidth, 160, accuracy: 1)
     }
 
+    func testWorkspaceAnnotationChipsRespectNarrowSidebarProposals() {
+        let shortWidth = measuredAnnotationChipWidth(
+            text: "LIN-030",
+            isLink: false,
+            proposedWidth: 40
+        )
+        let longWidth = measuredAnnotationChipWidth(
+            text: String(repeating: "very-long-annotation-", count: 12),
+            isLink: false,
+            proposedWidth: 100
+        )
+        let rowWidth = measuredAnnotationChipsRowWidth(
+            texts: ["Bodega", "LIN-319", "PR-1931"],
+            proposedWidth: 140
+        )
+
+        XCTAssertEqual(shortWidth, 40, accuracy: 1)
+        XCTAssertEqual(longWidth, 100, accuracy: 1)
+        XCTAssertLessThanOrEqual(rowWidth, 140)
+    }
+
     func testWorkspaceAccessibilityLabelIncludesTextOnlyChipsAndExcludesLinkChips() {
         var workspace = WorkspaceState.bootstrap(title: "Infra")
         workspace.annotations = [
@@ -1467,7 +1488,11 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    private func measuredAnnotationChipWidth(text: String, isLink: Bool) -> CGFloat {
+    private func measuredAnnotationChipWidth(
+        text: String,
+        isLink: Bool,
+        proposedWidth: CGFloat = 300
+    ) -> CGFloat {
         let recorder = SidebarLayoutWidthRecorder()
         let colors = ToastyTheme.AnnotationChipColors(
             foreground: .white,
@@ -1476,7 +1501,7 @@ final class SidebarViewTests: XCTestCase {
         )
         let hostingView = NSHostingView(
             rootView: SidebarProposedWidthRecordingLayout(
-                proposedWidth: 300,
+                proposedWidth: proposedWidth,
                 recorder: recorder
             ) {
                 SidebarView.workspaceAnnotationChipLabel(
@@ -1484,6 +1509,37 @@ final class SidebarViewTests: XCTestCase {
                     chipColors: colors,
                     isLink: isLink
                 )
+            }
+        )
+        _ = hostingView.fittingSize
+        hostingView.layoutSubtreeIfNeeded()
+        return recorder.width
+    }
+
+    private func measuredAnnotationChipsRowWidth(
+        texts: [String],
+        proposedWidth: CGFloat
+    ) -> CGFloat {
+        let recorder = SidebarLayoutWidthRecorder()
+        let colors = ToastyTheme.AnnotationChipColors(
+            foreground: .white,
+            background: .blue,
+            border: .blue
+        )
+        let hostingView = NSHostingView(
+            rootView: SidebarProposedWidthRecordingLayout(
+                proposedWidth: proposedWidth,
+                recorder: recorder
+            ) {
+                HStack(spacing: 4) {
+                    ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
+                        SidebarView.workspaceAnnotationChipLabel(
+                            annotation: WorkspaceAnnotation(text: text),
+                            chipColors: colors,
+                            isLink: false
+                        )
+                    }
+                }
             }
         )
         _ = hostingView.fittingSize
