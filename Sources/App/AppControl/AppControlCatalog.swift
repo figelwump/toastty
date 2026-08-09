@@ -467,7 +467,7 @@ private extension AppControlParameterDescriptor {
     static func annotationKey(required: Bool) -> Self {
         .init(
             name: "key",
-            summary: "Annotation key: 1-32 ASCII letters, digits, '.', '_', or '-'; lowercased on write.",
+            summary: "Stable semantic identity such as linear, github-pr, github-issue, or git-branch. The same key updates one workspace chip and shares its color across workspaces. Uses 1-32 ASCII letters, digits, '.', '_', or '-'; lowercased on write.",
             valueType: .string,
             required: required
         )

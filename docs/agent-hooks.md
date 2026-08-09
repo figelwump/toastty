@@ -137,7 +137,10 @@ including runtime-isolated dev instances.
 Hook scripts may call Toastty CLI actions; per-session serialization prevents
 overlapping invocations for the same session. Example: keep a status chip
 under the workspace name in sync with the latest session state using
-workspace annotations, and rename the workspace on approval waits.
+workspace annotations, and rename the workspace on approval waits. Use a stable
+semantic annotation key such as `agent` here so later calls update the same
+chip and preserve its global color; do not derive the key from the current
+display text.
 
 ```bash
 #!/bin/bash

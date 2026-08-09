@@ -771,7 +771,11 @@ struct SidebarView: View {
             Button {
                 openWorkspaceAnnotationURL(url)
             } label: {
-                workspaceAnnotationChipLabel(annotation: annotation, chipColors: chipColors, isLink: true)
+                Self.workspaceAnnotationChipLabel(
+                    annotation: annotation,
+                    chipColors: chipColors,
+                    isLink: true
+                )
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(key): \(annotation.text), link")
@@ -779,12 +783,16 @@ struct SidebarView: View {
                 SidebarSemanticTextBridge(text: "\(key): \(annotation.text)")
             }
         } else {
-            workspaceAnnotationChipLabel(annotation: annotation, chipColors: chipColors, isLink: false)
+            Self.workspaceAnnotationChipLabel(
+                annotation: annotation,
+                chipColors: chipColors,
+                isLink: false
+            )
                 .accessibilityHidden(true)
         }
     }
 
-    private func workspaceAnnotationChipLabel(
+    static func workspaceAnnotationChipLabel(
         annotation: WorkspaceAnnotation,
         chipColors: ToastyTheme.AnnotationChipColors,
         isLink: Bool
@@ -809,6 +817,10 @@ struct SidebarView: View {
             RoundedRectangle(cornerRadius: 4)
                 .strokeBorder(chipColors.border, lineWidth: 1)
         }
+        // This row intentionally clips overflow. Preserve each chip's ideal,
+        // capped width so short annotations do not expand to 160 points and
+        // long annotations do not shrink unpredictably against their peers.
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func openWorkspaceAnnotationURL(_ urlString: String) {

@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import CoreState
 import Foundation
@@ -40,12 +41,38 @@ struct AnnotationStyleStoreTests {
         let first = AnnotationStyleStore.fallbackColorToken(forKey: "pr")
         #expect(first == AnnotationStyleStore.fallbackColorToken(forKey: "pr"))
 
-        // Different keys can share palette entries, but the mapping itself
-        // must be a pure function of the key bytes.
+        // The mapping must be a pure function of the key bytes.
         let keys = ["pr", "env", "build", "review", "deploy", "issue"]
         let firstRun = keys.map { AnnotationStyleStore.fallbackColorToken(forKey: $0) }
         let secondRun = keys.map { AnnotationStyleStore.fallbackColorToken(forKey: $0) }
         #expect(firstRun == secondRun)
+    }
+
+    @Test
+    func automaticFallbacksAvoidReservedHuesAndDistinguishCommonKeys() throws {
+        for index in 0..<512 {
+            let token = AnnotationStyleStore.fallbackColorToken(forKey: "key-\(index)")
+            guard case .hex = token else {
+                Issue.record("automatic annotation colors must use generated hex tokens")
+                return
+            }
+            let hueDegrees = try Self.hueDegrees(for: token)
+            // Converting an 8-bit RGB token back to HSL can shift the source
+            // hue by roughly two degrees at the range edges.
+            #expect(hueDegrees >= 77)
+            #expect(hueDegrees <= 303)
+        }
+
+        let semanticKeys = ["linear", "github-pr", "github-issue", "git-branch"]
+        let semanticTokens = semanticKeys.map(AnnotationStyleStore.fallbackColorToken(forKey:))
+        #expect(Set(semanticTokens).count == semanticTokens.count)
+
+        let semanticHues = try semanticTokens.map(Self.hueDegrees(for:))
+        for firstIndex in semanticHues.indices {
+            for secondIndex in semanticHues.indices where secondIndex > firstIndex {
+                #expect(abs(semanticHues[firstIndex] - semanticHues[secondIndex]) >= 20)
+            }
+        }
     }
 
     // MARK: - Persistence
@@ -161,5 +188,21 @@ struct AnnotationStyleStoreTests {
         #expect(publishCount == 2)
         #expect(store.effectiveColorToken(forKey: "pr") == .hex("#123456"))
         _ = cancellable
+    }
+
+    private static func hueDegrees(for token: AnnotationColorToken) throws -> Double {
+        guard case .hex(let value) = token,
+              let rawValue = UInt32(value.dropFirst(), radix: 16) else {
+            Issue.record("expected a valid generated hex token")
+            return 0
+        }
+        let color = NSColor(
+            calibratedRed: CGFloat((rawValue >> 16) & 0xFF) / 255,
+            green: CGFloat((rawValue >> 8) & 0xFF) / 255,
+            blue: CGFloat(rawValue & 0xFF) / 255,
+            alpha: 1
+        )
+        let rgbColor = try #require(color.usingColorSpace(.deviceRGB))
+        return Double(rgbColor.hueComponent) * 360
     }
 }

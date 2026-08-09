@@ -100,6 +100,25 @@ private final class WorkspaceAnnotationAppControlFixture {
 @MainActor
 struct WorkspaceAnnotationAppControlTests {
     @Test
+    func annotationKeyDescriptorExplainsStableSemanticIdentity() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+
+        let descriptor = try #require(
+            fixture.executor.listActionDescriptors().first(where: {
+                $0.id == "workspace.set-annotation"
+            })
+        )
+        let keyParameter = try #require(
+            descriptor.parameters.first(where: { $0.name == "key" })
+        )
+
+        #expect(keyParameter.summary.contains("Stable semantic identity"))
+        #expect(keyParameter.summary.contains("same key updates one workspace chip"))
+        #expect(keyParameter.summary.contains("github-pr"))
+    }
+
+    @Test
     func setAnnotationCanonicalizesStoresAndReportsMutation() throws {
         let fixture = try WorkspaceAnnotationAppControlFixture()
         defer { fixture.cleanup() }

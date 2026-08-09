@@ -69,17 +69,61 @@ final class AnnotationStyleStore: ObservableObject {
         colorTokensByKey[key] ?? Self.fallbackColorToken(forKey: key)
     }
 
-    /// Stable palette selection for keys without an explicit style. FNV-1a
-    /// over UTF-8 bytes, never Swift `hashValue`, so the same key renders the
-    /// same color across workspaces, profiles, and launches.
+    /// Stable automatic color for keys without an explicit style. FNV-1a over
+    /// UTF-8 bytes, never Swift `hashValue`, feeds a broad green-through-
+    /// magenta HSL range. Red and Toastty amber stay reserved for explicit
+    /// status-like annotations, while the larger color space makes unrelated
+    /// keys very unlikely to render identically.
     nonisolated static func fallbackColorToken(forKey key: String) -> AnnotationColorToken {
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in key.utf8 {
             hash ^= UInt64(byte)
             hash &*= 0x100000001b3
         }
-        let palette = AnnotationColorToken.NamedColor.allCases
-        return .named(palette[Int(hash % UInt64(palette.count))])
+
+        // Hue 0 is red and Toastty's amber is around 39 degrees. Starting at
+        // 80 and stopping at 300 keeps both reserved regions out of automatic
+        // assignment without collapsing back to a small collision-prone list.
+        let hue = 80 + Double(hash % 221)
+        let saturation = 0.52 + (Double((hash >> 8) % 17) / 100)
+        let lightness = 0.58 + (Double((hash >> 16) % 11) / 100)
+        return .hex(hslHex(hue: hue, saturation: saturation, lightness: lightness))
+    }
+
+    private nonisolated static func hslHex(
+        hue: Double,
+        saturation: Double,
+        lightness: Double
+    ) -> String {
+        let chroma = (1 - abs((2 * lightness) - 1)) * saturation
+        let hueSector = hue / 60
+        let secondary = chroma * (1 - abs(hueSector.truncatingRemainder(dividingBy: 2) - 1))
+        let components: (red: Double, green: Double, blue: Double)
+        switch hueSector {
+        case 0..<1:
+            components = (chroma, secondary, 0)
+        case 1..<2:
+            components = (secondary, chroma, 0)
+        case 2..<3:
+            components = (0, chroma, secondary)
+        case 3..<4:
+            components = (0, secondary, chroma)
+        case 4..<5:
+            components = (secondary, 0, chroma)
+        default:
+            components = (chroma, 0, secondary)
+        }
+
+        let match = lightness - (chroma / 2)
+        func byte(_ component: Double) -> Int {
+            Int(((component + match) * 255).rounded())
+        }
+        return String(
+            format: "#%02X%02X%02X",
+            byte(components.red),
+            byte(components.green),
+            byte(components.blue)
+        )
     }
 
     /// Applies a global color for a key. Returns whether the style actually

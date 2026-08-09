@@ -217,11 +217,10 @@ The CLI sends `key=value` arguments as strings. The app-control executor coerces
 "$TOASTTY_CLI_PATH" action run workspace.rename --workspace "$WORKSPACE_ID" title="Infra"
 "$TOASTTY_CLI_PATH" action run workspace.set-annotation \
   --workspace "$WORKSPACE_ID" \
-  key=pr \
+  key=github-pr \
   text="PR #4512" \
-  url=https://github.com/example/repo/pull/4512 \
-  color=green
-"$TOASTTY_CLI_PATH" action run workspace.clear-annotation --workspace "$WORKSPACE_ID" key=pr
+  url=https://github.com/example/repo/pull/4512
+"$TOASTTY_CLI_PATH" action run workspace.clear-annotation --workspace "$WORKSPACE_ID" key=github-pr
 "$TOASTTY_CLI_PATH" action run panel.create.local-document \
   --workspace "$WORKSPACE_ID" \
   filePath=/tmp/README.md \
@@ -285,7 +284,23 @@ visual order.
 
 `workspace.set-annotation` sets or updates one structured `key -> (text, url?)`
 chip rendered under the workspace name in the sidebar, and
-`workspace.clear-annotation` removes one by key. Validation rules:
+`workspace.clear-annotation` removes one by key. The caller chooses the key;
+Toastty never derives it from the displayed text. Use a stable semantic identity
+for the annotation kind rather than copying its current value into the key. For
+example:
+
+- Linear issue: `key=linear`, `text=LIN-030`, plus its verified canonical URL
+  when available.
+- GitHub pull request: `key=github-pr`, `text="PR #1931"`, plus its verified pull
+  URL when available.
+- GitHub issue: `key=github-issue`, `text="Issue #482"`, plus its verified issue
+  URL when available.
+- Git branch: `key=git-branch`, `text=feat/hooks-chips`; a URL is usually
+  omitted.
+
+The same exact key updates one chip within a workspace. Multiple annotations of
+the same kind therefore need distinct stable keys. Include a URL only when it
+was supplied or verified; do not guess one from the label. Validation rules:
 
 - `key` is trimmed, lowercased, and must be 1-32 characters of ASCII letters,
   digits, `.`, `_`, and `-`. Invalid or overlong keys are rejected, never
@@ -301,8 +316,12 @@ chip rendered under the workspace name in the sidebar, and
   `blue`, or `#RRGGBB`. Color belongs to the key globally — the same key shows
   the same color across all workspaces and layout profiles — and omitting
   `color` keeps the current global style. Keys without an explicit color get a
-  stable per-key fallback color. Clearing an annotation does not clear its
-  global color; a later annotation with the same key reuses it.
+  stable per-key automatic `#RRGGBB` color that avoids reserved error red and
+  Toastty amber. Clearing an annotation does not clear its global color; a
+  later annotation with the same key reuses it.
+- Existing keys without an explicit color may receive a new automatic color
+  after upgrading from the earlier six-color fallback. Explicit global colors
+  remain unchanged.
 - A workspace holds at most 12 annotations. Updating an existing key remains
   allowed at the limit.
 - Setting an identical annotation again reports `didMutateState=false`; a
@@ -443,7 +462,8 @@ unselected workspace tabs are not included.
 `workspace.snapshot` also returns `annotations` as an array of
 `{key, text, url, color}` objects sorted by key in bytewise order. `url` is
 null for text-only chips, and `color` is the effective token for the key —
-the explicit global color when one was set, otherwise the stable fallback.
+the explicit global color when one was set, otherwise the stable automatic
+`#RRGGBB` fallback.
 
 `panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 

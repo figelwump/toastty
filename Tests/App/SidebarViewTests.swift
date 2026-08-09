@@ -4,6 +4,41 @@ import CoreState
 import SwiftUI
 import XCTest
 
+private final class SidebarLayoutWidthRecorder {
+    var width: CGFloat = 0
+}
+
+private struct SidebarProposedWidthRecordingLayout: Layout {
+    let proposedWidth: CGFloat
+    let recorder: SidebarLayoutWidthRecorder
+
+    func sizeThatFits(
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let size = subview.sizeThatFits(
+            ProposedViewSize(width: proposedWidth, height: nil)
+        )
+        recorder.width = size.width
+        return size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: recorder.width, height: bounds.height)
+        )
+    }
+}
+
 @MainActor
 final class SidebarViewTests: XCTestCase {
     private enum SessionPanelPlacement {
@@ -725,6 +760,19 @@ final class SidebarViewTests: XCTestCase {
         _ = cancellable
     }
 
+    func testWorkspaceAnnotationChipFitsContentAndCapsLongLabels() {
+        let shortWidth = measuredAnnotationChipWidth(text: "LIN-030", isLink: false)
+        let linkedWidth = measuredAnnotationChipWidth(text: "LIN-030", isLink: true)
+        let longWidth = measuredAnnotationChipWidth(
+            text: String(repeating: "very-long-annotation-", count: 12),
+            isLink: false
+        )
+
+        XCTAssertLessThan(shortWidth, 80)
+        XCTAssertGreaterThan(linkedWidth, shortWidth)
+        XCTAssertEqual(longWidth, 160, accuracy: 1)
+    }
+
     func testWorkspaceAccessibilityLabelIncludesTextOnlyChipsAndExcludesLinkChips() {
         var workspace = WorkspaceState.bootstrap(title: "Infra")
         workspace.annotations = [
@@ -1417,6 +1465,30 @@ final class SidebarViewTests: XCTestCase {
             ],
             focusedPanelID: panelID
         )
+    }
+
+    private func measuredAnnotationChipWidth(text: String, isLink: Bool) -> CGFloat {
+        let recorder = SidebarLayoutWidthRecorder()
+        let colors = ToastyTheme.AnnotationChipColors(
+            foreground: .white,
+            background: .blue,
+            border: .blue
+        )
+        let hostingView = NSHostingView(
+            rootView: SidebarProposedWidthRecordingLayout(
+                proposedWidth: 300,
+                recorder: recorder
+            ) {
+                SidebarView.workspaceAnnotationChipLabel(
+                    annotation: WorkspaceAnnotation(text: text),
+                    chipColors: colors,
+                    isLink: isLink
+                )
+            }
+        )
+        _ = hostingView.fittingSize
+        hostingView.layoutSubtreeIfNeeded()
+        return recorder.width
     }
 
     private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {
