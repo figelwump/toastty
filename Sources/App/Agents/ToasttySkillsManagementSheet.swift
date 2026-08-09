@@ -934,15 +934,15 @@ struct ManagedAgentSkillsProvisionedBanner: View {
     }
 
     private var title: String {
-        switch notice.agent {
-        case .codex: "Codex skills are ready"
-        case .claude: "Claude Code skills are ready"
-        default: "Toastty skills are ready"
-        }
+        Self.title(for: notice.agent)
     }
 
     private var message: String {
         Self.message(for: notice)
+    }
+
+    static func title(for agent: AgentKind) -> String {
+        "Toastty skills are now available in \(agent.displayName)"
     }
 
     static func message(for notice: ManagedAgentSkillsProvisionedNotice) -> String {

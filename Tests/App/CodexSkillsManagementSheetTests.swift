@@ -71,6 +71,29 @@ final class CodexSkillsManagementSheetTests: XCTestCase {
 
     // MARK: - Provisioned banner wording
 
+    func testProvisionedBannerTitleIdentifiesTheManagedAgent() {
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .codex),
+            "Toastty skills are now available in Codex"
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .claude),
+            "Toastty skills are now available in Claude Code"
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .pi),
+            "Toastty skills are now available in Pi"
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .opencode),
+            "Toastty skills are now available in OpenCode"
+        )
+        XCTAssertEqual(
+            ManagedAgentSkillsProvisionedBanner.title(for: .mimocode),
+            "Toastty skills are now available in MiMo Code"
+        )
+    }
+
     func testProvisionedBannerMessageForShippedOnlyLaunch() {
         XCTAssertEqual(
             ManagedAgentSkillsProvisionedBanner.message(
