@@ -355,6 +355,31 @@ function applyEvents(events) {
   }
 }
 
+function drainPendingEventPages() {
+  if (!openConversation?.run) return null;
+  if (openConversation.pendingEventPagesOverflowed) {
+    openConversation.pendingEventPagesOverflowed = false;
+    return "gap";
+  }
+  while (openConversation.pendingEventPages.length > 0) {
+    const page = openConversation.pendingEventPages.shift();
+    if (page.projectionRunID !== openConversation.run
+        || page.projectionGeneration !== openConversation.generation) {
+      resetChatTranscript();
+      return "resnapshot";
+    }
+    const firstNewEvent = page.events.find(
+      (event) => event.sequence > openConversation.lastSequence
+    );
+    if (firstNewEvent && firstNewEvent.sequence > openConversation.lastSequence + 1) {
+      openConversation.pendingEventPages.unshift(page);
+      return "gap";
+    }
+    applyEvents(page.events);
+  }
+  return null;
+}
+
 async function fetchEventsPage(cursor) {
   const body = {
     conversationID: openConversation.conversationID,
@@ -376,6 +401,7 @@ async function loadMoreEvents() {
   openConversation.loading = true;
   try {
     while (openConversation) {
+      const lastSequenceBeforePage = openConversation.lastSequence;
       const cursor = openConversation.run
         ? {
             projectionRunID: openConversation.run,
@@ -402,6 +428,17 @@ async function loadMoreEvents() {
           appendEventNode(event);
         }
       }
+      const pendingPageResult = drainPendingEventPages();
+      if (pendingPageResult) {
+        // A queued live page should become contiguous after REST fills the
+        // gap. If REST made no progress, discard the handoff queue and restart
+        // from a fresh snapshot instead of spinning forever on the same gap.
+        if (pendingPageResult === "gap"
+            && openConversation.lastSequence === lastSequenceBeforePage) {
+          resetChatTranscript();
+        }
+        continue;
+      }
       chatEmpty.hidden = chatMessages.children.length > 0;
       if (page.events.length === 0 || openConversation.lastSequence >= page.latestSequence) {
         chatMessages.lastElementChild?.scrollIntoView({ block: "end" });
@@ -419,6 +456,8 @@ function resetChatTranscript() {
     openConversation.run = null;
     openConversation.generation = 0;
     openConversation.lastSequence = 0;
+    openConversation.pendingEventPages = [];
+    openConversation.pendingEventPagesOverflowed = false;
   }
 }
 
@@ -432,6 +471,8 @@ function openChat(conversation) {
     sending: false,
     availability: null,
     pendingSend: null,
+    pendingEventPages: [],
+    pendingEventPagesOverflowed: false,
   };
   chatMessages.replaceChildren();
   chatEmpty.hidden = true;
@@ -508,6 +549,15 @@ function connectSocket() {
         void loadMoreEvents();
       } else if (openConversation.run) {
         applyEvents(page.events);
+      } else {
+        // The socket is connected before the initial REST page establishes
+        // its run/generation. Buffer that handoff window instead of dropping
+        // the only copy of a live event that may postdate the REST snapshot.
+        openConversation.pendingEventPages.push(page);
+        if (openConversation.pendingEventPages.length > 32) {
+          openConversation.pendingEventPages.shift();
+          openConversation.pendingEventPagesOverflowed = true;
+        }
       }
     } else if (message.type === "resnapshot_required" && openConversation
                && message.conversationID === openConversation.conversationID) {

@@ -2056,6 +2056,7 @@ public struct AppReducer {
         switch panelState {
         case .terminal(var terminalState):
             terminalState.resumeRecord = nil
+            terminalState.remoteConversationID = nil
             return .terminal(terminalState)
         case .web:
             return panelState

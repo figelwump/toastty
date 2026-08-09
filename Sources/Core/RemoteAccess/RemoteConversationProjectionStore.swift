@@ -35,9 +35,22 @@ public final class RemoteConversationProjectionStore {
     private var projectorsByID: [RemoteConversationID: ConversationProjector] = [:]
     private var descriptorsByID: [RemoteConversationID: ConversationDescriptor] = [:]
     private var conversationOrder: [RemoteConversationID] = []
+    private var nextGenerationByConversationID: [RemoteConversationID: UInt64] = [:]
+    private let eventRetentionLimit: Int
+    private let fingerprintRetentionLimit: Int
 
-    public init(runID: RemoteProjectionRunID = RemoteProjectionRunID()) {
+    public init(
+        runID: RemoteProjectionRunID = RemoteProjectionRunID(),
+        eventRetentionLimit: Int = 10_000,
+        fingerprintRetentionLimit: Int = 20_000
+    ) {
         self.runID = runID
+        self.eventRetentionLimit = max(1, eventRetentionLimit)
+        self.fingerprintRetentionLimit = max(1, fingerprintRetentionLimit)
+    }
+
+    public var registeredConversationIDs: Set<RemoteConversationID> {
+        Set(projectorsByID.keys)
     }
 
     // MARK: - Host mutation surface
@@ -56,8 +69,11 @@ public final class RemoteConversationProjectionStore {
         projectorsByID[conversationID] = ConversationProjector(
             conversationID: conversationID,
             provider: descriptor.provider,
+            generation: nextGenerationByConversationID.removeValue(forKey: conversationID) ?? 0,
             bindingID: bindingID,
             runtimeBound: runtimeBound,
+            eventRetentionLimit: eventRetentionLimit,
+            fingerprintRetentionLimit: fingerprintRetentionLimit,
             at: date
         )
         descriptorsByID[conversationID] = descriptor
@@ -134,6 +150,8 @@ public final class RemoteConversationProjectionStore {
             generation: previous.generation + 1,
             bindingID: bindingID,
             runtimeBound: previous.isRuntimeBound,
+            eventRetentionLimit: previous.eventRetentionLimit,
+            fingerprintRetentionLimit: previous.fingerprintRetentionLimit,
             at: date
         )
         replacement.noteBinding(reason: .projectionRebuilt, bindingID: bindingID, at: date)
@@ -141,7 +159,9 @@ public final class RemoteConversationProjectionStore {
     }
 
     public func removeConversation(_ conversationID: RemoteConversationID) {
-        projectorsByID.removeValue(forKey: conversationID)
+        if let projector = projectorsByID.removeValue(forKey: conversationID) {
+            nextGenerationByConversationID[conversationID] = projector.generation + 1
+        }
         descriptorsByID.removeValue(forKey: conversationID)
         conversationOrder.removeAll { $0 == conversationID }
     }
@@ -195,17 +215,20 @@ extension RemoteConversationProjectionStore: RemoteSessionFacade {
         }
 
         let afterSequence = cursor?.afterSequence ?? 0
+        if cursor != nil, afterSequence < projector.firstAvailableSequence - 1 {
+            return .resnapshotRequired
+        }
         let clampedLimit = max(1, min(limit, Self.defaultPageLimit))
-        let events = projector.events
-            .filter { $0.sequence > afterSequence }
-            .prefix(clampedLimit)
+        let events = projector.retainedEvents(afterSequence: afterSequence, limit: clampedLimit)
 
         return .page(ConversationEventPage(
             conversationID: conversationID,
             projectionRunID: runID,
             projectionGeneration: projector.generation,
-            events: Array(events),
-            latestSequence: projector.latestSequence
+            events: events,
+            latestSequence: projector.latestSequence,
+            firstAvailableSequence: projector.firstAvailableSequence,
+            historyTruncated: projector.firstAvailableSequence > 1
         ))
     }
 

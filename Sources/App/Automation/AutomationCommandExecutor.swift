@@ -910,6 +910,21 @@ final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("panelID does not exist")
             }
 
+            // Managed launches register the runtime before their hook emits
+            // session.start. A genuinely new hook-owned session has no such
+            // registration and must not inherit a prior conversation merely
+            // because it reused the same terminal panel.
+            let isAlreadyRegisteredLaunch = sessionRuntimeStore.sessionRegistry
+                .activeSession(sessionID: sessionID)?
+                .panelID == panelID
+            if isAlreadyRegisteredLaunch == false, agent != .processWatch {
+                _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
+                _ = store.send(.updateTerminalPanelRemoteConversationID(
+                    panelID: panelID,
+                    remoteConversationID: nil
+                ))
+            }
+
             sessionRuntimeStore.startSession(
                 sessionID: sessionID,
                 agent: agent,

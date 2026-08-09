@@ -98,10 +98,20 @@ extension AppReducerTests {
         let workspace = try #require(state.workspacesByID[workspaceID])
         let focusedPanelID = try #require(workspace.focusedPanelID)
         let resumeRecord = makeTestResumeRecord(cwd: "/tmp/toastty/reopen-cwd")
+        let remoteConversationID = RemoteConversationID()
 
         #expect(
             reducer.send(
                 .updateTerminalPanelResumeRecord(panelID: focusedPanelID, resumeRecord: resumeRecord),
+                state: &state
+            )
+        )
+        #expect(
+            reducer.send(
+                .updateTerminalPanelRemoteConversationID(
+                    panelID: focusedPanelID,
+                    remoteConversationID: remoteConversationID
+                ),
                 state: &state
             )
         )
@@ -118,6 +128,7 @@ extension AppReducerTests {
 
         #expect(reopenedPanelID != focusedPanelID)
         #expect(reopenedTerminalState.resumeRecord == nil)
+        #expect(reopenedTerminalState.remoteConversationID == nil)
 
         try StateValidator.validate(state)
     }

@@ -1,5 +1,6 @@
 import CoreState
 import Foundation
+import Network
 import Testing
 @testable import ToasttyApp
 
@@ -56,7 +57,10 @@ struct RemoteAccessGatewayServerTests {
         )
     }
 
-    private static func startHarness() throws -> Harness {
+    private static func startHarness(
+        maximumConnections: Int = RemoteAccessGatewayServer.defaultMaximumConnections,
+        requestHeaderTimeoutNanoseconds: UInt64 = RemoteAccessGatewayServer.defaultRequestHeaderTimeoutNanoseconds
+    ) throws -> Harness {
         let deviceStore = RemoteDeviceStore(fileURL: nil)
         var port: UInt16 = 0
         var lastError: Error?
@@ -77,7 +81,11 @@ struct RemoteAccessGatewayServerTests {
                     ]
                 )
             )
-            let server = RemoteAccessGatewayServer(handler: handler)
+            let server = RemoteAccessGatewayServer(
+                handler: handler,
+                maximumConnections: maximumConnections,
+                requestHeaderTimeoutNanoseconds: requestHeaderTimeoutNanoseconds
+            )
             do {
                 try server.start(port: candidate)
                 port = candidate
@@ -182,6 +190,79 @@ struct RemoteAccessGatewayServerTests {
             return
         }
         #expect(snapshot.conversations.first?.title == "Demo session")
+    }
+
+    @Test func disconnectingDeviceClosesItsActiveWebSocket() async throws {
+        let harness = try Self.startHarness()
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+        let cookie = try await Self.pairDevice(harness)
+        let deviceID = try #require(harness.deviceStore.devices.first?.id)
+
+        var request = URLRequest(url: URL(string: "ws://127.0.0.1:\(harness.port)/api/subscribe")!)
+        request.setValue(harness.origin, forHTTPHeaderField: "Origin")
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        let socket = URLSession.shared.webSocketTask(with: request)
+        socket.resume()
+        defer { socket.cancel(with: .goingAway, reason: nil) }
+
+        for _ in 0..<40 where harness.server.webSocketClientCount == 0 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(harness.server.webSocketClientCount == 1)
+
+        #expect(try harness.deviceStore.revokeDevice(deviceID, at: Date()))
+        #expect(try harness.deviceStore.revokeDevice(deviceID, at: Date()) == false)
+        harness.server.disconnectWebSockets(for: deviceID)
+        #expect(harness.server.webSocketClientCount == 0)
+    }
+
+    @Test func incompletePreAuthRequestIsDroppedAtDeadline() async throws {
+        let harness = try Self.startHarness(requestHeaderTimeoutNanoseconds: 100_000_000)
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+
+        let connection = NWConnection(
+            host: .ipv4(.loopback),
+            port: NWEndpoint.Port(rawValue: harness.port)!,
+            using: .tcp
+        )
+        connection.start(queue: DispatchQueue(label: "remote-access-timeout-test"))
+        connection.send(content: Data("GET /api/sessions HTTP/1.1\r\n".utf8), completion: .contentProcessed { _ in })
+        defer { connection.cancel() }
+
+        for _ in 0..<40 where harness.server.connectionCountForTesting == 0 {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        #expect(harness.server.connectionCountForTesting == 1)
+
+        for _ in 0..<40 where harness.server.connectionCountForTesting != 0 {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        #expect(harness.server.connectionCountForTesting == 0)
+    }
+
+    @Test func preAuthConnectionCountIsCapped() async throws {
+        let harness = try Self.startHarness(maximumConnections: 1, requestHeaderTimeoutNanoseconds: 2_000_000_000)
+        defer { harness.server.stop() }
+        try await Self.awaitListening(harness)
+
+        let queue = DispatchQueue(label: "remote-access-cap-test")
+        let connections = (0..<3).map { _ in
+            NWConnection(
+                host: .ipv4(.loopback),
+                port: NWEndpoint.Port(rawValue: harness.port)!,
+                using: .tcp
+            )
+        }
+        for connection in connections {
+            connection.start(queue: queue)
+            connection.send(content: Data("GET / HTTP/1.1\r\n".utf8), completion: .contentProcessed { _ in })
+        }
+        defer { connections.forEach { $0.cancel() } }
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(harness.server.connectionCountForTesting == 1)
     }
 
     @Test func stopClosesTheListener() async throws {

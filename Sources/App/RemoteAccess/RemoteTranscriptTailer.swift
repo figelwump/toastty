@@ -54,6 +54,9 @@ final class RemoteTranscriptTailer {
             var offset: UInt64 = 0
             var identity: FileIdentity?
             var remainder = Data()
+            let readChunkSize = 256 * 1024
+            let maximumBufferedLineBytes = 8 * 1024 * 1024
+            let observationBatchSize = 200
 
             while Task.isCancelled == false {
                 guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path) else {
@@ -73,19 +76,63 @@ final class RemoteTranscriptTailer {
                    let handle = try? FileHandle(forReadingFrom: fileURL) {
                     defer { try? handle.close() }
                     try? handle.seek(toOffset: offset)
-                    let data = (try? handle.readToEnd()) ?? Data()
-                    offset += UInt64(data.count)
-                    remainder.append(data)
+                    while offset < size, Task.isCancelled == false {
+                        let data: Data
+                        do {
+                            data = try handle.read(upToCount: readChunkSize) ?? Data()
+                        } catch {
+                            ToasttyLog.warning(
+                                "Failed to read remote transcript chunk",
+                                category: .automation,
+                                metadata: ["path": fileURL.path, "error": "\(error)"]
+                            )
+                            break
+                        }
+                        guard data.isEmpty == false else { break }
+                        offset += UInt64(data.count)
+                        remainder.append(data)
 
-                    var observations: [ProviderTranscriptObservation] = []
-                    while let newlineIndex = remainder.firstIndex(of: UInt8(ascii: "\n")) {
-                        let lineData = remainder[remainder.startIndex..<newlineIndex]
-                        remainder.removeSubrange(remainder.startIndex...newlineIndex)
-                        guard let line = String(data: lineData, encoding: .utf8) else { continue }
-                        observations.append(contentsOf: parser.parseLine(line))
+                        var observations: [ProviderTranscriptObservation] = []
+                        var consumedThrough = remainder.startIndex
+                        while let newlineIndex = remainder[consumedThrough...].firstIndex(of: UInt8(ascii: "\n")) {
+                            let lineData = remainder[consumedThrough..<newlineIndex]
+                            consumedThrough = remainder.index(after: newlineIndex)
+                            guard let line = String(data: lineData, encoding: .utf8) else { continue }
+                            observations.append(contentsOf: parser.parseLine(line))
+                            if observations.count >= observationBatchSize {
+                                await onEvent(conversationID, .observations(observations))
+                                observations.removeAll(keepingCapacity: true)
+                            }
+                        }
+                        if consumedThrough > remainder.startIndex {
+                            remainder.removeSubrange(remainder.startIndex..<consumedThrough)
+                        }
+                        if observations.isEmpty == false {
+                            await onEvent(conversationID, .observations(observations))
+                        }
+
+                        if remainder.count > maximumBufferedLineBytes {
+                            ToasttyLog.warning(
+                                "Discarding oversized remote transcript record",
+                                category: .automation,
+                                metadata: ["path": fileURL.path, "bytes": "\(remainder.count)"]
+                            )
+                            remainder.removeAll(keepingCapacity: true)
+                        }
                     }
-                    if observations.isEmpty == false {
-                        await onEvent(conversationID, .observations(observations))
+
+                    // JSONL writers normally append a newline, but a complete
+                    // final JSON object is still a valid record at EOF. Flush
+                    // it once it is syntactically complete; genuinely partial
+                    // writes remain buffered for the next poll.
+                    if remainder.isEmpty == false,
+                       (try? JSONSerialization.jsonObject(with: remainder)) != nil,
+                       let line = String(data: remainder, encoding: .utf8) {
+                        remainder.removeAll(keepingCapacity: true)
+                        let observations = parser.parseLine(line)
+                        if observations.isEmpty == false {
+                            await onEvent(conversationID, .observations(observations))
+                        }
                     }
                 }
 

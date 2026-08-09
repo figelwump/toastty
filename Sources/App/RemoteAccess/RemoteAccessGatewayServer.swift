@@ -21,6 +21,7 @@ final class RemoteAccessGatewayServer {
         var buffer = Data()
         var isWebSocket = false
         var deviceID: UUID?
+        var requestTimeoutTask: Task<Void, Never>?
         /// Frames handed to Network.framework that have not completed sending.
         /// A slow client that lets this grow past the bound is dropped rather
         /// than buffered without limit.
@@ -32,8 +33,12 @@ final class RemoteAccessGatewayServer {
     }
 
     static let maximumPendingSendsPerClient = 32
+    static let defaultMaximumConnections = 64
+    static let defaultRequestHeaderTimeoutNanoseconds: UInt64 = 10_000_000_000
 
     private let handler: RemoteGatewayRequestHandler
+    private let maximumConnections: Int
+    private let requestHeaderTimeoutNanoseconds: UInt64
     private let queue = DispatchQueue(label: "toastty.remote-access.gateway")
     private var listener: NWListener?
     private var connections: [UUID: GatewayConnection] = [:]
@@ -41,12 +46,22 @@ final class RemoteAccessGatewayServer {
 
     var onWebSocketCountChanged: ((Int) -> Void)?
 
-    init(handler: RemoteGatewayRequestHandler) {
+    init(
+        handler: RemoteGatewayRequestHandler,
+        maximumConnections: Int = defaultMaximumConnections,
+        requestHeaderTimeoutNanoseconds: UInt64 = defaultRequestHeaderTimeoutNanoseconds
+    ) {
         self.handler = handler
+        self.maximumConnections = max(1, maximumConnections)
+        self.requestHeaderTimeoutNanoseconds = requestHeaderTimeoutNanoseconds
     }
 
     var webSocketClientCount: Int {
         connections.values.filter(\.isWebSocket).count
+    }
+
+    var connectionCountForTesting: Int {
+        connections.count
     }
 
     func start(port: UInt16) throws {
@@ -90,6 +105,7 @@ final class RemoteAccessGatewayServer {
         listener = nil
         listeningPort = nil
         for connection in connections.values {
+            connection.requestTimeoutTask?.cancel()
             if connection.isWebSocket {
                 connection.connection.send(
                     content: RemoteWebSocketFraming.encodeServerCloseFrame(code: 1001),
@@ -100,6 +116,29 @@ final class RemoteAccessGatewayServer {
         }
         connections.removeAll()
         onWebSocketCountChanged?(0)
+    }
+
+    /// Immediately terminates subscriptions authenticated as one revoked
+    /// device. Deleting the stored credential only protects future requests;
+    /// active WebSockets must be closed separately.
+    func disconnectWebSockets(for deviceID: UUID) {
+        let matchingConnectionIDs = connections.values.compactMap { connection in
+            connection.isWebSocket && connection.deviceID == deviceID ? connection.id : nil
+        }
+        for connectionID in matchingConnectionIDs {
+            guard let connection = connections[connectionID] else { continue }
+            sendFrame(RemoteWebSocketFraming.encodeServerCloseFrame(code: 1008), to: connection)
+            drop(connectionID)
+        }
+    }
+
+    func disconnectAllWebSockets() {
+        let connectionIDs = connections.values.filter(\.isWebSocket).map(\.id)
+        for connectionID in connectionIDs {
+            guard let connection = connections[connectionID] else { continue }
+            sendFrame(RemoteWebSocketFraming.encodeServerCloseFrame(code: 1008), to: connection)
+            drop(connectionID)
+        }
     }
 
     /// Sends one stream message to every connected WebSocket client.
@@ -118,9 +157,30 @@ final class RemoteAccessGatewayServer {
     // MARK: - Connection lifecycle
 
     private func accept(_ nwConnection: NWConnection) {
+        guard connections.count < maximumConnections else {
+            ToasttyLog.warning(
+                "Rejected remote access connection at capacity",
+                category: .automation,
+                metadata: ["maximum_connections": "\(maximumConnections)"]
+            )
+            nwConnection.cancel()
+            return
+        }
         let connection = GatewayConnection(connection: nwConnection)
         let connectionID = connection.id
         connections[connectionID] = connection
+        connection.requestTimeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: self?.requestHeaderTimeoutNanoseconds ?? 0)
+            } catch {
+                return
+            }
+            guard let self,
+                  self.connections[connectionID]?.isWebSocket == false else {
+                return
+            }
+            self.drop(connectionID)
+        }
         nwConnection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .failed, .cancelled:
@@ -190,6 +250,8 @@ final class RemoteAccessGatewayServer {
                 })
 
             case .upgradeToWebSocket(let deviceID, let upgradeResponseData):
+                connection.requestTimeoutTask?.cancel()
+                connection.requestTimeoutTask = nil
                 connection.deviceID = deviceID
                 connection.isWebSocket = true
                 connection.connection.send(content: upgradeResponseData, completion: .contentProcessed { _ in })
@@ -247,6 +309,8 @@ final class RemoteAccessGatewayServer {
 
     private func drop(_ connectionID: UUID) {
         guard let connection = connections.removeValue(forKey: connectionID) else { return }
+        connection.requestTimeoutTask?.cancel()
+        connection.requestTimeoutTask = nil
         let wasWebSocket = connection.isWebSocket
         connection.connection.cancel()
         if wasWebSocket {

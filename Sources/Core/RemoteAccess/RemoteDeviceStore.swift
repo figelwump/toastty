@@ -93,15 +93,26 @@ public final class RemoteDeviceStore {
         case invalidCode
     }
 
+    typealias PersistenceWriter = @Sendable (State, URL) throws -> Void
+
     private(set) var state: State
     private var activePairingCode: RemotePairingCode?
     private let fileURL: URL?
+    private let persistenceWriter: PersistenceWriter
+    private let persistenceQueue = DispatchQueue(label: "toastty.remote-access.device-store")
+    private var lastPersistedLastSeenAtByDeviceID: [UUID: Date]
+    private static let lastSeenPersistenceInterval: TimeInterval = 60
 
     /// Loads persisted state from `fileURL`, starting empty when the file does
     /// not exist or cannot be decoded (corrupt state must never brick the
     /// gateway — devices can re-pair). Pass nil for an in-memory store (tests).
-    public init(fileURL: URL?) {
+    public convenience init(fileURL: URL?) {
+        self.init(fileURL: fileURL, persistenceWriter: Self.writeState)
+    }
+
+    init(fileURL: URL?, persistenceWriter: @escaping PersistenceWriter) {
         self.fileURL = fileURL
+        self.persistenceWriter = persistenceWriter
         if let fileURL,
            let data = try? Data(contentsOf: fileURL),
            let decoded = try? JSONDecoder().decode(State.self, from: data) {
@@ -109,6 +120,11 @@ public final class RemoteDeviceStore {
         } else {
             self.state = State()
         }
+        self.lastPersistedLastSeenAtByDeviceID = Dictionary(
+            uniqueKeysWithValues: state.devices.compactMap { device in
+                device.lastSeenAt.map { (device.id, $0) }
+            }
+        )
     }
 
     // MARK: - Pairing
@@ -137,14 +153,13 @@ public final class RemoteDeviceStore {
         _ presented: String,
         deviceName: String,
         at date: Date
-    ) -> PairingOutcome {
+    ) throws -> PairingOutcome {
         guard let active = activePairingCode,
               active.isValid(at: date),
               Self.constantTimeEquals(active.code, Self.normalizePairingCode(presented)) else {
             return .invalidCode
         }
 
-        activePairingCode = nil
         let trimmedName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
         let device = RemoteDeviceRecord(
             name: trimmedName.isEmpty ? "Unnamed device" : String(trimmedName.prefix(80)),
@@ -152,13 +167,17 @@ public final class RemoteDeviceStore {
             lastSeenAt: date
         )
         let token = Self.generateCredentialToken()
-        state.devices.append(device)
-        state.credentials.append(RemoteDeviceCredentialRecord(
+        var nextState = state
+        nextState.devices.append(device)
+        nextState.credentials.append(RemoteDeviceCredentialRecord(
             credentialHash: Self.hashToken(token),
             deviceID: device.id,
             issuedAt: date
         ))
-        persist()
+        try persistSynchronously(nextState)
+        state = nextState
+        lastPersistedLastSeenAtByDeviceID[device.id] = date
+        activePairingCode = nil
         return .paired(device: device, credentialToken: token)
     }
 
@@ -174,7 +193,12 @@ public final class RemoteDeviceStore {
             return nil
         }
         state.devices[deviceIndex].lastSeenAt = date
-        persist()
+        let deviceID = state.devices[deviceIndex].id
+        let lastPersistedAt = lastPersistedLastSeenAtByDeviceID[deviceID] ?? .distantPast
+        if date.timeIntervalSince(lastPersistedAt) >= Self.lastSeenPersistenceInterval {
+            lastPersistedLastSeenAtByDeviceID[deviceID] = date
+            persistEventually(state)
+        }
         return state.devices[deviceIndex]
     }
 
@@ -184,59 +208,86 @@ public final class RemoteDeviceStore {
         state.devices
     }
 
-    public func setScopes(_ scopes: Set<RemoteDeviceScope>, forDevice deviceID: UUID) {
-        guard let index = state.devices.firstIndex(where: { $0.id == deviceID }) else { return }
+    @discardableResult
+    public func setScopes(_ scopes: Set<RemoteDeviceScope>, forDevice deviceID: UUID) throws -> Bool {
+        guard let index = state.devices.firstIndex(where: { $0.id == deviceID }) else { return false }
         // Read scope is not removable; a device without read is a revocation.
-        state.devices[index].scopes = scopes.union([.read])
-        persist()
+        let normalizedScopes = scopes.union([.read])
+        guard state.devices[index].scopes != normalizedScopes else { return false }
+        var nextState = state
+        nextState.devices[index].scopes = normalizedScopes
+        try persistSynchronously(nextState)
+        state = nextState
+        return true
     }
 
     @discardableResult
-    public func revokeDevice(_ deviceID: UUID, at date: Date) -> Bool {
+    public func revokeDevice(_ deviceID: UUID, at date: Date) throws -> Bool {
         guard let index = state.devices.firstIndex(where: { $0.id == deviceID }),
               state.devices[index].isRevoked == false else {
             return false
         }
-        state.devices[index].revokedAt = date
-        state.credentials.removeAll { $0.deviceID == deviceID }
-        persist()
+        var nextState = state
+        nextState.devices[index].revokedAt = date
+        nextState.credentials.removeAll { $0.deviceID == deviceID }
+        try persistSynchronously(nextState)
+        state = nextState
+        lastPersistedLastSeenAtByDeviceID.removeValue(forKey: deviceID)
         return true
     }
 
-    public func revokeAllDevices(at date: Date) {
-        for index in state.devices.indices where state.devices[index].isRevoked == false {
-            state.devices[index].revokedAt = date
+    public func revokeAllDevices(at date: Date) throws {
+        var nextState = state
+        for index in nextState.devices.indices where nextState.devices[index].isRevoked == false {
+            nextState.devices[index].revokedAt = date
         }
-        state.credentials.removeAll()
+        nextState.credentials.removeAll()
+        try persistSynchronously(nextState)
+        state = nextState
         activePairingCode = nil
-        persist()
+        lastPersistedLastSeenAtByDeviceID.removeAll()
     }
 
     // MARK: - Internals
 
-    private func persist() {
+    private func persistSynchronously(_ state: State) throws {
         guard let fileURL else { return }
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-            let data = try encoder.encode(state)
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            try data.write(to: fileURL, options: [.atomic])
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: fileURL.path
-            )
-        } catch {
-            ToasttyLog.error(
-                "Failed to persist remote device store",
-                category: .automation,
-                metadata: ["error": "\(error)"]
-            )
+        let persistenceWriter = persistenceWriter
+        try persistenceQueue.sync {
+            try persistenceWriter(state, fileURL)
         }
+    }
+
+    private func persistEventually(_ state: State) {
+        guard let fileURL else { return }
+        let persistenceWriter = persistenceWriter
+        persistenceQueue.async {
+            do {
+                try persistenceWriter(state, fileURL)
+            } catch {
+                ToasttyLog.error(
+                    "Failed to persist remote device last-seen state",
+                    category: .automation,
+                    metadata: ["error": "\(error)"]
+                )
+            }
+        }
+    }
+
+    private static func writeState(_ state: State, to fileURL: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        let data = try encoder.encode(state)
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try data.write(to: fileURL, options: [.atomic])
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: fileURL.path
+        )
     }
 
     static func hashToken(_ token: String) -> String {

@@ -30,8 +30,11 @@ public struct ConversationProjector: Sendable {
 
     private var currentEpoch: RemoteInputEpoch
     private var seenFingerprints: Set<String>
+    private var seenFingerprintOrder: [String]
     private var runtimeEventCounter: UInt64
     private var nextSequence: UInt64
+    let eventRetentionLimit: Int
+    let fingerprintRetentionLimit: Int
 
     public var latestSequence: UInt64 {
         nextSequence - 1
@@ -43,6 +46,8 @@ public struct ConversationProjector: Sendable {
         generation: UInt64 = 0,
         bindingID: UUID,
         runtimeBound: Bool = true,
+        eventRetentionLimit: Int = 10_000,
+        fingerprintRetentionLimit: Int = 20_000,
         at date: Date
     ) {
         self.conversationID = conversationID
@@ -58,8 +63,11 @@ public struct ConversationProjector: Sendable {
         self.updatedAt = date
         self.currentEpoch = RemoteInputEpoch(bindingID: bindingID, counter: 0)
         self.seenFingerprints = []
+        self.seenFingerprintOrder = []
         self.runtimeEventCounter = 0
         self.nextSequence = 1
+        self.eventRetentionLimit = max(1, eventRetentionLimit)
+        self.fingerprintRetentionLimit = max(1, fingerprintRetentionLimit)
     }
 
     // MARK: - Provider observations
@@ -69,6 +77,8 @@ public struct ConversationProjector: Sendable {
         guard seenFingerprints.insert(observation.fingerprint).inserted else {
             return []
         }
+        seenFingerprintOrder.append(observation.fingerprint)
+        trimSeenFingerprintsIfNeeded()
 
         var emitted: [ConversationEvent] = []
         switch observation.payload {
@@ -198,6 +208,7 @@ public struct ConversationProjector: Sendable {
         )
         nextSequence += 1
         events.append(event)
+        trimEventsIfNeeded()
         return event
     }
 
@@ -216,7 +227,50 @@ public struct ConversationProjector: Sendable {
         )
         nextSequence += 1
         events.append(event)
+        trimEventsIfNeeded()
         return event
+    }
+
+    /// Returns a bounded page without allocating an eager copy of the whole
+    /// suffix. Event sequences are strictly increasing inside one generation.
+    func retainedEvents(afterSequence: UInt64, limit: Int) -> [ConversationEvent] {
+        var lowerBound = 0
+        var upperBound = events.count
+        while lowerBound < upperBound {
+            let midpoint = lowerBound + (upperBound - lowerBound) / 2
+            if events[midpoint].sequence <= afterSequence {
+                lowerBound = midpoint + 1
+            } else {
+                upperBound = midpoint
+            }
+        }
+        guard lowerBound < events.count else { return [] }
+        let endIndex = min(events.count, lowerBound + max(1, limit))
+        return Array(events[lowerBound..<endIndex])
+    }
+
+    public var firstAvailableSequence: UInt64 {
+        events.first?.sequence ?? nextSequence
+    }
+
+    var seenFingerprintCountForTesting: Int {
+        seenFingerprints.count
+    }
+
+    private mutating func trimEventsIfNeeded() {
+        let trimBatchSize = max(1, eventRetentionLimit / 10)
+        guard events.count > eventRetentionLimit + trimBatchSize else { return }
+        events.removeFirst(events.count - eventRetentionLimit)
+    }
+
+    private mutating func trimSeenFingerprintsIfNeeded() {
+        let trimBatchSize = max(1, fingerprintRetentionLimit / 10)
+        guard seenFingerprintOrder.count > fingerprintRetentionLimit + trimBatchSize else { return }
+        let removalCount = seenFingerprintOrder.count - fingerprintRetentionLimit
+        for fingerprint in seenFingerprintOrder.prefix(removalCount) {
+            seenFingerprints.remove(fingerprint)
+        }
+        seenFingerprintOrder.removeFirst(removalCount)
     }
 
     private mutating func transition(

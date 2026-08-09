@@ -107,6 +107,11 @@ struct RemoteAccessSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            if let deviceManagementError = service.deviceManagementError {
+                Text(deviceManagementError)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
             ForEach(service.devices) { device in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {

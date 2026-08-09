@@ -4,6 +4,79 @@ import XCTest
 
 @MainActor
 final class ManagedAgentLaunchPlannerTests: XCTestCase {
+    func testFreshLaunchClearsPriorRemoteConversationContinuation() throws {
+        let nativeSessionID = "01900000-aaaa-7000-8000-000000000001"
+        let remoteConversationID = RemoteConversationID()
+        let fixture = try makePlannerFixture(terminalState: TerminalPanelState(
+            title: "Agent",
+            shell: "zsh",
+            cwd: "/tmp/repo",
+            resumeRecord: ManagedAgentResumeRecord(
+                agent: .codex,
+                nativeSessionID: nativeSessionID,
+                sessionFilePath: "/tmp/old-rollout.jsonl",
+                cwd: "/tmp/repo",
+                capturedAt: Date(timeIntervalSince1970: 1_786_000_000)
+            ),
+            remoteConversationID: remoteConversationID
+        ))
+
+        let plan = try fixture.planner.prepareManagedLaunch(ManagedAgentLaunchRequest(
+            agent: .codex,
+            panelID: fixture.panelID,
+            argv: ["codex"],
+            cwd: "/tmp/repo"
+        ))
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        guard case .terminal(let terminalState)? = fixture.store.state
+            .workspaceSelection(containingPanelID: fixture.panelID)?
+            .workspace
+            .panelState(for: fixture.panelID) else {
+            XCTFail("Expected terminal panel")
+            return
+        }
+        XCTAssertNil(terminalState.resumeRecord)
+        XCTAssertNil(terminalState.remoteConversationID)
+    }
+
+    func testExplicitResumePreservesRemoteConversationContinuation() throws {
+        let nativeSessionID = "01900000-aaaa-7000-8000-000000000001"
+        let remoteConversationID = RemoteConversationID()
+        let resumeRecord = ManagedAgentResumeRecord(
+            agent: .codex,
+            nativeSessionID: nativeSessionID,
+            sessionFilePath: "/tmp/old-rollout.jsonl",
+            cwd: "/tmp/repo",
+            capturedAt: Date(timeIntervalSince1970: 1_786_000_000)
+        )
+        let fixture = try makePlannerFixture(terminalState: TerminalPanelState(
+            title: "Agent",
+            shell: "zsh",
+            cwd: "/tmp/repo",
+            resumeRecord: resumeRecord,
+            remoteConversationID: remoteConversationID
+        ))
+
+        let plan = try fixture.planner.prepareManagedLaunch(ManagedAgentLaunchRequest(
+            agent: .codex,
+            panelID: fixture.panelID,
+            argv: ["codex", "resume", nativeSessionID],
+            cwd: "/tmp/repo"
+        ))
+        defer { fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date()) }
+
+        guard case .terminal(let terminalState)? = fixture.store.state
+            .workspaceSelection(containingPanelID: fixture.panelID)?
+            .workspace
+            .panelState(for: fixture.panelID) else {
+            XCTFail("Expected terminal panel")
+            return
+        }
+        XCTAssertEqual(terminalState.resumeRecord, resumeRecord)
+        XCTAssertEqual(terminalState.remoteConversationID, remoteConversationID)
+    }
+
     func testCodexLaunchWithoutSkillsPostsActionableUnavailableNotice() throws {
         let fixture = try makePlannerFixture()
         let recorder = CodexSkillsUnavailableNoticeRecorder()

@@ -145,6 +145,7 @@ struct RemoteGatewayRequestHandlerTests {
     static func makeHandler(
         deviceStore: RemoteDeviceStore = RemoteDeviceStore(fileURL: nil),
         pairingLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 2, windowDuration: 60, lockoutDuration: 300),
+        authLimiter: RemoteAccessRateLimiter = RemoteAccessRateLimiter(maximumFailures: 20, windowDuration: 60, lockoutDuration: 300),
         eventsOutcome: ConversationEventPageOutcome = .conversationNotFound,
         sendHandler: RemoteGatewayRequestHandler.SendHandler? = nil
     ) -> (RemoteGatewayRequestHandler, RemoteDeviceStore, RemoteAccessAuditLog) {
@@ -165,7 +166,8 @@ struct RemoteGatewayRequestHandlerTests {
                 ]
             ),
             sendHandler: sendHandler,
-            pairingRateLimiter: pairingLimiter
+            pairingRateLimiter: pairingLimiter,
+            authRateLimiter: authLimiter
         )
         return (handler, deviceStore, audit)
     }
@@ -186,7 +188,7 @@ struct RemoteGatewayRequestHandlerTests {
 
     static func pairedDeviceCookie(_ store: RemoteDeviceStore) -> String {
         let code = store.issuePairingCode(at: now)
-        guard case .paired(_, let token) = store.redeemPairingCode(code.code, deviceName: "Phone", at: now) else {
+        guard case .paired(_, let token) = try! store.redeemPairingCode(code.code, deviceName: "Phone", at: now) else {
             fatalError("pairing must succeed")
         }
         return "\(RemoteGatewayProtocol.credentialCookieName)=\(token)"
@@ -216,6 +218,8 @@ struct RemoteGatewayRequestHandlerTests {
 
     @Test func pairingHappyPathSetsHttpOnlyCookie() throws {
         let (handler, store, _) = Self.makeHandler()
+        var pairedDevice: RemoteDeviceRecord?
+        handler.onDevicePaired = { pairedDevice = $0 }
         let code = store.issuePairingCode(at: Self.now)
         let body = #"{"code":"\#(code.code)","deviceName":"Vishal's phone"}"#
         guard case .respond(let response) = handler.handle(
@@ -234,6 +238,7 @@ struct RemoteGatewayRequestHandlerTests {
         let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteGatewayPairResponse.self, from: response.body)
         #expect(decoded.device.name == "Vishal's phone")
         #expect(decoded.device.scopes == [.read])
+        #expect(pairedDevice?.id == decoded.device.id)
     }
 
     @Test func pairingOverHTTPSFrontMarksCookieSecure() throws {
@@ -313,10 +318,97 @@ struct RemoteGatewayRequestHandlerTests {
         #expect(decoded.protocolVersion == RemoteGatewayProtocol.version)
     }
 
-    @Test func revokedDeviceCredentialStopsWorking() {
+    @Test func missingCredentialsDoNotLockOutAPairedDevice() {
+        let authLimiter = RemoteAccessRateLimiter(maximumFailures: 2, windowDuration: 60, lockoutDuration: 300)
+        let (handler, store, _) = Self.makeHandler(authLimiter: authLimiter)
+        let validCookie = Self.pairedDeviceCookie(store)
+
+        for offset in 0..<6 {
+            guard case .respond(let response) = handler.handle(
+                Self.request("GET", "/api/sessions"),
+                at: Self.now.addingTimeInterval(Double(offset))
+            ) else {
+                Issue.record("Expected response")
+                return
+            }
+            #expect(response.status == 401)
+        }
+
+        guard case .respond(let validResponse) = handler.handle(
+            Self.request("GET", "/api/sessions", cookie: validCookie),
+            at: Self.now.addingTimeInterval(10)
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(validResponse.status == 200)
+    }
+
+    @Test func validCredentialBypassesInvalidCredentialLockout() {
+        let authLimiter = RemoteAccessRateLimiter(maximumFailures: 2, windowDuration: 60, lockoutDuration: 300)
+        let (handler, store, _) = Self.makeHandler(authLimiter: authLimiter)
+        let validCookie = Self.pairedDeviceCookie(store)
+
+        for offset in 0..<3 {
+            _ = handler.handle(
+                Self.request(
+                    "GET",
+                    "/api/sessions",
+                    cookie: "\(RemoteGatewayProtocol.credentialCookieName)=invalid-\(offset)"
+                ),
+                at: Self.now.addingTimeInterval(Double(offset))
+            )
+        }
+
+        guard case .respond(let lockedInvalid) = handler.handle(
+            Self.request(
+                "GET",
+                "/api/sessions",
+                cookie: "\(RemoteGatewayProtocol.credentialCookieName)=still-invalid"
+            ),
+            at: Self.now.addingTimeInterval(4)
+        ), case .respond(let validResponse) = handler.handle(
+            Self.request("GET", "/api/sessions", cookie: validCookie),
+            at: Self.now.addingTimeInterval(5)
+        ) else {
+            Issue.record("Expected responses")
+            return
+        }
+        #expect(lockedInvalid.status == 429)
+        #expect(validResponse.status == 200)
+    }
+
+    @Test func pairingPersistenceFailureReturnsServerErrorWithoutConsumingCode() {
+        enum ExpectedFailure: Error { case write }
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-pairing-failure-\(UUID().uuidString).json")
+        let store = RemoteDeviceStore(fileURL: fileURL) { _, _ in
+            throw ExpectedFailure.write
+        }
+        let (handler, _, _) = Self.makeHandler(deviceStore: store)
+        let code = store.issuePairingCode(at: Self.now)
+
+        guard case .respond(let response) = handler.handle(
+            Self.request(
+                "POST",
+                "/api/pair",
+                origin: Self.origin,
+                body: #"{"code":"\#(code.code)","deviceName":"Phone"}"#
+            ),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 500)
+        #expect(store.devices.isEmpty)
+        #expect(store.hasActivePairingCode)
+    }
+
+    @Test func revokedDeviceCredentialStopsWorking() throws {
         let (handler, store, _) = Self.makeHandler()
         let cookie = Self.pairedDeviceCookie(store)
-        store.revokeAllDevices(at: Self.now.addingTimeInterval(1))
+        try store.revokeAllDevices(at: Self.now.addingTimeInterval(1))
         guard case .respond(let response) = handler.handle(
             Self.request("GET", "/api/sessions", cookie: cookie),
             at: Self.now.addingTimeInterval(2)
@@ -476,7 +568,7 @@ struct RemoteGatewayRequestHandlerTests {
         })
         // Grant send scope to the paired device.
         let cookie = Self.pairedDeviceCookie(store)
-        store.setScopes([.read, .send], forDevice: store.devices[0].id)
+        try store.setScopes([.read, .send], forDevice: store.devices[0].id)
 
         let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r7","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":4},"text":"deploy please"}"#
         guard case .respond(let response) = handler.handle(
@@ -499,7 +591,7 @@ struct RemoteGatewayRequestHandlerTests {
             .rejected(reason: .epochMismatch)
         })
         let cookie = Self.pairedDeviceCookie(store)
-        store.setScopes([.read, .send], forDevice: store.devices[0].id)
+        try store.setScopes([.read, .send], forDevice: store.devices[0].id)
         let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r1","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":1},"text":"hi"}"#
         guard case .respond(let response) = handler.handle(
             Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),
@@ -517,7 +609,7 @@ struct RemoteGatewayRequestHandlerTests {
     @Test func messageSendUncertaintyIsReported200AndAudited() throws {
         let (handler, store, audit) = Self.makeHandler(sendHandler: { _, _ in .uncertain })
         let cookie = Self.pairedDeviceCookie(store)
-        store.setScopes([.read, .send], forDevice: store.devices[0].id)
+        try store.setScopes([.read, .send], forDevice: store.devices[0].id)
         let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r1","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":1},"text":"hi"}"#
         guard case .respond(let response) = handler.handle(
             Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),
@@ -532,10 +624,10 @@ struct RemoteGatewayRequestHandlerTests {
         #expect(audit.recentEntries().contains { $0.action == .remoteSendUncertain })
     }
 
-    @Test func messageSendReturns404WhenNotWired() {
+    @Test func messageSendReturns404WhenNotWired() throws {
         let (handler, store, _) = Self.makeHandler(sendHandler: nil)
         let cookie = Self.pairedDeviceCookie(store)
-        store.setScopes([.read, .send], forDevice: store.devices[0].id)
+        try store.setScopes([.read, .send], forDevice: store.devices[0].id)
         let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r1","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":1},"text":"hi"}"#
         guard case .respond(let response) = handler.handle(
             Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),

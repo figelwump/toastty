@@ -198,6 +198,77 @@ struct RemoteConversationProjectionStoreTests {
         #expect(store.conversationSnapshot(for: Self.conversationID, at: Self.startDate) == nil)
     }
 
+    @Test func boundedProjectionRequiresResnapshotForAgedOutCursor() {
+        let store = RemoteConversationProjectionStore(
+            eventRetentionLimit: 3,
+            fingerprintRetentionLimit: 4
+        )
+        store.registerConversation(
+            Self.conversationID,
+            descriptor: RemoteConversationProjectionStore.ConversationDescriptor(
+                provider: .codex,
+                title: "Bounded",
+                placement: RemoteConversationPlacement(panelID: Self.panelID)
+            ),
+            bindingID: Self.bindingID,
+            at: Self.startDate
+        )
+
+        for index in 0..<12 {
+            store.ingest(
+                [ProviderTranscriptObservation(
+                    timestamp: Self.startDate.addingTimeInterval(Double(index)),
+                    fingerprint: "bounded-\(index)",
+                    payload: .contextCompacted
+                )],
+                for: Self.conversationID
+            )
+            store.noteBinding(
+                for: Self.conversationID,
+                reason: .runtimeResumed,
+                bindingID: UUID(),
+                at: Self.startDate.addingTimeInterval(Double(index + 1))
+            )
+        }
+
+        guard case .page(let retainedPage) = store.conversationEvents(
+            for: Self.conversationID,
+            after: nil,
+            limit: 200
+        ) else {
+            Issue.record("Expected retained page")
+            return
+        }
+        #expect(retainedPage.historyTruncated == true)
+        #expect((retainedPage.firstAvailableSequence ?? 0) > 1)
+        #expect(retainedPage.events.count <= 4)
+        #expect((store.projectorState(for: Self.conversationID)?.seenFingerprintCountForTesting ?? 0) <= 5)
+
+        let agedOutCursor = ConversationEventCursor(
+            projectionRunID: store.runID,
+            projectionGeneration: retainedPage.projectionGeneration,
+            afterSequence: 0
+        )
+        #expect(store.conversationEvents(
+            for: Self.conversationID,
+            after: agedOutCursor,
+            limit: 3
+        ) == .resnapshotRequired)
+    }
+
+    @Test func removingAndReregisteringConversationAdvancesGeneration() {
+        let store = Self.makeStore()
+        let initialGeneration = store.projectorState(for: Self.conversationID)?.generation
+        store.removeConversation(Self.conversationID)
+        store.registerConversation(
+            Self.conversationID,
+            descriptor: RemoteConversationProjectionStore.ConversationDescriptor(provider: .codex, title: "Rebound"),
+            bindingID: UUID(),
+            at: Self.startDate.addingTimeInterval(1)
+        )
+        #expect(store.projectorState(for: Self.conversationID)?.generation == (initialGeneration ?? 0) + 1)
+    }
+
     @Test func identicalInputsRebuildIdenticalEvents() {
         func buildEvents() -> [ConversationEvent] {
             let store = Self.makeStore()

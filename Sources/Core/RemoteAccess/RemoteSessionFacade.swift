@@ -115,19 +115,28 @@ public struct ConversationEventPage: Codable, Equatable, Sendable {
     /// Highest sequence in the projection at page time; when the last returned
     /// event is below this, more pages are available.
     public var latestSequence: UInt64
+    /// Oldest sequence retained by the bounded in-memory projection. Optional
+    /// for wire compatibility with v0.5 clients.
+    public var firstAvailableSequence: UInt64?
+    /// True when earlier events have aged out of the projection cache.
+    public var historyTruncated: Bool?
 
     public init(
         conversationID: RemoteConversationID,
         projectionRunID: RemoteProjectionRunID,
         projectionGeneration: UInt64,
         events: [ConversationEvent],
-        latestSequence: UInt64
+        latestSequence: UInt64,
+        firstAvailableSequence: UInt64? = nil,
+        historyTruncated: Bool? = nil
     ) {
         self.conversationID = conversationID
         self.projectionRunID = projectionRunID
         self.projectionGeneration = projectionGeneration
         self.events = events
         self.latestSequence = latestSequence
+        self.firstAvailableSequence = firstAvailableSequence
+        self.historyTruncated = historyTruncated
     }
 
     public var hasMore: Bool {

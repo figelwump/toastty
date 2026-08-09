@@ -55,6 +55,10 @@ public final class RemoteGatewayRequestHandler {
     private var authRateLimiter: RemoteAccessRateLimiter
     private let encoder = ConversationEventCoding.makeEncoder()
 
+    /// Host notification used to refresh device-management UI after a phone
+    /// redeems the code through the gateway rather than through the Mac UI.
+    public var onDevicePaired: ((RemoteDeviceRecord) -> Void)?
+
     public init(
         deviceStore: RemoteDeviceStore,
         auditLog: RemoteAccessAuditLog,
@@ -118,7 +122,28 @@ public final class RemoteGatewayRequestHandler {
             return .respond(errorResponse(status: 400, reason: "Bad Request", code: "invalid_body", message: "Expected pairing JSON"))
         }
 
-        switch deviceStore.redeemPairingCode(pairRequest.code, deviceName: pairRequest.deviceName, at: date) {
+        let pairingOutcome: RemoteDeviceStore.PairingOutcome
+        do {
+            pairingOutcome = try deviceStore.redeemPairingCode(
+                pairRequest.code,
+                deviceName: pairRequest.deviceName,
+                at: date
+            )
+        } catch {
+            ToasttyLog.error(
+                "Failed to persist paired remote device",
+                category: .automation,
+                metadata: ["error": "\(error)"]
+            )
+            return .respond(errorResponse(
+                status: 500,
+                reason: "Internal Server Error",
+                code: "persistence_failed",
+                message: "Could not save the paired device"
+            ))
+        }
+
+        switch pairingOutcome {
         case .invalidCode:
             let locked = pairingRateLimiter.recordFailure(at: date)
             auditLog.record(RemoteAccessAuditEntry(at: date, action: .pairingFailed))
@@ -129,6 +154,7 @@ public final class RemoteGatewayRequestHandler {
 
         case .paired(let device, let credentialToken):
             auditLog.record(RemoteAccessAuditEntry(at: date, action: .devicePaired, deviceID: device.id, detail: device.name))
+            onDevicePaired?(device)
             let responseBody = (try? encoder.encode(RemoteGatewayPairResponse(device: RemoteGatewayDeviceSummary(device: device)))) ?? Data()
             // `Secure` only when the client actually reached us over HTTPS
             // (Tailscale Serve terminates TLS and forwards the proto); Safari
@@ -277,19 +303,21 @@ public final class RemoteGatewayRequestHandler {
     }
 
     private func authenticate(_ request: RemoteGatewayHTTPRequest, at date: Date) -> AuthResult {
+        guard let token = request.cookies[RemoteGatewayProtocol.credentialCookieName] else {
+            return .failure(errorResponse(status: 401, reason: "Unauthorized", code: "unauthorized", message: "Pair this device first"))
+        }
+        if let device = deviceStore.authenticate(credentialToken: token, at: date) {
+            return .success(device)
+        }
         if authRateLimiter.isLockedOut(at: date) {
             return .failure(errorResponse(status: 429, reason: "Too Many Requests", code: "rate_limited", message: "Too many failed attempts"))
         }
-        guard let token = request.cookies[RemoteGatewayProtocol.credentialCookieName],
-              let device = deviceStore.authenticate(credentialToken: token, at: date) else {
-            let locked = authRateLimiter.recordFailure(at: date)
-            auditLog.record(RemoteAccessAuditEntry(at: date, action: .authenticationFailed))
-            if locked {
-                auditLog.record(RemoteAccessAuditEntry(at: date, action: .rateLimitLockout, detail: "auth"))
-            }
-            return .failure(errorResponse(status: 401, reason: "Unauthorized", code: "unauthorized", message: "Pair this device first"))
+        let locked = authRateLimiter.recordFailure(at: date)
+        auditLog.record(RemoteAccessAuditEntry(at: date, action: .authenticationFailed))
+        if locked {
+            auditLog.record(RemoteAccessAuditEntry(at: date, action: .rateLimitLockout, detail: "auth"))
         }
-        return .success(device)
+        return .failure(errorResponse(status: 401, reason: "Unauthorized", code: "unauthorized", message: "Pair this device first"))
     }
 
     private func errorResponse(status: Int, reason: String, code: String, message: String) -> RemoteGatewayHTTPResponse {

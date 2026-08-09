@@ -185,4 +185,47 @@ struct RemoteTranscriptTailerTests {
         }
         #expect(payload.text == "buffered line")
     }
+
+    @Test func completeFinalRecordWithoutNewlineIsFlushed() async throws {
+        let fileURL = try Self.makeTemporaryFile()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let line = #"{"timestamp":"2026-08-07T10:00:05.000Z","type":"event_msg","payload":{"type":"user_message","message":"final record","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}}"#
+        try line.write(to: fileURL, atomically: false, encoding: .utf8)
+
+        let collector = EventCollector()
+        let tailer = RemoteTranscriptTailer(
+            conversationID: Self.conversationID,
+            fileURL: fileURL,
+            provider: .codex,
+            makeParser: { CodexRolloutTranscriptParser() },
+            pollIntervalNanoseconds: 50_000_000
+        ) { _, event in
+            if case .observations(let observations) = event {
+                collector.observationBatches.append(observations)
+            }
+        }
+        tailer.start()
+        defer { tailer.stop() }
+
+        await Self.waitUntil { collector.allObservations.count == 1 }
+        guard case .transcript(.userMessage(let payload)) = collector.allObservations.first?.payload else {
+            Issue.record("Expected final user message")
+            return
+        }
+        #expect(payload.text == "final record")
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\n".utf8))
+        let nextLine =
+            #"{"timestamp":"2026-08-07T10:00:06.000Z","type":"event_msg","payload":{"type":"user_message","message":"next record","images":[],"local_images":[],"audio":[],"local_audio":[],"text_elements":[]}}"#
+        try handle.write(contentsOf: Data(
+            nextLine.utf8
+        ))
+        try handle.write(contentsOf: Data("\n".utf8))
+        try handle.close()
+
+        await Self.waitUntil { collector.allObservations.count == 2 }
+        #expect(collector.allObservations.count == 2)
+    }
 }

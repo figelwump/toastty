@@ -453,6 +453,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             at: launchStart
         )
 
+        prepareRemoteConversationForLaunch(
+            request,
+            panelID: target.panelID,
+            launchStart: launchStart
+        )
+
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
             agent: request.agent,
@@ -788,6 +794,41 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             forPanelID: panelID,
             at: now
         )
+    }
+
+    /// A remote conversation follows an explicit native resume, not the panel
+    /// itself. Starting any other managed command in a reused terminal must
+    /// discard both pieces of persisted continuation state before the new
+    /// runtime becomes visible to observers.
+    private func prepareRemoteConversationForLaunch(
+        _ request: ManagedAgentLaunchRequest,
+        panelID: UUID,
+        launchStart: Date
+    ) {
+        guard let store,
+              case .terminal(let terminalState)? = store.state
+                .workspaceSelection(containingPanelID: panelID)?
+                .workspace
+                .panelState(for: panelID) else {
+            return
+        }
+
+        let expectedNativeSessionID = ManagedAgentResumeResolver.expectedNativeSessionID(
+            agent: request.agent,
+            argv: request.argv
+        )
+        let continuesCurrentConversation = expectedNativeSessionID != nil
+            && terminalState.resumeRecord?.agent == request.agent
+            && terminalState.resumeRecord?.nativeSessionID == expectedNativeSessionID
+        guard continuesCurrentConversation == false else { return }
+
+        // Native-session discovery may publish the new launch's claim before
+        // startSession registers it. Keep that current claim while discarding
+        // an older panel-scoped continuation left by the previous process.
+        if (terminalState.resumeRecord?.capturedAt ?? .distantPast) < launchStart {
+            _ = store.send(.updateTerminalPanelResumeRecord(panelID: panelID, resumeRecord: nil))
+        }
+        _ = store.send(.updateTerminalPanelRemoteConversationID(panelID: panelID, remoteConversationID: nil))
     }
 
     private func logCodexStatusTrackingSourceIfNeeded(

@@ -108,6 +108,7 @@ final class RemoteAccessService: ObservableObject {
     @Published private(set) var isEnabled: Bool = false
     @Published private(set) var listeningPort: UInt16?
     @Published private(set) var startupError: String?
+    @Published private(set) var deviceManagementError: String?
     @Published private(set) var currentPairingCode: RemotePairingCode?
     @Published private(set) var devices: [RemoteDeviceRecord] = []
     @Published private(set) var connectedClientCount: Int = 0
@@ -135,6 +136,7 @@ final class RemoteAccessService: ObservableObject {
     private let server: RemoteAccessGatewayServer
     private let port: UInt16
     private var cancellables: Set<AnyCancellable> = []
+    private var sessionListBroadcastTask: Task<Void, Never>?
 
     private var tailersByConversationID: [RemoteConversationID: RemoteTranscriptTailer] = [:]
     private var activeSessionIDByConversationID: [RemoteConversationID: String] = [:]
@@ -171,6 +173,12 @@ final class RemoteAccessService: ObservableObject {
         self.devices = deviceStore.devices
         facadeBridge.service = self
         sendBridge.service = self
+        handler.onDevicePaired = { [weak self] _ in
+            guard let self else { return }
+            self.currentPairingCode = nil
+            self.deviceManagementError = nil
+            self.refreshDevices()
+        }
 
         // Observe local keyboard/paste input to invalidate open remote epochs.
         terminalRuntimeRegistry.localInputObserver = { [weak self] panelID in
@@ -239,6 +247,8 @@ final class RemoteAccessService: ObservableObject {
                 )
             }
         } else {
+            sessionListBroadcastTask?.cancel()
+            sessionListBroadcastTask = nil
             server.stop()
             isEnabled = false
             listeningPort = nil
@@ -265,16 +275,35 @@ final class RemoteAccessService: ObservableObject {
     }
 
     func revokeDevice(_ deviceID: UUID) {
-        guard deviceStore.revokeDevice(deviceID, at: Date()) else { return }
-        auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .deviceRevoked, deviceID: deviceID))
-        refreshDevices()
+        do {
+            let didRevoke = try deviceStore.revokeDevice(deviceID, at: Date())
+            // Sweep even when the durable record was already revoked. A retry
+            // must still close any connection that survived an earlier app
+            // interruption or best-effort transport teardown.
+            server.disconnectWebSockets(for: deviceID)
+            guard didRevoke else {
+                deviceManagementError = nil
+                return
+            }
+            auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .deviceRevoked, deviceID: deviceID))
+            deviceManagementError = nil
+            refreshDevices()
+        } catch {
+            reportDeviceManagementFailure("Could not revoke the device", error: error)
+        }
     }
 
     func revokeAllDevices() {
-        deviceStore.revokeAllDevices(at: Date())
-        auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .allDevicesRevoked))
-        currentPairingCode = nil
-        refreshDevices()
+        do {
+            try deviceStore.revokeAllDevices(at: Date())
+            server.disconnectAllWebSockets()
+            auditLog.record(RemoteAccessAuditEntry(at: Date(), action: .allDevicesRevoked))
+            currentPairingCode = nil
+            deviceManagementError = nil
+            refreshDevices()
+        } catch {
+            reportDeviceManagementFailure("Could not revoke paired devices", error: error)
+        }
     }
 
     func recentAuditEntries(limit: Int = 50) -> [RemoteAccessAuditEntry] {
@@ -339,11 +368,17 @@ final class RemoteAccessService: ObservableObject {
         var listChanged = false
 
         for candidate in candidates {
-            seenConversationIDs.insert(candidate.conversationID)
             guard ProviderTranscriptSupport.isSupported(candidate.provider),
                   let rolloutPath = candidate.transcriptPath else {
                 // Providers without a transcript parser stay registry-derived.
                 continue
+            }
+            seenConversationIDs.insert(candidate.conversationID)
+
+            if let projector = projectionStore.projectorState(for: candidate.conversationID),
+               projector.provider != candidate.provider {
+                removeConversationState(candidate.conversationID)
+                listChanged = true
             }
 
             let isNewRegistration = projectionStore.isConversationRegistered(candidate.conversationID) == false
@@ -421,21 +456,17 @@ final class RemoteAccessService: ObservableObject {
             ensureTailer(for: candidate.conversationID, provider: candidate.provider, path: rolloutPath)
         }
 
-        // Conversations whose panels disappeared: delete their cache entries.
-        for conversationID in tailersByConversationID.keys where seenConversationIDs.contains(conversationID) == false {
-            tailersByConversationID[conversationID]?.stop()
-            tailersByConversationID[conversationID] = nil
-            projectionStore.removeConversation(conversationID)
-            coordinator.removeConversation(conversationID)
-            activeSessionIDByConversationID[conversationID] = nil
-            pendingSendsByConversationID[conversationID] = nil
-            if let panelID = panelIDByConversationID.removeValue(forKey: conversationID) {
-                // A replacement conversation may already own the same panel;
-                // never let cleanup of the stale binding erase the new one.
-                if conversationIDByPanelID[panelID] == conversationID {
-                    conversationIDByPanelID[panelID] = nil
-                }
-            }
+        // Conversations whose panels disappeared or whose current runtime can
+        // no longer provide a supported transcript must lose every live
+        // binding. In particular, no old open-prompt epoch may survive behind
+        // a registry-derived read-only row.
+        let trackedConversationIDs = Set(tailersByConversationID.keys)
+            .union(activeSessionIDByConversationID.keys)
+            .union(panelIDByConversationID.keys)
+            .union(pendingSendsByConversationID.keys)
+            .union(projectionStore.registeredConversationIDs)
+        for conversationID in trackedConversationIDs where seenConversationIDs.contains(conversationID) == false {
+            removeConversationState(conversationID)
             listChanged = true
         }
 
@@ -493,10 +524,18 @@ final class RemoteAccessService: ObservableObject {
                     continue
                 }
 
-                let provider = activeRecord?.agent ?? terminalState.resumeRecord?.agent ?? .codex
+                let provider: AgentKind
+                if hasLiveAgent, let activeRecord {
+                    provider = activeRecord.agent
+                } else if let restorableProvider {
+                    provider = restorableProvider
+                } else {
+                    continue
+                }
                 // Both Codex rollout files and Claude transcript files are
                 // recorded as the resume record's sessionFilePath.
                 let transcriptPath = ProviderTranscriptSupport.isSupported(provider)
+                    && terminalState.resumeRecord?.agent == provider
                     ? terminalState.resumeRecord?.sessionFilePath
                     : nil
 
@@ -521,6 +560,26 @@ final class RemoteAccessService: ObservableObject {
         return candidates.sorted { lhs, rhs in
             (lhs.workspaceTitle, lhs.title, lhs.conversationID.rawValue.uuidString)
                 < (rhs.workspaceTitle, rhs.title, rhs.conversationID.rawValue.uuidString)
+        }
+    }
+
+    private func removeConversationState(_ conversationID: RemoteConversationID) {
+        if isEnabled, projectionStore.isConversationRegistered(conversationID) {
+            server.broadcast(.resnapshotRequired(conversationID: conversationID))
+        }
+        tailersByConversationID.removeValue(forKey: conversationID)?.stop()
+        projectionStore.removeConversation(conversationID)
+        coordinator.removeConversation(conversationID)
+        activeSessionIDByConversationID.removeValue(forKey: conversationID)
+        pendingSendsByConversationID.removeValue(forKey: conversationID)
+        if let panelID = panelIDByConversationID.removeValue(forKey: conversationID),
+           conversationIDByPanelID[panelID] == conversationID {
+            conversationIDByPanelID.removeValue(forKey: panelID)
+        }
+
+        let rawID = conversationID.rawValue.uuidString
+        if writeEnabledConversationIDs.remove(rawID) != nil {
+            RemoteAccessPreferences.persistWriteEnabledConversations(writeEnabledConversationIDs)
         }
     }
 
@@ -656,7 +715,9 @@ final class RemoteAccessService: ObservableObject {
             projectionRunID: projectionStore.runID,
             projectionGeneration: projector.generation,
             events: events,
-            latestSequence: projector.latestSequence
+            latestSequence: projector.latestSequence,
+            firstAvailableSequence: projector.firstAvailableSequence,
+            historyTruncated: projector.firstAvailableSequence > 1
         )))
         // Status-bearing events change the list rows too.
         if events.contains(where: { $0.kind == .statusChanged || $0.kind == .sessionBindingChanged }) {
@@ -731,15 +792,26 @@ final class RemoteAccessService: ObservableObject {
     }
 
     /// Records a local keyboard/paste/menu event on a panel so the coordinator
-    /// invalidates any open remote epoch. O(1) and allocation-free: two
-    /// dictionary lookups and an epoch bump. Safe to call from the terminal
-    /// input hot path.
+    /// invalidates any open remote epoch synchronously. The resulting network
+    /// update is coalesced onto a later main-actor turn so summary construction
+    /// and JSON encoding never run inside the terminal input call stack.
     func noteLocalInput(panelID: UUID) {
         guard let conversationID = conversationIDByPanelID[panelID] else { return }
         let wasOpen = coordinator.availability(for: conversationID).allowsRemoteSend
         coordinator.noteLocalInput(for: conversationID)
         if wasOpen {
-            broadcastSessionList()
+            scheduleSessionListBroadcast()
+        }
+    }
+
+    private func scheduleSessionListBroadcast() {
+        guard isEnabled, sessionListBroadcastTask == nil else { return }
+        sessionListBroadcastTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, Task.isCancelled == false else { return }
+            self.sessionListBroadcastTask = nil
+            guard self.isEnabled else { return }
+            self.broadcastSessionList()
         }
     }
 
@@ -813,21 +885,37 @@ final class RemoteAccessService: ObservableObject {
     }
 
     func setDeviceSendScope(_ enabled: Bool, for deviceID: UUID) {
-        guard let device = deviceStore.devices.first(where: { $0.id == deviceID }) else { return }
+        guard let device = deviceStore.devices.first(where: { $0.id == deviceID }),
+              device.isRevoked == false else { return }
         var scopes = device.scopes
         if enabled {
             scopes.insert(.send)
         } else {
             scopes.remove(.send)
         }
-        deviceStore.setScopes(scopes, forDevice: deviceID)
+        do {
+            guard try deviceStore.setScopes(scopes, forDevice: deviceID) else { return }
+        } catch {
+            reportDeviceManagementFailure("Could not update device permissions", error: error)
+            return
+        }
         auditLog.record(RemoteAccessAuditEntry(
             at: Date(),
             action: .deviceScopesChanged,
             deviceID: deviceID,
             detail: enabled ? "send_enabled" : "send_disabled"
         ))
+        deviceManagementError = nil
         refreshDevices()
+    }
+
+    private func reportDeviceManagementFailure(_ message: String, error: Error) {
+        deviceManagementError = "\(message). Try again."
+        ToasttyLog.error(
+            message,
+            category: .automation,
+            metadata: ["error": "\(error)"]
+        )
     }
 
     // MARK: - Configuration

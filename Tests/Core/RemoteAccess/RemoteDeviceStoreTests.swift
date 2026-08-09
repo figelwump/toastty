@@ -5,13 +5,13 @@ import Testing
 struct RemoteDeviceStoreTests {
     static let now = Date(timeIntervalSince1970: 1_786_100_000)
 
-    @Test func pairingFlowIssuesReadOnlyDeviceAndCredential() {
+    @Test func pairingFlowIssuesReadOnlyDeviceAndCredential() throws {
         let store = RemoteDeviceStore(fileURL: nil)
         let code = store.issuePairingCode(at: Self.now)
         #expect(code.isValid(at: Self.now))
         #expect(code.code.count == 9)
 
-        guard case .paired(let device, let token) = store.redeemPairingCode(
+        guard case .paired(let device, let token) = try store.redeemPairingCode(
             code.code,
             deviceName: "Vishal's phone",
             at: Self.now.addingTimeInterval(10)
@@ -28,75 +28,75 @@ struct RemoteDeviceStoreTests {
         #expect(authenticated?.lastSeenAt == Self.now.addingTimeInterval(20))
     }
 
-    @Test func pairingCodeIsSingleUseAndExpires() {
+    @Test func pairingCodeIsSingleUseAndExpires() throws {
         let store = RemoteDeviceStore(fileURL: nil)
         let code = store.issuePairingCode(at: Self.now)
 
         // Sloppy formatting (lowercase, no dash) still redeems.
         let sloppy = code.code.replacingOccurrences(of: "-", with: "").lowercased()
-        guard case .paired = store.redeemPairingCode(sloppy, deviceName: "One", at: Self.now.addingTimeInterval(5)) else {
+        guard case .paired = try store.redeemPairingCode(sloppy, deviceName: "One", at: Self.now.addingTimeInterval(5)) else {
             Issue.record("Expected normalized code to redeem")
             return
         }
         // Second use fails.
-        #expect(store.redeemPairingCode(code.code, deviceName: "Two", at: Self.now.addingTimeInterval(6)) == .invalidCode)
+        #expect(try store.redeemPairingCode(code.code, deviceName: "Two", at: Self.now.addingTimeInterval(6)) == .invalidCode)
 
         // Expired code fails.
         let expired = store.issuePairingCode(at: Self.now)
-        #expect(store.redeemPairingCode(
+        #expect(try store.redeemPairingCode(
             expired.code,
             deviceName: "Three",
             at: Self.now.addingTimeInterval(RemotePairingCode.timeToLive + 1)
         ) == .invalidCode)
     }
 
-    @Test func issuingANewCodeReplacesTheOldOne() {
+    @Test func issuingANewCodeReplacesTheOldOne() throws {
         let store = RemoteDeviceStore(fileURL: nil)
         let first = store.issuePairingCode(at: Self.now)
         _ = store.issuePairingCode(at: Self.now.addingTimeInterval(1))
-        #expect(store.redeemPairingCode(first.code, deviceName: "Old", at: Self.now.addingTimeInterval(2)) == .invalidCode)
+        #expect(try store.redeemPairingCode(first.code, deviceName: "Old", at: Self.now.addingTimeInterval(2)) == .invalidCode)
     }
 
-    @Test func revocationInvalidatesCredentialsImmediately() {
+    @Test func revocationInvalidatesCredentialsImmediately() throws {
         let store = RemoteDeviceStore(fileURL: nil)
         let code = store.issuePairingCode(at: Self.now)
-        guard case .paired(let device, let token) = store.redeemPairingCode(code.code, deviceName: "Phone", at: Self.now) else {
+        guard case .paired(let device, let token) = try store.redeemPairingCode(code.code, deviceName: "Phone", at: Self.now) else {
             Issue.record("Expected pairing to succeed")
             return
         }
 
-        #expect(store.revokeDevice(device.id, at: Self.now.addingTimeInterval(60)))
+        #expect(try store.revokeDevice(device.id, at: Self.now.addingTimeInterval(60)))
         #expect(store.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(61)) == nil)
         #expect(store.devices.first?.isRevoked == true)
         // Revoking again is a no-op.
-        #expect(store.revokeDevice(device.id, at: Self.now.addingTimeInterval(62)) == false)
+        #expect(try store.revokeDevice(device.id, at: Self.now.addingTimeInterval(62)) == false)
     }
 
-    @Test func revokeAllClearsCredentialsAndPairing() {
+    @Test func revokeAllClearsCredentialsAndPairing() throws {
         let store = RemoteDeviceStore(fileURL: nil)
         let firstCode = store.issuePairingCode(at: Self.now)
-        guard case .paired(_, let firstToken) = store.redeemPairingCode(firstCode.code, deviceName: "A", at: Self.now) else {
+        guard case .paired(_, let firstToken) = try store.redeemPairingCode(firstCode.code, deviceName: "A", at: Self.now) else {
             Issue.record("Expected pairing to succeed")
             return
         }
         _ = store.issuePairingCode(at: Self.now)
 
-        store.revokeAllDevices(at: Self.now.addingTimeInterval(5))
+        try store.revokeAllDevices(at: Self.now.addingTimeInterval(5))
         #expect(store.authenticate(credentialToken: firstToken, at: Self.now.addingTimeInterval(6)) == nil)
         #expect(store.hasActivePairingCode == false)
         let allRevoked = store.devices.allSatisfy(\.isRevoked)
         #expect(allRevoked)
     }
 
-    @Test func scopeChangesAlwaysKeepRead() {
+    @Test func scopeChangesAlwaysKeepRead() throws {
         let store = RemoteDeviceStore(fileURL: nil)
         let code = store.issuePairingCode(at: Self.now)
-        guard case .paired(let device, _) = store.redeemPairingCode(code.code, deviceName: "Phone", at: Self.now) else {
+        guard case .paired(let device, _) = try store.redeemPairingCode(code.code, deviceName: "Phone", at: Self.now) else {
             Issue.record("Expected pairing to succeed")
             return
         }
 
-        store.setScopes([.send], forDevice: device.id)
+        try store.setScopes([.send], forDevice: device.id)
         #expect(store.devices.first?.scopes == [.read, .send])
     }
 
@@ -108,7 +108,7 @@ struct RemoteDeviceStoreTests {
 
         let store = RemoteDeviceStore(fileURL: fileURL)
         let code = store.issuePairingCode(at: Self.now)
-        guard case .paired(let device, let token) = store.redeemPairingCode(code.code, deviceName: "Phone", at: Self.now) else {
+        guard case .paired(let device, let token) = try store.redeemPairingCode(code.code, deviceName: "Phone", at: Self.now) else {
             Issue.record("Expected pairing to succeed")
             return
         }
@@ -123,6 +123,45 @@ struct RemoteDeviceStoreTests {
         // The raw token never touches disk.
         let raw = try String(contentsOf: fileURL, encoding: .utf8)
         #expect(raw.contains(token) == false)
+    }
+
+    @Test func failedRevocationPersistenceDoesNotMutateMemoryOrDisk() throws {
+        enum ExpectedFailure: Error { case write }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-device-store-failure-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("remote-devices.json")
+
+        let initialStore = RemoteDeviceStore(fileURL: fileURL)
+        let code = initialStore.issuePairingCode(at: Self.now)
+        guard case .paired(let device, let token) = try initialStore.redeemPairingCode(
+            code.code,
+            deviceName: "Phone",
+            at: Self.now
+        ) else {
+            Issue.record("Expected pairing to succeed")
+            return
+        }
+
+        let failingStore = RemoteDeviceStore(fileURL: fileURL) { _, _ in
+            throw ExpectedFailure.write
+        }
+        #expect(throws: ExpectedFailure.self) {
+            try failingStore.revokeDevice(device.id, at: Self.now.addingTimeInterval(1))
+        }
+        #expect(failingStore.devices.first?.isRevoked == false)
+        #expect(failingStore.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(2)) != nil)
+
+        _ = failingStore.issuePairingCode(at: Self.now.addingTimeInterval(3))
+        #expect(throws: ExpectedFailure.self) {
+            try failingStore.revokeAllDevices(at: Self.now.addingTimeInterval(4))
+        }
+        #expect(failingStore.hasActivePairingCode)
+        #expect(failingStore.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(5)) != nil)
+
+        let reloaded = RemoteDeviceStore(fileURL: fileURL)
+        #expect(reloaded.authenticate(credentialToken: token, at: Self.now.addingTimeInterval(6)) != nil)
     }
 
     @Test func corruptStoreFileStartsEmpty() throws {
