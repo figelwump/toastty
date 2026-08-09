@@ -279,9 +279,9 @@ final class CodexSkillsManagerTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.operations, [])
     }
 
-    /// The ownership marker only counts as the first line: a user file that
-    /// merely quotes it mid-file stays foreign — preserved, with a conflict.
-    func testProfileWithMidFileMarkerIsTreatedAsForeign() throws {
+    /// A user file that merely quotes the ownership marker as part of a
+    /// larger comment stays foreign — preserved, with a conflict.
+    func testProfileWithEmbeddedMarkerTextIsTreatedAsForeign() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let runtime = fixture.runtime()
@@ -291,8 +291,7 @@ final class CodexSkillsManagerTests: XCTestCase {
             withIntermediateDirectories: true
         )
         let foreignContents = """
-        # user-authored overlay quoting Toastty's marker:
-        \(CodexManagedProfileConfig.ownershipMarker)
+        # user-authored overlay quoting: \(CodexManagedProfileConfig.ownershipMarker)
         model = "gpt-5"
 
         """
