@@ -237,7 +237,7 @@ struct RemoteGatewayRequestHandlerTests {
         #expect(cookieHeader.contains("Secure") == false)
         let decoded = try ConversationEventCoding.makeDecoder().decode(RemoteGatewayPairResponse.self, from: response.body)
         #expect(decoded.device.name == "Vishal's phone")
-        #expect(decoded.device.scopes == [.read])
+        #expect(decoded.device.scopes == [.read, .send])
         #expect(pairedDevice?.id == decoded.device.id)
     }
 
@@ -537,15 +537,16 @@ struct RemoteGatewayRequestHandlerTests {
             == .resnapshotRequired(conversationID: conversationID))
     }
 
-    @Test func messageSendRequiresSendScopeBeforeReachingHandler() {
+    @Test func messageSendRequiresSendScopeBeforeReachingHandler() throws {
         let epoch = RemoteInputEpoch(bindingID: UUID(), counter: 1)
         var handlerCalled = false
         let (handler, store, audit) = Self.makeHandler(sendHandler: { _, _ in
             handlerCalled = true
             return .accepted(epoch: epoch)
         })
-        // Paired device is read-only by default.
         let cookie = Self.pairedDeviceCookie(store)
+        // Explicitly remove the default send scope to exercise the gate.
+        #expect(try store.setScopes([.read], forDevice: store.devices[0].id))
         let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r1","expectedInputEpoch":{"bindingID":"\#(UUID().uuidString)","counter":1},"text":"hi"}"#
         guard case .respond(let response) = handler.handle(
             Self.request("POST", "/api/conversation.message.send", origin: Self.origin, cookie: cookie, body: body),
@@ -566,9 +567,8 @@ struct RemoteGatewayRequestHandlerTests {
             received = request
             return .accepted(epoch: epoch)
         })
-        // Grant send scope to the paired device.
+        // A freshly paired device can send without an additional grant.
         let cookie = Self.pairedDeviceCookie(store)
-        try store.setScopes([.read, .send], forDevice: store.devices[0].id)
 
         let body = #"{"conversationID":"11111111-1111-1111-1111-111111111111","clientRequestID":"r7","expectedInputEpoch":{"bindingID":"22222222-2222-2222-2222-222222222222","counter":4},"text":"deploy please"}"#
         guard case .respond(let response) = handler.handle(

@@ -1,8 +1,8 @@
 import Foundation
 
-/// Wire contract for the remote-access gateway (v0: pairing + read-only
-/// session observation). REST bodies and stream messages all carry
-/// `protocolVersion`; clients must ignore unknown message types.
+/// Wire contract for the remote-access gateway. REST bodies and stream
+/// messages all carry `protocolVersion`; clients must ignore unknown message
+/// types.
 public enum RemoteGatewayProtocol {
     public static let version = "1.0"
     /// HttpOnly session-credential cookie. Never appears in URLs or bodies.

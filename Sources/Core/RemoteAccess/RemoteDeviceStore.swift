@@ -1,8 +1,8 @@
 import Foundation
 import CryptoKit
 
-/// What a paired remote device is allowed to do. New devices start read-only;
-/// scope changes happen only on the Mac.
+/// What a paired remote device is allowed to do. Successful pairings grant
+/// read and send explicitly; later scope changes happen only on the Mac.
 public enum RemoteDeviceScope: String, Codable, Equatable, Sendable, CaseIterable {
     case read
     case send
@@ -145,7 +145,7 @@ public final class RemoteDeviceStore {
         activePairingCode != nil
     }
 
-    /// Redeems a pairing code for a new read-only device and its credential
+    /// Redeems a pairing code for a new read-and-send device and its credential
     /// token. The code is single-use: it is consumed on success and on any
     /// failed attempt it stays valid until expiry (rate limiting is the
     /// caller's responsibility).
@@ -163,6 +163,7 @@ public final class RemoteDeviceStore {
         let trimmedName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
         let device = RemoteDeviceRecord(
             name: trimmedName.isEmpty ? "Unnamed device" : String(trimmedName.prefix(80)),
+            scopes: [.read, .send],
             createdAt: date,
             lastSeenAt: date
         )

@@ -5,7 +5,7 @@ import Testing
 struct RemoteDeviceStoreTests {
     static let now = Date(timeIntervalSince1970: 1_786_100_000)
 
-    @Test func pairingFlowIssuesReadOnlyDeviceAndCredential() throws {
+    @Test func pairingFlowIssuesSendEnabledDeviceAndCredential() throws {
         let store = RemoteDeviceStore(fileURL: nil)
         let code = store.issuePairingCode(at: Self.now)
         #expect(code.isValid(at: Self.now))
@@ -19,7 +19,7 @@ struct RemoteDeviceStoreTests {
             Issue.record("Expected pairing to succeed")
             return
         }
-        #expect(device.scopes == [.read])
+        #expect(device.scopes == [.read, .send])
         #expect(device.name == "Vishal's phone")
         #expect(token.count >= 40)
 
@@ -125,6 +125,29 @@ struct RemoteDeviceStoreTests {
         #expect(raw.contains(token) == false)
     }
 
+    @Test func explicitReadOnlyScopePersistsAcrossReload() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-device-store-read-only-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("remote-devices.json")
+
+        let store = RemoteDeviceStore(fileURL: fileURL)
+        let code = store.issuePairingCode(at: Self.now)
+        guard case .paired(let device, _) = try store.redeemPairingCode(
+            code.code,
+            deviceName: "Phone",
+            at: Self.now
+        ) else {
+            Issue.record("Expected pairing to succeed")
+            return
+        }
+
+        #expect(try store.setScopes([.read], forDevice: device.id))
+
+        let reloaded = RemoteDeviceStore(fileURL: fileURL)
+        #expect(reloaded.devices.first?.scopes == [.read])
+    }
+
     @Test func failedRevocationPersistenceDoesNotMutateMemoryOrDisk() throws {
         enum ExpectedFailure: Error { case write }
 
@@ -174,6 +197,28 @@ struct RemoteDeviceStoreTests {
 
         let store = RemoteDeviceStore(fileURL: fileURL)
         #expect(store.devices.isEmpty)
+    }
+
+    @Test func missingOrInvalidPersistedScopesNeverGrantSend() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-device-store-scope-fixtures-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let fixtures: [(json: String, expectedDeviceCount: Int)] = [
+            (#"{"devices":[{"id":"00000000-0000-0000-0000-000000000001","name":"Missing","createdAt":807947048}],"credentials":[]}"#, 0),
+            (#"{"devices":[{"id":"00000000-0000-0000-0000-000000000002","name":"Empty","scopes":[],"createdAt":807947048}],"credentials":[]}"#, 1),
+            (#"{"devices":[{"id":"00000000-0000-0000-0000-000000000003","name":"Unknown","scopes":["read","bogus"],"createdAt":807947048}],"credentials":[]}"#, 0),
+        ]
+
+        for (index, fixture) in fixtures.enumerated() {
+            let fileURL = directory.appendingPathComponent("remote-devices-\(index).json")
+            try Data(fixture.json.utf8).write(to: fileURL)
+
+            let store = RemoteDeviceStore(fileURL: fileURL)
+            #expect(store.devices.count == fixture.expectedDeviceCount)
+            #expect(store.devices.allSatisfy { $0.scopes.contains(.send) == false })
+        }
     }
 }
 

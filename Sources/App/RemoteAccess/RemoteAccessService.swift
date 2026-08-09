@@ -86,16 +86,31 @@ enum RemoteAccessPreferences {
         }
     }
 
-    // Per-session remote-write opt-in, keyed by durable conversation ID. Every
-    // session starts read-only; a write must be enabled on the Mac.
-    private static let writeEnabledConversationsKey = "toastty.remoteAccess.writeEnabledConversations"
+    // Earlier builds persisted a per-conversation allowlist. Remote replies
+    // now default on, so retaining or inverting those values would give stale
+    // conversation IDs unintended meaning.
+    private static let legacyWriteEnabledConversationsKey = "toastty.remoteAccess.writeEnabledConversations"
 
-    static func loadWriteEnabledConversations(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> Set<String> {
-        Set(userDefaults.stringArray(forKey: writeEnabledConversationsKey) ?? [])
+    static func discardLegacyWriteEnabledConversations(userDefaults: UserDefaults = ToasttyAppDefaults.current) {
+        userDefaults.removeObject(forKey: legacyWriteEnabledConversationsKey)
+    }
+}
+
+/// Default-on, process-local overrides for active conversations. Device scope
+/// remains the durable remote-send kill switch.
+struct RemoteSessionWritePolicy: Equatable, Sendable {
+    private(set) var disabledConversationIDs: Set<RemoteConversationID> = []
+
+    func isEnabled(for conversationID: RemoteConversationID) -> Bool {
+        disabledConversationIDs.contains(conversationID) == false
     }
 
-    static func persistWriteEnabledConversations(_ ids: Set<String>, userDefaults: UserDefaults = ToasttyAppDefaults.current) {
-        userDefaults.set(Array(ids).sorted(), forKey: writeEnabledConversationsKey)
+    @discardableResult
+    mutating func setEnabled(_ enabled: Bool, for conversationID: RemoteConversationID) -> Bool {
+        if enabled {
+            return disabledConversationIDs.remove(conversationID) != nil
+        }
+        return disabledConversationIDs.insert(conversationID).inserted
     }
 }
 
@@ -112,8 +127,8 @@ final class RemoteAccessService: ObservableObject {
     @Published private(set) var currentPairingCode: RemotePairingCode?
     @Published private(set) var devices: [RemoteDeviceRecord] = []
     @Published private(set) var connectedClientCount: Int = 0
-    /// Durable conversation IDs (as strings) with remote writes enabled.
-    @Published private(set) var writeEnabledConversationIDs: Set<String>
+    /// Active-conversation exceptions to the default-on remote-write policy.
+    @Published private var sessionWritePolicy = RemoteSessionWritePolicy()
     /// Supported conversations shown by the per-session write controls.
     @Published private(set) var writeControllableSessions: [RemoteConversationSummary] = []
     @Published var tailnetOrigin: String {
@@ -157,7 +172,7 @@ final class RemoteAccessService: ObservableObject {
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.port = RemoteAccessPreferences.loadPort()
         self.tailnetOrigin = RemoteAccessPreferences.loadTailnetOrigin() ?? ""
-        self.writeEnabledConversationIDs = RemoteAccessPreferences.loadWriteEnabledConversations()
+        RemoteAccessPreferences.discardLegacyWriteEnabledConversations()
         self.deviceStore = RemoteDeviceStore(fileURL: runtimePaths.remoteAccessDevicesFileURL)
         self.auditLog = RemoteAccessAuditLog(fileURL: runtimePaths.remoteAccessAuditFileURL)
         self.handler = RemoteGatewayRequestHandler(
@@ -577,10 +592,6 @@ final class RemoteAccessService: ObservableObject {
             conversationIDByPanelID.removeValue(forKey: panelID)
         }
 
-        let rawID = conversationID.rawValue.uuidString
-        if writeEnabledConversationIDs.remove(rawID) != nil {
-            RemoteAccessPreferences.persistWriteEnabledConversations(writeEnabledConversationIDs)
-        }
     }
 
     private func buildConversationSummaries() -> [RemoteConversationSummary] {
@@ -593,7 +604,7 @@ final class RemoteAccessService: ObservableObject {
                 // projector's provider transitions with local-draft
                 // invalidation and honors the per-session write opt-in — the
                 // client's compose bar must never open when writes are off.
-                let availability = writeEnabledConversationIDs.contains(candidate.conversationID.rawValue.uuidString)
+                let availability = sessionWritePolicy.isEnabled(for: candidate.conversationID)
                     ? coordinator.availability(for: candidate.conversationID)
                     : RemoteInputAvailability.unavailable(reason: .unknownProviderState)
                 return RemoteConversationSummary(
@@ -740,7 +751,7 @@ final class RemoteAccessService: ObservableObject {
         guard let panelID = panelIDByConversationID[conversationID] else {
             return .rejected(reason: .notBound)
         }
-        let sessionWritesEnabled = writeEnabledConversationIDs.contains(conversationID.rawValue.uuidString)
+        let sessionWritesEnabled = sessionWritePolicy.isEnabled(for: conversationID)
         let isBound = activeSessionIDByConversationID[conversationID] != nil
         let promptState = terminalRuntimeRegistry.promptState(panelID: panelID)
         // A managed agent TUI commonly reports `.busy` even when its own
@@ -864,18 +875,11 @@ final class RemoteAccessService: ObservableObject {
     // MARK: - Per-session write controls
 
     func isSessionWriteEnabled(_ conversationID: RemoteConversationID) -> Bool {
-        writeEnabledConversationIDs.contains(conversationID.rawValue.uuidString)
+        sessionWritePolicy.isEnabled(for: conversationID)
     }
 
     func setSessionWriteEnabled(_ enabled: Bool, for conversationID: RemoteConversationID) {
-        let key = conversationID.rawValue.uuidString
-        guard writeEnabledConversationIDs.contains(key) != enabled else { return }
-        if enabled {
-            writeEnabledConversationIDs.insert(key)
-        } else {
-            writeEnabledConversationIDs.remove(key)
-        }
-        RemoteAccessPreferences.persistWriteEnabledConversations(writeEnabledConversationIDs)
+        guard sessionWritePolicy.setEnabled(enabled, for: conversationID) else { return }
         auditLog.record(RemoteAccessAuditEntry(
             at: Date(),
             action: .sessionWritesChanged,

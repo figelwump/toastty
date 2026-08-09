@@ -76,7 +76,7 @@ struct RemoteAccessSettingsView: View {
                         service.invalidatePairingCode()
                     }
                 }
-                Text("Single use, expires after 5 minutes. Enter it on the phone's pairing screen.")
+                Text("Single use, expires after 5 minutes. New devices can read and send by default; you can disable Send below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -146,7 +146,7 @@ struct RemoteAccessSettingsView: View {
     private var writeControlsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Remote replies").font(.headline)
-            Text("Off by default. Enable per session to let a device with Send permission reply while the agent is waiting at an open prompt. Local typing always wins.")
+            Text("On by default for each active session. Turn off a session for every device until Toastty restarts, or turn off Send on a device for a persistent block. Local typing always wins.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             let conversations = service.writeControllableSessions
