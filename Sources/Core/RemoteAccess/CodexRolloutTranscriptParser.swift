@@ -5,9 +5,11 @@ import CryptoKit
 /// `ProviderTranscriptObservation`s.
 ///
 /// Sourcing decisions (from auditing real rollout files):
-/// - User turns come from `event_msg`/`user_message` — the only clean record of
-///   what the user actually typed. `response_item` user messages are skipped:
-///   they interleave injected instruction and environment-context blocks.
+/// - User turns come from clean event records: legacy
+///   `event_msg`/`user_message` records and modern
+///   `event_msg`/`item_completed` records whose item is a `UserMessage`.
+///   `response_item` user messages are skipped because they interleave actual
+///   input with injected instruction and environment-context blocks.
 /// - Assistant turns come from `response_item`/`message` with role
 ///   `assistant` — they carry stable `msg_…` IDs and a phase, unlike
 ///   `event_msg`/`agent_message`.
@@ -178,6 +180,26 @@ private extension CodexRolloutTranscriptParser {
                 timestamp: timestamp,
                 turnID: currentTurnID,
                 fingerprint: fingerprintWithOccurrence("user:\(Self.contentHash(text))"),
+                payload: .transcript(.userMessage(ConversationUserMessagePayload(text: text)))
+            )]
+
+        case "item_completed":
+            guard let item = payload["item"] as? [String: Any],
+                  Self.nonEmptyString(item["type"]) == "UserMessage" else {
+                return []
+            }
+            let text = Self.joinedContentText(item["content"])
+            guard text.isEmpty == false else { return [] }
+            let turnID = Self.nonEmptyString(payload["turn_id"]) ?? currentTurnID
+            let contentHash = Self.contentHash(text)
+            let itemID = Self.nonEmptyString(item["id"])
+            let fingerprint = itemID.map { "user_item:\($0)" }
+                ?? fingerprintWithOccurrence("user_item:\(turnID ?? ""):\(contentHash)")
+            return [makeObservation(
+                timestamp: timestamp,
+                turnID: turnID,
+                providerIdentity: itemID,
+                fingerprint: fingerprint,
                 payload: .transcript(.userMessage(ConversationUserMessagePayload(text: text)))
             )]
 

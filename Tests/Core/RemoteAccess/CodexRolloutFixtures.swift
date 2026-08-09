@@ -45,6 +45,20 @@ enum CodexRolloutFixtures {
         #"{"timestamp":"2026-08-07T12:01:05.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-004","last_agent_message":"Wrapped up.","started_at":1786007860,"completed_at":1786007865,"duration_ms":5000}}"#,
     ])
 
+    /// Codex 0.147 user-input records. Raw response items include both injected
+    /// host context and the actual prompt; only the completed UserMessage item
+    /// is a safe transcript source.
+    static let completedItemUserSession = lines([
+        #"{"timestamp":"2026-08-08T10:00:00.000Z","type":"session_meta","payload":{"session_id":"01900000-aaaa-7000-8000-000000000006","id":"01900000-aaaa-7000-8000-000000000006","timestamp":"2026-08-08T10:00:00.000Z","cwd":"/tmp/demo","originator":"codex_cli","cli_version":"0.147.0","source":"cli","model_provider":"openai"}}"#,
+        #"{"timestamp":"2026-08-08T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-601","started_at":1786096801,"model_context_window":258400,"collaboration_mode_kind":"default"}}"#,
+        #"{"timestamp":"2026-08-08T10:00:01.010Z","type":"turn_context","payload":{"turn_id":"turn-601","cwd":"/tmp/demo","approval_policy":"on-request","model":"gpt-5.6"}}"#,
+        #"{"timestamp":"2026-08-08T10:00:01.020Z","type":"response_item","payload":{"type":"message","role":"user","id":"msg_injected_0601","content":[{"type":"input_text","text":"<skills_instructions>private host context</skills_instructions>"},{"type":"input_text","text":"<environment_context>private environment context</environment_context>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-601"}}}"#,
+        #"{"timestamp":"2026-08-08T10:00:01.030Z","type":"response_item","payload":{"type":"message","role":"user","id":"msg_user_0601","content":[{"type":"input_text","text":"Summarize previous commit"}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-601"}}}"#,
+        #"{"timestamp":"2026-08-08T10:00:01.040Z","type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-601","turn_id":"turn-601","item":{"type":"UserMessage","id":"item-user-0601","content":[{"type":"text","text":"Summarize previous commit"}]},"started_at_ms":1786096801030,"completed_at_ms":1786096801040}}"#,
+        #"{"timestamp":"2026-08-08T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","id":"msg_assistant_0601","phase":"final","content":[{"type":"output_text","text":"The previous commit hardened remote access."}],"internal_chat_message_metadata_passthrough":{"turn_id":"turn-601"}}}"#,
+        #"{"timestamp":"2026-08-08T10:00:02.100Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-601","last_agent_message":"The previous commit hardened remote access.","started_at":1786096801,"completed_at":1786096802,"duration_ms":1000}}"#,
+    ])
+
     /// Approval + question flow: an exec approval that resolves through its
     /// tool output, then a question that is superseded by the next turn.
     static let approvalSession = lines([

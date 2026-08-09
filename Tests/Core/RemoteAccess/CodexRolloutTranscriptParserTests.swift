@@ -41,6 +41,29 @@ struct CodexRolloutTranscriptParserTests {
         #expect(assistantTurnIDs == ["turn-001", "turn-001", "turn-002"])
     }
 
+    @Test func parsesCompletedUserItemWithoutLeakingInjectedContext() throws {
+        let result = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.completedItemUserSession)
+        let userObservations = result.observations.filter { observation in
+            if case .transcript(.userMessage) = observation.payload { return true }
+            return false
+        }
+
+        let observation = try #require(userObservations.first)
+        #expect(userObservations.count == 1)
+        guard case .transcript(.userMessage(let payload)) = observation.payload else {
+            Issue.record("Expected a user-message observation")
+            return
+        }
+        #expect(payload.text == "Summarize previous commit")
+        #expect(observation.turnID == "turn-601")
+        #expect(observation.providerIdentity == "item-user-0601")
+        #expect(observation.fingerprint == "user_item:item-user-0601")
+        #expect(result.observations.contains { candidate in
+            guard case .transcript(.userMessage(let candidatePayload)) = candidate.payload else { return false }
+            return candidatePayload.text.contains("private host context")
+        } == false)
+    }
+
     @Test func parsesApprovalAndQuestionInteractions() {
         let result = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.approvalSession)
         let interactions = result.observations.compactMap { observation -> ProviderInteractionObservation? in
@@ -131,6 +154,10 @@ struct CodexRolloutTranscriptParserTests {
         let first = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.basicSession)
         let second = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.basicSession)
         #expect(first.observations == second.observations)
+
+        let modernFirst = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.completedItemUserSession)
+        let modernSecond = CodexRolloutTranscriptParser.parseContents(CodexRolloutFixtures.completedItemUserSession)
+        #expect(modernFirst.observations == modernSecond.observations)
     }
 
     @Test func resumeAppendsSecondSessionMetaWithSameIdentity() {

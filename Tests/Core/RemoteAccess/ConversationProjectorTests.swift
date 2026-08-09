@@ -53,6 +53,23 @@ struct ConversationProjectorTests {
         #expect(toolEvents.count == 2)
     }
 
+    @Test func completedUserItemReachesConversationEvents() {
+        var projector = Self.makeProjector()
+        for observation in Self.observations(CodexRolloutFixtures.completedItemUserSession) {
+            projector.ingest(observation)
+        }
+
+        let userMessages = projector.events.compactMap { event -> ConversationUserMessagePayload? in
+            guard case .userMessage(let payload) = event.payload else { return nil }
+            return payload
+        }
+        #expect(userMessages.map(\.text) == ["Summarize previous commit"])
+        #expect(projector.events.contains { event in
+            guard case .userMessage(let payload) = event.payload else { return false }
+            return payload.text.contains("private host context")
+        } == false)
+    }
+
     @Test func reIngestingSameObservationsAppendsNothing() {
         var projector = Self.makeProjector()
         let observations = Self.observations(CodexRolloutFixtures.basicSession)
