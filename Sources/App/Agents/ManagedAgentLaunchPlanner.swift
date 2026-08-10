@@ -81,9 +81,17 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             )
         self.codexResumeResolver = codexResumeResolver ?? CodexManagedSessionResolver()
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
-            Task { @MainActor in
+            guard let self else { return }
+            // Status ticks (Working detail, Ready, etc.) republish the whole
+            // registry. Only schedule cleanup work when a tracked session is
+            // actually inactive — otherwise Grok/Claude hook floods queue the
+            // main actor with no-op cleanup Tasks.
+            let hasInactiveTrackedSession = self.managedArtifactsBySessionID.keys.contains { sessionID in
+                registry.activeSession(sessionID: sessionID) == nil
+            }
+            guard hasInactiveTrackedSession else { return }
+            Task { @MainActor [weak self] in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
-                self?.reapExpiredRetainedLaunchArtifacts()
             }
         }
         store.addActionAppliedObserver { [weak self] action, _, nextState in
