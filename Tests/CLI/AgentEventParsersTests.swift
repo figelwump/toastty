@@ -1925,6 +1925,35 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func grokDerivedSessionFilePathHonorsCustomGrokHome() {
+        let nativeSessionID = "019fe0b5-ab92-7ee2-a2e5-a2d720fe5a43"
+        let cwd = "/private/tmp/custom-home-cwd"
+        let customHome = URL(fileURLWithPath: "/var/tmp/custom-grok-home", isDirectory: true)
+        let path = GrokHookEventParser.derivedSessionFilePath(
+            sessionId: nativeSessionID,
+            cwd: cwd,
+            grokHome: customHome
+        )
+        #expect(path.hasPrefix(customHome.path))
+        #expect(path.contains("/sessions/"))
+        #expect(path.hasSuffix("/\(nativeSessionID)/summary.json"))
+        #expect(path.contains(GrokHookEventParser.encodedSessionCwdFolderName(cwd)))
+    }
+
+    @Test
+    func grokDerivedSessionFilePathReadsGROK_HOMEFromEnvironment() {
+        let nativeSessionID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        let cwd = "/tmp/env-home"
+        let path = GrokHookEventParser.derivedSessionFilePath(
+            sessionId: nativeSessionID,
+            cwd: cwd,
+            environment: ["GROK_HOME": "/opt/isolated-grok"]
+        )
+        #expect(path.hasPrefix("/opt/isolated-grok/sessions/"))
+        #expect(path.hasSuffix("/\(nativeSessionID)/summary.json"))
+    }
+
+    @Test
     func grokSessionStartPrefersTranscriptPathWhenPresent() throws {
         let panelID = UUID()
         let transcript = "/Users/jd/.grok/sessions/%2Ftmp%2Frepo/native-1/updates.jsonl"

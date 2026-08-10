@@ -371,12 +371,18 @@ enum AgentLaunchInstrumentation {
             sessionID: sessionID
         )
 
+        // Grok hook subprocesses expose GROK_SESSION_ID, not TOASTTY_SESSION_ID.
+        // Assign a stable native id via --session-id (or reuse --resume / existing -s)
+        // so the forwarder can gate concurrent hook files correctly.
+        let preparedArgvAndNative = resolvedGrokArgvWithNativeSessionID(argv)
+        let preparedArgv = preparedArgvAndNative.argv
+        let nativeSessionID = preparedArgvAndNative.nativeSessionID
+
         do {
             let hookScriptURL = artifactsDirectoryURL.appendingPathComponent("grok-hook.sh", isDirectory: false)
             let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
-            // Bake session + panel into the forwarder CLI args. Grok hooks inherit
-            // process env that can drift (or be wrong for concurrent hook files);
-            // the launch panel id is fixed when the session is created.
+            // Bake Toastty session + panel + socket into CLI args. Gate concurrent
+            // hook files on GROK_SESSION_ID (what Grok actually sets on hooks).
             try writeExecutableScript(
                 makeTelemetryForwarderScript(
                     cliExecutablePath: cliExecutablePath,
@@ -387,18 +393,29 @@ enum AgentLaunchInstrumentation {
                         isDirectory: false
                     ),
                     inputMode: .stdinOrFirstArgument,
-                    expectedSessionID: sessionID,
-                    expectedPanelID: panelID?.uuidString
+                    toasttySessionID: sessionID,
+                    expectedPanelID: panelID?.uuidString,
+                    socketPath: normalizedNonEmptyValue(
+                        launchEnvironment[ToasttyLaunchContextEnvironment.socketPathKey]
+                    ),
+                    sessionGate: nativeSessionID.map { .environmentKey("GROK_SESSION_ID", expectedValue: $0) }
                 ),
                 to: hookScriptURL,
                 fileManager: fileManager
             )
 
             let command = "/bin/sh \(shellQuote(hookScriptURL.path))"
-            try writeJSONObject(makeGrokHooksConfig(command: command), to: hookJSONURL)
+            try writeJSONObject(
+                makeGrokHooksConfig(
+                    command: command,
+                    ownerPID: ProcessInfo.processInfo.processIdentifier,
+                    managedSessionID: sessionID
+                ),
+                to: hookJSONURL
+            )
 
             return PreparedAgentLaunchCommand(
-                argv: argv,
+                argv: preparedArgv,
                 environment: [:],
                 artifacts: PreparedAgentLaunchArtifacts(
                     directoryURL: artifactsDirectoryURL,
@@ -414,6 +431,83 @@ enum AgentLaunchInstrumentation {
             try? fileManager.removeItem(at: hookJSONURL)
             throw error
         }
+    }
+
+    /// Ensures new Grok launches get a known native session UUID for hook gating.
+    /// Returns `(argv, nativeSessionID)` where `nativeSessionID` is nil only when
+    /// the argv resumes/continues without a concrete id we can pre-declare.
+    static func resolvedGrokArgvWithNativeSessionID(
+        _ argv: [String]
+    ) -> (argv: [String], nativeSessionID: String?) {
+        if let existing = extractGrokNativeSessionID(from: argv) {
+            return (argv, existing)
+        }
+        // --continue / bare --resume without an id: cannot pre-declare GROK_SESSION_ID.
+        if argvContainsGrokResumeOrContinueWithoutID(argv) {
+            return (argv, nil)
+        }
+        let nativeSessionID = UUID().uuidString.lowercased()
+        let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .grok, argv: argv)
+        let preparedArgv = insertingArguments(
+            ["--session-id", nativeSessionID],
+            into: argv,
+            afterIndex: insertionIndex
+        )
+        return (preparedArgv, nativeSessionID)
+    }
+
+    static func extractGrokNativeSessionID(from argv: [String]) -> String? {
+        let tokens: [(flag: String, requiresValue: Bool)] = [
+            ("--session-id", true),
+            ("-s", true),
+            ("--resume", true),
+            ("-r", true),
+        ]
+        var index = 0
+        while index < argv.count {
+            let argument = argv[index]
+            if let token = tokens.first(where: { $0.flag == argument }) {
+                let valueIndex = index + 1
+                guard token.requiresValue,
+                      argv.indices.contains(valueIndex) else {
+                    index += 1
+                    continue
+                }
+                let value = argv[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+                // Resume accepts titles; only UUID-shaped values are usable as GROK_SESSION_ID.
+                if UUID(uuidString: value) != nil {
+                    return value.lowercased()
+                }
+                index = valueIndex + 1
+                continue
+            }
+            if argument.hasPrefix("--session-id=") {
+                let value = String(argument.dropFirst("--session-id=".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if UUID(uuidString: value) != nil {
+                    return value.lowercased()
+                }
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func argvContainsGrokResumeOrContinueWithoutID(_ argv: [String]) -> Bool {
+        for (index, argument) in argv.enumerated() {
+            switch argument {
+            case "--continue", "-c":
+                return true
+            case "--resume", "-r":
+                let next = index + 1
+                if argv.indices.contains(next) == false || argv[next].hasPrefix("-") {
+                    return true
+                }
+            default:
+                continue
+            }
+        }
+        return false
     }
 
     private static func preparePiLaunch(
@@ -1470,21 +1564,31 @@ private extension AgentLaunchInstrumentation {
         """
     }
 
+    enum TelemetrySessionGate: Equatable {
+        /// No-op unless `environmentKey` equals `expectedValue` (e.g. GROK_SESSION_ID).
+        case environmentKey(String, expectedValue: String)
+    }
+
     static func makeTelemetryForwarderScript(
         cliExecutablePath: String,
         source: String,
         telemetryErrorLogURL: URL,
         stderrFallbackURL: URL,
         inputMode: TelemetryInputMode,
-        expectedSessionID: String? = nil,
-        expectedPanelID: String? = nil
+        toasttySessionID: String? = nil,
+        expectedPanelID: String? = nil,
+        socketPath: String? = nil,
+        sessionGate: TelemetrySessionGate? = nil
     ) -> String {
         let stderrTemplateURL = stderrFallbackURL.deletingLastPathComponent()
             .appendingPathComponent("telemetry-stderr.XXXXXX", isDirectory: false)
         var cliCommand =
             "\(shellQuote(cliExecutablePath)) session ingest-agent-event --source \(source)"
-        if let expectedSessionID {
-            cliCommand += " --session \(shellQuote(expectedSessionID))"
+        if let socketPath, socketPath.isEmpty == false {
+            cliCommand += " --socket-path \(shellQuote(socketPath))"
+        }
+        if let toasttySessionID {
+            cliCommand += " --session \(shellQuote(toasttySessionID))"
         }
         if let expectedPanelID {
             cliCommand += " --panel \(shellQuote(expectedPanelID))"
@@ -1517,13 +1621,13 @@ private extension AgentLaunchInstrumentation {
         }
 
         var scriptLines = ["#!/bin/sh"]
-        if let expectedSessionID {
+        if case let .environmentKey(key, expectedValue) = sessionGate {
             // Grok loads every file under $GROK_HOME/hooks. Concurrent Toastty
-            // sessions each install a forwarder; no-op unless env matches this
-            // launch's embedded session id.
+            // sessions each install a forwarder; no-op unless the agent-native
+            // session id matches this launch (GROK_SESSION_ID for Grok).
             scriptLines += [
-                "expected_session=\(shellQuote(expectedSessionID))",
-                "if [ -z \"${TOASTTY_SESSION_ID:-}\" ] || [ \"$TOASTTY_SESSION_ID\" != \"$expected_session\" ]; then",
+                "expected_gate_value=\(shellQuote(expectedValue))",
+                "if [ -z \"${\(key):-}\" ] || [ \"$\(key)\" != \"$expected_gate_value\" ]; then",
                 "  exit 0",
                 "fi",
                 "",
@@ -1542,7 +1646,7 @@ private extension AgentLaunchInstrumentation {
             "  status=\"$1\"",
             "  timestamp=\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\" 2>/dev/null || date)\"",
             "  {",
-            "    printf '[%s] source=%s exit_code=%s socket_path=%s session_id=%s panel_id=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
+            "    printf '[%s] source=%s exit_code=%s socket_path=%s toastty_session_id=%s grok_session_id=%s panel_id=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${GROK_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
             "    if [ -s \"$stderr_file\" ]; then",
             "      sed 's/^/stderr: /' \"$stderr_file\"",
             "    else",
@@ -1560,7 +1664,12 @@ private extension AgentLaunchInstrumentation {
         return scriptLines.joined(separator: "\n")
     }
 
-    static func makeGrokHooksConfig(command: String) -> [String: Any] {
+    static func makeGrokHooksConfig(
+        command: String,
+        ownerPID: Int32 = ProcessInfo.processInfo.processIdentifier,
+        managedSessionID: String = "",
+        createdAt: Date = Date()
+    ) -> [String: Any] {
         let commandHook: [String: Any] = [
             "type": "command",
             "command": command,
@@ -1584,7 +1693,17 @@ private extension AgentLaunchInstrumentation {
         for eventName in eventNames {
             hooks[eventName] = [entry]
         }
-        return ["hooks": hooks]
+        var object: [String: Any] = ["hooks": hooks]
+        // Owner metadata is ignored by Grok; cold-start cleanup uses it so a
+        // second Toastty instance does not delete hooks for a live owner PID.
+        if managedSessionID.isEmpty == false {
+            object[GrokManagedHookCleanup.ownerMetadataKey] = GrokManagedHookCleanup.ownerMetadata(
+                ownerPID: ownerPID,
+                managedSessionID: managedSessionID,
+                createdAt: createdAt
+            )
+        }
+        return object
     }
 
     static func jsonStringLiteral(_ value: String) -> String {

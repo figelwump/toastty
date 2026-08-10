@@ -108,20 +108,43 @@ enum GrokHookEventParser {
     }
 
     /// Percent-encodes an absolute cwd so `/` becomes `%2F`, matching Grok's
-    /// `~/.grok/sessions/<encoded-cwd>/<sessionId>/` layout.
+    /// `$GROK_HOME/sessions/<encoded-cwd>/<sessionId>/` layout.
     static func encodedSessionCwdFolderName(_ cwd: String) -> String {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         return cwd.addingPercentEncoding(withAllowedCharacters: allowed) ?? cwd
     }
 
+    /// Resolves the Grok home directory, honoring `GROK_HOME` when set.
+    static func resolveGrokHomeURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let grokHomePath = environment["GROK_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           grokHomePath.isEmpty == false {
+            return URL(
+                fileURLWithPath: (grokHomePath as NSString).expandingTildeInPath,
+                isDirectory: true
+            )
+        }
+        return fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".grok", isDirectory: true)
+    }
+
+    /// Derives `summary.json` under `$GROK_HOME/sessions/...` (not always `~/.grok`).
     static func derivedSessionFilePath(
         sessionId: String,
         cwd: String,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        grokHome: URL? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
     ) -> String {
-        homeDirectory
-            .appendingPathComponent(".grok", isDirectory: true)
+        let resolvedGrokHome = grokHome ?? resolveGrokHomeURL(
+            environment: environment,
+            fileManager: fileManager
+        )
+        return resolvedGrokHome
             .appendingPathComponent("sessions", isDirectory: true)
             .appendingPathComponent(encodedSessionCwdFolderName(cwd), isDirectory: true)
             .appendingPathComponent(sessionId, isDirectory: true)
@@ -148,6 +171,7 @@ private extension GrokHookEventParser {
         if let transcriptPath = normalizedPathString(field(object, "transcriptPath", "transcript_path")) {
             sessionFilePath = transcriptPath
         } else if let cwd {
+            // Prefer GROK_HOME from the hook/CLI process env so custom homes match launch.
             sessionFilePath = derivedSessionFilePath(sessionId: nativeSessionID, cwd: cwd)
         } else {
             sessionFilePath = nil

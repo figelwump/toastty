@@ -34,10 +34,17 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let codexResumeResolver: any CodexManagedSessionResolving
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
+    private var retainedLaunchArtifactDirectories: [RetainedLaunchArtifactDirectory] = []
+    private var retainedLaunchArtifactReapTask: Task<Void, Never>?
     private var codexRolloutWatchersBySessionID: [String: CodexRolloutSessionLogWatcherRegistration] = [:]
     private var desiredCodexRolloutLogURLsBySessionID: [String: URL] = [:]
     private var codexRolloutWatcherTransitionsBySessionID: [String: CodexRolloutWatcherTransition] = [:]
     private var codexSessionLogCursorStatesByKey: [CodexSessionLogStreamKey: CodexSessionLogCursorStateRegistration] = [:]
+    /// Grace period before deleting `retainAfterSessionStop` launch artifact dirs.
+    private let retainedLaunchArtifactGraceInterval: TimeInterval
+
+    /// Default brief retention so late Stop hooks soft-fail instead of missing files.
+    static let defaultRetainedLaunchArtifactGraceInterval: TimeInterval = 10 * 60
 
     init(
         store: AppStore,
@@ -51,7 +58,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         readVisibleText: @escaping @MainActor (UUID) -> String?,
         promptState: @escaping @MainActor (UUID) -> TerminalPromptState,
         nativeSessionObserverRegistry: (any ManagedAgentNativeSessionObserving)? = nil,
-        codexResumeResolver: (any CodexManagedSessionResolving)? = nil
+        codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
+        retainedLaunchArtifactGraceInterval: TimeInterval = ManagedAgentLaunchPlanner.defaultRetainedLaunchArtifactGraceInterval
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -63,6 +71,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.codexStatusTrackingSourceProvider = codexStatusTrackingSourceProvider
         self.readVisibleText = readVisibleText
         self.promptState = promptState
+        self.retainedLaunchArtifactGraceInterval = max(0, retainedLaunchArtifactGraceInterval)
         self.nativeSessionObserverRegistry = nativeSessionObserverRegistry
             ?? ManagedAgentNativeSessionObserverRegistry(
                 store: store,
@@ -74,6 +83,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
+                self?.reapExpiredRetainedLaunchArtifacts()
             }
         }
         store.addActionAppliedObserver { [weak self] action, _, nextState in
@@ -105,6 +115,10 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         let cliExecutablePath = try resolveCLIExecutablePath()
         let sessionID = UUID().uuidString
         let codexStatusTrackingSource = statusTrackingSource(for: request.agent)
+        // Instrumentation may bake --socket-path into Grok forwarders; include it
+        // before prepare even though the plan environment is assembled later.
+        var instrumentationEnvironment = request.environment
+        instrumentationEnvironment[ToasttyLaunchContextEnvironment.socketPathKey] = socketPathProvider()
         let preparedLaunch = prepareLaunch(
             agent: request.agent,
             argv: request.argv,
@@ -112,7 +126,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
             sessionID: sessionID,
             panelID: target.panelID,
             workingDirectory: resolvedCWD,
-            launchEnvironment: request.environment,
+            launchEnvironment: instrumentationEnvironment,
             codexStatusTrackingSource: codexStatusTrackingSource
         )
         let launchStart = nowProvider()
@@ -165,7 +179,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     launchStart: launchStart,
                     expectedNativeSessionID: ManagedAgentResumeResolver.expectedNativeSessionID(
                         agent: request.agent,
-                        argv: request.argv
+                        // Use prepared argv so injected Grok `--session-id` is visible.
+                        argv: preparedLaunch.argv
                     )
                 )
             )
@@ -898,13 +913,63 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         for url in managedArtifacts.additionalCleanupURLs {
             try? fileManager.removeItem(at: url)
         }
-        // Claude hook files need to outlive session bookkeeping so late stop
+        // Claude/Grok hook files need to outlive session bookkeeping so late stop
         // hooks turn into no-op telemetry delivery instead of missing-file
-        // shell errors.
-        guard managedArtifacts.cleanupPolicy == .deleteImmediately else {
+        // shell errors — then reap after a bounded grace period.
+        switch managedArtifacts.cleanupPolicy {
+        case .deleteImmediately:
+            try? fileManager.removeItem(at: managedArtifacts.directoryURL)
+        case .retainAfterSessionStop:
+            let removeAfter = nowProvider().addingTimeInterval(retainedLaunchArtifactGraceInterval)
+            retainedLaunchArtifactDirectories.append(
+                RetainedLaunchArtifactDirectory(
+                    directoryURL: managedArtifacts.directoryURL,
+                    removeAfter: removeAfter
+                )
+            )
+            scheduleRetainedLaunchArtifactReapIfNeeded()
+        }
+    }
+
+    private func scheduleRetainedLaunchArtifactReapIfNeeded() {
+        guard retainedLaunchArtifactReapTask == nil,
+              retainedLaunchArtifactDirectories.isEmpty == false else {
             return
         }
-        try? fileManager.removeItem(at: managedArtifacts.directoryURL)
+        retainedLaunchArtifactReapTask = Task { @MainActor [weak self] in
+            defer { self?.retainedLaunchArtifactReapTask = nil }
+            while let self, self.retainedLaunchArtifactDirectories.isEmpty == false {
+                self.reapExpiredRetainedLaunchArtifacts()
+                guard let nextDeadline = self.retainedLaunchArtifactDirectories
+                    .map(\.removeAfter)
+                    .min() else {
+                    break
+                }
+                let delay = max(0, nextDeadline.timeIntervalSince(self.nowProvider()))
+                let nanoseconds = UInt64(delay * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: nanoseconds)
+                if Task.isCancelled {
+                    break
+                }
+            }
+        }
+    }
+
+    private func reapExpiredRetainedLaunchArtifacts() {
+        let now = nowProvider()
+        var remaining: [RetainedLaunchArtifactDirectory] = []
+        remaining.reserveCapacity(retainedLaunchArtifactDirectories.count)
+        for entry in retainedLaunchArtifactDirectories {
+            if entry.removeAfter <= now {
+                try? fileManager.removeItem(at: entry.directoryURL)
+            } else {
+                remaining.append(entry)
+            }
+        }
+        retainedLaunchArtifactDirectories = remaining
+        if remaining.isEmpty == false {
+            scheduleRetainedLaunchArtifactReapIfNeeded()
+        }
     }
 
     private func codexSessionLogCursorState(
@@ -989,6 +1054,11 @@ private struct ManagedLaunchArtifacts {
     let codexSessionLogWatcher: CodexSessionLogWatcher?
     let cleanupPolicy: LaunchArtifactsCleanupPolicy
     let additionalCleanupURLs: [URL]
+}
+
+private struct RetainedLaunchArtifactDirectory {
+    let directoryURL: URL
+    let removeAfter: Date
 }
 
 private struct CodexRolloutSessionLogWatcherRegistration {

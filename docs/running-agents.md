@@ -271,7 +271,7 @@ When the helper script cannot deliver a hook event back to Toastty, it appends t
 
 When the profile ID is `grok`, Toastty:
 
-1. **Writes a session-scoped Grok hooks discovery file** at `$GROK_HOME/hooks/toastty-<sessionID>.json` (default `GROK_HOME` is `~/.grok`). Unlike Codex, Toastty does not install durable global hooks through a Get Started installer; each managed launch owns its own file and removes it on cleanup.
+1. **Writes a session-scoped Grok hooks discovery file** at `$GROK_HOME/hooks/toastty-<sessionID>.json` (default `GROK_HOME` is `~/.grok`). Unlike Codex, Toastty does not install durable global hooks through a Get Started installer; each managed launch owns its own file and removes it on cleanup. New launches pass Grok `--session-id` so hooks can gate on `GROK_SESSION_ID` (Grok does not preserve `TOASTTY_SESSION_ID` in hook subprocesses). Toastty session/panel/socket ids are baked into the forwarder CLI args.
 2. **Creates a temporary forwarder script** in the per-session launch artifacts directory that pipes Grok hook payloads into `toastty session ingest-agent-event --source grok-hooks`.
 3. **Registers lifecycle hooks** for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, `StopFailure`, `Notification`, `SubagentStart`, and `SubagentStop`. Hook discovery files use PascalCase event keys; wire payloads use camelCase fields with snake_case `hookEventName` values (the parser also accepts snake_case field aliases).
 4. **Maps status into the sidebar**:
