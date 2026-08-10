@@ -38,6 +38,7 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
 
     public static let claude = Self(rawValue: "claude")!
     public static let codex = Self(rawValue: "codex")!
+    public static let grok = Self(rawValue: "grok")!
     public static let mimocode = Self(rawValue: "mimocode")!
     public static let opencode = Self(rawValue: "opencode")!
     public static let pi = Self(rawValue: "pi")!
@@ -49,6 +50,8 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
             return "Claude Code"
         case .codex:
             return "Codex"
+        case .grok:
+            return "Grok Build"
         case .mimocode:
             return "MiMo Code"
         case .opencode:
@@ -98,6 +101,7 @@ public enum ManagedAgentCommandResolver {
             AgentKind.codex.rawValue,
             "cdx",
             AgentKind.claude.rawValue,
+            AgentKind.grok.rawValue,
             "mimo",
             AgentKind.mimocode.rawValue,
             AgentKind.opencode.rawValue,
@@ -139,7 +143,12 @@ public enum ManagedAgentCommandResolver {
 
 private extension ManagedAgentCommandResolver {
     static func isBuiltIn(_ agent: AgentKind) -> Bool {
-        agent == .codex || agent == .claude || agent == .mimocode || agent == .opencode || agent == .pi
+        agent == .codex
+            || agent == .claude
+            || agent == .grok
+            || agent == .mimocode
+            || agent == .opencode
+            || agent == .pi
     }
 
     static func launchCommandBasenames(for agent: AgentKind) -> Set<String> {
@@ -148,6 +157,8 @@ private extension ManagedAgentCommandResolver {
             return ["codex", "cdx"]
         case .claude:
             return ["claude", "cc"]
+        case .grok:
+            return ["grok"]
         case .mimocode:
             return ["mimo", "mimocode"]
         case .opencode:
@@ -165,6 +176,8 @@ private extension ManagedAgentCommandResolver {
             return .codex
         case AgentKind.claude.rawValue:
             return .claude
+        case AgentKind.grok.rawValue:
+            return .grok
         case "mimo", AgentKind.mimocode.rawValue:
             return .mimocode
         case AgentKind.opencode.rawValue:
@@ -217,6 +230,8 @@ private extension ManagedAgentCommandResolver {
             return .codex
         case "claude":
             return .claude
+        case "grok":
+            return .grok
         case "mimo", "mimocode":
             return .mimocode
         case "opencode":

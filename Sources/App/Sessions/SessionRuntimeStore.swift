@@ -288,6 +288,12 @@ final class SessionRuntimeStore: ObservableObject {
             previousRecord: previousRecord,
             state: store?.state
         )
+        // Identical status is common when hooks re-emit Working with the same
+        // summary/detail. Skip registry publish + sidebar observers.
+        if let previousStatus = previousRecord?.status,
+           previousStatus == storedStatus {
+            return
+        }
         updateSuppressedCodexVisibleErrorDetailIfNeeded(
             previousRecord: previousRecord,
             sessionID: sessionID,

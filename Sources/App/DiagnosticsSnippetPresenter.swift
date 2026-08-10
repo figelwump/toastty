@@ -29,8 +29,8 @@ enum DiagnosticsSnippetGenerator {
 
         {
           echo "TOASTTY_CLI_PATH=${TOASTTY_CLI_PATH:-<unset>}"
-          command -v toastty claude codex pi opencode mimo mimocode
-          type -a claude codex pi opencode mimo mimocode
+          command -v toastty claude codex grok pi opencode mimo mimocode
+          type -a claude codex grok pi opencode mimo mimocode
           ls -la ~/.toastty/bin 2>&1
           echo "PATH=$PATH"
         } > "$PROBE" 2>&1

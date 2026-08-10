@@ -20,6 +20,15 @@ enum AppBootstrap {
             category: .bootstrap,
             metadata: ToasttyLog.configurationSummary()
         )
+        // Managed Grok hook JSON is process-local; leftovers from prior crashes
+        // must not accumulate under $GROK_HOME/hooks (or ~/.grok/hooks).
+        // Run off the main thread: cold start may read many JSON files.
+        let coldStartEnvironment = processInfo.environment
+        Task.detached(priority: .utility) {
+            GrokManagedHookCleanup.removeOrphanHookFilesAtColdStart(
+                environment: coldStartEnvironment
+            )
+        }
         guard let automationConfig = AutomationConfig.parse(
             arguments: processInfo.arguments,
             environment: processInfo.environment

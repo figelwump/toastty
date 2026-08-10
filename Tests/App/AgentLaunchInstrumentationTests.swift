@@ -1014,6 +1014,204 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertTrue(telemetryLog.contains("stderr: "))
     }
 
+    func testPrepareGrokLaunchWritesSessionScopedHookAndGatedForwarder() throws {
+        let fileManager = FileManager.default
+        let grokHome = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-home-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: grokHome, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: grokHome) }
+
+        let sessionID = UUID().uuidString
+        let panelID = UUID()
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .grok,
+            argv: ["grok"],
+            cliExecutablePath: "/bin/echo",
+            sessionID: sessionID,
+            panelID: panelID,
+            workingDirectory: "/tmp/repo",
+            fileManager: fileManager,
+            launchEnvironment: ["GROK_HOME": grokHome.path]
+        )
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+                for url in artifacts.additionalCleanupURLs {
+                    try? fileManager.removeItem(at: url)
+                }
+            }
+        }
+
+        // New launches inject --session-id so hooks can gate on GROK_SESSION_ID.
+        XCTAssertEqual(preparedLaunch.argv.count, 3)
+        XCTAssertEqual(preparedLaunch.argv[0], "grok")
+        XCTAssertEqual(preparedLaunch.argv[1], "--session-id")
+        let nativeSessionID = preparedLaunch.argv[2]
+        XCTAssertNotNil(UUID(uuidString: nativeSessionID))
+        XCTAssertEqual(preparedLaunch.environment, [:])
+        XCTAssertEqual(preparedLaunch.artifacts?.cleanupPolicy, .retainAfterSessionStop)
+
+        let hookURL = grokHome.appendingPathComponent("hooks/toastty-\(sessionID).json")
+        XCTAssertTrue(fileManager.fileExists(atPath: hookURL.path))
+        XCTAssertEqual(preparedLaunch.artifacts?.additionalCleanupURLs.map(\.path), [hookURL.path])
+
+        let hookData = try Data(contentsOf: hookURL)
+        let hookObject = try XCTUnwrap(JSONSerialization.jsonObject(with: hookData) as? [String: Any])
+        let hooks = try XCTUnwrap(hookObject["hooks"] as? [String: Any])
+        for name in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "Stop",
+            "StopFailure",
+            "Notification",
+            "SubagentStart",
+            "SubagentStop",
+        ] {
+            XCTAssertNotNil(hooks[name], "missing \(name)")
+        }
+        let owner = try XCTUnwrap(GrokManagedHookCleanup.parseOwnerMetadata(from: hookObject))
+        XCTAssertEqual(owner.managedSessionID, sessionID)
+        XCTAssertEqual(owner.ownerPID, ProcessInfo.processInfo.processIdentifier)
+
+        let scriptURL = try XCTUnwrap(
+            preparedLaunch.artifacts?.directoryURL.appendingPathComponent("grok-hook.sh")
+        )
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+        XCTAssertTrue(script.contains(nativeSessionID), "gate should embed native Grok session id")
+        XCTAssertTrue(script.contains("GROK_SESSION_ID"), "gate must use GROK_SESSION_ID, not Toastty env")
+        XCTAssertFalse(
+            script.contains("TOASTTY_SESSION_ID\" != \"$expected"),
+            "must not gate on TOASTTY_SESSION_ID (Grok does not preserve it for hooks)"
+        )
+        XCTAssertTrue(
+            script.contains("--session"),
+            "forwarder should pass baked --session to ingest"
+        )
+        XCTAssertTrue(
+            script.contains(sessionID),
+            "forwarder should bake Toastty managed session id into --session"
+        )
+        XCTAssertTrue(
+            script.contains("--panel"),
+            "forwarder should pass baked --panel so ingest ignores drifted TOASTTY_PANEL_ID"
+        )
+        XCTAssertTrue(
+            script.contains(panelID.uuidString),
+            "forwarder should embed launch panel id"
+        )
+        XCTAssertTrue(script.contains("grok-hooks"))
+
+        let sessionStartEntries = try XCTUnwrap(hooks["SessionStart"] as? [[String: Any]])
+        let firstEntry = try XCTUnwrap(sessionStartEntries.first)
+        let commandHooks = try XCTUnwrap(firstEntry["hooks"] as? [[String: Any]])
+        let command = try XCTUnwrap(commandHooks.first?["command"] as? String)
+        XCTAssertTrue(command.contains(scriptURL.path))
+        XCTAssertTrue(command.hasPrefix("/bin/sh ") || command == scriptURL.path)
+    }
+
+    func testGrokForwarderGatesOnGrokSessionIDNotToasttySessionID() throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-forward-gate-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let grokHome = rootURL.appendingPathComponent("grok-home", isDirectory: true)
+        try fileManager.createDirectory(at: grokHome, withIntermediateDirectories: true)
+
+        let markerURL = rootURL.appendingPathComponent("cli-invoked", isDirectory: false)
+        let fakeCLIURL = rootURL.appendingPathComponent("toastty-cli", isDirectory: false)
+        try Data(
+            """
+            #!/bin/sh
+            printf 'invoked\\n' > '\(markerURL.path)'
+            cat >/dev/null
+            exit 0
+
+            """.utf8
+        ).write(to: fakeCLIURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCLIURL.path)
+
+        let sessionID = "session-\(UUID().uuidString)"
+        let panelID = UUID()
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .grok,
+            argv: ["grok"],
+            cliExecutablePath: fakeCLIURL.path,
+            sessionID: sessionID,
+            panelID: panelID,
+            workingDirectory: nil,
+            fileManager: fileManager,
+            launchEnvironment: [
+                "GROK_HOME": grokHome.path,
+                ToasttyLaunchContextEnvironment.socketPathKey: "/tmp/test-grok-hooks.sock",
+            ]
+        )
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+                for url in artifacts.additionalCleanupURLs {
+                    try? fileManager.removeItem(at: url)
+                }
+            }
+        }
+
+        let scriptURL = try XCTUnwrap(
+            preparedLaunch.artifacts?.directoryURL.appendingPathComponent("grok-hook.sh")
+        )
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+        XCTAssertTrue(script.contains("--socket-path"), "socket path should be baked for stripped env")
+        let nativeSessionID = try XCTUnwrap(preparedLaunch.argv.last)
+
+        let payload = #"{"hook_event_name":"SessionStart","session_id":"\#(nativeSessionID)"}"#
+
+        // Real Grok hook env: GROK_SESSION_ID set, TOASTTY_SESSION_ID typically absent.
+        let missingGrokSession = try runScript(
+            at: scriptURL,
+            environment: [
+                "TOASTTY_SESSION_ID": sessionID,
+            ],
+            standardInput: Data(payload.utf8)
+        )
+        XCTAssertEqual(missingGrokSession.exitCode, 0)
+        XCTAssertFalse(fileManager.fileExists(atPath: markerURL.path))
+
+        let wrongGrokSession = try runScript(
+            at: scriptURL,
+            environment: [
+                "GROK_SESSION_ID": "00000000-0000-0000-0000-000000000000",
+                "TOASTTY_SESSION_ID": sessionID,
+            ],
+            standardInput: Data(payload.utf8)
+        )
+        XCTAssertEqual(wrongGrokSession.exitCode, 0)
+        XCTAssertFalse(fileManager.fileExists(atPath: markerURL.path))
+
+        // Concurrent session gate: wrong GROK_SESSION_ID must no-op even if
+        // Toastty env matches this forwarder's managed session.
+        try? fileManager.removeItem(at: markerURL)
+        let match = try runScript(
+            at: scriptURL,
+            environment: [
+                "GROK_SESSION_ID": nativeSessionID,
+                "TOASTTY_PANEL_ID": "ADEAD85B-FEDA-4FCD-AA96-DDF53C4ED3D4",
+            ],
+            standardInput: Data(payload.utf8)
+        )
+        XCTAssertEqual(match.exitCode, 0)
+        XCTAssertTrue(fileManager.fileExists(atPath: markerURL.path))
+    }
+
+    func testGrokResumeArgvReusesNativeSessionIDWithoutInjectingSessionId() throws {
+        let nativeID = "019fe3cc-5ab7-7080-9b4b-e327646242c7"
+        let resolved = AgentLaunchInstrumentation.resolvedGrokArgvWithNativeSessionID(
+            ["grok", "--resume", nativeID]
+        )
+        XCTAssertEqual(resolved.argv, ["grok", "--resume", nativeID])
+        XCTAssertEqual(resolved.nativeSessionID, nativeID)
+    }
+
     func testTomlBasicStringLiteralEscapesSpecialCharacters() {
         let literal = AgentLaunchInstrumentation.tomlBasicStringLiteralForTesting("line\n\t\"\\\u{7F}\u{0001}")
 

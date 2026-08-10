@@ -52,27 +52,35 @@ enum ManagedAgentResumeResolver {
         )
     }
 
-    /// Extracts the native session ID a launch argv resumes, if the argv is a
-    /// resume-shaped command (the inverse of `resumeArgv`). Lets observation
-    /// treat the launch's own session ID as the only acceptable capture.
+    /// Extracts the native session ID a launch argv resumes or pre-assigns.
+    /// For Grok this includes `--session-id` / `-s` (new) and `--resume` / `-r`.
+    /// Lets observation treat the launch's own session ID as the only acceptable capture.
     static func expectedNativeSessionID(agent: AgentKind, argv: [String]) -> String? {
-        let resumeToken: String
         switch agent {
         case .codex:
-            resumeToken = "resume"
+            guard let tokenIndex = argv.firstIndex(of: "resume"),
+                  argv.indices.contains(tokenIndex + 1) else {
+                return nil
+            }
+            let value = argv[tokenIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard UUID(uuidString: value) != nil else { return nil }
+            return value
+
         case .claude:
-            resumeToken = "--resume"
+            guard let tokenIndex = argv.firstIndex(of: "--resume"),
+                  argv.indices.contains(tokenIndex + 1) else {
+                return nil
+            }
+            let value = argv[tokenIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard UUID(uuidString: value) != nil else { return nil }
+            return value
+
+        case .grok:
+            return AgentLaunchInstrumentation.extractGrokNativeSessionID(from: argv)
+
         default:
             return nil
         }
-
-        guard let tokenIndex = argv.firstIndex(of: resumeToken),
-              argv.indices.contains(tokenIndex + 1) else {
-            return nil
-        }
-        let value = argv[tokenIndex + 1].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard UUID(uuidString: value) != nil else { return nil }
-        return value
     }
 
     static func resumeArgv(
@@ -83,7 +91,7 @@ enum ManagedAgentResumeResolver {
         switch record.agent {
         case .codex:
             resumeArguments = ["resume", record.nativeSessionID]
-        case .claude:
+        case .claude, .grok:
             resumeArguments = ["--resume", record.nativeSessionID]
         case .opencode, .mimocode:
             resumeArguments = ["--session", record.nativeSessionID]

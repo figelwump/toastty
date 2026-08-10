@@ -75,6 +75,37 @@ struct ManagedAgentResumeResolverTests {
     }
 
     @Test
+    func resolveReturnsGrokResumeLaunchForValidRestoredRecord() throws {
+        let fixture = try makeResumeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let record = ManagedAgentResumeRecord(
+            agent: .grok,
+            nativeSessionID: "db4f311b-12d0-4f61-ba81-0ae44ed10492",
+            sessionFilePath: fixture.sessionFileURL.path,
+            cwd: fixture.cwdURL.path,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let resolution = ManagedAgentResumeResolver.resolve(
+            panelID: UUID(),
+            terminalState: TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "",
+                resumeRecord: record
+            ),
+            launchReason: .restore
+        )
+
+        guard case .launch(let configuration) = resolution else {
+            Issue.record("expected resume launch configuration")
+            return
+        }
+        #expect(configuration.initialInput == "grok --resume db4f311b-12d0-4f61-ba81-0ae44ed10492")
+        #expect(configuration.workingDirectoryOverride == fixture.cwdURL.path)
+    }
+
+    @Test
     func resolveReturnsPiSessionLaunchForValidRestoredRecord() throws {
         let fixture = try makeResumeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
@@ -405,6 +436,18 @@ struct ManagedAgentResumeResolverTests {
             ManagedAgentResumeResolver.expectedNativeSessionID(
                 agent: .claude,
                 argv: ["claude", "--resume", sessionID]
+            ) == sessionID
+        )
+    }
+
+    @Test
+    func expectedNativeSessionIDParsesGrokResumeArgv() {
+        let sessionID = "db4f311b-12d0-4f61-ba81-0ae44ed10492"
+
+        #expect(
+            ManagedAgentResumeResolver.expectedNativeSessionID(
+                agent: .grok,
+                argv: ["grok", "--resume", sessionID]
             ) == sessionID
         )
     }

@@ -9,6 +9,7 @@ struct AgentKindTests {
         #expect(AgentKind.opencode.displayName == "OpenCode")
         #expect(AgentKind.mimocode.displayName == "MiMo Code")
         #expect(AgentKind.pi.displayName == "Pi")
+        #expect(AgentKind.grok.displayName == "Grok Build")
     }
 
     @Test
@@ -66,6 +67,12 @@ struct AgentKindTests {
                 argv: ["agent-safehouse", "mimocode"]
             ) == 1
         )
+        #expect(
+            ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .grok,
+                argv: ["agent-safehouse", "grok", "--always-approve"]
+            ) == 1
+        )
     }
 
     @Test
@@ -117,6 +124,18 @@ struct AgentKindTests {
                 commandName: "agent-safehouse",
                 argv: ["agent-safehouse", "--cwd", "/tmp/repo", "mimo"]
             ) == .mimocode
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "grok",
+                argv: ["grok"]
+            ) == .grok
+        )
+        #expect(
+            ManagedAgentCommandResolver.inferManagedAgent(
+                commandName: "agent-safehouse",
+                argv: ["agent-safehouse", "grok"]
+            ) == .grok
         )
         #expect(
             ManagedAgentCommandResolver.inferManagedAgent(
@@ -189,6 +208,12 @@ struct AgentKindTests {
                     manualCommandNames: ["safe-mimo"]
                 ),
                 AgentProfile(
+                    id: "grok",
+                    displayName: "Grok Build",
+                    argv: ["agent-safehouse", "grok", "--always-approve"],
+                    manualCommandNames: ["safe-grok"]
+                ),
+                AgentProfile(
                     id: "gemini",
                     displayName: "Gemini",
                     argv: ["sandbox-wrapper", "gemini"],
@@ -209,6 +234,8 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("mimocode"))
         #expect(shimCommandNames.contains("safe-open"))
         #expect(shimCommandNames.contains("safe-mimo"))
+        #expect(shimCommandNames.contains("grok"))
+        #expect(shimCommandNames.contains("safe-grok"))
         #expect(shimCommandNames.contains("agent-safehouse"))
         #expect(shimCommandNames.contains("sandbox-wrapper") == false)
     }
@@ -224,6 +251,7 @@ struct AgentKindTests {
         #expect(shimCommandNames.contains("mimo"))
         #expect(shimCommandNames.contains("mimocode"))
         #expect(shimCommandNames.contains("pi"))
+        #expect(shimCommandNames.contains("grok"))
     }
 
     @Test

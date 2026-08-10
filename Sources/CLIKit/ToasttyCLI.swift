@@ -665,7 +665,7 @@ public enum ToasttyCLI {
       toastty [--json] [--socket-path <path>] session scope set [--session <id>] --workspace <id> [--workspace <id> ...]
       toastty [--json] [--socket-path <path>] session scope add [--session <id>] --workspace <id> [--workspace <id> ...]
       toastty [--json] [--socket-path <path>] session scope clear [--session <id>]
-      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|opencode-plugin|mimocode-plugin|pi-extension [--session <id>] [--panel <id>]
+      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-hooks|codex-notify|grok-hooks|opencode-plugin|mimocode-plugin|pi-extension [--session <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
@@ -1079,7 +1079,7 @@ public enum ToasttyCLI {
 
             let sourceValue = try requireValue("--source", in: parsed)
             guard let source = AgentEventSource(rawValue: sourceValue) else {
-                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-hooks, codex-notify, opencode-plugin, mimocode-plugin, pi-extension")
+                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-hooks, codex-notify, grok-hooks, opencode-plugin, mimocode-plugin, pi-extension")
             }
 
             return .sessionIngestAgentEvent(
@@ -1756,6 +1756,20 @@ public enum ToasttyCLI {
 
         case .codexNotify:
             return "type=\(normalizedEventField(object["type"]) ?? "unknown")"
+
+        case .grokHooks:
+            var components = [
+                "hook_event_name=\(normalizedEventField(object["hookEventName"]) ?? normalizedEventField(object["hook_event_name"]) ?? "unknown")"
+            ]
+            if let notificationType = normalizedEventField(object["notificationType"])
+                ?? normalizedEventField(object["notification_type"]) {
+                components.append("notification_type=\(notificationType)")
+            }
+            if let toolName = normalizedEventField(object["toolName"])
+                ?? normalizedEventField(object["tool_name"]) {
+                components.append("tool_name=\(toolName)")
+            }
+            return components.joined(separator: " ")
 
         case .mimocodePlugin, .opencodePlugin:
             let event = (object["event"] as? [String: Any]) ?? object

@@ -129,8 +129,10 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # default-terminal-profile = "zmx"
 
             # enable-agent-command-shims controls whether Toastty prepends
-            # managed codex/claude wrappers into terminal PATH so manual
-            # invocations report session status automatically.
+            # managed agent wrappers into terminal PATH so manual built-in
+            # agent invocations (codex, cdx, claude, grok, opencode, mimo,
+            # mimocode, pi, and configured manualCommandNames) report
+            # session status automatically.
             # Set this to false if you do not want Toastty intercepting
             # those commands in Toastty terminals.
             # enable-agent-command-shims = false

@@ -215,7 +215,7 @@ struct AgentGetStartedSheet: View {
             sectionCard(
                 title: "Typed Commands",
                 body: """
-                Type codex, claude, pi, or supported wrapper executables directly in Toastty terminals. Shell integration keeps agent sessions visible on the sidebar and preserves terminal history across restarts.
+                Type codex, claude, grok, pi, or supported wrapper executables directly in Toastty terminals. Shell integration keeps agent sessions visible on the sidebar and preserves terminal history across restarts.
                 """
             ) {
                 Button("Set Up Typed Commands") {

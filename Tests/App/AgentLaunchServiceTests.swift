@@ -625,6 +625,55 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func launchUsesImplicitGrokProfileWhenCatalogIsEmpty() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(profiles: []),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let result = try service.launch(profileID: "grok", initialPrompt: "/work-on POP-1234")
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(result.agent == .grok)
+        #expect(result.displayName == "Grok Build")
+        #expect(command.contains("grok '/work-on POP-1234'"))
+    }
+
+    @Test
+    func launchAppendsTrailingInitialPromptForDirectGrokProfile() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: TestAgentCatalogProvider(
+                profiles: [AgentProfile(id: "grok", displayName: "Grok", argv: ["grok"])]
+            ),
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let result = try service.launch(profileID: "grok", initialPrompt: "hello world")
+        let command = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+
+        #expect(result.agent == .grok)
+        #expect(command.contains("grok 'hello world'"))
+    }
+
+    @Test
     func launchWithExplicitCWDAndEnvironmentRendersStructuredShellPrefix() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()

@@ -44,6 +44,115 @@ final class ManagedAgentLaunchPlannerTests: XCTestCase {
         )
     }
 
+    func testGrokHookJSONDeletesEvenWhenArtifactsDirectoryIsRetained() async throws {
+        let fileManager = FileManager.default
+        let grokHome = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-planner-cleanup-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: grokHome, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: grokHome) }
+
+        let fixture = try makePlannerFixture()
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .grok,
+                panelID: fixture.panelID,
+                argv: ["grok"],
+                cwd: "/tmp/repo",
+                environment: ["GROK_HOME": grokHome.path]
+            )
+        )
+        let artifactsDirectoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-launch-\(plan.sessionID)", isDirectory: true)
+        let hookURL = GrokManagedHookCleanup.hookFileURL(
+            grokHome: grokHome,
+            sessionID: plan.sessionID
+        )
+        defer {
+            try? fileManager.removeItem(at: artifactsDirectoryURL)
+            try? fileManager.removeItem(at: hookURL)
+        }
+
+        XCTAssertTrue(fileManager.fileExists(atPath: artifactsDirectoryURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: hookURL.path))
+
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: Date())
+        await waitUntil {
+            fileManager.fileExists(atPath: hookURL.path) == false
+        }
+
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: hookURL.path),
+            "Grok session-scoped hook JSON must be removed on session stop"
+        )
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: artifactsDirectoryURL.path),
+            "Grok launch artifacts directory should remain after session stop"
+        )
+    }
+
+    func testGrokLaunchArtifactsReapedAfterGracePeriod() async throws {
+        let fileManager = FileManager.default
+        let grokHome = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-planner-reap-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: grokHome, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: grokHome) }
+
+        final class ClockBox: @unchecked Sendable {
+            var now: Date
+            init(_ now: Date) { self.now = now }
+        }
+        let clock = Date(timeIntervalSince1970: 1_800_000_000)
+        let clockBox = ClockBox(clock)
+        let fixture = try makePlannerFixture(
+            nowProvider: { clockBox.now },
+            retainedLaunchArtifactGraceInterval: 0.05
+        )
+        let plan = try fixture.planner.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .grok,
+                panelID: fixture.panelID,
+                argv: ["grok"],
+                cwd: "/tmp/repo",
+                environment: ["GROK_HOME": grokHome.path]
+            )
+        )
+        let artifactsDirectoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-grok-launch-\(plan.sessionID)", isDirectory: true)
+
+        XCTAssertTrue(fileManager.fileExists(atPath: artifactsDirectoryURL.path))
+        fixture.sessionRuntimeStore.stopSession(sessionID: plan.sessionID, at: clockBox.now)
+        // Hook JSON is removed immediately; temp dir waits for grace.
+        await waitUntil {
+            fileManager.fileExists(
+                atPath: GrokManagedHookCleanup.hookFileURL(
+                    grokHome: grokHome,
+                    sessionID: plan.sessionID
+                ).path
+            ) == false
+        }
+        XCTAssertTrue(fileManager.fileExists(atPath: artifactsDirectoryURL.path))
+
+        clockBox.now = clock.addingTimeInterval(1)
+        // Trigger reaper via another registry observation.
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: UUID().uuidString,
+            agent: .codex,
+            panelID: fixture.panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/tmp",
+            repoRoot: nil,
+            at: clockBox.now
+        )
+        await waitUntil {
+            fileManager.fileExists(atPath: artifactsDirectoryURL.path) == false
+        }
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: artifactsDirectoryURL.path),
+            "Retained Grok launch artifacts must be reaped after the grace period"
+        )
+    }
+
     func testCodexArtifactsDeleteImmediatelyAfterSessionStops() async throws {
         let fixture = try makePlannerFixture()
         let plan = try fixture.planner.prepareManagedLaunch(
@@ -1840,7 +1949,8 @@ private func makePlannerFixture(
     codexResumeResolver: (any CodexManagedSessionResolving)? = nil,
     codexStatusTrackingSourceProvider: @escaping @MainActor () -> CodexStatusTrackingSource = {
         .sessionLogFallback(reason: "test")
-    }
+    },
+    retainedLaunchArtifactGraceInterval: TimeInterval = ManagedAgentLaunchPlanner.defaultRetainedLaunchArtifactGraceInterval
 ) throws -> (
     store: AppStore,
     planner: ManagedAgentLaunchPlanner,
@@ -1876,7 +1986,8 @@ private func makePlannerFixture(
         readVisibleText: { _ in nil },
         promptState: { _ in .unavailable },
         nativeSessionObserverRegistry: nativeSessionObserverRegistry,
-        codexResumeResolver: codexResumeResolver
+        codexResumeResolver: codexResumeResolver,
+        retainedLaunchArtifactGraceInterval: retainedLaunchArtifactGraceInterval
     )
 
     return (store, planner, sessionRuntimeStore, panelID, .default)
