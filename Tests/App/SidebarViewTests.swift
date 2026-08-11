@@ -6,6 +6,7 @@ import XCTest
 
 private final class SidebarLayoutWidthRecorder {
     var width: CGFloat = 0
+    var height: CGFloat = 0
 }
 
 private struct SidebarProposedWidthRecordingLayout: Layout {
@@ -22,6 +23,7 @@ private struct SidebarProposedWidthRecordingLayout: Layout {
             ProposedViewSize(width: proposedWidth, height: nil)
         )
         recorder.width = size.width
+        recorder.height = size.height
         return size
     }
 
@@ -707,8 +709,9 @@ final class SidebarViewTests: XCTestCase {
         var state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
         let workspaceID = try XCTUnwrap(state.workspacesByID.keys.first)
+        let longAnnotationText = String(repeating: "long-annotation-", count: 5)
         state.workspacesByID[workspaceID]?.annotations = [
-            "pr": WorkspaceAnnotation(text: "PR #4512", url: "https://example.com/pr/4512"),
+            "pr": WorkspaceAnnotation(text: longAnnotationText, url: "https://example.com/pr/4512"),
             "env": WorkspaceAnnotation(text: "staging", url: nil),
         ]
         let store = AppStore(state: state, persistTerminalFontPreference: false)
@@ -736,8 +739,11 @@ final class SidebarViewTests: XCTestCase {
         hostingView.layoutSubtreeIfNeeded()
 
         let renderedValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(renderedValues.contains(where: { $0.contains("PR #4512") }))
+        XCTAssertTrue(renderedValues.contains(where: { $0.contains(longAnnotationText) }))
         XCTAssertTrue(renderedValues.contains(where: { $0.contains("staging") }))
+        let tooltipValues = renderedTooltipValues(in: hostingView)
+        XCTAssertTrue(tooltipValues.contains(longAnnotationText))
+        XCTAssertTrue(tooltipValues.contains("staging"))
 
         // A color-only change publishes through the observed store and swaps
         // the effective chip colors every rendered chip resolves through.
@@ -784,14 +790,30 @@ final class SidebarViewTests: XCTestCase {
             isLink: false,
             proposedWidth: 100
         )
-        let rowWidth = measuredAnnotationChipsRowWidth(
-            texts: ["Bodega", "LIN-319", "PR-1931"],
+        let singleRowSize = measuredAnnotationChipsFlowSize(
+            texts: ["Bodega", "LIN-319", "PR-1931", "LIN-030"],
+            proposedWidth: 400
+        )
+        let wrappedSize = measuredAnnotationChipsFlowSize(
+            texts: ["Bodega", "LIN-319", "PR-1931", "LIN-030"],
             proposedWidth: 140
+        )
+        let cappedLongChipSize = measuredAnnotationChipsFlowSize(
+            texts: [String(repeating: "very-long-annotation-", count: 12)],
+            proposedWidth: 400
+        )
+        let zeroProposalSize = measuredAnnotationChipsFlowSize(
+            texts: ["Bodega", "LIN-319"],
+            proposedWidth: 0
         )
 
         XCTAssertEqual(shortWidth, 40, accuracy: 1)
         XCTAssertEqual(longWidth, 100, accuracy: 1)
-        XCTAssertLessThanOrEqual(rowWidth, 140)
+        XCTAssertLessThanOrEqual(wrappedSize.width, 140)
+        XCTAssertGreaterThan(wrappedSize.height, singleRowSize.height)
+        XCTAssertEqual(cappedLongChipSize.width, 160, accuracy: 1)
+        XCTAssertEqual(zeroProposalSize.width, 0, accuracy: 1)
+        XCTAssertEqual(zeroProposalSize.height, 0, accuracy: 1)
     }
 
     func testWorkspaceAccessibilityLabelIncludesTextOnlyChipsAndExcludesLinkChips() {
@@ -1516,10 +1538,10 @@ final class SidebarViewTests: XCTestCase {
         return recorder.width
     }
 
-    private func measuredAnnotationChipsRowWidth(
+    private func measuredAnnotationChipsFlowSize(
         texts: [String],
         proposedWidth: CGFloat
-    ) -> CGFloat {
+    ) -> CGSize {
         let recorder = SidebarLayoutWidthRecorder()
         let colors = ToastyTheme.AnnotationChipColors(
             foreground: .white,
@@ -1531,7 +1553,7 @@ final class SidebarViewTests: XCTestCase {
                 proposedWidth: proposedWidth,
                 recorder: recorder
             ) {
-                HStack(spacing: 4) {
+                SidebarWrappingFlowLayout(horizontalSpacing: 4, verticalSpacing: 4) {
                     ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
                         SidebarView.workspaceAnnotationChipLabel(
                             annotation: WorkspaceAnnotation(text: text),
@@ -1544,7 +1566,7 @@ final class SidebarViewTests: XCTestCase {
         )
         _ = hostingView.fittingSize
         hostingView.layoutSubtreeIfNeeded()
-        return recorder.width
+        return CGSize(width: recorder.width, height: recorder.height)
     }
 
     private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {

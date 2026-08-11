@@ -98,6 +98,142 @@ private struct SidebarCappedIntrinsicWidthLayout: Layout {
     }
 }
 
+struct SidebarWrappingFlowLayout: Layout {
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+
+    private struct Item {
+        let index: Int
+        let size: CGSize
+    }
+
+    private struct Row {
+        var items: [Item] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private struct Placement {
+        let index: Int
+        let origin: CGPoint
+        let size: CGSize
+    }
+
+    private struct ResolvedLayout {
+        let size: CGSize
+        let placements: [Placement]
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        resolve(availableWidth: proposal.width, subviews: subviews).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        let resolved = resolve(availableWidth: bounds.width, subviews: subviews)
+        for placement in resolved.placements {
+            subviews[placement.index].place(
+                at: CGPoint(
+                    x: bounds.minX + placement.origin.x,
+                    y: bounds.minY + placement.origin.y
+                ),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(
+                    width: placement.size.width,
+                    height: nil
+                )
+            )
+        }
+    }
+
+    private func resolve(
+        availableWidth rawAvailableWidth: CGFloat?,
+        subviews: Subviews
+    ) -> ResolvedLayout {
+        let availableWidth = rawAvailableWidth.flatMap { width in
+            width.isFinite ? max(0, width) : nil
+        }
+        if availableWidth == 0 {
+            return ResolvedLayout(size: .zero, placements: [])
+        }
+        let resolvedHorizontalSpacing = max(0, horizontalSpacing)
+        let resolvedVerticalSpacing = max(0, verticalSpacing)
+        var rows: [Row] = []
+        var currentRow = Row()
+
+        for (index, subview) in subviews.enumerated() {
+            let idealSize = subview.sizeThatFits(.unspecified)
+            let proposedItemWidth = availableWidth.map {
+                min(max(0, idealSize.width), $0)
+            }
+            let measuredSize = subview.sizeThatFits(
+                ProposedViewSize(width: proposedItemWidth, height: nil)
+            )
+            let itemSize = CGSize(
+                width: availableWidth.map { min(max(0, measuredSize.width), $0) }
+                    ?? max(0, measuredSize.width),
+                height: max(0, measuredSize.height)
+            )
+            let nextWidth = currentRow.items.isEmpty
+                ? itemSize.width
+                : currentRow.width + resolvedHorizontalSpacing + itemSize.width
+
+            if currentRow.items.isEmpty == false,
+               let availableWidth,
+               nextWidth > availableWidth {
+                rows.append(currentRow)
+                currentRow = Row()
+            }
+
+            let itemSpacing = currentRow.items.isEmpty ? 0 : resolvedHorizontalSpacing
+            currentRow.items.append(Item(index: index, size: itemSize))
+            currentRow.width += itemSpacing + itemSize.width
+            currentRow.height = max(currentRow.height, itemSize.height)
+        }
+
+        if currentRow.items.isEmpty == false {
+            rows.append(currentRow)
+        }
+
+        var placements: [Placement] = []
+        var nextY: CGFloat = 0
+        var maximumRowWidth: CGFloat = 0
+        for row in rows {
+            var nextX: CGFloat = 0
+            for item in row.items {
+                placements.append(
+                    Placement(
+                        index: item.index,
+                        origin: CGPoint(
+                            x: nextX,
+                            y: nextY + ((row.height - item.size.height) / 2)
+                        ),
+                        size: item.size
+                    )
+                )
+                nextX += item.size.width + resolvedHorizontalSpacing
+            }
+            maximumRowWidth = max(maximumRowWidth, row.width)
+            nextY += row.height + resolvedVerticalSpacing
+        }
+
+        let height = rows.isEmpty ? 0 : max(0, nextY - resolvedVerticalSpacing)
+        let width = availableWidth.map { min(maximumRowWidth, $0) } ?? maximumRowWidth
+        return ResolvedLayout(
+            size: CGSize(width: width, height: height),
+            placements: placements
+        )
+    }
+}
+
 @MainActor
 private final class SidebarScrollViewportHeightReporterView: NSView {
     var onHeightChange: (@MainActor (CGFloat) -> Void)?
@@ -782,20 +918,19 @@ struct SidebarView: View {
         }
     }
 
-    /// One clipped row of annotation chips in deterministic bytewise key
-    /// order. Chips with a URL are real buttons; text-only chips fold their
-    /// content into the workspace row's accessibility summary instead.
+    /// Intrinsic-width annotation chips in deterministic bytewise key order.
+    /// Whole chips wrap before they shrink; an individually overlong chip
+    /// truncates to the row width and exposes its full value in a tooltip.
     @ViewBuilder
     private func workspaceAnnotationChipsRow(workspace: WorkspaceState) -> some View {
         let sortedAnnotations = workspace.annotations.sorted { $0.key < $1.key }
         if sortedAnnotations.isEmpty == false {
-            HStack(spacing: 4) {
+            SidebarWrappingFlowLayout(horizontalSpacing: 4, verticalSpacing: 4) {
                 ForEach(sortedAnnotations, id: \.key) { key, annotation in
                     workspaceAnnotationChip(key: key, annotation: annotation)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .clipped()
             .padding(.horizontal, 10)
             .padding(.top, -6)
             .padding(.bottom, 10)
@@ -820,7 +955,12 @@ struct SidebarView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(key): \(annotation.text), link")
             .background {
-                SidebarSemanticTextBridge(text: "\(key): \(annotation.text)")
+                ZStack {
+                    SidebarTooltipBridge(text: annotation.text)
+                    SidebarSemanticTextBridge(text: "\(key): \(annotation.text)")
+                        .frame(width: 0, height: 0)
+                }
+                .allowsHitTesting(false)
             }
         } else {
             Self.workspaceAnnotationChipLabel(
@@ -828,6 +968,10 @@ struct SidebarView: View {
                 chipColors: chipColors,
                 isLink: false
             )
+                .background {
+                    SidebarTooltipBridge(text: annotation.text)
+                        .allowsHitTesting(false)
+                }
                 .accessibilityHidden(true)
         }
     }
