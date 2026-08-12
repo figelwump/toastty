@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 SCRIPT_PATH="scripts/remote/test.sh"
+LIVE_GATEWAY_ENV_HELPER="$ROOT_DIR/scripts/remote/live-gateway-test-environment.sh"
+
+# shellcheck source=live-gateway-test-environment.sh
+source "$LIVE_GATEWAY_ENV_HELPER"
 
 REMOTE_EXEC=0
 TEST_PLATFORM="macos"
@@ -10,6 +14,10 @@ RUN_LABEL="${RUN_LABEL:-test-$(date +%Y%m%d-%H%M%S)}"
 VALIDATION_SCOPE="working-tree"
 REF_SPEC=""
 KEEP_REMOTE=0
+LIVE_GATEWAY=0
+ALLOW_DESTRUCTIVE_LIVE_REVOCATION=0
+LIVE_GATEWAY_URL_VALUE=""
+LIVE_GATEWAY_CREDENTIAL_VALUE=""
 SETUP_ERROR_EXIT_CODE=78
 DEFAULT_REMOTE_TEST_TIMEOUT_SECONDS=3600
 DEFAULT_XCODEBUILD_ARGS_SENTINEL="__toastty_default_xcodebuild_args__"
@@ -40,6 +48,8 @@ Options:
   --ref <git-ref>                       Git ref to export when --scope ref is used
   --run-label <label>                   Stable label used for local and remote artifacts
   --keep-remote                         Keep the remote worktree and run directory after completion
+  --live-gateway                        Forward the manifest-scoped live URL and credential over SSH stdin
+  --allow-destructive-live-revocation   Revoke the forwarded credential; requires --live-gateway
   --remote-exec                         Internal mode used on the remote host
 
 Optional environment:
@@ -81,6 +91,9 @@ Required local environment:
 Optional local environment:
   TOASTTY_REMOTE_GUI_REPO_ROOT          Absolute Toastty repo path on the remote host
   TOASTTY_REMOTE_GUI_ROOT               Remote directory that will hold disposable worktrees and test runs
+  TOASTTY_MOBILE_LIVE_GATEWAY_URL       Canonical HTTPS *.ts.net gateway URL used only with --live-gateway
+  TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL
+                                        43-character native credential used only with --live-gateway
 EOF
 }
 
@@ -193,7 +206,31 @@ write_request_env() {
     printf 'remote_repo_root=%q\n' "$REMOTE_REPO_ROOT"
     printf 'remote_gui_root=%q\n' "$REMOTE_GUI_ROOT"
     printf 'xcodebuild_command=%q\n' "$xcodebuild_command"
+    printf 'live_gateway=%q\n' "$([[ "$LIVE_GATEWAY" == "1" ]] && printf enabled || printf disabled)"
+    printf 'destructive_live_revocation=%q\n' "$([[ "$ALLOW_DESTRUCTIVE_LIVE_REVOCATION" == "1" ]] && printf enabled || printf disabled)"
   } >"$path"
+}
+
+configure_live_gateway_environment() {
+  if [[ "$ALLOW_DESTRUCTIVE_LIVE_REVOCATION" == "1" && "$LIVE_GATEWAY" != "1" ]]; then
+    fail "--allow-destructive-live-revocation requires --live-gateway"
+  fi
+  if [[ "$LIVE_GATEWAY" != "1" ]]; then
+    return 0
+  fi
+
+  # Do this before the inputs are read. It also protects callers that invoke
+  # the wrapper with tracing enabled from recording credentials in local logs.
+  set +xv
+  unset BASH_XTRACEFD 2>/dev/null || true
+
+  LIVE_GATEWAY_URL_VALUE="${TOASTTY_MOBILE_LIVE_GATEWAY_URL:-}"
+  LIVE_GATEWAY_CREDENTIAL_VALUE="${TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL:-}"
+  unset TOASTTY_MOBILE_LIVE_GATEWAY_URL TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL
+  if ! toastty_live_gateway_url_is_valid "$LIVE_GATEWAY_URL_VALUE" \
+    || ! toastty_live_gateway_credential_is_valid "$LIVE_GATEWAY_CREDENTIAL_VALUE"; then
+    fail "--live-gateway requires canonical URL and credential inputs"
+  fi
 }
 
 write_result_json() {
@@ -375,18 +412,32 @@ wait_for_remote_completion() {
   local remote_stderr="$LOCAL_ARTIFACTS_DIR/remote-stderr.log"
   local ssh_exit_code=0
 
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
-      "$RUN_LABEL" \
-      "$remote_run_root" \
-      "$remote_worktree_dir" \
-      "$SCRIPT_PATH" \
-      "$xcodebuild_args_b64" \
-      "$remote_timeout_seconds" \
-      "$allow_remote_x86_64_tests" \
-      "$TEST_PLATFORM" \
-      > >(tee "$remote_stdout") \
-      2> >(tee "$remote_stderr" >&2) <<'EOF'; then
+  emit_remote_test_script() {
+    cat <<'EOF'
+set +xv
+unset BASH_XTRACEFD 2>/dev/null || true
 set -euo pipefail
+unset TOASTTY_MOBILE_LIVE_GATEWAY_URL
+unset TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL
+unset TOASTTY_MOBILE_LIVE_ALLOW_DESTRUCTIVE_REVOCATION
+unset TOASTTY_MOBILE_LIVE_FORWARDING_PROBE
+unset TEST_RUNNER_TOASTTY_MOBILE_LIVE_GATEWAY_URL
+unset TEST_RUNNER_TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL
+unset TEST_RUNNER_TOASTTY_MOBILE_LIVE_ALLOW_DESTRUCTIVE_REVOCATION
+unset TEST_RUNNER_TOASTTY_MOBILE_LIVE_FORWARDING_PROBE
+unset TEST_RUNNER_TOASTTY_MOBILE_LIVE_BROKER_PORT
+unset TEST_RUNNER_TOASTTY_MOBILE_LIVE_BROKER_TOKEN
+live_gateway_url=""
+live_gateway_credential=""
+live_gateway_allow_destructive="false"
+EOF
+    if [[ "$LIVE_GATEWAY" == "1" ]]; then
+      toastty_emit_live_gateway_remote_setup \
+        "$LIVE_GATEWAY_URL_VALUE" \
+        "$LIVE_GATEWAY_CREDENTIAL_VALUE" \
+        "$ALLOW_DESTRUCTIVE_LIVE_REVOCATION"
+    fi
+    cat <<'EOF'
 run_label="$1"
 remote_run_root="$2"
 remote_worktree_dir="$3"
@@ -402,9 +453,105 @@ export TOASTTY_REMOTE_TEST_XCODEBUILD_ARGS_B64="$xcodebuild_args_b64"
 export TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS="$remote_timeout_seconds"
 export TOASTTY_ALLOW_REMOTE_X86_64_TESTS="$allow_remote_x86_64_tests"
 export TOASTTY_REMOTE_TEST_PLATFORM="$test_platform"
+
+live_gateway_broker_pid=""
+live_gateway_broker_root=""
+live_gateway_broker_state=""
+cleanup_live_gateway_broker() {
+  local cleanup_status=$?
+  if [[ -n "${live_gateway_broker_pid:-}" ]]; then
+    kill -TERM "$live_gateway_broker_pid" >/dev/null 2>&1 || true
+    for ((cleanup_attempt = 0; cleanup_attempt < 20; cleanup_attempt += 1)); do
+      kill -0 "$live_gateway_broker_pid" >/dev/null 2>&1 || break
+      sleep 0.05
+    done
+    kill -KILL "$live_gateway_broker_pid" >/dev/null 2>&1 || true
+    wait "$live_gateway_broker_pid" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${live_gateway_broker_root:-}" ]]; then
+    rm -f \
+      "$live_gateway_broker_root/state.json" \
+      "$live_gateway_broker_root"/state.json.tmp-* \
+      "$live_gateway_broker_root/stdout.log" \
+      "$live_gateway_broker_root/stderr.log"
+    rmdir "$live_gateway_broker_root" >/dev/null 2>&1 || true
+  fi
+  return "$cleanup_status"
+}
+trap cleanup_live_gateway_broker EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [[ -n "$live_gateway_url" || -n "$live_gateway_credential" ]]; then
+  if ! command -v node >/dev/null 2>&1; then
+    printf 'error: live gateway broker requires node\n' >&2
+    exit 78
+  fi
+  live_gateway_broker_root="$(mktemp -d "$remote_run_root.live-gateway-broker.XXXXXX")"
+  live_gateway_broker_state="$live_gateway_broker_root/state.json"
+  printf '%s\n%s\n%s\n' \
+      "$live_gateway_url" \
+      "$live_gateway_credential" \
+      "$live_gateway_allow_destructive" \
+    | node "$remote_worktree_dir/scripts/remote/live-gateway-test-broker.mjs" \
+        --state-file "$live_gateway_broker_state" \
+        >"$live_gateway_broker_root/stdout.log" \
+        2>"$live_gateway_broker_root/stderr.log" &
+  live_gateway_broker_pid=$!
+  unset live_gateway_url live_gateway_credential live_gateway_allow_destructive
+
+  for ((attempt = 0; attempt < 100; attempt += 1)); do
+    if [[ -s "$live_gateway_broker_state" ]]; then
+      break
+    fi
+    if ! kill -0 "$live_gateway_broker_pid" >/dev/null 2>&1; then
+      wait "$live_gateway_broker_pid" >/dev/null 2>&1 || true
+      printf 'error: live gateway broker did not start\n' >&2
+      exit 78
+    fi
+    sleep 0.05
+  done
+  if [[ ! -s "$live_gateway_broker_state" ]]; then
+    printf 'error: live gateway broker readiness timed out\n' >&2
+    exit 78
+  fi
+
+  broker_metadata="$(node -e '
+    const fs = require("node:fs");
+    const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (!Number.isInteger(state.port) || state.port < 1 || state.port > 65535
+        || typeof state.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(state.token)) {
+      process.exit(1);
+    }
+    process.stdout.write(`${state.port} ${state.token}`);
+  ' "$live_gateway_broker_state")" || {
+    printf 'error: live gateway broker produced invalid state\n' >&2
+    exit 78
+  }
+  read -r broker_port broker_token <<<"$broker_metadata"
+  unset broker_metadata
+  export TEST_RUNNER_TOASTTY_MOBILE_LIVE_BROKER_PORT="$broker_port"
+  export TEST_RUNNER_TOASTTY_MOBILE_LIVE_BROKER_TOKEN="$broker_token"
+fi
+
 cd "$remote_worktree_dir"
 /bin/bash "$script_path" --remote-exec
 EOF
+  }
+
+  if ssh -T -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
+      "$RUN_LABEL" \
+      "$remote_run_root" \
+      "$remote_worktree_dir" \
+      "$SCRIPT_PATH" \
+      "$xcodebuild_args_b64" \
+      "$remote_timeout_seconds" \
+      "$allow_remote_x86_64_tests" \
+      "$TEST_PLATFORM" \
+      > >(tee "$remote_stdout") \
+      2> >(tee "$remote_stderr" >&2) \
+      < <(emit_remote_test_script); then
     :
   else
     ssh_exit_code=$?
@@ -417,6 +564,8 @@ run_local_mode() {
   require_command git
   require_command ssh
   require_command rsync
+
+  configure_live_gateway_environment
 
   if [[ "${#XCODEBUILD_ARGS[@]}" != "0" ]]; then
     assert_supported_xcodebuild_args "${XCODEBUILD_ARGS[@]}"
@@ -841,6 +990,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --keep-remote)
       KEEP_REMOTE=1
+      shift
+      ;;
+    --live-gateway)
+      LIVE_GATEWAY=1
+      shift
+      ;;
+    --allow-destructive-live-revocation)
+      ALLOW_DESTRUCTIVE_LIVE_REVOCATION=1
       shift
       ;;
     --remote-exec)

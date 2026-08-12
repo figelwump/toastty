@@ -4,9 +4,19 @@ import RemoteProtocol
 import XCTest
 
 final class LiveGatewayIntegrationTests: XCTestCase {
+    func testRemoteLiveEnvironmentForwardingAdmission() async throws {
+        guard ProcessInfo.processInfo.environment["TOASTTY_MOBILE_LIVE_FORWARDING_PROBE"] == "1" else {
+            throw XCTSkip("The remote live-environment forwarding probe was not requested.")
+        }
+
+        // Configuration validation is intentionally the assertion. Its errors
+        // are categorical and never include the URL, hostname, or credential.
+        _ = try await Self.liveConfiguration()
+    }
+
     func testLiveGatewayContractPagingCloseAndReconnect() async throws {
-        let configuration = try Self.liveConfiguration()
-        if Self.destructiveRevocationIsEnabled {
+        let configuration = try await Self.liveConfiguration()
+        if configuration.allowDestructiveRevocation {
             throw XCTSkip("The destructive live test runs the contract checks before revoking the credential.")
         }
 
@@ -14,12 +24,12 @@ final class LiveGatewayIntegrationTests: XCTestCase {
     }
 
     func testDestructiveRevocationClosesSocketAndRejectsCurrentDevice() async throws {
-        guard Self.destructiveRevocationIsEnabled else {
+        let configuration = try await Self.liveConfiguration()
+        guard configuration.allowDestructiveRevocation else {
             throw XCTSkip(
                 "Set TOASTTY_MOBILE_LIVE_ALLOW_DESTRUCTIVE_REVOCATION=true to run this credential-revoking test."
             )
         }
-        let configuration = try Self.liveConfiguration()
         let evidence = try await Self.exerciseLiveContract(configuration)
         let credentialProvider = configuration.credentialProvider
         let streamClient = EventStreamClient(
@@ -221,15 +231,31 @@ final class LiveGatewayIntegrationTests: XCTestCase {
         throw LiveGatewayTestError.missingSessionList
     }
 
-    private static func liveConfiguration() throws -> LiveGatewayConfiguration {
+    private static func liveConfiguration() async throws -> LiveGatewayConfiguration {
         let environment = ProcessInfo.processInfo.environment
-        guard let rawGatewayURL = environment["TOASTTY_MOBILE_LIVE_GATEWAY_URL"],
-              rawGatewayURL.isEmpty == false else {
-            throw XCTSkip("Set TOASTTY_MOBILE_LIVE_GATEWAY_URL to run the live gateway suite.")
-        }
-        guard let credential = environment["TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL"],
-              credential.isEmpty == false else {
-            throw XCTSkip("Set TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL to run the live gateway suite.")
+        let rawGatewayURL: String
+        let credential: String
+        let allowDestructiveRevocation: Bool
+        let hasBrokerConfiguration = environment["TOASTTY_MOBILE_LIVE_BROKER_PORT"] != nil
+            || environment["TOASTTY_MOBILE_LIVE_BROKER_TOKEN"] != nil
+        let hasEnvironmentConfiguration = environment["TOASTTY_MOBILE_LIVE_GATEWAY_URL"] != nil
+            || environment["TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL"] != nil
+        if hasBrokerConfiguration {
+            let brokerConfiguration = try await brokerConfiguration(environment: environment)
+            rawGatewayURL = brokerConfiguration.gatewayURL
+            credential = brokerConfiguration.credential
+            allowDestructiveRevocation = brokerConfiguration.allowDestructiveRevocation
+        } else if let environmentGatewayURL = environment["TOASTTY_MOBILE_LIVE_GATEWAY_URL"],
+                  environmentGatewayURL.isEmpty == false,
+                  let environmentCredential = environment["TOASTTY_MOBILE_LIVE_GATEWAY_CREDENTIAL"],
+                  environmentCredential.isEmpty == false {
+            rawGatewayURL = environmentGatewayURL
+            credential = environmentCredential
+            allowDestructiveRevocation = Self.environmentAllowsDestructiveRevocation(environment)
+        } else if hasEnvironmentConfiguration {
+            throw LiveGatewayTestError.invalidLiveConfiguration
+        } else {
+            throw XCTSkip("Set the live gateway inputs to run the live gateway suite.")
         }
 
         let gatewayURL: URL
@@ -242,11 +268,66 @@ final class LiveGatewayIntegrationTests: XCTestCase {
               PairingInputParser.isValidCredentialMaterial(credential) else {
             throw LiveGatewayTestError.invalidLiveConfiguration
         }
-        return LiveGatewayConfiguration(gatewayURL: gatewayURL, credential: credential)
+        return LiveGatewayConfiguration(
+            gatewayURL: gatewayURL,
+            credential: credential,
+            allowDestructiveRevocation: allowDestructiveRevocation
+        )
     }
 
-    private static var destructiveRevocationIsEnabled: Bool {
-        ProcessInfo.processInfo.environment["TOASTTY_MOBILE_LIVE_ALLOW_DESTRUCTIVE_REVOCATION"]?
+    private static func brokerConfiguration(
+        environment: [String: String]
+    ) async throws -> LiveGatewayBrokerConfiguration {
+        guard let rawPort = environment["TOASTTY_MOBILE_LIVE_BROKER_PORT"],
+              let port = UInt16(rawPort), port > 0,
+              let token = environment["TOASTTY_MOBILE_LIVE_BROKER_TOKEN"],
+              token.utf8.count == 43,
+              token.unicodeScalars.allSatisfy({ scalar in
+                  switch scalar.value {
+                  case 45, 48...57, 65...90, 95, 97...122: true
+                  default: false
+                  }
+              }),
+              let brokerURL = URL(string: "http://127.0.0.1:\(port)/v1/config") else {
+            throw LiveGatewayTestError.invalidLiveConfiguration
+        }
+
+        let request: URLRequest = {
+            var value = URLRequest(url: brokerURL)
+            value.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            value.timeoutInterval = 5
+            value.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            return value
+        }()
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.timeoutIntervalForRequest = 5
+        configuration.timeoutIntervalForResource = 5
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+
+        do {
+            let (data, response) = try await withTimeout(.seconds(5)) {
+                try await session.data(for: request)
+            }
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  data.count <= 512 else {
+                throw LiveGatewayTestError.invalidLiveConfiguration
+            }
+            return try JSONDecoder().decode(LiveGatewayBrokerConfiguration.self, from: data)
+        } catch {
+            throw LiveGatewayTestError.invalidLiveConfiguration
+        }
+    }
+
+    private static func environmentAllowsDestructiveRevocation(
+        _ environment: [String: String]
+    ) -> Bool {
+        environment["TOASTTY_MOBILE_LIVE_ALLOW_DESTRUCTIVE_REVOCATION"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == "true"
     }
@@ -317,15 +398,23 @@ private actor LiveGatewaySocketProbe {
 private struct LiveGatewayConfiguration: Sendable {
     let gatewayURL: URL
     private let credential: String
+    let allowDestructiveRevocation: Bool
 
-    init(gatewayURL: URL, credential: String) {
+    init(gatewayURL: URL, credential: String, allowDestructiveRevocation: Bool) {
         self.gatewayURL = gatewayURL
         self.credential = credential
+        self.allowDestructiveRevocation = allowDestructiveRevocation
     }
 
     var credentialProvider: StaticGatewayCredentialProvider {
         StaticGatewayCredentialProvider(.bearer(token: credential))
     }
+}
+
+private struct LiveGatewayBrokerConfiguration: Decodable, Sendable {
+    let gatewayURL: String
+    let credential: String
+    let allowDestructiveRevocation: Bool
 }
 
 private struct LiveGatewayEvidence: Sendable {
