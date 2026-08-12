@@ -39,6 +39,45 @@ enum AnnotationColorToken: Equatable, Hashable, Sendable {
             return value
         }
     }
+
+    /// Fixed sRGB base used to render and compare tokens. Equality here is
+    /// visual, so a named token and its exact hex spelling are equivalent.
+    var baseHexValue: UInt32 {
+        switch self {
+        case .named(let named):
+            switch named {
+            case .neutral:
+                return 0xB7AEA5
+            case .green:
+                return 0x5BA08A
+            case .amber:
+                return 0xE8A635
+            case .red:
+                return 0xE55C5C
+            case .violet:
+                return 0xA78BFA
+            case .blue:
+                return 0x7AA2F7
+            }
+        case .hex(let value):
+            return UInt32(value.dropFirst(), radix: 16) ?? 0xB7AEA5
+        }
+    }
+
+    func isVisuallyEquivalent(to other: AnnotationColorToken) -> Bool {
+        baseHexValue == other.baseHexValue
+    }
+}
+
+enum AnnotationStyleStoreError: LocalizedError {
+    case automaticColorSpaceExhausted
+
+    var errorDescription: String? {
+        switch self {
+        case .automaticColorSpaceExhausted:
+            return "automatic annotation color space is exhausted"
+        }
+    }
 }
 
 /// Global per-key annotation colors, shared across workspaces and layout
@@ -48,6 +87,7 @@ enum AnnotationColorToken: Equatable, Hashable, Sendable {
 @MainActor
 final class AnnotationStyleStore: ObservableObject {
     static let fileName = "annotation-styles.json"
+    private nonisolated static let automaticColorCombinationCount = 221 * 17 * 11
 
     @Published private(set) var colorTokensByKey: [String: AnnotationColorToken] = [:]
 
@@ -69,24 +109,59 @@ final class AnnotationStyleStore: ObservableObject {
         colorTokensByKey[key] ?? Self.fallbackColorToken(forKey: key)
     }
 
-    /// Stable automatic color for keys without an explicit style. FNV-1a over
-    /// UTF-8 bytes, never Swift `hashValue`, feeds a broad green-through-
-    /// magenta HSL range. Red and Toastty amber stay reserved for explicit
-    /// status-like annotations, while the larger color space makes unrelated
-    /// keys very unlikely to render identically.
+    /// Stable first automatic candidate for a key. Claims are materialized in
+    /// the style file; allocation probes the same safe color space when this
+    /// candidate is already owned by another key.
     nonisolated static func fallbackColorToken(forKey key: String) -> AnnotationColorToken {
+        automaticColorCandidate(forKey: key, probe: 0)
+    }
+
+    /// Allocates a deterministic automatic color that is visually distinct
+    /// from every recorded claim. Explicit callers may intentionally reuse a
+    /// semantic color; this uniqueness rule applies only to automatic claims.
+    nonisolated static func automaticColorToken(
+        forKey key: String,
+        avoiding claimedBaseHexValues: Set<UInt32>
+    ) throws -> AnnotationColorToken {
+        let candidateCount = 1 + automaticColorCombinationCount
+        for probe in 0..<candidateCount {
+            let candidate = automaticColorCandidate(forKey: key, probe: probe)
+            if claimedBaseHexValues.contains(candidate.baseHexValue) == false {
+                return candidate
+            }
+        }
+        throw AnnotationStyleStoreError.automaticColorSpaceExhausted
+    }
+
+    private nonisolated static func automaticColorCandidate(
+        forKey key: String,
+        probe: Int
+    ) -> AnnotationColorToken {
         var hash: UInt64 = 0xcbf29ce484222325
         for byte in key.utf8 {
             hash ^= UInt64(byte)
             hash &*= 0x100000001b3
         }
 
-        // Hue 0 is red and Toastty's amber is around 39 degrees. Starting at
-        // 80 and stopping at 300 keeps both reserved regions out of automatic
-        // assignment without collapsing back to a small collision-prone list.
-        let hue = 80 + Double(hash % 221)
-        let saturation = 0.52 + (Double((hash >> 8) % 17) / 100)
-        let lightness = 0.58 + (Double((hash >> 16) % 11) / 100)
+        let hue: Double
+        let saturation: Double
+        let lightness: Double
+        if probe == 0 {
+            hue = 80 + Double(hash % 221)
+            saturation = 0.52 + (Double((hash >> 8) % 17) / 100)
+            lightness = 0.58 + (Double((hash >> 16) % 11) / 100)
+        } else {
+            // Exhaustively rotate through the bounded green-through-magenta
+            // HSL space after trying the historical per-key fallback first.
+            var index = (
+                Int(hash % UInt64(automaticColorCombinationCount)) + probe - 1
+            ) % automaticColorCombinationCount
+            hue = 80 + Double(index % 221)
+            index /= 221
+            saturation = 0.52 + (Double(index % 17) / 100)
+            index /= 17
+            lightness = 0.58 + (Double(index % 11) / 100)
+        }
         return .hex(hslHex(hue: hue, saturation: saturation, lightness: lightness))
     }
 
@@ -134,6 +209,32 @@ final class AnnotationStyleStore: ObservableObject {
         guard colorTokensByKey[key] != token else { return false }
         var candidateTokens = colorTokensByKey
         candidateTokens[key] = token
+        try persist(candidateTokens)
+        colorTokensByKey = candidateTokens
+        return true
+    }
+
+    /// Atomically records automatic claims for legacy/restored annotations
+    /// that predate first-use materialization. Existing entries are preserved;
+    /// new keys are allocated in bytewise order for repeatable migration.
+    @discardableResult
+    func materializeMissingClaims(forKeys keys: Set<String>) throws -> Bool {
+        let missingKeys = keys
+            .filter { colorTokensByKey[$0] == nil }
+            .sorted()
+        guard missingKeys.isEmpty == false else { return false }
+
+        var candidateTokens = colorTokensByKey
+        var claimedBaseHexValues = Set(candidateTokens.values.map(\.baseHexValue))
+        for key in missingKeys {
+            let token = try Self.automaticColorToken(
+                forKey: key,
+                avoiding: claimedBaseHexValues
+            )
+            candidateTokens[key] = token
+            claimedBaseHexValues.insert(token.baseHexValue)
+        }
+
         try persist(candidateTokens)
         colorTokensByKey = candidateTokens
         return true

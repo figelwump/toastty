@@ -140,10 +140,10 @@ enum AgentHookTemplateFile {
             #
             # Example: show a status chip under the workspace name. Use a
             # stable semantic key (key=agent) so later events update the same
-            # chip and preserve its global color.
+            # chip and preserve its first-use global color.
             # "$TOASTTY_CLI_PATH" action run workspace.set-annotation \\
             #     --workspace "$TOASTTY_WORKSPACE_ID" \\
-            #     key=agent text="$TOASTTY_AGENT working" color=blue
+            #     key=agent text="$TOASTTY_AGENT working"
             ;;
         turn-complete)
             # The session became ready/actionable after working,
@@ -153,7 +153,7 @@ enum AgentHookTemplateFile {
             # Example: flip the chip to done.
             # "$TOASTTY_CLI_PATH" action run workspace.set-annotation \\
             #     --workspace "$TOASTTY_WORKSPACE_ID" \\
-            #     key=agent text="$TOASTTY_AGENT done" color=green
+            #     key=agent text="$TOASTTY_AGENT done"
             #
             # Example: desktop notification.
             # osascript -e "display notification \\"$TOASTTY_AGENT finished\\" with title \\"Toastty\\""
@@ -162,13 +162,13 @@ enum AgentHookTemplateFile {
             # The session is waiting on user approval.
             # "$TOASTTY_CLI_PATH" action run workspace.set-annotation \\
             #     --workspace "$TOASTTY_WORKSPACE_ID" \\
-            #     key=agent text="$TOASTTY_AGENT waiting on you" color=amber
+            #     key=agent text="$TOASTTY_AGENT waiting on you"
             ;;
         session-error)
             # The session's accepted status became error.
             # "$TOASTTY_CLI_PATH" action run workspace.set-annotation \\
             #     --workspace "$TOASTTY_WORKSPACE_ID" \\
-            #     key=agent text="$TOASTTY_AGENT error" color=red
+            #     key=agent text="$TOASTTY_AGENT error"
             ;;
         session-stop)
             # The session ended (fired exactly once, from any teardown path).

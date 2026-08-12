@@ -16,6 +16,7 @@ final class AppControlExecutor {
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
     private let annotationStyleStore: AnnotationStyleStore?
+    private let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
     private let reloadConfigurationAction: (@MainActor () -> Void)?
     private let scratchpadDocumentStore: ScratchpadDocumentStore
     private var currentRequestContext: AutomationRequestContext?
@@ -28,6 +29,7 @@ final class AppControlExecutor {
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
         annotationStyleStore: AnnotationStyleStore? = nil,
+        inactiveAnnotationUsageCountsProvider: @escaping @MainActor () throws -> [String: Int] = { [:] },
         reloadConfigurationAction: (@MainActor () -> Void)?,
         scratchpadDocumentStore: ScratchpadDocumentStore? = nil
     ) {
@@ -38,6 +40,7 @@ final class AppControlExecutor {
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
         self.annotationStyleStore = annotationStyleStore
+        self.inactiveAnnotationUsageCountsProvider = inactiveAnnotationUsageCountsProvider
         self.reloadConfigurationAction = reloadConfigurationAction
         self.scratchpadDocumentStore = scratchpadDocumentStore ?? webPanelRuntimeRegistry.scratchpadDocumentStore
     }
@@ -1999,13 +2002,10 @@ private extension AppControlExecutor {
         return .object(result)
     }
 
-    /// Validates the whole set-annotation request before mutating either
-    /// store, then applies the optional global style first and the workspace
-    /// mutation second. The two persistence domains are intentionally not
-    /// transactional: a style-write failure aborts with an error before the
-    /// annotation mutates, while a later asynchronous workspace-layout
-    /// persistence failure leaves an inert style entry behind and relies on
-    /// existing layout-persistence error reporting.
+    /// Validates the whole request, claims or verifies the key's global color,
+    /// then mutates the workspace. A live key's claim cannot be replaced; a
+    /// key becomes replaceable only after its usage reaches zero across the
+    /// live state and inactive persisted layout profiles.
     private func runSetWorkspaceAnnotation(
         args: [String: AutomationJSONValue]
     ) throws -> AppControlActionOutcome {
@@ -2053,20 +2053,71 @@ private extension AppControlExecutor {
             )
         }
 
-        // Apply/persist the validated style before the reducer mutation so a
-        // failed style write never leaves a half-applied request.
-        var didChangeStyle = false
-        if let colorToken {
-            guard let annotationStyleStore else {
-                throw AutomationSocketError.invalidPayload("annotation styles are unavailable in this app instance")
+        guard let annotationStyleStore else {
+            throw AutomationSocketError.invalidPayload("annotation styles are unavailable in this app instance")
+        }
+
+        let existingToken = annotationStyleStore.colorTokensByKey[key]
+        let resolvedToken: AnnotationColorToken
+        if let existingToken {
+            if let colorToken,
+               colorToken.isVisuallyEquivalent(to: existingToken) == false {
+                let liveUsageCount = liveAnnotationUsageCount(forKey: key, in: store.state)
+                guard liveUsageCount == 0 else {
+                    throw AutomationSocketError.annotationColorLocked(
+                        key: key,
+                        currentColor: existingToken.storageValue
+                    )
+                }
+                let inactiveUsageCount: Int
+                do {
+                    inactiveUsageCount = try inactiveAnnotationUsageCountsProvider()[key, default: 0]
+                } catch {
+                    throw AutomationSocketError.annotationUsageUnavailable
+                }
+                guard inactiveUsageCount == 0 else {
+                    throw AutomationSocketError.annotationColorLocked(
+                        key: key,
+                        currentColor: existingToken.storageValue
+                    )
+                }
+                resolvedToken = colorToken
+            } else {
+                resolvedToken = existingToken
             }
+        } else if let colorToken {
+            // A missing claim can follow a legacy upgrade or failed startup
+            // migration. Adopt the first explicit color instead of rejecting
+            // against a fabricated, unpersisted automatic token.
+            resolvedToken = colorToken
+        } else {
             do {
-                didChangeStyle = try annotationStyleStore.setColor(colorToken, forKey: key)
+                resolvedToken = try AnnotationStyleStore.automaticColorToken(
+                    forKey: key,
+                    avoiding: Set(annotationStyleStore.colorTokensByKey.values.map(\.baseHexValue))
+                )
             } catch {
                 throw AutomationSocketError.invalidPayload(
-                    "failed to persist annotation style: \(error.localizedDescription)"
+                    "failed to allocate annotation color: \(error.localizedDescription)"
                 )
             }
+        }
+
+        // Persist before the reducer mutation so every successful first use
+        // has a durable claim and a failed style write cannot create an
+        // annotation whose color may change on restart.
+        let didChangeStyle: Bool
+        do {
+            if let existingToken,
+               existingToken.isVisuallyEquivalent(to: resolvedToken) {
+                didChangeStyle = false
+            } else {
+                didChangeStyle = try annotationStyleStore.setColor(resolvedToken, forKey: key)
+            }
+        } catch {
+            throw AutomationSocketError.invalidPayload(
+                "failed to persist annotation style: \(error.localizedDescription)"
+            )
         }
 
         let didChangeAnnotation = store.send(
@@ -2079,6 +2130,14 @@ private extension AppControlExecutor {
                 "key": .string(key),
             ]
         )
+    }
+
+    private func liveAnnotationUsageCount(forKey key: String, in state: AppState) -> Int {
+        state.workspacesByID.values.reduce(into: 0) { count, workspace in
+            if workspace.annotations[key] != nil {
+                count += 1
+            }
+        }
     }
 
     func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {

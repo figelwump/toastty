@@ -313,20 +313,28 @@ was supplied or verified; do not guess one from the label. Validation rules:
   a URL render as clickable links routed through Toastty's URL-opening
   preferences.
 - `color` is optional: one of `neutral`, `green`, `amber`, `red`, `violet`,
-  `blue`, or `#RRGGBB`. Color belongs to the key globally — the same key shows
-  the same color across all workspaces and layout profiles — and omitting
-  `color` keeps the current global style. Keys without an explicit color get a
-  stable per-key automatic `#RRGGBB` color that avoids reserved error red and
-  Toastty amber. Clearing an annotation does not clear its global color; a
-  later annotation with the same key reuses it.
-- Existing keys without an explicit color may receive a new automatic color
-  after upgrading from the earlier six-color fallback. Explicit global colors
-  remain unchanged.
+  `blue`, or `#RRGGBB`. The first annotation for a key claims its global color
+  across all workspaces and layout profiles. Omitting `color` records a stable
+  automatic `#RRGGBB` claim; automatic claims avoid every color already
+  recorded for another key as well as reserved error red and Toastty amber.
+- While at least one annotation with that key exists, later calls may omit
+  `color` or repeat the claimed color, but cannot replace it. A conflict fails
+  with `ANNOTATION_COLOR_LOCKED` and leaves both the annotation and style
+  unchanged. Explicitly requested colors may intentionally duplicate semantic
+  colors used by other keys.
+- If Toastty cannot read inactive layout profiles while checking an unlocked
+  replacement, the call fails closed with `ANNOTATION_USAGE_UNAVAILABLE` and
+  changes nothing.
+- Clearing the last annotation unlocks the claim. A later colorless annotation
+  reuses it; a later first-use call with an explicit color replaces it. Saved
+  annotations in inactive layout profiles count as existing uses.
+- Existing keys without a recorded claim are assigned and persisted once during
+  startup migration. Automatic colors may therefore change once when upgrading
+  from the earlier unrecorded fallback behavior. Existing explicit colors stay
+  unchanged.
 - A workspace holds at most 12 annotations. Updating an existing key remains
   allowed at the limit.
-- Setting an identical annotation again reports `didMutateState=false`; a
-  changed `color` alone still counts as a mutation and restyles every visible
-  chip with that key.
+- Setting an identical annotation again reports `didMutateState=false`.
 
 Prefer `action list --json` to discover the current canonical IDs. Common actions include:
 

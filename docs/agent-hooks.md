@@ -147,8 +147,8 @@ overlapping invocations for the same session. Example: keep a status chip
 under the workspace name in sync with the latest session state using
 workspace annotations, and rename the workspace on approval waits. Use a stable
 semantic annotation key such as `agent` here so later calls update the same
-chip and preserve its global color; do not derive the key from the current
-display text.
+chip and preserve its first-use global color; do not derive the key from the
+current display text or try to repaint it as status changes.
 
 ```bash
 #!/bin/bash
@@ -162,15 +162,13 @@ turn-complete)
     "$TOASTTY_CLI_PATH" action run workspace.set-annotation \
         --workspace "$TOASTTY_WORKSPACE_ID" \
         key=agent \
-        text="$TOASTTY_AGENT done" \
-        color=green
+        text="$TOASTTY_AGENT done"
     ;;
 needs-approval)
     "$TOASTTY_CLI_PATH" action run workspace.set-annotation \
         --workspace "$TOASTTY_WORKSPACE_ID" \
         key=agent \
-        text="$TOASTTY_AGENT waiting on you" \
-        color=amber
+        text="$TOASTTY_AGENT waiting on you"
     "$TOASTTY_CLI_PATH" action run workspace.rename \
         --workspace "$TOASTTY_WORKSPACE_ID" \
         title="Waiting on approval"

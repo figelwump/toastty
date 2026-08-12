@@ -58,6 +58,30 @@ public struct WorkspaceLayoutPersistenceStore: Sendable {
         return nil
     }
 
+    /// Counts persisted workspace annotations outside the profiles represented
+    /// by the caller's live AppState. Excluding those profiles prevents their
+    /// debounced on-disk snapshots from overriding newer in-memory mutations.
+    public func annotationUsageCounts(
+        excludingProfileIDs: Set<String>
+    ) throws -> [String: Int] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [:] }
+
+        let data = try Data(contentsOf: fileURL)
+        let document = try JSONDecoder().decode(
+            WorkspaceLayoutPersistenceDocument.self,
+            from: data
+        )
+
+        return document.profiles.reduce(into: [String: Int]()) { counts, entry in
+            guard excludingProfileIDs.contains(entry.key) == false else { return }
+            for workspace in entry.value.layout.workspacesByID.values {
+                for key in workspace.annotations.keys {
+                    counts[key, default: 0] += 1
+                }
+            }
+        }
+    }
+
     @discardableResult
     public func persistLayout(
         _ layout: WorkspaceLayoutSnapshot,

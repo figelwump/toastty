@@ -869,7 +869,37 @@ struct ToasttyApp: App {
         }
         let sessionRuntimeStore = SessionRuntimeStore(agentHookDispatcher: agentHookDispatcher)
         sessionRuntimeStore.bind(store: store)
+        let inactiveAnnotationUsageCountsProvider: @MainActor () throws -> [String: Int]
+        if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
+            // Layout profile selection is fixed for this app process, so the
+            // bootstrap identities remain the live-state exclusions for every
+            // later usage scan.
+            let representedProfileIDs = bootstrap.layoutProfileIDsRepresentedByState
+            inactiveAnnotationUsageCountsProvider = {
+                try WorkspaceLayoutPersistenceStore(fileURL: layoutPersistenceContext.fileURL)
+                    .annotationUsageCounts(excludingProfileIDs: representedProfileIDs)
+            }
+        } else {
+            inactiveAnnotationUsageCountsProvider = { [:] }
+        }
         let annotationStyleStore = AnnotationStyleStore(runtimePaths: runtimePaths)
+        var restoredAnnotationKeys = Set(
+            store.state.workspacesByID.values.flatMap { $0.annotations.keys }
+        )
+        do {
+            restoredAnnotationKeys.formUnion(
+                try inactiveAnnotationUsageCountsProvider()
+                    .filter { $0.value > 0 }
+                    .map(\.key)
+            )
+            try annotationStyleStore.materializeMissingClaims(forKeys: restoredAnnotationKeys)
+        } catch {
+            ToasttyLog.warning(
+                "Failed to materialize restored annotation color claims",
+                category: .state,
+                metadata: ["error": error.localizedDescription]
+            )
+        }
         terminalRuntimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
         terminalRuntimeRegistry.setTerminalProfileProvider(
             terminalProfileStore,
@@ -1191,6 +1221,7 @@ struct ToasttyApp: App {
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
                 annotationStyleStore: annotationStyleStore,
+                inactiveAnnotationUsageCountsProvider: inactiveAnnotationUsageCountsProvider,
                 reloadConfigurationAction: {
                     Self.reloadConfiguration(
                         store: store,

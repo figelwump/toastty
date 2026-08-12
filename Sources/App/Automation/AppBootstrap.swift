@@ -8,6 +8,7 @@ struct AppBootstrapResult {
     let automationLifecycle: AutomationLifecycle?
     let disableAnimations: Bool
     let layoutPersistenceContext: WorkspaceLayoutPersistenceContext?
+    let layoutProfileIDsRepresentedByState: Set<String>
 }
 
 enum AppBootstrap {
@@ -31,10 +32,15 @@ enum AppBootstrap {
             let layoutPersistenceContext = WorkspaceLayoutPersistenceContext.resolve(processInfo: processInfo)
             var state: AppState
             let restoredTerminalPanelIDs: Set<UUID>
+            let layoutProfileIDsRepresentedByState: Set<String>
             if let restored = layoutPersistenceContext.loadState() {
                 state = restored.state
                 state.defaultTerminalProfileID = AppState.normalizedTerminalProfileID(defaultTerminalProfileID)
                 restoredTerminalPanelIDs = state.allTerminalPanelIDs
+                layoutProfileIDsRepresentedByState = [
+                    layoutPersistenceContext.profileID,
+                    restored.resolvedProfileID,
+                ]
                 let restoredStateLayout = WorkspaceLayoutSnapshot(state: state)
                 ToasttyLog.info(
                     "Restored workspace layout state",
@@ -64,6 +70,7 @@ enum AppBootstrap {
             } else {
                 state = .bootstrap(defaultTerminalProfileID: defaultTerminalProfileID)
                 restoredTerminalPanelIDs = []
+                layoutProfileIDsRepresentedByState = [layoutPersistenceContext.profileID]
                 ToasttyLog.info(
                     "Launching without persisted layout state",
                     category: .bootstrap,
@@ -79,7 +86,8 @@ enum AppBootstrap {
                 automationConfig: nil,
                 automationLifecycle: nil,
                 disableAnimations: false,
-                layoutPersistenceContext: layoutPersistenceContext
+                layoutPersistenceContext: layoutPersistenceContext,
+                layoutProfileIDsRepresentedByState: layoutProfileIDsRepresentedByState
             )
         }
 
@@ -129,7 +137,8 @@ enum AppBootstrap {
             disableAnimations: automationConfig.disableAnimations,
             // Automation runs must be deterministic and fixture-driven, so we
             // intentionally bypass user layout persistence in this mode.
-            layoutPersistenceContext: nil
+            layoutPersistenceContext: nil,
+            layoutProfileIDsRepresentedByState: []
         )
     }
 

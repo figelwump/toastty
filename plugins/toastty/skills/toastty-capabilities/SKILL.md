@@ -83,7 +83,9 @@ Common workflow families:
 The caller chooses the annotation `key`; Toastty does not derive it from the
 displayed `text`. Use a stable semantic identity for the kind of annotation,
 not its current value. The same exact key updates one chip within a workspace
-and shares its color across workspaces. Examples:
+and shares one claimed color across workspaces. The first use records either
+the supplied color or an automatic color. While any annotation with that key
+exists, omit color or repeat the claim; attempting to replace it fails. Examples:
 
 - Linear issue: `key=linear`, `text=LIN-030`, and
   `url=<verified canonical Linear issue URL>` when available.

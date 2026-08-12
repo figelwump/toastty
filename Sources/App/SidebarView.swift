@@ -362,8 +362,8 @@ struct SidebarView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
-    // Observed so a color-only global style change immediately restyles every
-    // visible chip with that key.
+    // Observed so first-use claims, unlocked replacements, and legacy
+    // materialization immediately restyle every visible chip with that key.
     @ObservedObject var annotationStyleStore: AnnotationStyleStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     /// Test seam for asserting scroll requests without depending on AppKit's

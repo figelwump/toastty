@@ -277,26 +277,7 @@ enum ToastyTheme {
     /// foreground for the dark sidebar instead of assuming the raw color is
     /// legible as text.
     static func annotationChipColors(for token: AnnotationColorToken) -> AnnotationChipColors {
-        let baseHex: UInt32
-        switch token {
-        case .named(let named):
-            switch named {
-            case .neutral:
-                baseHex = 0xB7AEA5
-            case .green:
-                baseHex = 0x5BA08A
-            case .amber:
-                baseHex = 0xE8A635
-            case .red:
-                baseHex = 0xE55C5C
-            case .violet:
-                baseHex = 0xA78BFA
-            case .blue:
-                baseHex = 0x7AA2F7
-            }
-        case .hex(let value):
-            baseHex = Self.parsedAnnotationHex(value) ?? 0xB7AEA5
-        }
+        let baseHex = token.baseHexValue
 
         let foregroundHex = readableAnnotationForegroundHex(baseHex)
         return AnnotationChipColors(
@@ -304,11 +285,6 @@ enum ToastyTheme {
             background: Color(hex: baseHex, alpha: 0.14),
             border: Color(hex: foregroundHex, alpha: 0.42)
         )
-    }
-
-    private static func parsedAnnotationHex(_ value: String) -> UInt32? {
-        guard value.hasPrefix("#"), value.count == 7 else { return nil }
-        return UInt32(value.dropFirst(), radix: 16)
     }
 
     /// Blends dark hues toward white until chip text stays readable on the

@@ -3,6 +3,10 @@ import Foundation
 import Testing
 @testable import ToasttyApp
 
+private enum WorkspaceAnnotationFixtureError: Error {
+    case inactiveUsageUnavailable
+}
+
 @MainActor
 private final class WorkspaceAnnotationAppControlFixture {
     let store: AppStore
@@ -11,7 +15,11 @@ private final class WorkspaceAnnotationAppControlFixture {
     let workspaceID: UUID
     private let runtimeHomeURL: URL
 
-    init(brokenStyleStore: Bool = false) throws {
+    init(
+        brokenStyleStore: Bool = false,
+        inactiveAnnotationUsageCounts: [String: Int] = [:],
+        inactiveAnnotationUsageUnavailable: Bool = false
+    ) throws {
         store = AppStore(persistTerminalFontPreference: false)
         let selection = try #require(store.state.selectedWorkspaceSelection())
         workspaceID = selection.workspaceID
@@ -54,6 +62,12 @@ private final class WorkspaceAnnotationAppControlFixture {
                 socketPathProvider: { "/tmp/toastty-annotation-test.sock" }
             ),
             annotationStyleStore: annotationStyleStore,
+            inactiveAnnotationUsageCountsProvider: {
+                if inactiveAnnotationUsageUnavailable {
+                    throw WorkspaceAnnotationFixtureError.inactiveUsageUnavailable
+                }
+                return inactiveAnnotationUsageCounts
+            },
             reloadConfigurationAction: nil
         )
     }
@@ -70,10 +84,11 @@ private final class WorkspaceAnnotationAppControlFixture {
         key: String,
         text: String,
         url: String? = nil,
-        color: String? = nil
+        color: String? = nil,
+        workspaceID targetWorkspaceID: UUID? = nil
     ) throws -> AppControlActionOutcome {
         var args: [String: AutomationJSONValue] = [
-            "workspaceID": .string(workspaceID.uuidString),
+            "workspaceID": .string((targetWorkspaceID ?? workspaceID).uuidString),
             "key": .string(key),
             "text": .string(text),
         ]
@@ -84,6 +99,15 @@ private final class WorkspaceAnnotationAppControlFixture {
             args["color"] = .string(color)
         }
         return try executor.runAction(id: "workspace.set-annotation", args: args)
+    }
+
+    func createWorkspace() throws -> UUID {
+        let windowID = try #require(store.state.windows.first?.id)
+        let existingWorkspaceIDs = Set(store.state.workspacesByID.keys)
+        #expect(store.send(.createWorkspace(windowID: windowID, title: nil, activate: false)))
+        return try #require(store.state.workspacesByID.keys.first(where: {
+            existingWorkspaceIDs.contains($0) == false
+        }))
     }
 
     func runClearAnnotation(key: String) throws -> AppControlActionOutcome {
@@ -135,6 +159,7 @@ struct WorkspaceAnnotationAppControlTests {
             text: "PR #4512",
             url: "https://example.com/pr/4512"
         ))
+        #expect(fixture.annotationStyleStore.colorTokensByKey["pr"] != nil)
     }
 
     @Test
@@ -222,16 +247,139 @@ struct WorkspaceAnnotationAppControlTests {
     }
 
     @Test
-    func colorOnlyChangeMutatesGlobalStyleEvenWhenAnnotationIsUnchanged() throws {
+    func liveAnnotationRejectsAConflictingColorWithoutMutatingEitherStore() throws {
         let fixture = try WorkspaceAnnotationAppControlFixture()
         defer { fixture.cleanup() }
         _ = try fixture.runSetAnnotation(key: "pr", text: "PR #1", color: "green")
 
-        let outcome = try fixture.runSetAnnotation(key: "pr", text: "PR #1", color: "#123456")
+        do {
+            _ = try fixture.runSetAnnotation(key: "pr", text: "PR #2", color: "blue")
+            Issue.record("expected a conflicting live color to be rejected")
+        } catch let error as AutomationSocketError {
+            #expect(error.errorBody.code == "ANNOTATION_COLOR_LOCKED")
+            #expect(error.errorBody.message.contains("green"))
+        }
+
+        #expect(fixture.annotationStyleStore.effectiveColorToken(forKey: "pr") == .named(.green))
+        #expect(fixture.annotations()["pr"]?.text == "PR #1")
+    }
+
+    @Test
+    func thirdWorkspaceCannotRecolorTwoExistingGitBranchAnnotations() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+        let secondWorkspaceID = try fixture.createWorkspace()
+        let thirdWorkspaceID = try fixture.createWorkspace()
+
+        _ = try fixture.runSetAnnotation(
+            key: "git-branch",
+            text: "first",
+            color: "green"
+        )
+        _ = try fixture.runSetAnnotation(
+            key: "git-branch",
+            text: "second",
+            workspaceID: secondWorkspaceID
+        )
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.runSetAnnotation(
+                key: "git-branch",
+                text: "third",
+                color: "blue",
+                workspaceID: thirdWorkspaceID
+            )
+        }
+
+        #expect(fixture.annotationStyleStore.colorTokensByKey["git-branch"] == .named(.green))
+        #expect(fixture.store.state.workspacesByID[fixture.workspaceID]?.annotations["git-branch"]?.text == "first")
+        #expect(fixture.store.state.workspacesByID[secondWorkspaceID]?.annotations["git-branch"]?.text == "second")
+        #expect(fixture.store.state.workspacesByID[thirdWorkspaceID]?.annotations["git-branch"] == nil)
+    }
+
+    @Test
+    func liveAnnotationAcceptsMatchingVisualColorWithoutRewritingClaim() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+        _ = try fixture.runSetAnnotation(key: "pr", text: "PR #1", color: "blue")
+
+        let outcome = try fixture.runSetAnnotation(
+            key: "pr",
+            text: "PR #2",
+            color: "#7AA2F7"
+        )
 
         #expect(outcome.didMutateState)
-        #expect(fixture.annotationStyleStore.effectiveColorToken(forKey: "pr") == .hex("#123456"))
-        #expect(fixture.annotations()["pr"]?.text == "PR #1")
+        #expect(fixture.annotationStyleStore.colorTokensByKey["pr"] == .named(.blue))
+        #expect(fixture.annotations()["pr"]?.text == "PR #2")
+    }
+
+    @Test
+    func finalClearUnlocksClaimForExplicitReplacement() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+        _ = try fixture.runSetAnnotation(key: "pr", text: "PR #1", color: "green")
+        _ = try fixture.runClearAnnotation(key: "pr")
+
+        let outcome = try fixture.runSetAnnotation(key: "pr", text: "PR #2", color: "blue")
+
+        #expect(outcome.didMutateState)
+        #expect(fixture.annotationStyleStore.colorTokensByKey["pr"] == .named(.blue))
+    }
+
+    @Test
+    func inactiveProfileUsageKeepsClaimLockedAfterLocalClear() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture(
+            inactiveAnnotationUsageCounts: ["pr": 1]
+        )
+        defer { fixture.cleanup() }
+        _ = try fixture.runSetAnnotation(key: "pr", text: "PR #1")
+        let claimedColor = try #require(fixture.annotationStyleStore.colorTokensByKey["pr"])
+        _ = try fixture.runClearAnnotation(key: "pr")
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.runSetAnnotation(key: "pr", text: "PR #2", color: "red")
+        }
+        #expect(fixture.annotations().isEmpty)
+        #expect(fixture.annotationStyleStore.colorTokensByKey["pr"] == claimedColor)
+    }
+
+    @Test
+    func unreadableInactiveProfilesFailClosedWithoutChangingUnlockedClaim() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture(
+            inactiveAnnotationUsageUnavailable: true
+        )
+        defer { fixture.cleanup() }
+        _ = try fixture.runSetAnnotation(key: "pr", text: "PR #1", color: "green")
+        _ = try fixture.runClearAnnotation(key: "pr")
+
+        do {
+            _ = try fixture.runSetAnnotation(key: "pr", text: "PR #2", color: "blue")
+            Issue.record("expected unavailable inactive usage to reject replacement")
+        } catch let error as AutomationSocketError {
+            #expect(error.errorBody.code == "ANNOTATION_USAGE_UNAVAILABLE")
+        }
+
+        #expect(fixture.annotations().isEmpty)
+        #expect(fixture.annotationStyleStore.colorTokensByKey["pr"] == .named(.green))
+    }
+
+    @Test
+    func legacyAnnotationWithoutRecordedClaimAdoptsFirstExplicitColor() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+        #expect(fixture.store.send(.setWorkspaceAnnotation(
+            workspaceID: fixture.workspaceID,
+            key: "pr",
+            annotation: WorkspaceAnnotation(text: "legacy")
+        )))
+        #expect(fixture.annotationStyleStore.colorTokensByKey["pr"] == nil)
+
+        let outcome = try fixture.runSetAnnotation(key: "pr", text: "updated", color: "blue")
+
+        #expect(outcome.didMutateState)
+        #expect(fixture.annotationStyleStore.colorTokensByKey["pr"] == .named(.blue))
+        #expect(fixture.annotations()["pr"]?.text == "updated")
     }
 
     @Test
@@ -245,8 +393,12 @@ struct WorkspaceAnnotationAppControlTests {
         #expect(fixture.annotations().isEmpty)
         #expect(fixture.annotationStyleStore.colorTokensByKey.isEmpty)
 
-        // Without a color the same request needs no style write and succeeds.
-        #expect(try fixture.runSetAnnotation(key: "pr", text: "PR #1").didMutateState)
+        // Automatic first-use claims are also durable, so an unwritable style
+        // store rejects colorless requests before adding an annotation.
+        #expect(throws: (any Error).self) {
+            try fixture.runSetAnnotation(key: "pr", text: "PR #1")
+        }
+        #expect(fixture.annotations().isEmpty)
     }
 
     @Test

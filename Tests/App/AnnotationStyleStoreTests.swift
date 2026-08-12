@@ -75,6 +75,24 @@ struct AnnotationStyleStoreTests {
         }
     }
 
+    @Test
+    func automaticAllocationProbesPastAnOwnedFallbackColor() throws {
+        let fallback = AnnotationStyleStore.fallbackColorToken(forKey: "git-branch")
+
+        let allocated = try AnnotationStyleStore.automaticColorToken(
+            forKey: "git-branch",
+            avoiding: [fallback.baseHexValue]
+        )
+
+        #expect(allocated.baseHexValue != fallback.baseHexValue)
+    }
+
+    @Test
+    func namedAndEquivalentHexTokensCompareAsTheSameVisualColor() {
+        #expect(AnnotationColorToken.named(.blue).isVisuallyEquivalent(to: .hex("#7AA2F7")))
+        #expect(AnnotationColorToken.named(.blue).isVisuallyEquivalent(to: .named(.green)) == false)
+    }
+
     // MARK: - Persistence
 
     @Test
@@ -89,6 +107,26 @@ struct AnnotationStyleStoreTests {
         let reloaded = AnnotationStyleStore(runtimePaths: paths)
         #expect(reloaded.effectiveColorToken(forKey: "pr") == .named(.green))
         #expect(reloaded.effectiveColorToken(forKey: "env") == .hex("#A1B2C3"))
+    }
+
+    @Test
+    func materializesMissingClaimsAtomicallyInDeterministicUniqueColors() throws {
+        let (paths, homeURL) = Self.makeRuntimePaths()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let store = AnnotationStyleStore(runtimePaths: paths)
+        #expect(try store.setColor(.named(.blue), forKey: "existing"))
+
+        #expect(try store.materializeMissingClaims(forKeys: ["git-branch", "github-pr"]))
+
+        let gitBranch = try #require(store.colorTokensByKey["git-branch"])
+        let githubPR = try #require(store.colorTokensByKey["github-pr"])
+        #expect(gitBranch.baseHexValue != githubPR.baseHexValue)
+        #expect(gitBranch.baseHexValue != AnnotationColorToken.named(.blue).baseHexValue)
+        #expect(githubPR.baseHexValue != AnnotationColorToken.named(.blue).baseHexValue)
+        #expect(try store.materializeMissingClaims(forKeys: ["git-branch"]) == false)
+
+        let reloaded = AnnotationStyleStore(runtimePaths: paths)
+        #expect(reloaded.colorTokensByKey == store.colorTokensByKey)
     }
 
     @Test

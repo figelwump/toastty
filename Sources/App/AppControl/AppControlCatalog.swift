@@ -467,7 +467,7 @@ private extension AppControlParameterDescriptor {
     static func annotationKey(required: Bool) -> Self {
         .init(
             name: "key",
-            summary: "Stable semantic identity such as linear, github-pr, github-issue, or git-branch. The same key updates one workspace chip and shares its color across workspaces. Uses 1-32 ASCII letters, digits, '.', '_', or '-'; lowercased on write.",
+            summary: "Stable semantic identity such as linear, github-pr, github-issue, or git-branch. The same key updates one workspace chip and keeps one claimed color across workspaces. Uses 1-32 ASCII letters, digits, '.', '_', or '-'; lowercased on write.",
             valueType: .string,
             required: required
         )
@@ -494,7 +494,7 @@ private extension AppControlParameterDescriptor {
     static func annotationColor(required: Bool) -> Self {
         .init(
             name: "color",
-            summary: "Global color for this key across all workspaces. Omit to keep the current style.",
+            summary: "First-use global color for this key. Locked while any annotation with the key exists; omit for an automatic claim.",
             valueType: .string,
             required: required,
             allowedValues: AnnotationColorToken.NamedColor.allCases.map(\.rawValue) + ["#RRGGBB"]

@@ -30,9 +30,11 @@ Toastty is designed to run locally on your machine. The app itself does not send
     scoped session after app restart.
 - `~/.toastty/annotation-styles.json`
   - The global annotation color map: one named or `#RRGGBB` color token per
-    annotation key, shared across workspaces and layout profiles. Contains only
-    keys and color tokens, never chip text or URLs. Runtime-isolated instances
-    keep their own copy inside the runtime home.
+    annotation key, shared across workspaces and layout profiles. First use
+    records automatic as well as explicit colors so a live key cannot be
+    recolored by another annotation call. Contains only keys and color tokens,
+    never chip text or URLs. Runtime-isolated instances keep their own copy
+    inside the runtime home.
 - `~/.toastty/recent-right-panel-items.json`
   - The locally persisted Recently Opened list for right-panel browsers, local
     document paths, and Scratchpad document IDs/titles. The list contains up to
