@@ -3,6 +3,7 @@ import ToasttyMobileDomain
 
 struct ToasttyConversationSheet: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @FocusState private var isComposerFocused: Bool
 
     let conversationID: UUID
     let controller: HomeScreenController
@@ -49,7 +50,9 @@ struct ToasttyConversationSheet: View {
                         loadOlder: loadOlder,
                         dismissSendReceipt: dismissSendReceipt
                     )
-                    composerBar(conversation)
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        composerBar(conversation)
+                    }
                 }
             } else {
                 ContentUnavailableView(
@@ -80,13 +83,15 @@ struct ToasttyConversationSheet: View {
                     Text(conversation.title)
                         .font(.headline)
                         .foregroundStyle(ToasttyDesignTokens.primaryText)
+                        .accessibilityAddTraits(.isHeader)
                         .accessibilityIdentifier("toastty-mobile-conversation-title")
-                    HStack(spacing: 6) {
-                        Text(conversation.workspaceTitle)
-                        Text("·")
-                        Text(conversation.agent.displayName)
-                        Text("·")
-                        ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) {
+                            conversationMetadata(conversation)
+                        }
+                        VStack(alignment: .leading, spacing: 3) {
+                            conversationMetadata(conversation)
+                        }
                     }
                     .font(.caption2.monospaced())
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
@@ -95,9 +100,13 @@ struct ToasttyConversationSheet: View {
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
                         .font(.caption.weight(.bold))
-                        .frame(width: 30, height: 30)
+                        .frame(width: 48, height: 48)
                         .background(ToasttyDesignTokens.border, in: Circle())
                 }
+                .buttonStyle(.plain)
+                .frame(minWidth: 48, minHeight: 48)
+                .fixedSize(horizontal: true, vertical: true)
+                .contentShape(Rectangle())
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
                 .accessibilityLabel("Close conversation")
                 .accessibilityIdentifier("toastty-mobile-conversation-close")
@@ -108,19 +117,23 @@ struct ToasttyConversationSheet: View {
         .overlay(alignment: .bottom) { Divider().overlay(ToasttyDesignTokens.divider) }
     }
 
+    @ViewBuilder
+    private func conversationMetadata(_ conversation: MobileConversation) -> some View {
+        Text(conversation.workspaceTitle)
+        Text("·")
+        Text(conversation.agent.displayName)
+        Text("·")
+        ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
+    }
+
     private func composerBar(_ conversation: MobileConversation) -> some View {
         let presentation = composer ?? lockedComposerFallback(conversation)
         return VStack(alignment: .leading, spacing: 8) {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 8) {
-                    composerField(presentation)
-                    sendButton(presentation, expands: true)
-                }
-            } else {
-                HStack(alignment: .bottom, spacing: 8) {
-                    composerField(presentation)
-                    sendButton(presentation, expands: false)
-                }
+            HStack(alignment: .bottom, spacing: 8) {
+                composerField(presentation)
+                    .frame(maxWidth: .infinity)
+                sendButton(presentation)
+                    .fixedSize(horizontal: true, vertical: true)
             }
 
             if case .disabled(let reason) = presentation.gate {
@@ -128,19 +141,24 @@ struct ToasttyConversationSheet: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(composerStatusColor(reason))
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .combine)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Composer locked. \(reason.message)")
+                    .accessibilityAddTraits(.updatesFrequently)
                     .accessibilityIdentifier("toastty-mobile-composer-status")
             } else if let feedback = presentation.inlineFeedback {
                 Label(feedback, systemImage: "exclamationmark.circle")
                     .font(.caption.monospaced())
                     .foregroundStyle(ToasttyDesignTokens.amberText)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .combine)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Composer notice. \(feedback)")
+                    .accessibilityAddTraits(.updatesFrequently)
                     .accessibilityIdentifier("toastty-mobile-composer-status")
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
+        .padding(.bottom, composerKeyboardClearance)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(ToasttyDesignTokens.elevatedSurface)
         .overlay(alignment: .top) { Divider().overlay(ToasttyDesignTokens.divider) }
@@ -150,6 +168,7 @@ struct ToasttyConversationSheet: View {
         _ presentation: ToasttyComposerPresentation
     ) -> some View {
         TextField(presentation.placeholder, text: $draft, axis: .vertical)
+            .focused($isComposerFocused)
             .lineLimit(1...5)
             .textInputAutocapitalization(.sentences)
             .font(.body)
@@ -173,22 +192,18 @@ struct ToasttyConversationSheet: View {
             .accessibilityIdentifier("toastty-mobile-composer-input")
     }
 
-    private func sendButton(
-        _ presentation: ToasttyComposerPresentation,
-        expands: Bool
-    ) -> some View {
+    private var composerKeyboardClearance: CGFloat {
+        isComposerFocused && dynamicTypeSize.isAccessibilitySize ? 32 : 0
+    }
+
+    private func sendButton(_ presentation: ToasttyComposerPresentation) -> some View {
         Button(action: submitDraft) {
             Group {
                 if isSubmitting {
                     ProgressView()
                         .controlSize(.small)
                         .tint(Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255))
-                        .frame(maxWidth: expands ? .infinity : nil)
-                        .frame(width: expands ? nil : 44)
-                } else if expands {
-                    Label("Send", systemImage: "arrow.up")
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, 12)
+                        .frame(width: 44)
                 } else {
                     Image(systemName: "arrow.up")
                         .frame(width: 44)

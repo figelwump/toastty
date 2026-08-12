@@ -12,6 +12,7 @@ struct PairingFlowView: View {
                 PairingPrivacyShield()
             } else {
                 content
+                    .privacySensitive()
             }
         }
         .tint(ToasttyDesignTokens.amber)
@@ -179,6 +180,7 @@ private struct PairingManualEntryView: View {
                         .keyboardType(.URL)
                         .textContentType(.URL)
                         .toasttyPairingField()
+                        .accessibilityLabel("Tailscale hostname")
                         .accessibilityIdentifier("toastty-mobile-pairing-hostname")
                 }
 
@@ -192,6 +194,7 @@ private struct PairingManualEntryView: View {
                         .autocorrectionDisabled()
                         .textContentType(.oneTimeCode)
                         .toasttyPairingField()
+                        .accessibilityLabel("Pairing code")
                         .accessibilityIdentifier("toastty-mobile-pairing-code")
                 }
             }
@@ -240,6 +243,7 @@ private struct PairingConfirmationView: View {
                     .foregroundStyle(ToasttyDesignTokens.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                    .accessibilityLabel("Authoritative hostname, \(confirmation.hostname)")
                     .accessibilityIdentifier("toastty-mobile-pairing-confirm-hostname")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -344,6 +348,7 @@ private struct PairingBrandHeader: View {
                 .font(.largeTitle.weight(.bold))
                 .foregroundStyle(ToasttyDesignTokens.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
             Text(subtitle)
                 .font(.body)
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)

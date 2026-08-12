@@ -1,5 +1,7 @@
+import UIKit
 import XCTest
 
+@MainActor
 final class ToasttyMobileFixtureUITests: XCTestCase {
     private let toasttyWorkspaceID = "A1000000-0000-0000-0000-000000000001"
     private let pendingInteractionID = "B1000000-0000-0000-0000-000000000001"
@@ -21,9 +23,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Reply"].exists)
         attachScreenshot(named: "fixture-home", of: app)
 
-        let workspaceLink = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
-        XCTAssertTrue(workspaceLink.waitForExistence(timeout: 5))
-        workspaceLink.tap()
+        openWorkspace(toasttyWorkspaceID, in: app)
 
         assertToasttyWorkspace(in: app)
         attachScreenshot(named: "fixture-workspace", of: app)
@@ -37,13 +37,20 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(conversationTitle.waitForExistence(timeout: 5))
         XCTAssertTrue(readOnlyInteraction.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Respond on the desktop"].exists)
+        XCTAssertEqual(
+            app.descendants(matching: .any)["toastty-mobile-composer-status"].label,
+            "Composer locked. Respond to the pending interaction on the Mac"
+        )
         XCTAssertFalse(app.buttons["Approve"].exists)
         XCTAssertFalse(app.buttons["Deny"].exists)
         XCTAssertFalse(app.buttons["Reply"].exists)
         XCTAssertFalse(app.staticTexts["Reply shortcut preview — sending arrives in the gated-send milestone"].exists)
         attachScreenshot(named: "fixture-conversation-sheet", of: app)
 
-        app.buttons["toastty-mobile-conversation-close"].tap()
+        let close = app.buttons["toastty-mobile-conversation-close"]
+        XCTAssertGreaterThanOrEqual(close.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(close.frame.height, 44)
+        close.tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-workspace-detail"].waitForExistence(timeout: 5))
     }
 
@@ -51,13 +58,11 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let app = launchFixtureApp(
             launchArguments: [
                 "-UIPreferredContentSizeCategoryName",
-                "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge",
+                UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
             ]
         )
 
-        let workspaceLink = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
-        XCTAssertTrue(workspaceLink.waitForExistence(timeout: 10))
-        workspaceLink.tap()
+        openWorkspace(toasttyWorkspaceID, in: app)
 
         assertToasttyWorkspace(in: app)
         attachScreenshot(named: "fixture-workspace-accessibility-xxxl", of: app)
@@ -66,6 +71,32 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(firstSession.isHittable)
         firstSession.tap()
         XCTAssertTrue(app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5))
+    }
+
+    func testFixtureHomeAtEveryAccessibilityContentSize() {
+        for category in accessibilityContentSizeCategories {
+            let app = launchFixtureApp(
+                launchArguments: ["-UIPreferredContentSizeCategoryName", category.rawValue]
+            )
+
+            let home = app.descendants(matching: .any)["toastty-mobile-home"]
+            XCTAssertTrue(
+                home.waitForExistence(timeout: 10),
+                "Home must load at \(category.rawValue)"
+            )
+            XCTAssertEqual(
+                app.descendants(matching: .any)[
+                    "toastty-mobile-needs-you-card-\(pendingInteractionID)"
+                ].label,
+                "Mobile gateway design, needs you, toastty, 2m"
+            )
+            XCTAssertEqual(
+                app.descendants(matching: .any)["toastty-mobile-connection"].label,
+                "Connection live to mac-studio"
+            )
+            XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].isHittable)
+            app.terminate()
+        }
     }
 
     func testFixtureTranscriptExposesEveryEventKindWithStableSequenceIdentifiers() {
@@ -259,7 +290,10 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertFalse(send.isEnabled)
         let status = app.descendants(matching: .any)["toastty-mobile-composer-status"]
         XCTAssertTrue(status.exists)
-        XCTAssertTrue(status.label.contains("A message is already being sent at this prompt"))
+        XCTAssertEqual(
+            status.label,
+            "Composer locked. A message is already being sent at this prompt"
+        )
         attachScreenshot(named: "fixture-gated-send-optimistic", of: app)
     }
 
@@ -294,7 +328,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         let app = launchFixtureApp(
             launchArguments: [
                 "-UIPreferredContentSizeCategoryName",
-                "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge",
+                UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
             ],
             environment: ["TOASTTY_MOBILE_FIXTURE_SCENARIO": "gated-send"]
         )
@@ -306,9 +340,38 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(input.isHittable)
         input.tap()
         input.typeText("Accessible send")
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.exists)
+        let keyboardObstructionTop = topOfKeyboardObstruction(keyboard)
+        XCTAssertLessThanOrEqual(
+            input.frame.maxY,
+            keyboardObstructionTop + 1,
+            "The focused message field must remain fully visible above the keyboard and prediction bar"
+        )
         XCTAssertTrue(send.isHittable)
         XCTAssertTrue(send.isEnabled)
+        XCTAssertGreaterThan(
+            send.frame.minX,
+            input.frame.minX,
+            "The compact Send control should follow the message field visually"
+        )
+        XCTAssertLessThanOrEqual(
+            send.frame.maxY,
+            keyboardObstructionTop + 1,
+            "Send must remain fully visible above the keyboard and prediction bar"
+        )
         attachScreenshot(named: "fixture-gated-send-accessibility-xxxl", of: app)
+    }
+
+    private func topOfKeyboardObstruction(_ keyboard: XCUIElement) -> CGFloat {
+        var top = keyboard.frame.minY
+        for element in keyboard.descendants(matching: .any).allElementsBoundByIndex {
+            let frame = element.frame
+            if frame.isEmpty == false, frame.minY > 0 {
+                top = min(top, frame.minY)
+            }
+        }
+        return top
     }
 
     private func launchFixtureApp(
@@ -331,10 +394,18 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         return app
     }
 
+    private var accessibilityContentSizeCategories: [UIContentSizeCategory] {
+        [
+            .accessibilityMedium,
+            .accessibilityLarge,
+            .accessibilityExtraLarge,
+            .accessibilityExtraExtraLarge,
+            .accessibilityExtraExtraExtraLarge,
+        ]
+    }
+
     private func openFixtureConversation(in app: XCUIApplication) {
-        let workspaceLink = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
-        XCTAssertTrue(workspaceLink.waitForExistence(timeout: 10))
-        workspaceLink.tap()
+        openWorkspace(toasttyWorkspaceID, in: app)
 
         let sessionButton = app.buttons["toastty-mobile-workspace-session-\(pendingInteractionID)"]
         XCTAssertTrue(sessionButton.waitForExistence(timeout: 5))
@@ -343,9 +414,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
     }
 
     private func openGatedSendConversation(in app: XCUIApplication) {
-        let workspaceLink = app.buttons["toastty-mobile-workspace-\(releaseWorkspaceID)"]
-        XCTAssertTrue(workspaceLink.waitForExistence(timeout: 10))
-        workspaceLink.tap()
+        openWorkspace(releaseWorkspaceID, in: app)
 
         let sessionButton = app.buttons[
             "toastty-mobile-workspace-session-\(openPromptConversationID)"
@@ -355,6 +424,26 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["toastty-mobile-conversation-title"].waitForExistence(timeout: 5)
         )
+    }
+
+    private func openWorkspace(
+        _ workspaceID: String,
+        in app: XCUIApplication,
+        attempts: Int = 12
+    ) {
+        let home = app.descendants(matching: .any)["toastty-mobile-home"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
+
+        let workspace = app.buttons["toastty-mobile-workspace-\(workspaceID)"]
+        for _ in 0..<attempts {
+            if workspace.exists, workspace.isHittable {
+                workspace.tap()
+                return
+            }
+            home.swipeUp()
+        }
+
+        XCTFail("Workspace \(workspaceID) was not reachable from Home after \(attempts) swipes")
     }
 
     private func scrollToOlder(

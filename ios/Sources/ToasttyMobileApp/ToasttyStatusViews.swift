@@ -38,7 +38,7 @@ struct ToasttyStatusLabel: View {
         HStack(spacing: 5) {
             statusDot
             Text(bucket.rawValue)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .font(compact ? .caption2.monospaced() : .caption.monospaced())
         .foregroundStyle(bucket == .offline ? ToasttyDesignTokens.mutedText : statusColor)
@@ -74,5 +74,6 @@ struct ToasttySectionTitle: View {
             .foregroundStyle(ToasttyDesignTokens.mutedText)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 6)
+            .accessibilityAddTraits(.isHeader)
     }
 }

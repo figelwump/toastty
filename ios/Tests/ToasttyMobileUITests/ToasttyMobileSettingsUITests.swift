@@ -1,5 +1,7 @@
+import UIKit
 import XCTest
 
+@MainActor
 final class ToasttyMobileSettingsUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -33,7 +35,7 @@ final class ToasttyMobileSettingsUITests: XCTestCase {
     func testFixtureSettingsReflowsAtAccessibilityXXXL() {
         let app = launchFixtureApp(launchArguments: [
             "-UIPreferredContentSizeCategoryName",
-            "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge",
+            UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
         ])
         XCTAssertTrue(app.buttons["toastty-mobile-settings-button"].waitForExistence(timeout: 10))
         app.buttons["toastty-mobile-settings-button"].tap()

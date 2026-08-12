@@ -1,5 +1,7 @@
+import UIKit
 import XCTest
 
+@MainActor
 final class ToasttyMobilePairingUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -11,15 +13,19 @@ final class ToasttyMobilePairingUITests: XCTestCase {
         app.buttons["toastty-mobile-session-begin-pairing"].tap()
         app.buttons["toastty-mobile-pairing-manual"].tap()
 
-        app.textFields["toastty-mobile-pairing-hostname"].tap()
-        app.textFields["toastty-mobile-pairing-hostname"].typeText("fixture-mac.example.ts.net")
-        app.secureTextFields["toastty-mobile-pairing-code"].tap()
-        app.secureTextFields["toastty-mobile-pairing-code"].typeText("2345-6789-ABCD")
+        let hostnameField = app.textFields["toastty-mobile-pairing-hostname"]
+        let pairingCodeField = app.secureTextFields["toastty-mobile-pairing-code"]
+        XCTAssertEqual(hostnameField.label, "Tailscale hostname")
+        XCTAssertEqual(pairingCodeField.label, "Pairing code")
+        hostnameField.tap()
+        hostnameField.typeText("fixture-mac.example.ts.net")
+        pairingCodeField.tap()
+        pairingCodeField.typeText("2345-6789-ABCD")
         app.buttons["toastty-mobile-pairing-manual-continue"].tap()
 
         let hostname = app.staticTexts["toastty-mobile-pairing-confirm-hostname"]
         XCTAssertTrue(hostname.waitForExistence(timeout: 5))
-        XCTAssertEqual(hostname.label, "fixture-mac.example.ts.net")
+        XCTAssertEqual(hostname.label, "Authoritative hostname, fixture-mac.example.ts.net")
         XCTAssertFalse(app.descendants(matching: .any)["toastty-mobile-home"].exists)
 
         app.buttons["toastty-mobile-pairing-confirm"].tap()
@@ -37,7 +43,7 @@ final class ToasttyMobilePairingUITests: XCTestCase {
 
         let hostname = app.staticTexts["toastty-mobile-pairing-confirm-hostname"]
         XCTAssertTrue(hostname.waitForExistence(timeout: 5))
-        XCTAssertEqual(hostname.label, "fixture-mac.example.ts.net")
+        XCTAssertEqual(hostname.label, "Authoritative hostname, fixture-mac.example.ts.net")
         app.buttons["toastty-mobile-pairing-confirm"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-home"].waitForExistence(timeout: 10))
     }
@@ -82,10 +88,41 @@ final class ToasttyMobilePairingUITests: XCTestCase {
         XCTAssertFalse(app.secureTextFields["toastty-mobile-pairing-code"].exists)
     }
 
-    private func launchPairingFixture(_ scenario: String) -> XCUIApplication {
+    func testManualFallbackRemainsReachableAtAccessibilityXXXL() {
+        let app = launchPairingFixture(
+            "unpaired",
+            preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge
+        )
+        app.buttons["toastty-mobile-session-begin-pairing"].tap()
+
+        XCTAssertTrue(app.buttons["toastty-mobile-pairing-scan"].exists)
+        let manual = app.buttons["toastty-mobile-pairing-manual"]
+        XCTAssertTrue(manual.exists)
+        for _ in 0..<4 where manual.isHittable == false {
+            app.swipeUp()
+        }
+        XCTAssertTrue(manual.isHittable)
+        manual.tap()
+
+        XCTAssertTrue(
+            app.textFields["toastty-mobile-pairing-hostname"].waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.secureTextFields["toastty-mobile-pairing-code"].exists)
+    }
+
+    private func launchPairingFixture(
+        _ scenario: String,
+        preferredContentSizeCategory: UIContentSizeCategory? = nil
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOASTTY_MOBILE_USE_FIXTURE"] = "1"
         app.launchEnvironment["TOASTTY_MOBILE_FIXTURE_SCENARIO"] = scenario
+        if let preferredContentSizeCategory {
+            app.launchArguments += [
+                "-UIPreferredContentSizeCategoryName",
+                preferredContentSizeCategory.rawValue,
+            ]
+        }
         app.launch()
         return app
     }
