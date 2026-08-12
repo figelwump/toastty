@@ -5,6 +5,38 @@ public extension AgentKind {
     var displayName: String { rawValue }
 }
 
+public enum MobileSessionDisplayState: Equatable, Sendable {
+    case known(RemoteSessionState)
+    case unsupported(rawValue: String)
+
+    public static let starting = Self.known(.starting)
+    public static let working = Self.known(.working)
+    public static let awaitingInput = Self.known(.awaitingInput)
+    public static let ready = Self.known(.ready)
+    public static let interrupted = Self.known(.interrupted)
+    public static let ended = Self.known(.ended)
+    public static let error = Self.known(.error)
+    public static let offline = Self.known(.offline)
+
+    public var bucket: MobileSessionBucket {
+        switch self {
+        case .known(let state):
+            state.bucket
+        case .unsupported:
+            .attention
+        }
+    }
+
+    public var accessibilityLabel: String {
+        switch self {
+        case .known(let state):
+            state.bucket.rawValue
+        case .unsupported(let rawValue):
+            "unsupported state \(rawValue)"
+        }
+    }
+}
+
 public extension RemoteSessionState {
     var bucket: MobileSessionBucket {
         switch self {
@@ -67,7 +99,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let workspacePath: String
     public let agent: AgentKind
     public let title: String
-    public let state: RemoteSessionState
+    public let state: MobileSessionDisplayState
     public let inputAvailability: MobileInputAvailability
     public let age: String
     public let lastActivity: String
@@ -79,7 +111,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         workspacePath: String,
         agent: AgentKind,
         title: String,
-        state: RemoteSessionState,
+        state: MobileSessionDisplayState,
         inputAvailability: MobileInputAvailability,
         age: String,
         lastActivity: String
@@ -96,8 +128,34 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         self.lastActivity = lastActivity
     }
 
+    public init(
+        id: UUID,
+        workspaceID: UUID,
+        workspaceTitle: String,
+        workspacePath: String,
+        agent: AgentKind,
+        title: String,
+        state: RemoteSessionState,
+        inputAvailability: MobileInputAvailability,
+        age: String,
+        lastActivity: String
+    ) {
+        self.init(
+            id: id,
+            workspaceID: workspaceID,
+            workspaceTitle: workspaceTitle,
+            workspacePath: workspacePath,
+            agent: agent,
+            title: title,
+            state: .known(state),
+            inputAvailability: inputAvailability,
+            age: age,
+            lastActivity: lastActivity
+        )
+    }
+
     public var accessibilitySummary: String {
-        "\(title), \(state.bucket.rawValue), \(workspaceTitle), \(age)"
+        "\(title), \(state.accessibilityLabel), \(workspaceTitle), \(age)"
     }
 }
 
@@ -124,7 +182,7 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     }
 
     public var needsYouCount: Int {
-        conversations.count { $0.state == .awaitingInput }
+        conversations.count { $0.state == .known(.awaitingInput) }
     }
 
     public var workingCount: Int {
@@ -150,7 +208,7 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
     public var needsYou: [MobileConversation] {
         workspaces
             .flatMap(\.conversations)
-            .filter { $0.state == .awaitingInput }
+            .filter { $0.state == .known(.awaitingInput) }
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 }

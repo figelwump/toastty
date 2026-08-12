@@ -230,6 +230,7 @@ let project = Project(
             sources: ["Tests/ToasttyMobileDomainTests/**"],
             resources: [
                 .folderReference(path: "../Tests/RemoteProtocol/Fixtures/v1"),
+                .folderReference(path: "Tests/ToasttyMobileDomainTests/Fixtures/Compatibility"),
             ],
             dependencies: [
                 .target(name: "ToasttyMobileDomain"),

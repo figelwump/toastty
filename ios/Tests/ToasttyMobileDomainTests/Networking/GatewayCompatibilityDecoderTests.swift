@@ -1,0 +1,137 @@
+import Foundation
+import RemoteProtocol
+import XCTest
+@testable import ToasttyMobileDomain
+
+final class GatewayCompatibilityDecoderTests: XCTestCase {
+    private let decoder = GatewayCompatibilityDecoder()
+
+    func testVersionMismatchFailsAdmission() throws {
+        XCTAssertThrowsError(try decoder.decodeHello(CompatibilityFixture.data("version-mismatch"))) { error in
+            XCTAssertEqual(error as? GatewayCompatibilityError, .unsupportedProtocolVersion("2.0"))
+        }
+    }
+
+    func testUnknownTopLevelStreamMessageIsIgnored() throws {
+        XCTAssertEqual(
+            try decoder.decodeStreamMessage(CompatibilityFixture.data("stream-unknown-top-level")),
+            .ignoredUnknown(type: "future_notification")
+        )
+    }
+
+    func testRESTPagePreservesUnknownMiddleEventAndCursorProgress() throws {
+        let response = try decoder.decodeEventsResponse(CompatibilityFixture.data("events-unknown-middle"))
+        guard case .page(let page) = response else { return XCTFail("Expected page") }
+
+        XCTAssertEqual(page.events.map(\.sequence), [1, 2, 3])
+        XCTAssertEqual(page.events[1].kind, "future_optional_event")
+        XCTAssertEqual(page.continuationCursor?.afterSequence, 3)
+        guard case .unknown(let conversationID, 2, "future_optional_event") = page.events[1] else {
+            return XCTFail("Expected compatible unknown event")
+        }
+        XCTAssertEqual(conversationID.rawValue.uuidString, "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testStreamUsesSameTolerantPageDecoder() throws {
+        let message = try decoder.decodeStreamMessage(CompatibilityFixture.data("stream-unknown-middle"))
+        guard case .conversationEvents(let page) = message else { return XCTFail("Expected event page") }
+
+        XCTAssertEqual(page.events.map(\.sequence), [1, 2, 3])
+        XCTAssertEqual(page.events[1].kind, "future_optional_event")
+    }
+
+    func testKnownStatusChangedPreservesUnknownDisplayAndInputDiscriminators() throws {
+        let response = try decoder.decodeEventsResponse(CompatibilityFixture.data("status-unknown-discriminators"))
+        guard case .page(let page) = response, page.events.count == 2 else {
+            return XCTFail("Expected two status events")
+        }
+        guard case .statusChanged(let first) = page.events[0] else {
+            return XCTFail("Expected compatible status event")
+        }
+        XCTAssertEqual(first.state, .unsupported(rawValue: "future_display_state"))
+        XCTAssertEqual(
+            first.inputAvailability,
+            .unavailable(reason: .unsupported(rawValue: "future_lock_reason"))
+        )
+        XCTAssertFalse(first.inputAvailability.allowsRemoteSend)
+
+        guard case .statusChanged(let second) = page.events[1] else {
+            return XCTFail("Expected compatible status event")
+        }
+        XCTAssertEqual(second.inputAvailability, .unsupported(rawKind: "future_input_mode"))
+        XCTAssertFalse(second.inputAvailability.allowsRemoteSend)
+    }
+
+    func testSessionSnapshotRetainsMetadataAndUnknownRawValuesReadOnly() throws {
+        let snapshot = try decoder.decodeSessionListResponse(
+            CompatibilityFixture.data("session-unknown-display-input")
+        )
+        let summary = try XCTUnwrap(snapshot.conversations.first)
+
+        XCTAssertEqual(snapshot.projectionRunID.rawValue.uuidString, "22222222-2222-2222-2222-222222222222")
+        XCTAssertEqual(summary.projectionGeneration, UInt64.max)
+        XCTAssertEqual(summary.latestSequence, UInt64.max)
+        XCTAssertEqual(summary.state, .unsupported(rawValue: "future_display_state"))
+        XCTAssertEqual(summary.inputAvailability, .unsupported(rawKind: "future_input_mode"))
+        XCTAssertFalse(summary.inputAvailability.allowsRemoteSend)
+
+        let presentation = snapshot.presentation(hostName: "test-mac")
+        let mobile = try XCTUnwrap(presentation.workspaces.first?.conversations.first)
+        XCTAssertEqual(mobile.state, .unsupported(rawValue: "future_display_state"))
+        XCTAssertFalse(mobile.inputAvailability.allowsReply)
+    }
+
+    func testCanonicalSessionStateAndInputCombinationsRemainIndependent() throws {
+        let bundle = Bundle(for: Self.self)
+        let fixtureURL = try XCTUnwrap(
+            bundle.url(
+                forResource: "session-list-response",
+                withExtension: "json",
+                subdirectory: "v1"
+            )
+        )
+        let snapshot = try decoder.decodeSessionListResponse(Data(contentsOf: fixtureURL))
+
+        XCTAssertEqual(snapshot.conversations.count, 11)
+        let expectedStates: [MobileSessionDisplayState] = [
+            .starting, .working, .awaitingInput, .ready,
+            .interrupted, .ended, .error, .offline,
+        ]
+        for state in expectedStates {
+            XCTAssertTrue(snapshot.conversations.contains { $0.state == state })
+        }
+        XCTAssertEqual(
+            snapshot.conversations.filter { $0.inputAvailability.allowsRemoteSend }.count,
+            1,
+            "Only the exact open-prompt availability enables a send, independently of display state."
+        )
+        let claude = try XCTUnwrap(snapshot.conversations.first {
+            $0.provider == .claude
+                && $0.inputAvailability == .unavailable(reason: .known(.unknownProviderState))
+        })
+        XCTAssertFalse(claude.inputAvailability.allowsRemoteSend)
+    }
+
+    func testUnexpectedKnownStateWithOpenPromptPreservesBothFacts() throws {
+        let data = Data(
+            #"{"protocolVersion":"1.0","snapshot":{"conversations":[{"conversationID":"11111111-1111-1111-1111-111111111111","inputAvailability":{"epoch":{"bindingID":"33333333-3333-3333-3333-333333333333","counter":9},"kind":"open_prompt"},"latestSequence":1,"placement":{},"projectionGeneration":1,"provider":"codex","state":"working","title":"Unexpected combination","updatedAt":"2026-08-08T14:40:00.125Z"}],"generatedAt":"2026-08-08T14:41:00.125Z","projectionRunID":"22222222-2222-2222-2222-222222222222"}}"#.utf8
+        )
+        let summary = try XCTUnwrap(decoder.decodeSessionListResponse(data).conversations.first)
+
+        XCTAssertEqual(summary.state, .working)
+        guard case .openPrompt(let epoch) = summary.inputAvailability else {
+            return XCTFail("Expected the exact open-prompt epoch to survive")
+        }
+        XCTAssertEqual(epoch.counter, 9)
+        XCTAssertTrue(summary.inputAvailability.allowsRemoteSend)
+    }
+
+    func testUnknownSendStatusAndRejectionReasonFailOnlySendDecode() throws {
+        XCTAssertThrowsError(try decoder.decodeSendResult(CompatibilityFixture.data("send-unknown-status"))) { error in
+            XCTAssertEqual(error as? GatewayCompatibilityError, .unsupportedSendStatus("scheduled_for_future"))
+        }
+        XCTAssertThrowsError(try decoder.decodeSendResult(CompatibilityFixture.data("send-unknown-reason"))) { error in
+            XCTAssertEqual(error as? GatewayCompatibilityError, .unsupportedSendRejectionReason("future_policy"))
+        }
+    }
+}
