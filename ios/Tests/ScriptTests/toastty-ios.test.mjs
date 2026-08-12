@@ -20,7 +20,14 @@ function runDispatcher(args, environment = {}) {
     "TOASTTY_IOS_RUN_ROOT",
     "TOASTTY_IOS_SIMULATOR_DEVICE_NAMES",
     "TOASTTY_IOS_WORKTREE_ID",
+    "TOASTTY_IOS_DEVELOPMENT_TEAM",
+    "TOASTTY_NATIVE_DEVICE_DERIVED_DATA_PATH",
+    "TOASTTY_NATIVE_DEVICE_RUN_ID",
+    "TOASTTY_NATIVE_DEVICE_RUN_LOCK_DIR",
+    "TOASTTY_NATIVE_DEVICE_RUN_ROOT",
     "TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX",
+    "TUIST_TOASTTY_MOBILE_DEVELOPMENT_TEAM",
+    "TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE",
   ]) {
     delete childEnvironment[key];
   }
@@ -149,6 +156,58 @@ test("bundle suffix sanitization is deterministic, bounded, and collision-resist
   assert.match(plan.worktreeComponent, /^[a-z0-9-]+-[a-f0-9]{8}$/);
   assert.ok(plan.worktreeComponent.length <= 40);
   assert.equal(plan.bundleSuffix, `.dev.${plan.worktreeComponent}`);
+});
+
+test("native-device dry-run pins the fixed Debug identity without invoking tools", () => {
+  const environment = {
+    PATH: "",
+    TOASTTY_IOS_DEVELOPMENT_TEAM: "TEAM123456",
+    TOASTTY_NATIVE_DEVICE_RUN_ID: "device-dry-run",
+    TOASTTY_NATIVE_DEVICE_RUN_ROOT: "/tmp/toastty-device-dry-run",
+  };
+  const first = runDispatcher([
+    "native-device",
+    "--dry-run",
+    "--preflight-only",
+    "--device",
+    "TEST-UDID",
+  ], environment);
+  const second = runDispatcher([
+    "native-device",
+    "--dry-run",
+    "--preflight-only",
+    "--device",
+    "TEST-UDID",
+  ], environment);
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(first.stdout, second.stdout);
+
+  const plan = JSON.parse(first.stdout);
+  assert.equal(plan.command, "native-device");
+  assert.equal(plan.buildConfiguration, "Debug");
+  assert.equal(plan.bundleID, "com.giantthings.toastty.mobile.dev");
+  assert.equal(plan.developmentTeam, "TEAM123456");
+  assert.equal(plan.device, "TEST-UDID");
+  assert.equal(plan.preflightOnly, true);
+  assert.equal(plan.physicalDeviceManifestFlag, true);
+  assert.equal(plan.environment.TUIST_TOASTTY_MOBILE_BUNDLE_SUFFIX, ".dev.local");
+  assert.equal(plan.environment.TUIST_TOASTTY_MOBILE_PHYSICAL_DEVICE, "1");
+  assert.deepEqual(plan.args, ["scripts/dev/native-device.sh"]);
+});
+
+test("native-device rejects conflicting or incomplete options before spawning", () => {
+  const conflict = runDispatcher([
+    "native-device",
+    "--preflight-only",
+    "--build-only",
+  ], { PATH: "" });
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stderr, /cannot be combined/);
+
+  const missingDevice = runDispatcher(["native-device", "--device"], { PATH: "" });
+  assert.equal(missingDevice.status, 1);
+  assert.match(missingDevice.stderr, /--device requires a value/);
 });
 
 test("a booted iOS 17 device is rejected in favor of creating on the newest compatible runtime", () => {
