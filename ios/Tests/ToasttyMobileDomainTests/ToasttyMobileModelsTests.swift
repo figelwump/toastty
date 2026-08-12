@@ -1,16 +1,17 @@
+import RemoteProtocol
 import XCTest
 @testable import ToasttyMobileDomain
 
 final class ToasttyMobileModelsTests: XCTestCase {
     func testEightProtocolStatesMapIntoFivePresentationBuckets() {
-        XCTAssertEqual(MobileSessionState.awaitingInput.bucket, .needsYou)
-        XCTAssertEqual(MobileSessionState.starting.bucket, .working)
-        XCTAssertEqual(MobileSessionState.working.bucket, .working)
-        XCTAssertEqual(MobileSessionState.ready.bucket, .ready)
-        XCTAssertEqual(MobileSessionState.interrupted.bucket, .attention)
-        XCTAssertEqual(MobileSessionState.error.bucket, .attention)
-        XCTAssertEqual(MobileSessionState.ended.bucket, .offline)
-        XCTAssertEqual(MobileSessionState.offline.bucket, .offline)
+        XCTAssertEqual(RemoteSessionState.awaitingInput.bucket, .needsYou)
+        XCTAssertEqual(RemoteSessionState.starting.bucket, .working)
+        XCTAssertEqual(RemoteSessionState.working.bucket, .working)
+        XCTAssertEqual(RemoteSessionState.ready.bucket, .ready)
+        XCTAssertEqual(RemoteSessionState.interrupted.bucket, .attention)
+        XCTAssertEqual(RemoteSessionState.error.bucket, .attention)
+        XCTAssertEqual(RemoteSessionState.ended.bucket, .offline)
+        XCTAssertEqual(RemoteSessionState.offline.bucket, .offline)
     }
 
     func testNeedsYouQueueUsesStateWhileReasonUsesInputAvailability() {

@@ -1,3 +1,4 @@
+import RemoteProtocol
 import SwiftUI
 import ToasttyMobileDomain
 
@@ -29,12 +30,10 @@ enum ToasttyDesignTokens {
         }
     }
 
-    static func color(for agent: MobileAgentKind) -> Color {
-        switch agent {
-        case .claude: claude
-        case .codex: codex
-        case .other: secondaryText
-        }
+    static func color(for agent: AgentKind) -> Color {
+        if agent == .claude { return claude }
+        if agent == .codex { return codex }
+        return secondaryText
     }
 }
 

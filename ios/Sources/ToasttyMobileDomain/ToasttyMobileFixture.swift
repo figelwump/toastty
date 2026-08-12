@@ -1,4 +1,5 @@
 import Foundation
+import RemoteProtocol
 
 public enum ToasttyMobileFixture {
     public static let home: MobileHomeSnapshot = {
@@ -94,9 +95,9 @@ public enum ToasttyMobileFixture {
         workspaceID: UUID,
         workspaceTitle: String,
         path: String,
-        agent: MobileAgentKind,
+        agent: AgentKind,
         title: String,
-        state: MobileSessionState,
+        state: RemoteSessionState,
         availability: MobileInputAvailability,
         age: String,
         last: String

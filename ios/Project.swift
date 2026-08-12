@@ -182,6 +182,19 @@ let project = Project(
     ]),
     targets: [
         .target(
+            name: "RemoteProtocol",
+            destinations: .iOS,
+            product: .staticFramework,
+            bundleId: "com.giantthings.toastty.mobile.remote-protocol",
+            deploymentTargets: deploymentTarget,
+            infoPlist: .default,
+            sources: ["../Sources/RemoteProtocol/**"],
+            settings: .settings(base: [
+                "SWIFT_VERSION": "6.0",
+                "SWIFT_STRICT_CONCURRENCY": "complete",
+            ])
+        ),
+        .target(
             name: "ToasttyMobileApp",
             destinations: .iOS,
             product: .app,
@@ -191,7 +204,10 @@ let project = Project(
             infoPlist: .extendingDefault(with: appInfoPlist),
             sources: ["Sources/ToasttyMobileApp/**"],
             resources: ["Resources/ToasttyMobileApp/**"],
-            dependencies: [.target(name: "ToasttyMobileDomain")],
+            dependencies: [
+                .target(name: "ToasttyMobileDomain"),
+                .target(name: "RemoteProtocol"),
+            ],
             settings: .settings(base: appSettings)
         ),
         .target(
@@ -201,7 +217,8 @@ let project = Project(
             bundleId: "com.giantthings.toastty.mobile.domain",
             deploymentTargets: deploymentTarget,
             infoPlist: .default,
-            sources: ["Sources/ToasttyMobileDomain/**"]
+            sources: ["Sources/ToasttyMobileDomain/**"],
+            dependencies: [.target(name: "RemoteProtocol")]
         ),
         .target(
             name: "ToasttyMobileDomainTests",
@@ -214,7 +231,10 @@ let project = Project(
             resources: [
                 .folderReference(path: "../Tests/RemoteProtocol/Fixtures/v1"),
             ],
-            dependencies: [.target(name: "ToasttyMobileDomain")]
+            dependencies: [
+                .target(name: "ToasttyMobileDomain"),
+                .target(name: "RemoteProtocol"),
+            ]
         ),
         .target(
             name: "ToasttyMobileAppTests",

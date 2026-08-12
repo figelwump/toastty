@@ -1,24 +1,12 @@
 import Foundation
+import RemoteProtocol
 
-public enum MobileAgentKind: String, Equatable, Sendable {
-    case claude
-    case codex
-    case other
-
-    public var displayName: String { rawValue }
+public extension AgentKind {
+    var displayName: String { rawValue }
 }
 
-public enum MobileSessionState: String, Equatable, Sendable {
-    case starting
-    case working
-    case awaitingInput
-    case ready
-    case interrupted
-    case ended
-    case error
-    case offline
-
-    public var bucket: MobileSessionBucket {
+public extension RemoteSessionState {
+    var bucket: MobileSessionBucket {
         switch self {
         case .awaitingInput: .needsYou
         case .starting, .working: .working
@@ -77,9 +65,9 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let workspaceID: UUID
     public let workspaceTitle: String
     public let workspacePath: String
-    public let agent: MobileAgentKind
+    public let agent: AgentKind
     public let title: String
-    public let state: MobileSessionState
+    public let state: RemoteSessionState
     public let inputAvailability: MobileInputAvailability
     public let age: String
     public let lastActivity: String
@@ -89,9 +77,9 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         workspaceID: UUID,
         workspaceTitle: String,
         workspacePath: String,
-        agent: MobileAgentKind,
+        agent: AgentKind,
         title: String,
-        state: MobileSessionState,
+        state: RemoteSessionState,
         inputAvailability: MobileInputAvailability,
         age: String,
         lastActivity: String
