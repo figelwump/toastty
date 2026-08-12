@@ -71,6 +71,7 @@ list includes right-panel tabs belonging to unselected workspace tabs.
 
 Common workflow families:
 
+- Annotation discovery: `annotation.keys`.
 - Workspaces and tabs: `workspace.create`, `workspace.select`, `workspace.rename`, `workspace.set-annotation`, `workspace.clear-annotation`, `workspace.tab.create`, `workspace.tab.select`.
 - Panels: `panel.create.browser`, `panel.create.local-document`, `panel.close`, `panel.focus-mode.toggle`.
 - Terminal control: `terminal.send-text`, `terminal.visible-text`, `terminal.state`.
@@ -102,11 +103,23 @@ exists, omit color or repeat the claim; attempting to replace it fails. Examples
 - Git branch: `key=git-branch`, `text=feat/hooks-chips`; omit `url` unless a
   canonical branch URL is already known.
 
+Before setting an annotation, query `annotation.keys`. It returns every key
+previously registered in the current Toastty runtime, including historical
+keys and keys created outside the caller's workspace scope. Reuse an exact key
+when its semantic meaning clearly matches the requested annotation kind; do
+not fuzzy-match or infer meaning from an ambiguous key. Omit `color` when
+reusing a key so its existing global claim remains authoritative.
+
+Also query `workspace.snapshot` for the target workspace before setting the
+annotation. Because one exact key represents one chip per workspace, setting a
+key already present there replaces that chip's text and URL. Do so only when
+the request intends to update that same semantic annotation; otherwise choose
+a distinct stable key. If no catalog key is a clear match, use the established
+canonical key for the annotation kind, such as the examples above.
+
 Include a URL only when the user supplied it or available context verified it;
-never construct one by guessing from the label. Query `workspace.snapshot`
-when existing annotations may need to be preserved or updated. One exact key
-represents one chip per workspace, so multiple annotations of the same kind
-need distinct stable keys.
+never construct one by guessing from the label. Multiple annotations of the
+same kind need distinct stable keys.
 
 ## Scope Semantics
 

@@ -714,6 +714,12 @@ final class AppControlExecutor {
         }
 
         switch query {
+        case .annotationKeys:
+            // This selector-free catalog is intentionally runtime-global even
+            // for workspace-scoped callers. It exposes key strings only; the
+            // workspace access boundary still protects annotation contents.
+            return try annotationKeysSnapshot()
+
         case .workspaceSnapshot:
             return try workspaceSnapshot(workspaceID: try resolveWorkspaceID(args: args))
 
@@ -2138,6 +2144,18 @@ private extension AppControlExecutor {
                 count += 1
             }
         }
+    }
+
+    func annotationKeysSnapshot() throws -> [String: AutomationJSONValue] {
+        guard let annotationStyleStore else {
+            throw AutomationSocketError.invalidPayload("annotation styles are unavailable in this app instance")
+        }
+        return [
+            "keys": .array(
+                annotationStyleStore.registeredKeys()
+                    .map(AutomationJSONValue.string)
+            ),
+        ]
     }
 
     func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {

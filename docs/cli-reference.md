@@ -298,6 +298,25 @@ example:
 - Git branch: `key=git-branch`, `text=feat/hooks-chips`; a URL is usually
   omitted.
 
+Before choosing a key, callers can run:
+
+```bash
+"$TOASTTY_CLI_PATH" --json query run annotation.keys
+```
+
+The query returns `{"keys": [...]}` in bytewise key order. It is
+runtime-global and intentionally available to workspace-scoped callers, so it
+can include historical keys and keys registered from workspaces outside the
+caller's scope. Keys are caller-authored and may themselves contain sensitive
+semantic labels. The response does not include colors, workspace IDs, usage
+counts, chip text, or URLs.
+
+Reuse an exact catalog key only when its semantic meaning clearly matches. Do
+not fuzzy-match ambiguous keys. Before setting the annotation, also query the
+target `workspace.snapshot`: setting a key already present in that workspace
+replaces that chip's text and URL. Omit `color` when reusing a catalog key so
+its existing global claim remains authoritative.
+
 The same exact key updates one chip within a workspace. Multiple annotations of
 the same kind therefore need distinct stable keys. Include a URL only when it
 was supplied or verified; do not guess one from the label. Validation rules:
@@ -446,12 +465,14 @@ toastty query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=va
 Query selectors and `key=value` argument handling follow the same rules as `action run`.
 
 ```bash
+"$TOASTTY_CLI_PATH" query run annotation.keys
 "$TOASTTY_CLI_PATH" query run workspace.snapshot --workspace "$WORKSPACE_ID"
 "$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$PANEL_ID" contains="ready"
 ```
 
 Prefer `query list --json` to discover the current canonical IDs. Common queries include:
 
+- `annotation.keys`
 - `workspace.snapshot`
 - `terminal.state` (returns `windowID`, `workspaceID`, `panelID`, and terminal metadata)
 - `terminal.visible-text`
@@ -472,6 +493,11 @@ unselected workspace tabs are not included.
 null for text-only chips, and `color` is the effective token for the key —
 the explicit global color when one was set, otherwise the stable automatic
 `#RRGGBB` fallback.
+
+`annotation.keys` takes no selector and returns `keys`, the bytewise-sorted
+array of annotation keys previously registered in the current runtime. The
+catalog is historical rather than an active-usage listing and is intentionally
+runtime-global even for workspace-scoped callers.
 
 `panel.scratchpad.state` returns Scratchpad panel metadata, including the document ID, revision, linked session ID when present, host lifecycle state, current bootstrap diagnostics, and content hashes for automation checks.
 

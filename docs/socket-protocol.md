@@ -385,6 +385,7 @@ Selectors are passed inside `args` using the same keys as `app_control.run_actio
 
 Common query IDs include:
 
+- `annotation.keys`
 - `workspace.snapshot`
 - `terminal.state`
 - `terminal.visible-text`
@@ -392,6 +393,14 @@ Common query IDs include:
 - `panel.browser.state`
 - `panel.scratchpad.lookup`
 - `panel.scratchpad.state`
+
+`annotation.keys` takes no selectors or arguments and returns
+`{keys: [String]}` in bytewise order. It lists every annotation key previously
+registered in the current runtime, including historical keys. The result is
+intentionally runtime-global for workspace-scoped callers and contains no
+colors, workspace IDs, usage counts, chip text, or URLs. Because keys are
+caller-authored, the key strings themselves may contain sensitive semantic
+labels.
 
 `panel.scratchpad.state` resolves a Scratchpad panel from `panelID`, or from
 `workspaceID` / `windowID` using focused layout Scratchpad, focused right-panel

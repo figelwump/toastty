@@ -395,6 +395,7 @@ enum AppControlActionID: String, CaseIterable, Sendable {
 }
 
 enum AppControlQueryID: String, CaseIterable, Sendable {
+    case annotationKeys = "annotation.keys"
     case workspaceSnapshot = "workspace.snapshot"
     case terminalState = "terminal.state"
     case terminalVisibleText = "terminal.visible-text"
@@ -425,6 +426,13 @@ enum AppControlQueryID: String, CaseIterable, Sendable {
 
     var descriptor: AppControlCommandDescriptor {
         switch self {
+        case .annotationKeys:
+            return .init(
+                id: rawValue,
+                kind: .query,
+                summary: "Return runtime-global workspace annotation keys previously registered in this Toastty instance.",
+                selectors: []
+            )
         case .workspaceSnapshot:
             return .init(id: rawValue, kind: .query, summary: "Return workspace structure and tab metadata.", selectors: [.windowID, .workspaceID])
         case .terminalState:

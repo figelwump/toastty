@@ -35,6 +35,16 @@ Toastty is designed to run locally on your machine. The app itself does not send
     recolored by another annotation call. Contains only keys and color tokens,
     never chip text or URLs. Runtime-isolated instances keep their own copy
     inside the runtime home.
+  - The read-only `annotation.keys` app-control query exposes all registered
+    key strings in the current runtime, including historical keys, to
+    automation callers even when a managed session is workspace-scoped. Keys
+    are caller-authored and may contain sensitive semantic labels. The query
+    does not expose the stored colors, workspace IDs, usage counts, chip text,
+    or URLs.
+  - To remove a mistakenly disclosed historical key, quit every Toastty
+    instance using that runtime home, remove that key's entry from
+    `annotation-styles.json`, and relaunch Toastty. Do not edit the file while
+    Toastty is running because the in-memory registry remains authoritative.
 - `~/.toastty/recent-right-panel-items.json`
   - The locally persisted Recently Opened list for right-panel browsers, local
     document paths, and Scratchpad document IDs/titles. The list contains up to

@@ -109,6 +109,13 @@ final class AnnotationStyleStore: ObservableObject {
         colorTokensByKey[key] ?? Self.fallbackColorToken(forKey: key)
     }
 
+    /// Runtime-global historical keys in deterministic bytewise order. Keys
+    /// admitted through app-control and persisted-load boundaries are
+    /// canonical lowercase ASCII, so Swift's lexical ordering is bytewise here.
+    func registeredKeys() -> [String] {
+        colorTokensByKey.keys.sorted()
+    }
+
     /// Stable first automatic candidate for a key. Claims are materialized in
     /// the style file; allocation probes the same safe color space when this
     /// candidate is already owned by another key.

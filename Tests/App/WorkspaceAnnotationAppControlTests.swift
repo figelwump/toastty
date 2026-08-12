@@ -12,11 +12,13 @@ private final class WorkspaceAnnotationAppControlFixture {
     let store: AppStore
     let executor: AppControlExecutor
     let annotationStyleStore: AnnotationStyleStore
+    let sessionRuntimeStore: SessionRuntimeStore
     let workspaceID: UUID
     private let runtimeHomeURL: URL
 
     init(
         brokenStyleStore: Bool = false,
+        includeStyleStore: Bool = true,
         inactiveAnnotationUsageCounts: [String: Int] = [:],
         inactiveAnnotationUsageUnavailable: Bool = false
     ) throws {
@@ -40,7 +42,7 @@ private final class WorkspaceAnnotationAppControlFixture {
 
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
-        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
         executor = AppControlExecutor(
@@ -61,7 +63,7 @@ private final class WorkspaceAnnotationAppControlFixture {
                 cliExecutablePathProvider: { "/bin/sh" },
                 socketPathProvider: { "/tmp/toastty-annotation-test.sock" }
             ),
-            annotationStyleStore: annotationStyleStore,
+            annotationStyleStore: includeStyleStore ? annotationStyleStore : nil,
             inactiveAnnotationUsageCountsProvider: {
                 if inactiveAnnotationUsageUnavailable {
                     throw WorkspaceAnnotationFixtureError.inactiveUsageUnavailable
@@ -123,6 +125,128 @@ private final class WorkspaceAnnotationAppControlFixture {
 
 @MainActor
 struct WorkspaceAnnotationAppControlTests {
+    @Test
+    func annotationKeysDescriptorExplainsRuntimeGlobalHistory() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+
+        let descriptor = try #require(
+            fixture.executor.listQueryDescriptors().first(where: {
+                $0.id == AppControlQueryID.annotationKeys.rawValue
+            })
+        )
+
+        #expect(descriptor.selectors.isEmpty)
+        #expect(descriptor.summary.contains("runtime-global"))
+        #expect(descriptor.summary.contains("previously registered"))
+    }
+
+    @Test
+    func annotationKeysQueryReturnsSortedHistoricalKeysOnly() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+        _ = try fixture.runSetAnnotation(key: "zeta", text: "last", color: "red")
+        _ = try fixture.runSetAnnotation(key: "alpha", text: "first", color: "green")
+        _ = try fixture.runClearAnnotation(key: "alpha")
+
+        let snapshot = try fixture.executor.runQuery(
+            id: AppControlQueryID.annotationKeys.rawValue,
+            args: [:]
+        )
+
+        #expect(snapshot.keys.sorted() == ["keys"])
+        guard case .array(let keys)? = snapshot["keys"] else {
+            Issue.record("annotation.keys did not return a keys array")
+            return
+        }
+        #expect(keys == [.string("alpha"), .string("zeta")])
+    }
+
+    @Test
+    func annotationKeysQueryReturnsEmptyArrayForFreshRegistry() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+
+        let snapshot = try fixture.executor.runQuery(
+            id: AppControlQueryID.annotationKeys.rawValue,
+            args: [:]
+        )
+
+        #expect(snapshot["keys"] == .array([]))
+    }
+
+    @Test
+    func annotationKeysQueryIsRuntimeIsolated() throws {
+        let firstFixture = try WorkspaceAnnotationAppControlFixture()
+        let secondFixture = try WorkspaceAnnotationAppControlFixture()
+        defer {
+            firstFixture.cleanup()
+            secondFixture.cleanup()
+        }
+        _ = try firstFixture.runSetAnnotation(key: "linear", text: "LIN-030")
+
+        let firstSnapshot = try firstFixture.executor.runQuery(
+            id: AppControlQueryID.annotationKeys.rawValue,
+            args: [:]
+        )
+        let secondSnapshot = try secondFixture.executor.runQuery(
+            id: AppControlQueryID.annotationKeys.rawValue,
+            args: [:]
+        )
+
+        #expect(firstSnapshot["keys"] == .array([.string("linear")]))
+        #expect(secondSnapshot["keys"] == .array([]))
+    }
+
+    @Test
+    func scopedCallerCanReadRuntimeGlobalAnnotationKeys() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture()
+        defer { fixture.cleanup() }
+        let otherWorkspaceID = try fixture.createWorkspace()
+        _ = try fixture.runSetAnnotation(
+            key: "github-pr",
+            text: "PR #4512",
+            workspaceID: otherWorkspaceID
+        )
+        let selection = try #require(fixture.store.state.selectedWorkspaceSelection())
+        let panelID = try #require(selection.workspace.focusedPanelID)
+        fixture.sessionRuntimeStore.startSession(
+            sessionID: "annotation-keys-scoped-caller",
+            agent: .codex,
+            panelID: panelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            scopedWorkspaceIDs: [],
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let snapshot = try fixture.executor.runQuery(
+            id: AppControlQueryID.annotationKeys.rawValue,
+            args: [:],
+            context: AutomationRequestContext(
+                callerSessionID: "annotation-keys-scoped-caller",
+                commandName: "app_control.run_query"
+            )
+        )
+
+        #expect(snapshot["keys"] == .array([.string("github-pr")]))
+    }
+
+    @Test
+    func annotationKeysQueryRejectsUnavailableStyleStore() throws {
+        let fixture = try WorkspaceAnnotationAppControlFixture(includeStyleStore: false)
+        defer { fixture.cleanup() }
+
+        #expect(throws: AutomationSocketError.self) {
+            try fixture.executor.runQuery(
+                id: AppControlQueryID.annotationKeys.rawValue,
+                args: [:]
+            )
+        }
+    }
+
     @Test
     func annotationKeyDescriptorExplainsStableSemanticIdentity() throws {
         let fixture = try WorkspaceAnnotationAppControlFixture()
