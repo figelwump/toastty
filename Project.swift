@@ -85,6 +85,7 @@ let ghosttyMacOSSliceDirectoryCandidates = [
     "macos-x86_64",
 ]
 let ghosttyStaticLibraryFilenameCandidates = [
+    "libghostty-internal.a",
     "libghostty.a",
     "libghostty-fat.a",
     "ghostty-internal.a",
