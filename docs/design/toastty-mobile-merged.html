@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toastty Mobile — Merged Prototype</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  button { font:inherit; border:none; background:none; cursor:pointer; color:inherit; }
+  button:active { transform:scale(.97); }
+  input { font:inherit; }
+  body {
+    background:#f4f2ee; color:#22211d; padding:34px 28px 52px;
+    font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  }
+  .page { max-width:1140px; margin:0 auto; }
+  h1 { font-size:21px; font-weight:650; letter-spacing:-.2px; }
+  .pagesub { margin-top:8px; font-size:13.5px; color:#6d6961; line-height:1.55; max-width:840px; }
+  .pagesub b { color:#22211d; font-weight:600; }
+  .layout { display:flex; gap:44px; margin-top:32px; flex-wrap:wrap; justify-content:center; }
+  .aside { width:380px; display:flex; flex-direction:column; gap:20px; font-size:13px; color:#4c4942;
+           line-height:1.6; }
+  .aside h3 { font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:#8d887e; font-weight:650;
+              margin-bottom:8px; }
+  .aside b { color:#22211d; font-weight:600; }
+  .aside ul { list-style:none; }
+  .aside li { padding:5px 0 5px 0; border-bottom:1px solid #e9e5dd; }
+  .aside li:last-child { border-bottom:none; }
+  .aside .tag { display:inline-block; font-size:10px; font-weight:700; letter-spacing:.06em; padding:2px 7px;
+                border-radius:5px; margin-right:7px; vertical-align:1px; }
+  .tag.a { background:#1d1f22; color:#e8b46a; }
+  .tag.b { background:#e7effc; color:#2f5cb0; }
+  .tag.c { background:#f5ecdb; color:#96650f; }
+  .legend { display:flex; gap:16px; font-size:12px; color:#6d6961; flex-wrap:wrap; margin-top:10px; }
+  .legend span { display:flex; align-items:center; gap:6px; }
+
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
+  .dot.attention { background:#e8930c; }
+  .dot.working { background:#1fa971; }
+  .dot.ready   { background:#4285f4; }
+  .dot.offline { background:none; border:1.5px solid #6b7076; width:7px; height:7px; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(31,169,113,.45)} 70%{box-shadow:0 0 0 6px rgba(31,169,113,0)} 100%{box-shadow:0 0 0 0 rgba(31,169,113,0)} }
+  .dot.working { animation:pulse 1.9s infinite; }
+
+  /* ===== phone chrome ===== */
+  .phone { width:380px; height:772px; border-radius:54px; background:#0b0b0c; padding:10px; flex:none;
+           box-shadow:0 22px 44px rgba(35,28,16,.20), 0 3px 10px rgba(0,0,0,.10); }
+  .phone-screen { position:relative; width:100%; height:100%; border-radius:44px; overflow:hidden; background:#101214; }
+  .island { position:absolute; top:11px; left:50%; transform:translateX(-50%); width:108px; height:27px;
+            border-radius:15px; background:#0b0b0c; z-index:50; }
+  .sbar { position:absolute; top:0; left:0; right:0; height:46px; display:flex; justify-content:space-between;
+          align-items:center; padding:14px 28px 0; z-index:40; font-size:13.5px; font-weight:650;
+          color:#f5f4f0; pointer-events:none; }
+  .homebar { position:absolute; bottom:7px; left:50%; transform:translateX(-50%); width:118px; height:4px;
+             border-radius:3px; background:rgba(255,255,255,.75); z-index:55; pointer-events:none; }
+  .screens { position:relative; height:100%; }
+  .screen { position:absolute; inset:0; display:flex; flex-direction:column; background:#101214; color:#e8e6e1;
+            transform:translateX(102%); transition:transform .34s cubic-bezier(.32,.72,.35,1); }
+  .screen.root { transform:translateX(0); z-index:1; }
+  .screen.lvl1 { z-index:2; }
+  .screens[data-depth="1"] .screen.root { transform:translateX(-26%); }
+  .screens[data-depth="1"] .screen.lvl1 { transform:translateX(0); }
+  .hdr { flex:none; }
+  .body { flex:1; overflow-y:auto; scrollbar-width:none; }
+  .body::-webkit-scrollbar { display:none; }
+  .boot { padding:90px 30px; font-size:13px; color:#8d887e; text-align:center; }
+  .proto-error { padding:90px 24px; font-size:13px; color:#e0705a; }
+  .toast { position:absolute; left:50%; bottom:92px; transform:translateX(-50%) translateY(14px); z-index:60;
+           background:rgba(240,236,228,.95); color:#1c1a16; font-size:12px; font-weight:600; padding:9px 16px;
+           border-radius:999px; opacity:0; transition:all .3s ease; white-space:nowrap; pointer-events:none; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  .typing { display:inline-flex; gap:4px; padding:10px 2px; }
+  .typing i { width:6px; height:6px; border-radius:50%; background:#77726a; animation:tybl 1.1s infinite; }
+  .typing i:nth-child(2){ animation-delay:.15s } .typing i:nth-child(3){ animation-delay:.3s }
+  @keyframes tybl { 0%,60%,100%{opacity:.3; transform:translateY(0)} 30%{opacity:1; transform:translateY(-3px)} }
+  .live-dot { width:7px; height:7px; border-radius:50%; background:#1fa971; display:inline-block; }
+  .mono { font-family:ui-monospace, "SF Mono", Menlo, monospace; }
+
+  /* ===== merged skin (Toastty dark) ===== */
+  .m-hdr { padding:60px 20px 12px; display:flex; justify-content:space-between; align-items:baseline; }
+  .m-brand { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:15px; font-weight:700;
+             letter-spacing:.22em; }
+  .m-conn { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10.5px; color:#8d887e;
+            display:flex; gap:6px; align-items:center; }
+  .m-body { padding:2px 14px 40px; }
+  .m-sec { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10px; letter-spacing:.18em;
+           color:#77726a; margin:18px 6px 8px; }
+  .m-empty { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11.5px; color:#5d5952;
+             padding:10px 6px; }
+
+  /* needs-you queue (from A) */
+  .m-card { background:#181b1e; border:1px solid #23272b; border-left:3px solid #e8930c; border-radius:12px;
+            padding:12px 14px; margin-bottom:10px; }
+  .m-card-meta { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10.5px; color:#8d887e;
+                 display:flex; align-items:center; gap:7px; }
+  .m-agent { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10.5px; font-weight:700; }
+  .m-card-title { font-size:14.5px; font-weight:650; margin-top:7px; }
+  .m-card-line { font-size:12px; color:#b8b4ac; margin-top:5px; line-height:1.45; }
+  .m-card-line code { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11px; color:#e8b46a; }
+  .m-card-actions { display:flex; gap:8px; margin-top:11px; }
+  .m-btn { font-size:12px; font-weight:650; padding:7px 14px; border-radius:8px; background:#22262a; color:#d9d6cf; }
+  .m-btn.primary { background:#e8930c; color:#161006; }
+  .m-btn.ghost { background:none; color:#8d887e; margin-left:auto; }
+
+  /* workspace cards (structure from B, skin from A) */
+  .m-wcard { background:#181b1e; border:1px solid #23272b; border-radius:14px; padding:13px 14px 8px;
+             margin-bottom:10px; }
+  .m-wcard-hd { display:flex; justify-content:space-between; align-items:center; }
+  .m-ws-name { font-size:15px; font-weight:650; }
+  .m-pill { font-size:10.5px; font-weight:650; padding:3px 9px; border-radius:999px; }
+  .m-pill.amber { background:rgba(232,147,12,.14); color:#e8b46a; }
+  .m-pill.green { background:rgba(31,169,113,.14); color:#5fd0a5; }
+  .m-pill.gray  { background:#22262a; color:#8d887e; }
+  .m-ws-path { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10px; color:#77726a;
+               margin-top:3px; }
+  .m-mini { margin-top:10px; border-top:1px solid #1f2327; }
+  .m-mini-row { display:flex; align-items:center; gap:8px; padding:8px 2px; font-size:12.5px;
+                border-bottom:1px solid #1a1e21; }
+  .m-mini-row:last-child { border-bottom:none; }
+  .m-mini-row .t { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#c9c5bd; }
+  .m-mini-row .time { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10px; color:#77726a; }
+  .m-mini-row.offline .t { color:#77726a; }
+
+  /* detail screen */
+  .m-hdr2 { padding:58px 16px 12px; display:flex; align-items:center; gap:6px; border-bottom:1px solid #1c2023; }
+  .backb { font-size:26px; line-height:1; color:#e8930c; padding:0 6px 3px 0; }
+  .m-hdr2 .t { font-size:15.5px; font-weight:650; }
+  .m-hdr2 .s { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10px; color:#77726a; margin-top:2px; }
+  .m-sess { padding:12px 14px; border-bottom:1px solid #1c2023; }
+  .m-sess.is-attention { border-left:3px solid #e8930c; background:#16181a; }
+  .m-sess.is-offline { opacity:.62; }
+  .m-sess-top { display:flex; align-items:center; gap:8px; }
+  .m-sess-title { font-size:13.5px; font-weight:600; flex:1; white-space:nowrap; overflow:hidden;
+                  text-overflow:ellipsis; }
+  .m-time { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10px; color:#77726a; flex:none; }
+  .m-draft { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:9.5px; color:#e8b46a;
+             border:1px solid #3a2e14; border-radius:5px; padding:1px 5px; flex:none; }
+  .m-sess-last { font-size:11.5px; color:#8f8b83; margin-top:5px; white-space:nowrap; overflow:hidden;
+                 text-overflow:ellipsis; }
+
+  /* bottom sheet chat (from C) */
+  .scrim { position:absolute; inset:0; background:rgba(0,0,0,.5); opacity:0; pointer-events:none;
+           transition:opacity .3s; z-index:44; }
+  .scrim.show { opacity:1; pointer-events:auto; }
+  .sheet { position:absolute; left:0; right:0; bottom:0; height:87%; z-index:46; border-radius:22px 22px 0 0;
+           background:#15181b; border-top:1px solid #2a2f34; transform:translateY(105%); display:flex;
+           flex-direction:column; transition:transform .38s cubic-bezier(.32,.72,.3,1);
+           box-shadow:0 -10px 34px rgba(0,0,0,.5); color:#e8e6e1; }
+  .sheet.open { transform:translateY(0); }
+  .m-sheet-hd { flex:none; padding:8px 18px 10px; border-bottom:1px solid #1f2327; }
+  .grab { width:38px; height:5px; border-radius:3px; background:#3a3f45; margin:0 auto 10px; }
+  .m-sheet-row { display:flex; align-items:center; justify-content:space-between; }
+  .m-sheet-t { font-size:15.5px; font-weight:650; }
+  .m-sheet-s { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10px; color:#8d887e;
+               margin-top:3px; display:flex; align-items:center; gap:6px; }
+  .m-x { font-size:13px; color:#8d887e; width:28px; height:28px; border-radius:50%; background:#22262a; flex:none; }
+  .m-chat { padding:14px 16px 20px; display:flex; flex-direction:column; gap:12px; }
+  .m-turn-u { align-self:flex-end; max-width:82%; background:#3a2e14; border:1px solid #55431d; color:#f0e8d8;
+              font-size:13px; line-height:1.5; padding:9px 13px; border-radius:14px 14px 4px 14px; }
+  .m-turn-a { align-self:flex-start; max-width:92%; font-size:13px; line-height:1.55; color:#dcd9d2; }
+  .m-tool { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10.5px; color:#77726a; }
+  .m-appr { border:1px solid #55431d; background:#181509; border-radius:12px; padding:12px 14px; }
+  .m-appr .cap { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:9.5px; letter-spacing:.16em;
+                 color:#e8930c; }
+  .m-appr code { display:block; font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:11.5px;
+                 color:#f0e8d8; margin-top:7px; }
+  .m-appr .btns { display:flex; gap:8px; margin-top:11px; }
+  .m-appr.done-ok, .m-appr.done-no { font-size:12px; color:#8f8b83; border-color:#23272b; background:transparent; }
+  .m-compose { flex:none; display:flex; gap:8px; padding:10px 14px 22px; border-top:1px solid #1f2327;
+               align-items:center; }
+  .m-compose input { flex:1; background:#1b1f22; border:1px solid #262b30; border-radius:10px; color:#e8e6e1;
+                     font-size:13px; padding:9px 12px; outline:none; }
+  .m-send { width:34px; height:34px; border-radius:9px; background:#e8930c; color:#161006; font-size:16px;
+            font-weight:700; flex:none; }
+  .m-gate { flex:1; font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:10.5px; color:#77726a;
+            padding:9px 4px; line-height:1.5; }
+  .m-gate.draft { color:#e8b46a; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Toastty Mobile — merged prototype</h1>
+  <p class="pagesub">
+    <b>B's structure · A's "needs you" queue and Toastty-dark skin · C's bottom-sheet chat.</b>
+    Statuses follow the revised design doc's state model: input availability is separate from display
+    status — the compose bar is driven by prompt state, not by whether the agent "looks idle."
+  </p>
+
+  <div class="layout">
+
+    <div class="phone" id="phone-m">
+      <div class="phone-screen">
+        <div class="island"></div>
+        <div class="sbar"><span>9:41</span><span><svg width="62" height="14" viewBox="0 0 62 14" fill="currentColor"><rect x="0" y="6" width="3" height="7" rx="1"/><rect x="5" y="4" width="3" height="9" rx="1"/><rect x="10" y="2" width="3" height="11" rx="1"/><rect x="15" y="0" width="3" height="13" rx="1"/><path d="M28 5c2.5-2.4 6.5-2.4 9 0l-1.6 1.7c-1.6-1.5-4.2-1.5-5.8 0L28 5z"/><path d="M30.5 7.8c1.2-1.1 3.8-1.1 5 0L33 10.4l-2.5-2.6z"/><rect x="42" y="1.5" width="16" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="44" y="3.5" width="10" height="7" rx="1.5"/><rect x="59" y="5" width="2" height="4" rx="1" opacity=".5"/></svg></span></div>
+        <div class="screens" data-depth="0">
+          <div class="screen root"><div class="boot">interactive prototype…</div></div>
+          <div class="screen lvl1"></div>
+        </div>
+        <div class="sheet-layer"></div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+
+    <div class="aside">
+      <div>
+        <h3>What was merged</h3>
+        <ul>
+          <li><span class="tag b">B</span><b>Structure:</b> workspace cards on home, workspace detail screen — mirrors the desktop sidebar.</li>
+          <li><span class="tag a">A</span><b>"Needs you" queue</b> pinned above the workspaces with inline approve / deny, plus the dark, mono-accented skin that matches Toastty today.</li>
+          <li><span class="tag c">C</span><b>Bottom-sheet chat:</b> any session — queue card, mini-row, or detail row — opens as a sheet, so you never lose your place.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Design-doc states demonstrated</h3>
+        <ul>
+          <li><b>Awaiting input</b> (amber) — compose enabled; approve/deny on the pending push. <i>Note: v1 ships approvals read-only ("respond on desktop") until providers expose a semantic approval channel; this shows the target interaction.</i></li>
+          <li><b>Working</b> (green) — compose locked: "input opens at the next prompt."</li>
+          <li><b>Local draft</b> — open <i>Smoke test triage</i>: the desktop has an unsent draft, so remote input is paused (the epoch rule).</li>
+          <li><b>Offline</b> — open <i>Log spelunking</i>: conversation readable, resume happens on the desktop.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Try</h3>
+        <ul>
+          <li>Approve the <code>git push</code> from the home queue — watch the queue, pills, and sheet all update.</li>
+          <li>Reply to Codex's build-number question from the sheet.</li>
+          <li>Tap a workspace card body for the detail screen; tap a mini-row to jump straight to its sheet.</li>
+        </ul>
+        <div class="legend">
+          <span><i class="dot attention"></i> needs you</span>
+          <span><i class="dot working"></i> working</span>
+          <span><i class="dot ready"></i> ready</span>
+          <span><i class="dot offline"></i> offline</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+try {
+  var STATUS = {
+    attention:{ label:'needs you', color:'#e8930c' },
+    working:{   label:'working',   color:'#1fa971' },
+    ready:{     label:'ready',     color:'#4285f4' },
+    offline:{   label:'offline',   color:'#6b7076' }
+  };
+  var AGENTS = { claude:{ color:'#d97757' }, codex:{ color:'#2dbba0' } };
+  var ORDER = { attention:0, working:1, ready:2, offline:3 };
+
+  var data = { workspaces:[
+    { id:'ws1', name:'toastty', path:'~/GiantThings/repos/toastty', sessions:[
+      { id:'s1', agent:'claude', title:'Mobile gateway design', status:'attention', time:'2m',
+        last:'Ready to push feat/gateway — needs approval',
+        transcript:[
+          { role:'user',  text:'Extract the gateway protocol types into their own module and add pairing scaffolding.' },
+          { role:'tool',  text:'Edited Sources/App/Remote/GatewayProtocol.swift · +214 −38' },
+          { role:'tool',  text:'xcodebuild test — 34 passed' },
+          { role:'agent', text:'Done. Protocol types now live in GatewayProtocol.swift with a versioned envelope, and PairingManager has QR payload encoding behind a feature flag. All 34 gateway tests pass.' },
+          { role:'approval', state:'pending', command:'git push origin feat/gateway' }
+        ] },
+      { id:'s2', agent:'codex', title:'Sparkle updater fix', status:'working', time:'now',
+        last:'Running xcodebuild tests (12/34)…',
+        transcript:[
+          { role:'user',  text:'Fix the Sparkle delta update failure going 0.8.x → 0.9.' },
+          { role:'agent', text:'Found it — the appcast signs the full DMG, but deltas were generated pre-notarization. Rebuilding the delta pipeline now.' },
+          { role:'tool',  text:'Running xcodebuild tests (12/34)…' }
+        ] },
+      { id:'s3', agent:'claude', title:'Panel focus bug', status:'ready', time:'18m',
+        last:'Fixed and committed — 3 files changed',
+        transcript:[
+          { role:'user',  text:'Panel focus is lost after closing a modal — it should return to the last terminal.' },
+          { role:'tool',  text:'Committed 3 files · added regression test' },
+          { role:'agent', text:'Fixed — focus now returns to the last focused terminal panel after any modal dismissal. Committed with a regression test.' }
+        ] },
+      { id:'s4', agent:'codex', title:'Release notes draft', status:'ready', time:'1h',
+        last:'Draft ready for review in artifacts/release/',
+        transcript:[
+          { role:'agent', text:'Release notes draft is ready in artifacts/release/. Want me to tighten the highlights section?' }
+        ] }
+    ]},
+    { id:'ws2', name:'herdr research', path:'~/GiantThings/playground/herdr', sessions:[
+      { id:'s5', agent:'claude', title:'Architecture review', status:'working', time:'now',
+        last:'Reading src/server/handoff.rs — fd transfer path',
+        transcript:[
+          { role:'user',  text:'Review herdr’s architecture and write up what Toastty can learn for mobile.' },
+          { role:'tool',  text:'Reading src/server/handoff.rs' },
+          { role:'agent', text:'Their live-handoff transfers PTY fds between server versions — interesting, but the frame-streaming client contract is the part we should not copy. Writing this up.' }
+        ] },
+      { id:'s8', agent:'claude', title:'Log spelunking', status:'offline', time:'2d',
+        last:'Conversation readable — resume from desktop',
+        transcript:[
+          { role:'user',  text:'Dig through the diagnostics worker logs for the redaction edge case.' },
+          { role:'agent', text:'Found two suspicious entries around the socket-health snapshot; summarized in the panel. We can pick this up whenever.' }
+        ] }
+    ]},
+    { id:'ws3', name:'release 0.9.0', path:'~/…/toastty-worktrees/release', sessions:[
+      { id:'s6', agent:'codex', title:'Changelog + tag', status:'attention', time:'9m',
+        last:'Which build number should I use — 412 or 413?',
+        reply:'Tagging with build 413. I’ll draft the GitHub release next and ping you before publishing.',
+        transcript:[
+          { role:'user',  text:'Draft the 0.9.0 changelog from the release diff and prep the tag.' },
+          { role:'tool',  text:'Read 41 commits · drafted release-notes.md' },
+          { role:'agent', text:'Changelog drafted — 12 features, 9 fixes. One thing before I tag: which build number should I use, 412 or 413? 412 exists as a failed archive.' }
+        ] },
+      { id:'s7', agent:'claude', title:'Smoke test triage', status:'ready', time:'3h', localDraft:true,
+        last:'2 flaky tests quarantined, issues filed',
+        transcript:[
+          { role:'agent', text:'Quarantined the 2 flaky smoke tests and filed issues with repro notes. Ready for the next batch when you are.' }
+        ] }
+    ]}
+  ]};
+
+  var phone = document.getElementById('phone-m');
+  var st = { wsId:null, sId:null, depth:0 };
+  var screens = phone.querySelector('.screens');
+  var home = phone.querySelector('.screen.root');
+  var detail = phone.querySelector('.screen.lvl1');
+  var layer = phone.querySelector('.sheet-layer');
+
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function dot(k){ return '<span class="dot '+k+'"></span>'; }
+  function agentTag(a){ return '<span class="m-agent" style="color:'+AGENTS[a].color+'">'+a+'</span>'; }
+  function findSession(id){
+    for (var i=0;i<data.workspaces.length;i++){
+      var ws=data.workspaces[i];
+      for (var j=0;j<ws.sessions.length;j++) if(ws.sessions[j].id===id) return { ws:ws, s:ws.sessions[j] };
+    }
+    return null;
+  }
+  function findWs(id){ var out=null; data.workspaces.forEach(function(w){ if(w.id===id) out=w; }); return out; }
+  function sorted(ws){ return ws.sessions.slice().sort(function(a,b){ return ORDER[a.status]-ORDER[b.status]; }); }
+  function attention(){
+    var out=[]; data.workspaces.forEach(function(ws){ ws.sessions.forEach(function(s){
+      if(s.status==='attention') out.push({ws:ws,s:s}); }); });
+    return out;
+  }
+  function pendingApproval(s){
+    for (var i=0;i<s.transcript.length;i++){
+      var t=s.transcript[i]; if(t.role==='approval'&&t.state==='pending') return t;
+    }
+    return null;
+  }
+  // input availability per the design doc: separate from display status
+  function inputState(s){
+    if(s.status==='offline') return 'offline';
+    if(s.status==='working') return 'busy';
+    if(s.localDraft) return 'localDraft';
+    return 'open';
+  }
+  function toast(msg){
+    var scr = phone.querySelector('.phone-screen');
+    var t = document.createElement('div'); t.className='toast'; t.textContent=msg;
+    scr.appendChild(t);
+    requestAnimationFrame(function(){ t.classList.add('show'); });
+    setTimeout(function(){ t.classList.remove('show'); setTimeout(function(){ t.remove(); }, 350); }, 2100);
+  }
+
+  function mutApprove(s){
+    var ap = pendingApproval(s); if(!ap) return;
+    ap.state='approved'; s.status='working'; s.time='now';
+    s.transcript.push({ role:'tool', text:'Running: '+ap.command });
+    s.last='Running: '+ap.command;
+    toast('Approved — injected at the desktop prompt');
+    refresh();
+    setTimeout(function(){
+      s.transcript.push({ role:'agent', text:'Pushed. CI is running — I’ll watch it and report back here.' });
+      s.last='Watching CI on feat/gateway…';
+      refresh();
+    }, 2600);
+  }
+  function mutDeny(s){
+    var ap = pendingApproval(s); if(!ap) return;
+    ap.state='denied'; s.status='ready'; s.time='now';
+    s.transcript.push({ role:'agent', text:'Okay, holding off on the push. Anything you want changed first?' });
+    s.last='Holding off — waiting on you';
+    toast('Denied — nothing was run');
+    refresh();
+  }
+  function mutSend(s, text){
+    if(!text || !text.trim() || inputState(s)!=='open') return;
+    s.transcript.push({ role:'user', text:text.trim() });
+    s.status='working'; s.time='now'; s._typing=true; s.last='Working…';
+    toast('Sent to the desktop terminal');
+    refresh();
+    setTimeout(function(){
+      s._typing=false;
+      s.transcript.push({ role:'agent', text: s.reply || 'On it — working now. I’ll flag you here if I need anything.' });
+      refresh();
+    }, 2100);
+  }
+
+  function wsPill(ws){
+    var a = ws.sessions.filter(function(s){return s.status==='attention';}).length;
+    var w = ws.sessions.filter(function(s){return s.status==='working';}).length;
+    if(a) return '<div class="m-pill amber">'+a+' need'+(a===1?'s':'')+' you</div>';
+    if(w) return '<div class="m-pill green">'+w+' working</div>';
+    return '<div class="m-pill gray">quiet</div>';
+  }
+
+  function renderHome(){
+    var q = attention();
+    var html = '<div class="hdr m-hdr"><div class="m-brand">TOASTTY</div>' +
+      '<div class="m-conn"><span class="live-dot"></span>mac-studio</div></div>' +
+      '<div class="body m-body">' +
+      '<div class="m-sec">NEEDS YOU · '+q.length+'</div>';
+    if(!q.length){
+      html += '<div class="m-empty">queue clear — all agents running or idle</div>';
+    } else {
+      q.forEach(function(p){
+        var ap = pendingApproval(p.s);
+        html += '<div class="m-card">' +
+          '<div class="m-card-meta">'+dot('attention')+esc(p.ws.name)+' · '+agentTag(p.s.agent)+' · '+p.s.time+'</div>' +
+          '<div class="m-card-title">'+esc(p.s.title)+'</div>' +
+          '<div class="m-card-line">'+(ap ? 'Run: <code>'+esc(ap.command)+'</code>' : esc(p.s.last))+'</div>' +
+          '<div class="m-card-actions">' +
+          (ap ? '<button class="m-btn primary" data-act="approve" data-s="'+p.s.id+'">Approve</button>' +
+                '<button class="m-btn" data-act="deny" data-s="'+p.s.id+'">Deny</button>'
+              : '<button class="m-btn primary" data-act="open-sheet" data-s="'+p.s.id+'">Reply</button>') +
+          '<button class="m-btn ghost" data-act="open-sheet" data-s="'+p.s.id+'">Open ›</button>' +
+          '</div></div>';
+      });
+    }
+    html += '<div class="m-sec">WORKSPACES</div>';
+    data.workspaces.forEach(function(ws){
+      var rows = sorted(ws).slice(0,3).map(function(s){
+        return '<div class="m-mini-row'+(s.status==='offline'?' offline':'')+'" data-act="open-sheet" data-s="'+s.id+'">' +
+          dot(s.status)+'<span class="t">'+esc(s.title)+'</span>' +
+          (s.localDraft?'<span class="m-draft">✎ desktop draft</span>':'') +
+          '<span class="time">'+s.time+'</span></div>';
+      }).join('');
+      var more = ws.sessions.length>3 ? '<div class="m-mini-row" data-act="open-ws" data-ws="'+ws.id+'">' +
+        '<span class="t" style="color:#77726a">+'+(ws.sessions.length-3)+' more…</span></div>' : '';
+      html += '<div class="m-wcard" data-act="open-ws" data-ws="'+ws.id+'">' +
+        '<div class="m-wcard-hd"><div class="m-ws-name">'+esc(ws.name)+'</div>'+wsPill(ws)+'</div>' +
+        '<div class="m-ws-path">'+esc(ws.path)+'</div>' +
+        '<div class="m-mini">'+rows+more+'</div></div>';
+    });
+    html += '</div>';
+    home.innerHTML = html;
+  }
+
+  function renderDetail(){
+    if(!st.wsId) return;
+    var ws = findWs(st.wsId); if(!ws) return;
+    var html = '<div class="hdr m-hdr2"><button class="backb" data-act="back">‹</button>' +
+      '<div><div class="t">'+esc(ws.name)+'</div><div class="s">'+ws.sessions.length+' sessions · '+esc(ws.path)+'</div></div></div>' +
+      '<div class="body">';
+    sorted(ws).forEach(function(s){
+      html += '<div class="m-sess'+(s.status==='attention'?' is-attention':'')+(s.status==='offline'?' is-offline':'')+
+        '" data-act="open-sheet" data-s="'+s.id+'">' +
+        '<div class="m-sess-top">'+dot(s.status)+agentTag(s.agent)+
+        '<span class="m-sess-title">'+esc(s.title)+'</span>' +
+        (s.localDraft?'<span class="m-draft">✎ desktop draft</span>':'') +
+        '<span class="m-time">'+s.time+'</span></div>' +
+        '<div class="m-sess-last">'+esc(s.last)+'</div></div>';
+    });
+    html += '</div>';
+    detail.innerHTML = html;
+  }
+
+  function composeHTML(s, prevInput){
+    var is = inputState(s);
+    if(is==='open')
+      return '<div class="m-compose"><input placeholder="Message '+s.agent+'…" value="'+esc(prevInput)+'">' +
+        '<button class="m-send" data-act="send">↑</button></div>';
+    if(is==='busy')
+      return '<div class="m-compose"><div class="m-gate">'+s.agent+' is working — input opens at the next prompt</div></div>';
+    if(is==='localDraft')
+      return '<div class="m-compose"><div class="m-gate draft">✎ paused — a draft is in progress on the desktop</div></div>';
+    return '<div class="m-compose"><div class="m-gate">session offline — conversation is readable; resume from the desktop</div></div>';
+  }
+
+  function renderSheet(open){
+    if(!st.sId) return;
+    var f = findSession(st.sId); if(!f) return;
+    var s = f.s;
+    var prevInput = layer.querySelector('input') ? layer.querySelector('input').value : '';
+    var html = '<div class="scrim'+(open?' show':'')+'" data-act="close-sheet"></div>' +
+      '<div class="sheet'+(open?' open':'')+'">' +
+      '<div class="m-sheet-hd"><div class="grab"></div><div class="m-sheet-row">' +
+      '<div><div class="m-sheet-t">'+esc(s.title)+'</div>' +
+      '<div class="m-sheet-s">'+dot(s.status)+' '+esc(f.ws.name)+' · '+agentTag(s.agent)+' · '+STATUS[s.status].label+'</div></div>' +
+      '<button class="m-x" data-act="close-sheet">✕</button></div></div>' +
+      '<div class="body m-chat">';
+    s.transcript.forEach(function(t){
+      if(t.role==='user') html += '<div class="m-turn-u">'+esc(t.text)+'</div>';
+      else if(t.role==='agent') html += '<div class="m-turn-a">'+esc(t.text)+'</div>';
+      else if(t.role==='tool') html += '<div class="m-tool">▸ '+esc(t.text)+'</div>';
+      else if(t.role==='approval'){
+        if(t.state==='pending')
+          html += '<div class="m-appr"><div class="cap">APPROVAL REQUESTED</div><code>'+esc(t.command)+'</code>' +
+            '<div class="btns"><button class="m-btn primary" data-act="approve" data-s="'+s.id+'">Approve</button>' +
+            '<button class="m-btn" data-act="deny" data-s="'+s.id+'">Deny</button></div></div>';
+        else if(t.state==='approved')
+          html += '<div class="m-appr done-ok">✓ approved · '+esc(t.command)+'</div>';
+        else html += '<div class="m-appr done-no">✕ denied · '+esc(t.command)+'</div>';
+      }
+    });
+    if(s._typing) html += '<div class="typing"><i></i><i></i><i></i></div>';
+    html += '</div>' + composeHTML(s, prevInput) + '</div>';
+    layer.innerHTML = html;
+    var body = layer.querySelector('.m-chat'); if(body) body.scrollTop = body.scrollHeight;
+  }
+
+  function refresh(){
+    renderHome(); renderDetail();
+    if(st.sId) renderSheet(true);
+    screens.setAttribute('data-depth', String(st.depth));
+  }
+
+  function closeSheet(){
+    var sh=layer.querySelector('.sheet'), sc=layer.querySelector('.scrim');
+    if(sh) sh.classList.remove('open');
+    if(sc) sc.classList.remove('show');
+    st.sId=null;
+    setTimeout(function(){ if(!st.sId) layer.innerHTML=''; }, 400);
+  }
+
+  var handlers = {
+    'open-ws': function(t){ st.wsId=t.getAttribute('data-ws'); st.depth=1; refresh(); },
+    'open-sheet': function(t){
+      var sid = t.getAttribute('data-s');
+      if(st.sId===sid) return;
+      st.sId = sid;
+      renderSheet(false);
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){
+        var sh=layer.querySelector('.sheet'), sc=layer.querySelector('.scrim');
+        if(sh) sh.classList.add('open'); if(sc) sc.classList.add('show');
+      }); });
+    },
+    'close-sheet': closeSheet,
+    'back': function(){ st.depth=0; st.wsId=null; refresh(); },
+    'approve': function(t){ var f=findSession(t.getAttribute('data-s')); if(f) mutApprove(f.s); },
+    'deny': function(t){ var f=findSession(t.getAttribute('data-s')); if(f) mutDeny(f.s); },
+    'send': function(){
+      if(!st.sId) return;
+      var f=findSession(st.sId); var inp=layer.querySelector('input');
+      if(f && inp){ var v=inp.value; inp.value=''; mutSend(f.s, v); }
+    }
+  };
+  phone.addEventListener('click', function(e){
+    var t = e.target.closest('[data-act]');
+    if(!t || !phone.contains(t)) return;
+    var act = t.getAttribute('data-act');
+    if(handlers[act]) handlers[act](t, e);
+    e.stopPropagation();
+  });
+  phone.addEventListener('keydown', function(e){
+    if(e.key==='Enter' && e.target && e.target.matches('input')) handlers.send();
+  });
+
+  refresh();
+} catch (err) {
+  console.error('merged prototype init failed', err);
+  document.querySelectorAll('.boot').forEach(function(b){
+    b.className='proto-error'; b.textContent='Prototype failed to start: '+err.message;
+  });
+}
+</script>
+</body>
+</html>

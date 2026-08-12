@@ -1,0 +1,86 @@
+# Remote Access
+
+Toastty's current remote client is a small web app served by Toastty on your
+Mac. Tailscale Serve provides the private tailnet HTTPS address; Toastty itself
+listens only on `127.0.0.1` and does not expose a LAN or public listener.
+
+## Set up access
+
+1. Install Tailscale on the Mac and phone, sign both into the same tailnet, and
+   confirm they can reach each other.
+2. In Toastty, open **Toastty > Remote Access…** and turn on **Enable Remote
+   Access**. The default local address is `http://127.0.0.1:42871`.
+3. Configure Tailscale Serve to proxy an HTTPS tailnet URL to that loopback
+   address. With current Tailscale clients, this is typically:
+
+   ```bash
+   tailscale serve --bg http://127.0.0.1:42871
+   ```
+
+   Follow the URL printed by Tailscale; your tailnet policy and HTTPS settings
+   may require an administrator. `tailscale serve status` shows the active
+   mapping.
+4. Enter the exact HTTPS origin in Toastty's **Tailnet origin** field, without
+   a trailing path—for example `https://your-mac.example-tailnet.ts.net`.
+   Toastty rejects browser requests whose `Origin` does not exactly match this
+   value.
+5. Open that HTTPS URL on the phone. In Toastty, choose **Show Pairing Code**,
+   then enter the single-use code and a device name in the phone web app. The
+   code expires after five minutes.
+
+Pairing installs an HttpOnly, same-site credential cookie in that browser. It
+is specific to that browser profile: private browsing, cleared site data, or a
+different browser requires pairing again. Do not put a pairing code or cookie
+in a URL, message, screenshot, or command line.
+
+## Reading and replying
+
+A newly paired device can read supported agent conversations and send replies.
+Remote replies are enabled by default for active sessions. You can turn off
+**Send** for a paired device persistently, turn off replies for an individual
+active session until Toastty restarts, revoke one device, revoke all devices,
+or disable the gateway immediately.
+
+Remote input is fail-closed. A send succeeds only while Toastty can prove that
+the root prompt shown to the phone is still open and untouched. Local typing,
+a newer prompt, a modal interaction, an offline session, or an unavailable
+terminal rejects the send. An accepted send means Toastty handed it to the
+terminal; the transcript event carrying the same request ID is the later
+confirmation.
+
+The browser reconnects automatically after transient network loss and reloads
+from Toastty's current snapshots when it detects an event gap. Keep Toastty
+running and Remote Access enabled; Tailscale Serve alone cannot reach a stopped
+local gateway.
+
+## Privacy and security
+
+- Remote Access is tailnet-private only when your Tailscale Serve and tailnet
+  ACL configuration keep it private. Do not publish the loopback gateway
+  through Funnel, a public reverse proxy, port forwarding, or another ingress.
+- Tailscale terminates HTTPS. The hop from Tailscale Serve to Toastty is plain
+  HTTP confined to loopback.
+- Toastty stores only a SHA-256 hash of the browser credential, never the
+  credential itself. The browser receives the credential only as an HttpOnly
+  cookie; the web app does not put it in page storage, URLs, or JSON bodies.
+- The phone receives normalized conversation metadata and events, including
+  message text, concise tool activity, state, workspace/panel placement, and
+  working directories when present. It does not receive raw provider JSONL or
+  raw terminal frames.
+- Toastty keeps a bounded local audit log of remote-security actions. Entries
+  may include timestamps, device IDs or names, and rejection reasons, but not
+  message text, prompts, or credential values.
+- Pairing failures and invalid credentials are rate-limited. Presented origins
+  outside the exact allowlist are rejected on every route.
+
+If a phone is lost or a browser profile may be compromised, revoke that device
+from the Mac. Disabling Remote Access closes active subscriptions and stops all
+remote reads. Remove the Tailscale Serve mapping separately when you no longer
+need the tailnet URL:
+
+```bash
+tailscale serve reset
+```
+
+See [Toastty Privacy and Local Data](privacy-and-local-data.md) for the local
+files associated with Remote Access.
