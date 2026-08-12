@@ -25,6 +25,7 @@ LOCAL_ARTIFACTS_DIR=""
 REMOTE_PREFLIGHT_ERROR=""
 REMOTE_CUSTOM_CLEANUP_SOCKET_PATH=""
 REMOTE_CUSTOM_CLEANUP_APP_PID=""
+REMOTE_CUSTOM_CLEANUP_TERM_ATTEMPTS=20
 
 usage() {
   cat <<'EOF'
@@ -75,15 +76,77 @@ fail() {
   exit 1
 }
 
+remote_custom_pid_is_safe() {
+  local pid="$1"
+  local decimal_pid
+
+  [[ "$pid" =~ ^[0-9]{1,10}$ ]] || return 1
+  decimal_pid="$pid"
+  while [[ "$decimal_pid" == 0* && "${#decimal_pid}" -gt 1 ]]; do
+    decimal_pid="${decimal_pid#0}"
+  done
+  ((decimal_pid > 1))
+}
+
+remote_custom_process_tree() {
+  local root_pid="$1"
+  local child_pid
+
+  remote_custom_pid_is_safe "$root_pid" || return 0
+  if command -v pgrep >/dev/null 2>&1; then
+    while IFS= read -r child_pid; do
+      remote_custom_pid_is_safe "$child_pid" || continue
+      remote_custom_process_tree "$child_pid"
+    done < <(pgrep -P "$root_pid" 2>/dev/null || true)
+  fi
+  printf '%s\n' "$root_pid"
+}
+
 cleanup_remote_custom_mode() {
   local cleanup_exit_code=$?
+  local cleanup_pid="$REMOTE_CUSTOM_CLEANUP_APP_PID"
+  local process_pid
+  local attempt
+  local process_is_live
+  local -a process_tree=()
 
   if [[ -n "$REMOTE_CUSTOM_CLEANUP_SOCKET_PATH" ]]; then
-    rm -f "$REMOTE_CUSTOM_CLEANUP_SOCKET_PATH"
+    rm -f "$REMOTE_CUSTOM_CLEANUP_SOCKET_PATH" || true
   fi
-  if [[ -n "$REMOTE_CUSTOM_CLEANUP_APP_PID" ]]; then
-    kill "$REMOTE_CUSTOM_CLEANUP_APP_PID" >/dev/null 2>&1 || true
-    wait "$REMOTE_CUSTOM_CLEANUP_APP_PID" >/dev/null 2>&1 || true
+  if remote_custom_pid_is_safe "$cleanup_pid"; then
+    while IFS= read -r process_pid; do
+      [[ -n "$process_pid" ]] && process_tree+=("$process_pid")
+    done < <(remote_custom_process_tree "$cleanup_pid")
+
+    # Stop the trusted root first so it cannot keep spawning work while its
+    # already-discovered descendants are being terminated.
+    for ((attempt = ${#process_tree[@]} - 1; attempt >= 0; attempt -= 1)); do
+      kill -TERM "${process_tree[$attempt]}" >/dev/null 2>&1 || true
+    done
+
+    for ((attempt = 0; attempt < REMOTE_CUSTOM_CLEANUP_TERM_ATTEMPTS; attempt += 1)); do
+      process_is_live=0
+      for process_pid in "${process_tree[@]}"; do
+        if kill -0 "$process_pid" >/dev/null 2>&1; then
+          process_is_live=1
+          break
+        fi
+      done
+      [[ "$process_is_live" == "0" ]] && break
+      sleep 0.1
+    done
+
+    # Refresh descendants before escalation in case the app resisted TERM and
+    # spawned more work during the grace period. Also retain the initial list so
+    # children orphaned by an exiting root cannot escape cleanup.
+    while IFS= read -r process_pid; do
+      remote_custom_pid_is_safe "$process_pid" || continue
+      kill -KILL "$process_pid" >/dev/null 2>&1 || true
+    done < <(remote_custom_process_tree "$cleanup_pid")
+    for process_pid in "${process_tree[@]}"; do
+      kill -KILL "$process_pid" >/dev/null 2>&1 || true
+    done
+    wait "$cleanup_pid" >/dev/null 2>&1 || true
   fi
 
   return "$cleanup_exit_code"
@@ -815,6 +878,7 @@ run_remote_smoke_mode() {
 
 run_remote_custom_mode() {
   require_command xcodebuild
+  require_command jq
   require_command peekaboo
 
   local run_label="${TOASTTY_REMOTE_VALIDATE_RUN_LABEL:?TOASTTY_REMOTE_VALIDATE_RUN_LABEL is required}"
@@ -884,16 +948,20 @@ run_remote_custom_mode() {
     status="fail"
     failure_summary="Remote instance.json was not written: $instance_json"
   else
-    local recorded_pid="$app_pid"
-    if command -v jq >/dev/null 2>&1; then
-      recorded_pid="$(jq -r '.pid // empty' "$instance_json")"
-      if [[ -n "$recorded_pid" ]]; then
-        app_pid="$recorded_pid"
-        REMOTE_CUSTOM_CLEANUP_APP_PID="$recorded_pid"
-      fi
-    fi
-
-    if ! kill -0 "$app_pid" >/dev/null 2>&1; then
+    local recorded_pid=""
+    if ! recorded_pid="$(jq -r '.pid // empty' "$instance_json" 2>/dev/null)"; then
+      exit_code=1
+      status="fail"
+      failure_summary="Remote instance.json did not contain valid JSON"
+    elif ! remote_custom_pid_is_safe "$recorded_pid"; then
+      exit_code=1
+      status="fail"
+      failure_summary="Remote instance.json contained an invalid pid"
+    elif [[ "$recorded_pid" != "$app_pid" ]]; then
+      exit_code=1
+      status="fail"
+      failure_summary="Remote instance pid did not match the launched Toastty process"
+    elif ! kill -0 "$app_pid" >/dev/null 2>&1; then
       exit_code=1
       status="fail"
       failure_summary="Remote Toastty process is not running"
