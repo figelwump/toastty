@@ -1,6 +1,6 @@
 ---
 name: toastty-capabilities
-description: Use this skill when a user asks an agent to orchestrate, inspect, automate, control, coordinate, or present work inside Toastty, including creating workspaces or panels, launching agents, opening browser or local-document panels, using Scratchpad, checking terminal state, managing workspace scope, or notifying the user.
+description: Use this skill when a user asks an agent to orchestrate, inspect, automate, control, coordinate, or present work inside Toastty, including setting or clearing Toastty workspace annotations, creating workspaces or panels, launching agents, opening browser or local-document panels, using Scratchpad, checking terminal state, managing workspace scope, or notifying the user. Prefer this over document or code-review annotation tools when the target is a Toastty workspace.
 ---
 
 # Toastty Capabilities
@@ -79,6 +79,12 @@ Common workflow families:
 - Notifications: `toastty notify`.
 
 ## Workspace Annotations
+
+Treat requests to annotate, label, tag, or mark a Toastty workspace as workspace
+annotation actions. Do not turn them into document annotation or code review
+flows. A user-supplied identifier is enough to set the annotation text. A
+remote lookup may provide a canonical URL, but a missing or unverifiable remote
+record must not block the annotation; omit the URL instead.
 
 The caller chooses the annotation `key`; Toastty does not derive it from the
 displayed `text`. Use a stable semantic identity for the kind of annotation,
