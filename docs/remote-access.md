@@ -9,7 +9,7 @@ or public listener.
 
 1. Install Tailscale on the Mac and phone, sign both into the same tailnet, and
    confirm they can reach each other.
-2. In Toastty, open **Window > Remote Access…** and turn on **Enable Remote
+2. In Toastty, open **Toastty > Remote Access…** and turn on **Enable Remote
    Access**. The default local address is `http://127.0.0.1:42871`.
 3. Configure Tailscale Serve to proxy an HTTPS tailnet URL to that loopback
    address. With current Tailscale clients, this is typically:

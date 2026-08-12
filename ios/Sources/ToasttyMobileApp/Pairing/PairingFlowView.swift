@@ -61,7 +61,7 @@ private struct PairingIntroView: View {
             )
 
             VStack(alignment: .leading, spacing: 14) {
-                Label("On your Mac, open Toastty → Settings → Remote Access and create a native pairing offer.", systemImage: "macbook")
+                Label("On your Mac, choose Toastty → Remote Access…, then create a native pairing offer.", systemImage: "macbook")
                 Label("The offer expires after two minutes and can be used only once.", systemImage: "timer")
             }
             .font(.subheadline)

@@ -11,6 +11,11 @@ final class ToasttyMobilePairingUITests: XCTestCase {
         let app = launchPairingFixture("unpaired")
         XCTAssertTrue(app.descendants(matching: .any)["toastty-mobile-session-unpaired"].waitForExistence(timeout: 10))
         app.buttons["toastty-mobile-session-begin-pairing"].tap()
+        XCTAssertTrue(
+            app.staticTexts[
+                "On your Mac, choose Toastty → Remote Access…, then create a native pairing offer."
+            ].exists
+        )
         app.buttons["toastty-mobile-pairing-manual"].tap()
 
         let hostnameField = app.textFields["toastty-mobile-pairing-hostname"]
