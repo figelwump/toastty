@@ -141,6 +141,12 @@ private struct StubFacade: RemoteSessionFacade {
 struct RemoteGatewayRequestHandlerTests {
     static let now = Date(timeIntervalSince1970: 1_786_200_000)
     static let origin = "https://mac.tailnet.ts.net"
+    static let fixtureDirectory = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Tests/RemoteProtocol/Fixtures/v1", isDirectory: true)
 
     static func makeHandler(
         deviceStore: RemoteDeviceStore = RemoteDeviceStore(fileURL: nil),
@@ -202,6 +208,46 @@ struct RemoteGatewayRequestHandlerTests {
         }
         #expect(response.status == 200)
         #expect(String(data: response.body, encoding: .utf8) == "<html>app</html>")
+    }
+
+    @Test func helloIsPublicCachelessAndAdvertisesOnlyImplementedAuthentication() throws {
+        let (handler, _, _) = Self.makeHandler()
+        guard case .respond(let response) = handler.handle(
+            Self.request("GET", "/api/hello"),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+
+        #expect(response.status == 200)
+        let hello = try ConversationEventCoding.makeDecoder().decode(
+            RemoteGatewayHelloResponse.self,
+            from: response.body
+        )
+        #expect(hello == RemoteGatewayHelloResponse())
+        #expect(hello.capabilities == [.browserCookiePairing])
+
+        let expectedFixture = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent("hello-response.json"))
+        #expect(response.body == expectedFixture)
+
+        let serialized = try #require(String(data: response.serialized(), encoding: .utf8))
+        #expect(serialized.contains("Cache-Control: no-store"))
+        #expect(serialized.localizedCaseInsensitiveContains("access-control-allow-origin") == false)
+        #expect(serialized.localizedCaseInsensitiveContains("set-cookie") == false)
+        #expect(serialized.contains(RemoteGatewayProtocol.credentialCookieName) == false)
+    }
+
+    @Test func helloRejectsAPresentDisallowedOrigin() {
+        let (handler, _, _) = Self.makeHandler()
+        guard case .respond(let response) = handler.handle(
+            Self.request("GET", "/api/hello", origin: "https://evil.example"),
+            at: Self.now
+        ) else {
+            Issue.record("Expected response")
+            return
+        }
+        #expect(response.status == 403)
     }
 
     @Test func rejectsUnlistedOriginOnEveryRoute() {

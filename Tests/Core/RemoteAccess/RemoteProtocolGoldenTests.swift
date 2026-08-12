@@ -66,6 +66,7 @@ private extension RemoteProtocolGoldenTests {
         let epoch = RemoteInputEpoch(bindingID: bindingID, counter: 42)
 
         var fixtures: [Fixture] = [
+            try fixture("hello-response.json", RemoteGatewayHelloResponse()),
             try fixture(
                 "pair-request.json",
                 RemoteGatewayPairRequest(code: "ABCD-EFGH", deviceName: "Vishal's iPhone")

@@ -5,8 +5,35 @@ import Foundation
 /// types.
 public enum RemoteGatewayProtocol {
     public static let version = "1.0"
+    public static let minimumSupportedVersion = "1.0"
     /// HttpOnly session-credential cookie. Never appears in URLs or bodies.
     public static let credentialCookieName = "toastty_remote_session"
+}
+
+/// Implemented unauthenticated capability hints. Keep this list narrow: the
+/// native client must not infer that a future authentication mechanism exists
+/// until the host actually implements and advertises it.
+public enum RemoteGatewayCapability: String, Codable, Equatable, Sendable {
+    /// The existing web flow exchanges a short pairing code for an HttpOnly
+    /// browser session cookie. This does not imply native Bearer support.
+    case browserCookiePairing = "browser_cookie_pairing"
+}
+
+/// Public compatibility probe used before a client has credentials.
+public struct RemoteGatewayHelloResponse: Codable, Equatable, Sendable {
+    public var protocolVersion: String
+    public var minimumSupportedProtocolVersion: String
+    public var capabilities: [RemoteGatewayCapability]
+
+    public init(
+        protocolVersion: String = RemoteGatewayProtocol.version,
+        minimumSupportedProtocolVersion: String = RemoteGatewayProtocol.minimumSupportedVersion,
+        capabilities: [RemoteGatewayCapability] = [.browserCookiePairing]
+    ) {
+        self.protocolVersion = protocolVersion
+        self.minimumSupportedProtocolVersion = minimumSupportedProtocolVersion
+        self.capabilities = capabilities
+    }
 }
 
 /// Client-facing device view. Never exposes credentials or hashes.

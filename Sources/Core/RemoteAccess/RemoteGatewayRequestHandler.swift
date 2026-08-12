@@ -89,6 +89,8 @@ public final class RemoteGatewayRequestHandler {
         }
 
         switch (request.method, request.path) {
+        case ("GET", "/api/hello"):
+            return handleHello()
         case ("GET", "/api/sessions"):
             return handleSessionList(request, at: date)
         case ("GET", "/api/subscribe"):
@@ -107,6 +109,11 @@ public final class RemoteGatewayRequestHandler {
     }
 
     // MARK: - Routes
+
+    private func handleHello() -> Outcome {
+        let body = (try? encoder.encode(RemoteGatewayHelloResponse())) ?? Data()
+        return .respond(.json(body: body))
+    }
 
     private func handlePair(_ request: RemoteGatewayHTTPRequest, at date: Date) -> Outcome {
         // Browsers always attach Origin to POSTs; its absence means a
