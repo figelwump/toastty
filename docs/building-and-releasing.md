@@ -38,16 +38,31 @@ sv exec -- <command>
 
 ## Install Ghostty XCFramework (optional)
 
+Toastty's full Ghostty integration requires the internal
+`ghostty_surface_is_at_prompt` API carried by the maintained
+[`toastty-downstream`](https://github.com/figelwump/ghostty/tree/toastty-downstream)
+branch. Clone that branch as a sibling of the Toastty checkout, then build its
+XCFramework using the command in [Ghostty Integration](ghostty-integration.md):
+
+```bash
+git clone --branch toastty-downstream \
+  https://github.com/figelwump/ghostty.git \
+  ../ghostty
+```
+
+After building the XCFramework, install it into Toastty:
+
 ```bash
 GHOSTTY_BUILD_FLAGS="-Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal -Dsentry=false" \
-GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
+GHOSTTY_XCFRAMEWORK_SOURCE=../ghostty/macos/GhosttyKit.xcframework \
   ./scripts/ghostty/install-local-xcframework.sh
 ```
 
 Set `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to control the destination artifact path. The installer also auto-detects a sibling `../ghostty/macos/GhosttyKit.xcframework` checkout when present.
 When the source path lives inside a Ghostty git checkout, the installer also records the Ghostty commit and source cleanliness in an ignored sidecar metadata file next to the installed xcframework.
 
-For the recommended upstream Ghostty build command, release note guidance, see [ghostty-integration.md](ghostty-integration.md).
+For the recommended Ghostty build command, downstream branch policy, and release
+note guidance, see [Ghostty Integration](ghostty-integration.md).
 
 After installing, regenerate:
 

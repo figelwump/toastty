@@ -6,12 +6,32 @@ For the broader build, launch, and automation flag reference, see [Environment a
 
 The repository intentionally does not commit Ghostty binaries. Contributors can:
 
-- build their own Ghostty xcframework from an upstream Ghostty checkout, or
+- build their own Ghostty xcframework from Toastty's maintained Ghostty branch, or
 - build Toastty in fallback mode without Ghostty by setting `TUIST_DISABLE_GHOSTTY=1`
+
+Toastty's full Ghostty integration currently uses the internal
+`ghostty_surface_is_at_prompt` embedder API. That API is not part of upstream
+Ghostty, so the canonical source for Toastty builds is the
+[`toastty-downstream`](https://github.com/figelwump/ghostty/tree/toastty-downstream)
+branch of the Toastty maintainer's Ghostty fork. The branch contains upstream
+Ghostty plus the small downstream surface API addition.
+
+The branch advances when Toastty intentionally updates its Ghostty dependency;
+it does not continuously follow upstream `main`. Updates merge upstream into the
+branch so existing commit history remains available. Builds and releases still
+record the exact Ghostty commit because the branch name is not a stable pin.
 
 ## Recommended Ghostty build
 
-From an upstream Ghostty checkout:
+Clone the maintained branch as a sibling of the Toastty checkout:
+
+```bash
+git clone --branch toastty-downstream \
+  https://github.com/figelwump/ghostty.git \
+  ../ghostty
+```
+
+Then, from that Ghostty checkout:
 
 ```bash
 zig build \
