@@ -6,6 +6,48 @@ import Testing
 @MainActor
 struct SessionRuntimeStoreCodexRootProgressIntegrationTests {
     @Test
+    func codexInfoLoggingOnlySelectsStopAndWorkingReactivationTransitions() {
+        #expect(SessionRuntimeStore.codexStatusInfoEvent(
+            isCodexStop: true,
+            previousKind: .working,
+            currentKind: .ready
+        ) == .stopApplied)
+        #expect(SessionRuntimeStore.codexStatusInfoEvent(
+            isCodexStop: false,
+            previousKind: .ready,
+            currentKind: .working
+        ) == .transitionedToWorking)
+        #expect(SessionRuntimeStore.codexStatusInfoEvent(
+            isCodexStop: false,
+            previousKind: nil,
+            currentKind: .working
+        ) == nil)
+        #expect(SessionRuntimeStore.codexStatusInfoEvent(
+            isCodexStop: false,
+            previousKind: .working,
+            currentKind: .working
+        ) == nil)
+        #expect(SessionRuntimeStore.codexStatusInfoEvent(
+            isCodexStop: false,
+            previousKind: .ready,
+            currentKind: .idle
+        ) == nil)
+    }
+
+    @Test
+    func codexWorkingTransitionLogSourcesIdentifyProviderSignals() {
+        #expect(SessionRuntimeStore.codexRootProgressLogSource(
+            .hookWorking(summary: "Working", detail: nil)
+        ) == "hook")
+        #expect(SessionRuntimeStore.codexRootProgressLogSource(
+            .sessionLogWorking(detail: nil)
+        ) == "session_log")
+        #expect(SessionRuntimeStore.codexRootProgressLogSource(
+            .visibleTextWorking(detail: "Updated Plan")
+        ) == "visible_text")
+    }
+
+    @Test
     func explicitHookProgressProjectsExactStatusAndIsolatedAuthority() {
         let store = SessionRuntimeStore()
         let startedAt = Date(timeIntervalSince1970: 1_700_500_000)

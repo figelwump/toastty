@@ -64,6 +64,40 @@ final class SessionRuntimeStore: ObservableObject {
         let previousKind: SessionStatusKind?
     }
 
+    enum CodexStatusInfoEvent: Equatable {
+        case stopApplied
+        case transitionedToWorking
+    }
+
+    static func codexStatusInfoEvent(
+        isCodexStop: Bool,
+        previousKind: SessionStatusKind?,
+        currentKind: SessionStatusKind?
+    ) -> CodexStatusInfoEvent? {
+        if isCodexStop {
+            return .stopApplied
+        }
+        guard let previousKind,
+              previousKind != .working,
+              currentKind == .working else {
+            return nil
+        }
+        return .transitionedToWorking
+    }
+
+    static func codexRootProgressLogSource(_ observation: CodexRootProgressObservation) -> String {
+        switch observation {
+        case .hookWorking:
+            return "hook"
+        case .sessionLogWorking, .sessionLogTurnAborted:
+            return "session_log"
+        case .visibleTextWorking:
+            return "visible_text"
+        case .localInterrupt:
+            return "local_interrupt"
+        }
+    }
+
     private struct WorkspaceStatusDiagnosticRow: Equatable {
         let sessionID: String
         let panelID: UUID
@@ -326,6 +360,8 @@ final class SessionRuntimeStore: ObservableObject {
             sessionID: sessionID,
             status: status,
             isUIOnlyReadyCollapse: false,
+            statusUpdateSource: "direct",
+            codexHookEvent: nil,
             at: now
         )
     }
@@ -338,6 +374,8 @@ final class SessionRuntimeStore: ObservableObject {
         sessionID: String,
         status: SessionStatus,
         isUIOnlyReadyCollapse: Bool,
+        statusUpdateSource: String,
+        codexHookEvent: CodexHookEvent?,
         at now: Date
     ) {
         let previousRecord = sessionRegistry.sessionsByID[sessionID]
@@ -373,15 +411,30 @@ final class SessionRuntimeStore: ObservableObject {
             )
         }
         if let currentRecord = nextRegistry.sessionsByID[sessionID] {
+            let transitionMetadata = sessionStatusTransitionMetadata(
+                previousRecord: previousRecord,
+                currentRecord: currentRecord,
+                status: storedStatus,
+                now: now
+            )
             ToasttyLog.debug(
                 "Updated managed session status",
                 category: .terminal,
-                metadata: sessionStatusTransitionMetadata(
-                    previousRecord: previousRecord,
-                    currentRecord: currentRecord,
-                    status: storedStatus,
-                    now: now
-                )
+                metadata: transitionMetadata
+            )
+            logCodexStatusInfoEvent(
+                Self.codexStatusInfoEvent(
+                    isCodexStop: codexHookEvent?.isStop == true,
+                    previousKind: previousRecord?.status?.kind,
+                    currentKind: currentRecord.status?.kind
+                ),
+                currentRecord: currentRecord,
+                requestedStatus: status,
+                registry: nextRegistry,
+                statusUpdateSource: statusUpdateSource,
+                codexHookEvent: codexHookEvent,
+                baseMetadata: transitionMetadata,
+                now: now
             )
         }
         publish(nextRegistry, reason: "update_status", at: now)
@@ -408,6 +461,61 @@ final class SessionRuntimeStore: ObservableObject {
                 sessionID: sessionID,
                 status: storedStatus
             )
+        }
+    }
+
+    private func logCodexStatusInfoEvent(
+        _ event: CodexStatusInfoEvent?,
+        currentRecord: SessionRecord,
+        requestedStatus: SessionStatus,
+        registry: SessionRegistry,
+        statusUpdateSource: String,
+        codexHookEvent: CodexHookEvent?,
+        baseMetadata: [String: String],
+        now: Date
+    ) {
+        guard currentRecord.agent == .codex,
+              let event else {
+            return
+        }
+
+        var metadata = baseMetadata
+        let projected = registry.panelStatus(for: currentRecord.panelID, at: now)
+        let state = codexLegacyPolicySnapshot(sessionID: currentRecord.sessionID)
+        metadata["requested_status_kind"] = requestedStatus.kind.rawValue
+        metadata["stored_status_kind"] = currentRecord.status?.kind.rawValue ?? "none"
+        metadata["projected_status_kind"] = projected?.status.kind.rawValue ?? "none"
+        metadata["status_projection"] = statusProjectionMetadata(projected?.projection)
+        metadata["status_update_source"] = statusUpdateSource
+        metadata["status_tracking_source"] = codexStatusTrackingSourceMetadata(
+            sessionID: currentRecord.sessionID
+        )
+        metadata["root_thread_id"] = state.rootThreadID ?? "none"
+        metadata["root_turn_id"] = state.rootTurnID ?? "none"
+        metadata["hook_event_name"] = codexHookEvent?.hookEventName ?? "none"
+        metadata["hook_thread_id"] = codexHookEvent?.threadID ?? "none"
+        metadata["hook_turn_id"] = codexHookEvent?.turnID ?? "none"
+
+        ToasttyLog.info(
+            event == .stopApplied
+                ? "Applied Codex Stop status"
+                : "Codex session transitioned to working",
+            category: .terminal,
+            metadata: metadata
+        )
+    }
+
+    private func statusProjectionMetadata(_ projection: SessionStatusProjection?) -> String {
+        guard let projection else {
+            return "none"
+        }
+        switch projection {
+        case .none:
+            return "none"
+        case .waitingOnChildren(let childCount, let pendingBackgroundTaskCount):
+            return "waiting_on_children(children:\(childCount),pending:\(pendingBackgroundTaskCount))"
+        case .resuming:
+            return "resuming"
         }
     }
 
@@ -1269,13 +1377,21 @@ final class SessionRuntimeStore: ObservableObject {
                 let didProject = applyCodexRootProgressObservation(
                     sessionID: sessionID,
                     observation: .hookWorking(summary: status.summary, detail: status.detail),
+                    codexHookEvent: event,
                     at: now
                 )
                 return stateChanged || didProject
             }
         }
 
-        updateStatus(sessionID: sessionID, status: status, at: now)
+        updateStatus(
+            sessionID: sessionID,
+            status: status,
+            isUIOnlyReadyCollapse: false,
+            statusUpdateSource: "hook",
+            codexHookEvent: event,
+            at: now
+        )
         return true
     }
 
@@ -2763,6 +2879,7 @@ final class SessionRuntimeStore: ObservableObject {
     private func applyCodexRootProgressObservation(
         sessionID: String,
         observation: CodexRootProgressObservation,
+        codexHookEvent: CodexHookEvent? = nil,
         at now: Date
     ) -> Bool {
         guard let source = codexStatusTrackingSourceBySessionID[sessionID],
@@ -2782,6 +2899,9 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(
                 sessionID: sessionID,
                 status: SessionStatus(kind: .working, summary: summary, detail: detail),
+                isUIOnlyReadyCollapse: false,
+                statusUpdateSource: Self.codexRootProgressLogSource(observation),
+                codexHookEvent: codexHookEvent,
                 at: now
             )
             return true
@@ -2790,6 +2910,9 @@ final class SessionRuntimeStore: ObservableObject {
             updateStatus(
                 sessionID: sessionID,
                 status: SessionStatus(kind: .idle, summary: "Waiting", detail: detail),
+                isUIOnlyReadyCollapse: false,
+                statusUpdateSource: Self.codexRootProgressLogSource(observation),
+                codexHookEvent: codexHookEvent,
                 at: now
             )
             return true
@@ -3570,6 +3693,8 @@ final class SessionRuntimeStore: ObservableObject {
             sessionID: record.sessionID,
             status: collapsedReadyStatus(from: status),
             isUIOnlyReadyCollapse: true,
+            statusUpdateSource: "ui_ready_collapse",
+            codexHookEvent: nil,
             at: now
         )
     }
