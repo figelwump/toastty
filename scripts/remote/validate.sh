@@ -23,6 +23,8 @@ REMOTE_GUI_ROOT="${TOASTTY_REMOTE_GUI_ROOT:-$DEFAULT_REMOTE_GUI_ROOT}"
 
 LOCAL_ARTIFACTS_DIR=""
 REMOTE_PREFLIGHT_ERROR=""
+REMOTE_CUSTOM_CLEANUP_SOCKET_PATH=""
+REMOTE_CUSTOM_CLEANUP_APP_PID=""
 
 usage() {
   cat <<'EOF'
@@ -71,6 +73,20 @@ warn() {
 fail() {
   printf 'error: %s\n' "$*" >&2
   exit 1
+}
+
+cleanup_remote_custom_mode() {
+  local cleanup_exit_code=$?
+
+  if [[ -n "$REMOTE_CUSTOM_CLEANUP_SOCKET_PATH" ]]; then
+    rm -f "$REMOTE_CUSTOM_CLEANUP_SOCKET_PATH"
+  fi
+  if [[ -n "$REMOTE_CUSTOM_CLEANUP_APP_PID" ]]; then
+    kill "$REMOTE_CUSTOM_CLEANUP_APP_PID" >/dev/null 2>&1 || true
+    wait "$REMOTE_CUSTOM_CLEANUP_APP_PID" >/dev/null 2>&1 || true
+  fi
+
+  return "$cleanup_exit_code"
 }
 
 require_command() {
@@ -830,15 +846,8 @@ run_remote_custom_mode() {
   mkdir -p "$artifacts_dir" "$runtime_home" "$(dirname "$socket_path")"
   rm -f "$socket_path"
 
-  cleanup_remote_custom_mode() {
-    local cleanup_exit_code=$?
-    rm -f "$socket_path"
-    if [[ -n "$app_pid" ]]; then
-      kill "$app_pid" >/dev/null 2>&1 || true
-      wait "$app_pid" >/dev/null 2>&1 || true
-    fi
-    return "$cleanup_exit_code"
-  }
+  REMOTE_CUSTOM_CLEANUP_SOCKET_PATH="$socket_path"
+  REMOTE_CUSTOM_CLEANUP_APP_PID=""
   trap cleanup_remote_custom_mode EXIT
 
   ./scripts/dev/bootstrap-worktree.sh >/dev/null
@@ -858,6 +867,7 @@ run_remote_custom_mode() {
   TOASTTY_DERIVED_PATH="$derived_path" \
   "$app_binary" >"$artifacts_dir/app.log" 2>&1 &
   app_pid=$!
+  REMOTE_CUSTOM_CLEANUP_APP_PID="$app_pid"
 
   for _ in $(seq 1 200); do
     if [[ -f "$instance_json" ]]; then
@@ -879,6 +889,7 @@ run_remote_custom_mode() {
       recorded_pid="$(jq -r '.pid // empty' "$instance_json")"
       if [[ -n "$recorded_pid" ]]; then
         app_pid="$recorded_pid"
+        REMOTE_CUSTOM_CLEANUP_APP_PID="$recorded_pid"
       fi
     fi
 
