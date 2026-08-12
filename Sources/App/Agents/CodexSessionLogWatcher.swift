@@ -933,24 +933,41 @@ private extension CodexSessionLogWatcher {
             return []
         }
 
-        switch (normalizedString(object["type"]), payloadType) {
+        let objectType = normalizedString(object["type"])
+        let collaborationActivity: [String: Any]?
+        switch (objectType, payloadType) {
         case ("event_msg", "sub_agent_activity"):
-            guard let agentPath = nonEmptyString(payload["agent_path"]),
+            collaborationActivity = payload
+        case ("event_msg", "item_completed"):
+            guard let item = payload["item"] as? [String: Any],
+                  normalizedString(item["type"]) == "SubAgentActivity" else {
+                collaborationActivity = nil
+                break
+            }
+            collaborationActivity = item
+        default:
+            collaborationActivity = nil
+        }
+
+        if let collaborationActivity {
+            guard let agentPath = nonEmptyString(collaborationActivity["agent_path"]),
                   isCurrentMultiAgentEvent(
                     object: object,
-                    payload: payload,
+                    payload: collaborationActivity,
                     cutoff: multiAgentEventCutoff
                   ) else {
                 return []
             }
-            let eventID = nonEmptyString(payload["event_id"])
-                ?? "\(agentPath):\(normalizedString(payload["kind"]) ?? "unknown"):"
-                    + "\(collaborationEventDate(object: object, payload: payload)?.timeIntervalSince1970 ?? 0)"
-            guard seenKeys.insertIfAbsent("collaboration_activity:\(eventID)") else {
+            let eventID = nonEmptyString(collaborationActivity["event_id"])
+                ?? nonEmptyString(collaborationActivity["id"])
+                ?? "\(agentPath):\(normalizedString(collaborationActivity["kind"]) ?? "unknown"):"
+                    + "\(collaborationEventDate(object: object, payload: collaborationActivity)?.timeIntervalSince1970 ?? 0)"
+            let activityKind = normalizedString(collaborationActivity["kind"])
+            guard seenKeys.insertIfAbsent("collaboration_activity:\(eventID):\(activityKind ?? "unknown")") else {
                 return []
             }
 
-            switch normalizedString(payload["kind"]) {
+            switch activityKind {
             case "started":
                 let pendingCall = pendingCalls.peek(callID: eventID)
                 let spawnArguments = pendingCall?.toolName == "spawn_agent"
@@ -958,7 +975,7 @@ private extension CodexSessionLogWatcher {
                     : nil
                 return [collaborationStartedEvent(
                     activityID: agentPath,
-                    hookActivityID: nonEmptyString(payload["agent_thread_id"]),
+                    hookActivityID: nonEmptyString(collaborationActivity["agent_thread_id"]),
                     spawnToolUseID: eventID,
                     displayName: spawnMetadataSummaryText(spawnArguments?["task_name"], limit: 80),
                     command: spawnMetadataSummaryText(spawnArguments?["message"], limit: 512)
@@ -971,7 +988,7 @@ private extension CodexSessionLogWatcher {
                 }
                 return [collaborationFinishedEvent(
                     activityID: agentPath,
-                    hookActivityID: nonEmptyString(payload["agent_thread_id"]),
+                    hookActivityID: nonEmptyString(collaborationActivity["agent_thread_id"]),
                     turnTransition: .deactivated
                 )]
 
@@ -983,14 +1000,16 @@ private extension CodexSessionLogWatcher {
                 }
                 return [collaborationStartedEvent(
                     activityID: agentPath,
-                    hookActivityID: nonEmptyString(payload["agent_thread_id"]),
+                    hookActivityID: nonEmptyString(collaborationActivity["agent_thread_id"]),
                     turnTransition: .activated
                 )]
 
             default:
                 return []
             }
+        }
 
+        switch (objectType, payloadType) {
         case ("response_item", "agent_message"):
             guard isCurrentMultiAgentEvent(
                 object: object,

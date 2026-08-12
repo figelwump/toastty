@@ -1673,6 +1673,63 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         )
     }
 
+    func testWatcherParsesItemCompletedCollaborationLifecycle() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-08-12T03:44:37.422Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"collaboration","arguments":"{\"agent_type\":\"worker\",\"fork_turns\":\"5\",\"task_name\":\"phase1_networking\",\"message\":\"Implement networking\"}","call_id":"call_spawn"}}
+                {"timestamp":"2026-08-12T03:44:37.665Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"call_spawn","kind":"started","agent_thread_id":"thread-networking","agent_path":"/root/phase1_networking"},"started_at_ms":1786506277665,"completed_at_ms":1786506277665}}
+                {"timestamp":"2026-08-12T03:44:37.668Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/phase1_networking\"}"}}
+                {"timestamp":"2026-08-12T03:58:21.303Z","type":"response_item","payload":{"type":"function_call","name":"interrupt_agent","namespace":"collaboration","arguments":"{\"target\":\"phase1_networking\"}","call_id":"call_interrupt"}}
+                {"timestamp":"2026-08-12T03:58:21.335Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"call_interrupt","kind":"interrupted","agent_thread_id":"thread-networking","agent_path":"/root/phase1_networking"},"started_at_ms":1786507101335,"completed_at_ms":1786507101335}}
+                {"timestamp":"2026-08-12T03:58:21.352Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_interrupt","output":"{\"previous_status\":\"running\"}"}}
+                """#,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .backgroundActivityStarted,
+                detail: "Started phase1_networking",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/phase1_networking",
+                    hookActivityID: "thread-networking",
+                    spawnToolUseID: "call_spawn",
+                    kind: .subagent,
+                    displayName: "phase1_networking",
+                    command: "Implement networking"
+                )
+            ),
+            CodexSessionLogEvent(
+                kind: .backgroundActivityFinished,
+                detail: "Finished sub-agent",
+                backgroundActivity: CodexSessionBackgroundActivity(
+                    activityID: "/root/phase1_networking",
+                    hookActivityID: "thread-networking",
+                    kind: .subagent,
+                    turnTransition: .deactivated
+                )
+            ),
+        ])
+    }
+
+    func testWatcherKeepsDifferentItemCompletedKindsWithSameID() async throws {
+        let events = try await recordEvents(
+            from:
+                #"""
+                {"timestamp":"2026-08-12T03:44:37.665Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"shared-item","kind":"started","agent_thread_id":"thread-networking","agent_path":"/root/phase1_networking"}}}
+                {"timestamp":"2026-08-12T03:58:21.335Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"shared-item","kind":"interrupted","agent_thread_id":"thread-networking","agent_path":"/root/phase1_networking"}}}
+                """#,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events.map(\.kind), [.backgroundActivityStarted, .backgroundActivityFinished])
+        XCTAssertEqual(
+            events.compactMap(\.backgroundActivity?.activityID),
+            ["/root/phase1_networking", "/root/phase1_networking"]
+        )
+    }
+
     func testWatcherCorrelatesReusableAgentInterruptAndFollowUpTurns() async throws {
         let events = try await recordEvents(
             from:
@@ -1781,14 +1838,16 @@ final class CodexSessionLogWatcherTests: XCTestCase {
                 #"""
                 {"timestamp":"2026-07-12T18:44:11.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_stale","occurred_at_ms":1783875653886,"agent_path":"/root/stale","kind":"started"}}
                 {"timestamp":"2026-07-12T18:44:12.355Z","type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"call_fresh","occurred_at_ms":1783881851355,"agent_path":"/root/fresh","kind":"started"}}
+                {"timestamp":"2026-07-12T17:44:13.355Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"nested-stale","agent_path":"/root/nested-stale","kind":"started"}}}
+                {"timestamp":"2026-07-12T18:44:14.355Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","id":"nested-fresh","agent_path":"/root/nested-fresh","kind":"started"}}}
                 """#,
-            expectedCount: 1,
+            expectedCount: 2,
             multiAgentEventCutoff: cutoff
         )
 
         XCTAssertEqual(
             events.compactMap(\.backgroundActivity?.activityID),
-            ["/root/fresh"]
+            ["/root/fresh", "/root/nested-fresh"]
         )
     }
 
