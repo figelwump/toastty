@@ -28,8 +28,12 @@ function writeExecutable(directory, name, contents) {
 }
 
 function releaseEnvironment(overrides = {}) {
+  const environment = { ...process.env };
+  delete environment.SKIP_UPLOAD;
+  delete environment.TOASTTY_IOS_SKIP_UPLOAD;
+  delete environment.TOASTTY_IOS_UPLOAD;
   return {
-    ...process.env,
+    ...environment,
     APP_STORE_CONNECT_API_KEY_ID: "key-id",
     APP_STORE_CONNECT_API_ISSUER_ID: "issuer-id",
     APP_STORE_CONNECT_API_PRIVATE_KEY: "private-key-fixture",
@@ -68,6 +72,7 @@ test("release script is safe-by-default and validates before explicit upload", (
   assert.ok(uploadGateIndex > validationIndex);
   assert.ok(uploadIndex > uploadGateIndex);
   assert.match(script, /UPLOAD_REQUESTED="\$\{TOASTTY_IOS_UPLOAD:-0\}"/);
+  assert.match(script, /DOCUMENTED_SKIP_UPLOAD="\$\{SKIP_UPLOAD-0\}"/);
   assert.match(script, /trap cleanup EXIT/);
   assert.match(script, /profile_get_task_allow/);
   assert.match(script, /profile_provisioned_devices/);
@@ -78,10 +83,9 @@ test("release script is safe-by-default and validates before explicit upload", (
   assert.match(script, /PrivacyInfo\.xcprivacy/);
 });
 
-test("stubbed release run validates with App Store Connect and does not upload by default", () => {
+test("stubbed release runs prove both skip inputs and the explicit upload path", () => {
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "toastty-ios-release-test-"));
   const binDirectory = path.join(temporaryDirectory, "bin");
-  const outputDirectory = path.join(temporaryDirectory, "output");
   const homeDirectory = path.join(temporaryDirectory, "home");
   const toolLog = path.join(temporaryDirectory, "tool.log");
   fs.mkdirSync(binDirectory);
@@ -159,26 +163,68 @@ esac
   writeExecutable(binDirectory, "xcrun", "#!/bin/sh\nprintf 'xcrun %s\\n' \"$*\" >>\"$TOOL_LOG\"\n");
 
   try {
-    execFileSync("bash", [releaseScript], {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-      env: releaseEnvironment({
-        PATH: `${binDirectory}:${process.env.PATH}`,
-        HOME: homeDirectory,
-        TOOL_LOG: toolLog,
-        TOASTTY_IOS_PLIST_BUDDY: plistBuddy,
-        TOASTTY_IOS_RELEASE_OUTPUT_DIR: outputDirectory,
-      }),
-    });
+    function runStubbedRelease(label, overrides) {
+      const outputDirectory = path.join(temporaryDirectory, label);
+      fs.writeFileSync(toolLog, "");
+      const output = execFileSync("bash", [releaseScript], {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: releaseEnvironment({
+          PATH: `${binDirectory}:${process.env.PATH}`,
+          HOME: homeDirectory,
+          TOOL_LOG: toolLog,
+          TOASTTY_IOS_PLIST_BUDDY: plistBuddy,
+          TOASTTY_IOS_RELEASE_OUTPUT_DIR: outputDirectory,
+          GITHUB_REF: "refs/heads/main",
+          ...overrides,
+        }),
+      });
+      return {
+        output,
+        outputDirectory,
+        invocations: fs.readFileSync(toolLog, "utf8"),
+        metadata: fs.readFileSync(
+          path.join(outputDirectory, "release-metadata.txt"),
+          "utf8",
+        ),
+      };
+    }
 
-    const invocations = fs.readFileSync(toolLog, "utf8");
-    assert.match(invocations, /xcrun altool --validate-app/);
-    assert.doesNotMatch(invocations, /--upload-app/);
-    assert.match(invocations, /tuist install/);
-    assert.match(invocations, /tuist generate --no-open/);
-    assert.match(invocations, /xcodebuild .* -scheme ToasttyMobileApp-Release .* archive/);
-    assert.ok(fs.existsSync(path.join(outputDirectory, "export/Toastty.ipa")));
-    assert.match(fs.readFileSync(path.join(outputDirectory, "release-metadata.txt"), "utf8"), /STATUS=validated/);
+    const documentedSkip = runStubbedRelease("documented-skip", {
+      TOASTTY_IOS_UPLOAD: "1",
+      SKIP_UPLOAD: "1",
+    });
+    assert.match(documentedSkip.invocations, /xcrun altool --validate-app/);
+    assert.doesNotMatch(documentedSkip.invocations, /--upload-app/);
+    assert.match(documentedSkip.invocations, /tuist install/);
+    assert.match(documentedSkip.invocations, /tuist generate --no-open/);
+    assert.match(documentedSkip.invocations, /xcodebuild .* -scheme ToasttyMobileApp-Release .* archive/);
+    assert.ok(fs.existsSync(path.join(documentedSkip.outputDirectory, "export/Toastty.ipa")));
+    assert.match(documentedSkip.output, /Upload request suppressed by validate-only skip input/);
+    assert.match(documentedSkip.metadata, /STATUS=validated/);
+    assert.match(documentedSkip.metadata, /UPLOAD_REQUESTED_ORIGINAL=1/);
+    assert.match(documentedSkip.metadata, /UPLOAD_REQUESTED=0/);
+    assert.match(documentedSkip.metadata, /UPLOAD_SUPPRESSED_BY=SKIP_UPLOAD/);
+
+    const scopedSkip = runStubbedRelease("scoped-skip", {
+      TOASTTY_IOS_UPLOAD: "1",
+      TOASTTY_IOS_SKIP_UPLOAD: "1",
+    });
+    assert.match(scopedSkip.invocations, /xcrun altool --validate-app/);
+    assert.doesNotMatch(scopedSkip.invocations, /--upload-app/);
+    assert.match(scopedSkip.metadata, /UPLOAD_REQUESTED_ORIGINAL=1/);
+    assert.match(scopedSkip.metadata, /UPLOAD_REQUESTED=0/);
+    assert.match(scopedSkip.metadata, /UPLOAD_SUPPRESSED_BY=TOASTTY_IOS_SKIP_UPLOAD/);
+
+    const upload = runStubbedRelease("upload", {
+      TOASTTY_IOS_UPLOAD: "1",
+    });
+    assert.match(upload.invocations, /xcrun altool --validate-app/);
+    assert.match(upload.invocations, /xcrun altool --upload-app/);
+    assert.match(upload.metadata, /STATUS=uploaded/);
+    assert.match(upload.metadata, /UPLOAD_REQUESTED_ORIGINAL=1/);
+    assert.match(upload.metadata, /UPLOAD_REQUESTED=1/);
+    assert.match(upload.metadata, /UPLOAD_SUPPRESSED_BY=none/);
   } finally {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
@@ -203,7 +249,39 @@ test("release script rejects upload away from main before touching signing asset
   assert.match(error.stderr, /upload is allowed only from refs\/heads\/main/);
 });
 
-test("legacy skip-upload input is fail-closed", () => {
+test("documented skip-upload input is fail-closed", () => {
+  let error;
+  try {
+    execFileSync("bash", [releaseScript], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: releaseEnvironment({ SKIP_UPLOAD: "true" }),
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error);
+  assert.match(error.stderr, /SKIP_UPLOAD must be 0 or 1/);
+});
+
+test("empty documented skip-upload input is fail-closed", () => {
+  let error;
+  try {
+    execFileSync("bash", [releaseScript], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: releaseEnvironment({ SKIP_UPLOAD: "" }),
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error);
+  assert.match(error.stderr, /SKIP_UPLOAD must be 0 or 1/);
+});
+
+test("scoped skip-upload input is fail-closed", () => {
   let error;
   try {
     execFileSync("bash", [releaseScript], {

@@ -19,6 +19,8 @@ SIGNING_ASSETS_DIR=""
 ASC_KEY_DIR=""
 ORIGINAL_DEFAULT_KEYCHAIN=""
 ORIGINAL_KEYCHAIN_LIST=()
+UPLOAD_REQUESTED_ORIGINAL="0"
+UPLOAD_SUPPRESSED_BY="none"
 
 log() {
   printf '[ios-testflight] %s\n' "$*"
@@ -396,7 +398,9 @@ write_release_metadata() {
     printf 'BUNDLE_ID=%s\n' "$RELEASE_BUNDLE_ID"
     printf 'MARKETING_VERSION=%s\n' "$TUIST_TOASTTY_MOBILE_VERSION"
     printf 'BUILD_NUMBER=%s\n' "$TUIST_TOASTTY_MOBILE_BUILD_NUMBER"
+    printf 'UPLOAD_REQUESTED_ORIGINAL=%s\n' "$UPLOAD_REQUESTED_ORIGINAL"
     printf 'UPLOAD_REQUESTED=%s\n' "$upload_requested"
+    printf 'UPLOAD_SUPPRESSED_BY=%s\n' "$UPLOAD_SUPPRESSED_BY"
   } >"$RELEASE_METADATA_PATH"
 }
 
@@ -453,11 +457,23 @@ validate_build_number "$TUIST_TOASTTY_MOBILE_BUILD_NUMBER"
 UPLOAD_REQUESTED="${TOASTTY_IOS_UPLOAD:-0}"
 [[ "$UPLOAD_REQUESTED" == "0" || "$UPLOAD_REQUESTED" == "1" ]] \
   || fail "TOASTTY_IOS_UPLOAD must be 0 or 1"
-SKIP_UPLOAD="${TOASTTY_IOS_SKIP_UPLOAD:-0}"
-[[ "$SKIP_UPLOAD" == "0" || "$SKIP_UPLOAD" == "1" ]] \
+UPLOAD_REQUESTED_ORIGINAL="$UPLOAD_REQUESTED"
+DOCUMENTED_SKIP_UPLOAD="${SKIP_UPLOAD-0}"
+[[ "$DOCUMENTED_SKIP_UPLOAD" == "0" || "$DOCUMENTED_SKIP_UPLOAD" == "1" ]] \
+  || fail "SKIP_UPLOAD must be 0 or 1"
+SCOPED_SKIP_UPLOAD="${TOASTTY_IOS_SKIP_UPLOAD-0}"
+[[ "$SCOPED_SKIP_UPLOAD" == "0" || "$SCOPED_SKIP_UPLOAD" == "1" ]] \
   || fail "TOASTTY_IOS_SKIP_UPLOAD must be 0 or 1"
-if [[ "$SKIP_UPLOAD" == "1" ]]; then
+if [[ "$DOCUMENTED_SKIP_UPLOAD" == "1" || "$SCOPED_SKIP_UPLOAD" == "1" ]]; then
   UPLOAD_REQUESTED=0
+  if [[ "$DOCUMENTED_SKIP_UPLOAD" == "1" && "$SCOPED_SKIP_UPLOAD" == "1" ]]; then
+    UPLOAD_SUPPRESSED_BY="both"
+  elif [[ "$DOCUMENTED_SKIP_UPLOAD" == "1" ]]; then
+    UPLOAD_SUPPRESSED_BY="SKIP_UPLOAD"
+  else
+    UPLOAD_SUPPRESSED_BY="TOASTTY_IOS_SKIP_UPLOAD"
+  fi
+  log "Upload request suppressed by validate-only skip input."
 fi
 if [[ "$UPLOAD_REQUESTED" == "1" && "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
   fail "TestFlight upload is allowed only from refs/heads/main; current ref is '${GITHUB_REF:-unset}'"
