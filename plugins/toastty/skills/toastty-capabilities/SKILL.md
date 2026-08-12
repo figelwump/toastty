@@ -1,6 +1,6 @@
 ---
 name: toastty-capabilities
-description: Use this skill when a user asks an agent to orchestrate, inspect, automate, control, coordinate, or present work inside Toastty, including setting or clearing Toastty workspace annotations, creating workspaces or panels, launching agents, opening browser or local-document panels, using Scratchpad, checking terminal state, managing workspace scope, or notifying the user. Prefer this over document or code-review annotation tools when the target is a Toastty workspace.
+description: Use this skill when a user asks an agent to orchestrate, inspect, automate, control, coordinate, or present work inside Toastty, including setting or clearing Toastty workspace annotations, creating workspaces or panels, launching agents, opening browser or local-document panels, using Scratchpad, checking terminal state, managing workspace scope, or notifying the user.
 ---
 
 # Toastty Capabilities
