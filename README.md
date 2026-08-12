@@ -414,6 +414,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 ## Documentation
 
 - [Configuration](docs/configuration.md) — `~/.toastty/config`, `config-reference`, menu actions, and Toastty-owned config keys
+- [Remote Access](docs/remote-access.md) — private tailnet setup, browser pairing, remote replies, and security guidance
 - [Running Agents](docs/running-agents.md) — agents.toml configuration, profile IDs, instrumentation, launch flow, and manual integration
 - [Keyboard Shortcuts](docs/keyboard-shortcuts.md) — workspace, pane, tab, agent, and profile shortcuts
 - [CLI Reference](docs/cli-reference.md) — `toastty` CLI commands, flags, environment variables, and integration examples
