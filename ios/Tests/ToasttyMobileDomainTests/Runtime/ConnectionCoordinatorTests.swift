@@ -210,6 +210,15 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await subscription.send(.conversationEvents(
             page(runID: firstRun, events: [event(2)], latestSequence: 2)
         ))
+        do {
+            // The third receive begins only after both queued stream messages
+            // have been handled, so this test deterministically exercises a
+            // live page buffered before the gated REST response returns.
+            try await withTimeout { try await subscription.waitForReceiveCount(3) }
+        } catch {
+            XCTFail("Buffered live page was not processed before REST: \(error)")
+            throw error
+        }
         await firstRESTGate.open()
 
         let initialRuntimeState: ConversationRuntime.State
@@ -741,7 +750,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
         await coordinator.suspend()
     }
 
-    func testExactStreamEchoBeforeResponseWinsAndNewSnapshotStalesRenderedStamp() async throws {
+    func testExactStreamEchoWinsAndLateResponseCannotInvalidateNewSnapshot() async throws {
         let operations = OperationLog()
         let run = runID(1)
         let epoch = RemoteInputEpoch(
@@ -796,8 +805,6 @@ final class ConnectionCoordinatorTests: XCTestCase {
             matching: { $0["echo-first"]?.deliveryState == .confirmed(sequence: 2) },
             runtime.sendReconciliation
         )
-        await sendGate.open()
-
         let nextEpoch = epoch.next()
         await subscription.send(.sessionList(snapshot(
             runID: run,
@@ -808,6 +815,26 @@ final class ConnectionCoordinatorTests: XCTestCase {
         _ = try await conversationState(matching: {
             $0.composerAuthority.stamp?.inputEpoch == nextEpoch
         }, runtime)
+        let stateRecorder = ConversationStateRecorder()
+        let stateStream = await runtime.states()
+        let observation = Task {
+            for await state in stateStream {
+                await stateRecorder.record(state)
+            }
+        }
+        defer { observation.cancel() }
+        try await withTimeout { try await stateRecorder.waitForCount(1) }
+
+        await sendGate.open()
+        try await withTimeout { try await stateRecorder.waitForCount(2) }
+        let recordedState = await stateRecorder.latest()
+        let afterLateResponse = try XCTUnwrap(recordedState)
+        XCTAssertEqual(
+            afterLateResponse.composerAuthority.stamp?.inputEpoch,
+            nextEpoch,
+            "A response for the prior stream snapshot must not invalidate fresh authority"
+        )
+
         let staleOutcome = await coordinator.sendMessage(
             conversationID: conversationID,
             text: "stale",
@@ -1246,6 +1273,24 @@ private struct ScriptedCall<Value: Sendable>: Sendable {
     init(result: Result<Value, GatewayFailure>, gate: CancellationAwareGate? = nil) {
         self.result = result
         self.gate = gate
+    }
+}
+
+private actor ConversationStateRecorder {
+    private var states: [ConversationRuntime.State] = []
+    private let records = CallCounter()
+
+    func record(_ state: ConversationRuntime.State) async {
+        states.append(state)
+        await records.increment()
+    }
+
+    func waitForCount(_ count: Int) async throws {
+        try await records.wait(for: count)
+    }
+
+    func latest() -> ConversationRuntime.State? {
+        states.last
     }
 }
 

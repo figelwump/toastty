@@ -1225,7 +1225,7 @@ public actor ConnectionCoordinator {
         sendOperations.removeValue(forKey: clientRequestID)
         sendTasks.removeValue(forKey: clientRequestID)?.cancel()
         releaseReservation(operation.reservationKey, clientRequestID: clientRequestID)
-        invalidatedComposerOrdinals[operation.request.conversationID] = streamSnapshotOrdinal
+        invalidateComposerAuthority(for: operation)
         await operation.runtime.sendReconciliation.markOperationFailed(
             clientRequestID: clientRequestID
         )
@@ -1244,7 +1244,7 @@ public actor ConnectionCoordinator {
               current.runtime === operation.runtime,
               current.request == operation.request else { return }
 
-        invalidatedComposerOrdinals[operation.request.conversationID] = streamSnapshotOrdinal
+        invalidateComposerAuthority(for: operation)
         await publishComposerAuthority(
             for: operation.request.conversationID,
             runtime: operation.runtime
@@ -1295,7 +1295,7 @@ public actor ConnectionCoordinator {
               current.request == operation.request else { return }
 
         let failure = (error as? GatewayFailure) ?? .network
-        invalidatedComposerOrdinals[operation.request.conversationID] = streamSnapshotOrdinal
+        invalidateComposerAuthority(for: operation)
         await publishComposerAuthority(
             for: operation.request.conversationID,
             runtime: operation.runtime
@@ -1323,7 +1323,7 @@ public actor ConnectionCoordinator {
                 clientRequestID: clientRequestID
             )
             releaseReservation(operation.reservationKey, clientRequestID: clientRequestID)
-            invalidatedComposerOrdinals[operation.request.conversationID] = streamSnapshotOrdinal
+            invalidateComposerAuthority(for: operation)
             await publishComposerAuthority(
                 for: operation.request.conversationID,
                 runtime: operation.runtime
@@ -1352,6 +1352,16 @@ public actor ConnectionCoordinator {
     ) {
         guard reservations[key] == clientRequestID else { return }
         reservations.removeValue(forKey: key)
+    }
+
+    private func invalidateComposerAuthority(for operation: SendOperation) {
+        let stamp = operation.composerStamp
+        guard stamp.connectionGeneration == state.connectionGeneration,
+              stamp.streamSnapshotOrdinal == streamSnapshotOrdinal else {
+            return
+        }
+        invalidatedComposerOrdinals[operation.request.conversationID] =
+            stamp.streamSnapshotOrdinal
     }
 
     private func terminateConnectionAfterSendFailure(_ failure: GatewayFailure) async {
