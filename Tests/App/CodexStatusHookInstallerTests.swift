@@ -350,6 +350,109 @@ final class CodexStatusHookInstallerTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: hooksFileURL, encoding: .utf8), "not json")
     }
 
+    func testForwarderScriptLogsRealExitCodeAndStderrWithoutTempFiles() throws {
+        let homeURL = try makeTemporaryHome()
+        let result = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).install()
+        let stubCLIURL = try writeStubCLI(
+            homeURL: homeURL,
+            body: "cat >/dev/null\necho 'boom line' >&2\nexit 7"
+        )
+
+        let exitCode = try runForwarder(
+            at: result.status.forwarderScriptURL,
+            cliPath: stubCLIURL.path
+        )
+
+        XCTAssertEqual(exitCode, 0, "forwarder must always exit 0")
+        let logContents = try String(
+            contentsOf: telemetryLogURL(homeURL: homeURL),
+            encoding: .utf8
+        )
+        XCTAssertTrue(logContents.contains("exit_code=7"), logContents)
+        XCTAssertTrue(logContents.contains("stderr: boom line"), logContents)
+        XCTAssertEqual(try stderrCaptureFileNames(homeURL: homeURL), [])
+    }
+
+    func testForwarderScriptExitsQuietlyOnSuccess() throws {
+        let homeURL = try makeTemporaryHome()
+        let result = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).install()
+        let stubCLIURL = try writeStubCLI(homeURL: homeURL, body: "cat >/dev/null\nexit 0")
+
+        let exitCode = try runForwarder(
+            at: result.status.forwarderScriptURL,
+            cliPath: stubCLIURL.path
+        )
+
+        XCTAssertEqual(exitCode, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: telemetryLogURL(homeURL: homeURL).path))
+        XCTAssertEqual(try stderrCaptureFileNames(homeURL: homeURL), [])
+    }
+
+    func testForwarderScriptSweepsStaleLeakedStderrFiles() throws {
+        let homeURL = try makeTemporaryHome()
+        let result = try CodexStatusHookInstaller(homeDirectoryPath: homeURL.path).install()
+        let hooksDirectoryURL = result.status.forwarderScriptURL.deletingLastPathComponent()
+        let staleURL = hooksDirectoryURL.appendingPathComponent("codex-hook-stderr.stale", isDirectory: false)
+        let freshURL = hooksDirectoryURL.appendingPathComponent("codex-hook-stderr.fresh", isDirectory: false)
+        try Data().write(to: staleURL)
+        try Data().write(to: freshURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -7200)],
+            ofItemAtPath: staleURL.path
+        )
+        let stubCLIURL = try writeStubCLI(homeURL: homeURL, body: "cat >/dev/null\nexit 0")
+
+        _ = try runForwarder(at: result.status.forwarderScriptURL, cliPath: stubCLIURL.path)
+
+        XCTAssertEqual(try stderrCaptureFileNames(homeURL: homeURL), ["codex-hook-stderr.fresh"])
+    }
+
+    private func writeStubCLI(homeURL: URL, body: String) throws -> URL {
+        let url = homeURL.appendingPathComponent("stub-toastty-cli", isDirectory: false)
+        try "#!/bin/sh\n\(body)\n".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))],
+            ofItemAtPath: url.path
+        )
+        return url
+    }
+
+    private func runForwarder(at scriptURL: URL, cliPath: String) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [scriptURL.path]
+        process.environment = [
+            "PATH": "/usr/bin:/bin",
+            "TOASTTY_SESSION_ID": "11111111-2222-3333-4444-555555555555",
+            "TOASTTY_PANEL_ID": "66666666-7777-8888-9999-000000000000",
+            "TOASTTY_SOCKET_PATH": "/tmp/unused.sock",
+            "TOASTTY_CLI_PATH": cliPath,
+        ]
+        let stdinPipe = Pipe()
+        process.standardInput = stdinPipe
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        stdinPipe.fileHandleForWriting.write(Data("{}\n".utf8))
+        stdinPipe.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    private func telemetryLogURL(homeURL: URL) -> URL {
+        homeURL.appendingPathComponent(
+            ".toastty/codex-hooks/telemetry-failures.log",
+            isDirectory: false
+        )
+    }
+
+    private func stderrCaptureFileNames(homeURL: URL) throws -> [String] {
+        let directoryURL = homeURL.appendingPathComponent(".toastty/codex-hooks", isDirectory: true)
+        return try FileManager.default.contentsOfDirectory(atPath: directoryURL.path)
+            .filter { $0.hasPrefix("codex-hook-stderr.") }
+            .sorted()
+    }
+
     private func makeTemporaryHome() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-codex-hooks-\(UUID().uuidString)", isDirectory: true)
