@@ -399,12 +399,17 @@ NODE
 }
 
 require_value BUNDLE_ID
-require_value DEVELOPMENT_TEAM
 require_value DISPLAY_NAME
 require_value URL_SCHEME
 validate_flag BUILD_ONLY
 validate_flag PREFLIGHT_ONLY
 validate_paths
+if [[ "$PREFLIGHT_ONLY" == "1" && "$BUILD_ONLY" == "1" ]]; then
+  fail "TOASTTY_NATIVE_DEVICE_PREFLIGHT_ONLY and TOASTTY_NATIVE_DEVICE_BUILD_ONLY cannot both be 1"
+fi
+if [[ "$PREFLIGHT_ONLY" != "1" ]]; then
+  require_value DEVELOPMENT_TEAM
+fi
 if [[ "$BUILD_CONFIGURATION" != "Debug" ]]; then
   fail "TOASTTY_NATIVE_DEVICE_BUILD_CONFIGURATION must be Debug"
 fi

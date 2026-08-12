@@ -93,6 +93,7 @@ function readCommands(logPath) {
 
 test("preflight-only records selected-device evidence without generation, build, install, or launch", () => {
   const toolchain = createPreflightToolchain();
+  toolchain.environment.TOASTTY_IOS_DEVELOPMENT_TEAM = "";
   const result = spawnSync(process.execPath, [
     dispatcherPath,
     "native-device",
@@ -113,6 +114,7 @@ test("preflight-only records selected-device evidence without generation, build,
   assert.equal(preflight.ok, true);
   assert.equal(preflight.buildConfiguration, "Debug");
   assert.equal(preflight.bundleID, "com.giantthings.toastty.mobile.dev");
+  assert.equal(preflight.developmentTeam, "");
   assert.equal(preflight.physicalDevice.selectedDevice.udid, "PHYSICAL-UDID");
 
   const instance = JSON.parse(readFileSync(
@@ -136,20 +138,31 @@ test("preflight-only records selected-device evidence without generation, build,
   assert.equal(commands.some(({ args }) => args.includes("install") || args.includes("launch")), false);
 });
 
-test("execution fails before tool access when the development team is missing", () => {
-  const toolchain = createPreflightToolchain();
-  delete toolchain.environment.TOASTTY_IOS_DEVELOPMENT_TEAM;
-  const result = spawnSync(process.execPath, [
-    dispatcherPath,
-    "native-device",
-    "--preflight-only",
-  ], {
-    cwd: iosRoot,
-    env: toolchain.environment,
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /DEVELOPMENT_TEAM is required/);
+test("build and install execution fail before tool access when the development team is missing", () => {
+  for (const argumentsForMode of [["--build-only"], []]) {
+    const toolchain = createPreflightToolchain();
+    toolchain.environment.TOASTTY_IOS_DEVELOPMENT_TEAM = "";
+    const result = spawnSync(process.execPath, [
+      dispatcherPath,
+      "native-device",
+      ...argumentsForMode,
+    ], {
+      cwd: iosRoot,
+      env: toolchain.environment,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /DEVELOPMENT_TEAM is required/);
+    assert.throws(() => readFileSync(toolchain.logPath), { code: "ENOENT" });
+    assert.throws(
+      () => readFileSync(path.join(toolchain.runRoot, "state", "preflight.json")),
+      { code: "ENOENT" },
+    );
+    assert.throws(
+      () => readFileSync(path.join(toolchain.runRoot, "instance.json")),
+      { code: "ENOENT" },
+    );
+  }
 });
 
 test("execution rejects traversal-like run identifiers before tool access", () => {
