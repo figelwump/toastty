@@ -42,6 +42,30 @@ Prefer omitting `-destination` for remote tests. If a destination is required, u
 
 Use `--scope`, `--ref`, and `--run-label` as needed. Remote `xcodebuild` is killed after `TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS` seconds (default `3600`; set `0` to disable), and the wrapper cleans up the spawned process tree on timeout or interruption.
 
+### Native iOS Tests
+
+The native client is an independent Tuist graph under `ios/`; root `Project.swift` and root `Tuist/` remain the macOS host graph. Generate and test the iOS graph through its dispatcher:
+
+```bash
+node ios/scripts/toastty-ios.mjs generate
+node ios/scripts/toastty-ios.mjs test
+```
+
+Each dispatcher command accepts `--dry-run`. For agent-driven testing, keep simulator work on toastty-mini:
+
+```bash
+sv exec -- scripts/remote/test.sh \
+  --platform ios \
+  --scope working-tree \
+  --run-label <label>
+```
+
+`--platform ios` makes the wrapper run the iOS dispatcher generation step in the disposable remote worktree and default to `ios/ToasttyMobile.xcworkspace`, scheme `ToasttyMobileApp`, and Debug. When no `-destination` is passed, it asks `xcodebuild -showdestinations` for an iPhone Simulator compatible with that generated scheme and uses its identifier. Custom xcodebuild flags can still follow `--`; do not pass `-derivedDataPath`, `-resultBundlePath`, or an action.
+
+The remote timeout watchdog owns a separate timer child and reaps it on success, timeout, or interruption. Cleanup is scoped to the run's recorded PIDs; never use broad `pkill` cleanup for remote tests.
+
+For changes under `Sources/RemoteProtocol/` or `Tests/RemoteProtocol/`, run both this iOS tier and the root macOS graph. Report whether each iOS result came from fixture tests, a remote simulator, or a physical device.
+
 ## Local Helpers
 
 Use local smoke helpers only when the user explicitly wants a local run, the check is local-only, or the remote wrapper path has already fallen back or failed and you are intentionally continuing locally.
@@ -141,6 +165,6 @@ Shortcut-trace env: `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_R
 
 Remote GUI env: `TOASTTY_REMOTE_GUI_HOST`, `TOASTTY_REMOTE_GUI_REPO_ROOT`, `TOASTTY_REMOTE_GUI_ROOT`.
 
-Remote test env: `TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS`, `TOASTTY_ALLOW_REMOTE_X86_64_TESTS`.
+Remote test env: `TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS`, `TOASTTY_ALLOW_REMOTE_X86_64_TESTS`. Select the native client with the `--platform ios` CLI flag.
 
 Manual/Xcode env: `TOASTTY_RUNTIME_HOME` or `TOASTTY_DEV_WORKTREE_ROOT`, plus `TOASTTY_SOCKET_PATH` if you need a specific socket path.

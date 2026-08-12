@@ -1,0 +1,143 @@
+name: Mobile iOS
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Select build graphs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ios: ${{ steps.filter.outputs.ios }}
+      macos: ${{ steps.filter.outputs.macos }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select affected graphs
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            ios:
+              - '.github/workflows/mobile-ios.yml'
+              - 'ios/**'
+              - 'Sources/RemoteProtocol/**'
+              - 'Tests/RemoteProtocol/**'
+              - 'scripts/remote/test.sh'
+            macos:
+              - '.github/workflows/mobile-ios.yml'
+              - 'Project.swift'
+              - 'Tuist/**'
+              - 'Sources/RemoteProtocol/**'
+              - 'Tests/RemoteProtocol/**'
+              - 'Sources/Core/RemoteAccess/**'
+              - 'Tests/CoreTests/RemoteAccess/**'
+              - 'scripts/dev/**'
+              - 'scripts/remote/test.sh'
+
+  ios:
+    name: iOS tests
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.ios == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      TOASTTY_IOS_WORKTREE_ID: mobile-ci
+      TOASTTY_IOS_RUN_ROOT: ${{ github.workspace }}/artifacts/ios/run
+      TOASTTY_IOS_DERIVED_DATA_PATH: ${{ github.workspace }}/artifacts/ios/DerivedData
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Tuist
+        run: brew install tuist
+
+      - name: Test dispatcher
+        run: node --test ios/Tests/ScriptTests/*.test.mjs
+
+      - name: Test native client
+        run: node ios/scripts/toastty-ios.mjs test
+
+      - name: Upload iOS test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ios/
+          if-no-files-found: warn
+          retention-days: 14
+
+  macos:
+    name: macOS contract tests
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.macos == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      ARCH: arm64
+      TUIST_DISABLE_GHOSTTY: 1
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Tuist
+        run: brew install tuist
+
+      - name: Generate macOS project
+        run: ./scripts/dev/bootstrap-worktree.sh
+
+      - name: Test macOS contract
+        run: |
+          xcodebuild \
+            -workspace toastty.xcworkspace \
+            -scheme ToasttyApp \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath artifacts/ci-macos/Derived \
+            -resultBundlePath artifacts/ci-macos/TestResults.xcresult \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            test
+
+      - name: Upload macOS test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-contract-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ci-macos/
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate:
+    name: Mobile iOS gate
+    if: always()
+    needs:
+      - changes
+      - ios
+      - macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require selected graph checks
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          IOS_RESULT: ${{ needs.ios.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          case "$IOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
+          case "$MACOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac

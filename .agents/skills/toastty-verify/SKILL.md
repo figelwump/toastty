@@ -59,6 +59,18 @@ Pass `xcodebuild` flags after `--`. Prefer omitting `-destination`; if needed, u
 
 Use local `xcodebuild test` only when the user explicitly wants a local run, the check is local-only, or the remote wrapper is unavailable and you intentionally continue locally.
 
+### Native iOS Surface
+
+Treat `ios/` as a separate Tuist graph from the root macOS project. Choose the tier that matches the change:
+
+- Baseline/dispatcher: run the dispatcher tests, then `node ios/scripts/toastty-ios.mjs test`. The dispatcher installs and generates the `ios/` graph; build and test select a compatible iPhone Simulator and keep per-run DerivedData isolated.
+- Agent-driven simulator: start with `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree`. The remote wrapper generates the iOS graph before `xcodebuild`, resolves a compatible simulator when no destination was supplied, and copies the log, result JSON, and xcresult back under `artifacts/remote-tests/`.
+- User surface: use remote simulator screenshots or a live paired phone check. State explicitly whether evidence came from fixtures, an iOS Simulator, or a physical device.
+
+Changes to `Sources/RemoteProtocol/` or its fixtures must validate both graphs: root macOS generation/build/tests and the native iOS test tier. Do not treat a green iOS run as proof that the macOS host still compiles the shared contract.
+
+Do not boot or interact with a local iOS Simulator when the user has requested remote-only validation. Pass `--platform ios`; merely supplying an iOS workspace without that mode is intentionally insufficient because the wrapper must select the correct bootstrap path.
+
 ### UI, Runtime, Menu, Or Shortcut Changes
 
 Start with remote smoke validation through the wrapper:

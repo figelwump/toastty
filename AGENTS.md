@@ -18,11 +18,12 @@
 
 ## Build And Generate
 
-- Source of truth: `Project.swift`. Never hand-edit generated Xcode project/workspace files.
+- Toastty has two independent Tuist graphs. The macOS source of truth is root `Project.swift`; the native client source of truth is `ios/Project.swift` with `ios/Workspace.swift`. Never hand-edit either graph's generated Xcode project/workspace files, and run Tuist from the graph's own directory.
 - Web-panel bundles under `Sources/App/Resources/WebPanels/` are generated artifacts. For local-document behavior, inspect and edit `WebPanels/LocalDocumentApp/src/` rather than loading or modifying the generated `local-document-panel` bundle; use the bundle only when validating generated output.
 - Install packages with `tuist install` after cloning and whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes. Repo scripts do this automatically where needed.
 - For a fresh worktree, run `./scripts/dev/bootstrap-worktree.sh`. It links local Ghostty artifacts when needed, then runs `tuist install` and `tuist generate --no-open`.
 - Regenerate with `tuist generate` after project/dependency/build-setting changes, source file adds/renames/deletes, or branch switches. Generated `.xcodeproj` and `.xcworkspace` files are gitignored and can otherwise keep stale references.
+- Generate, build, or test the iOS graph through `node ios/scripts/toastty-ios.mjs generate|build|test`. The dispatcher installs and generates the `ios/` graph; build and test select a compatible iPhone Simulator. All commands support `--dry-run`.
 - Build:
   ```bash
   ARCH="${ARCH:-$(if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then echo arm64; else uname -m; fi)}"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build
@@ -30,6 +31,7 @@
 - Full local gate: `./scripts/automation/check.sh` (generate, artifact self-tests, web-panel tests, build, smoke, and app tests; Ghostty-backed unless fallback is explicitly requested).
 - After any code, project, dependency, or merge-related change, ensure the generated Xcode project is current and the app builds cleanly before handoff. This includes branch merges and branch switches that may leave generated project state stale.
 - Avoid deriving `ARCH` from `uname -m` in translated shells or inside `sv exec`; it may report `x86_64` on arm64 hosts. Set `ARCH=arm64` explicitly for agent/remote runs unless intentionally validating Rosetta. Prefer invocation-scoped overrides such as `ARCHS` and `ONLY_ACTIVE_ARCH=YES` over mutating project settings.
+- Agent-driven iOS simulator tests run on the remote toastty-mini path: `sv exec -- scripts/remote/test.sh --platform ios --scope working-tree`. Do not boot or drive a local simulator unless the user explicitly requests local validation.
 
 ## Validation
 

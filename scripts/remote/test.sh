@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 SCRIPT_PATH="scripts/remote/test.sh"
 
 REMOTE_EXEC=0
+TEST_PLATFORM="macos"
 RUN_LABEL="${RUN_LABEL:-test-$(date +%Y%m%d-%H%M%S)}"
 VALIDATION_SCOPE="working-tree"
 REF_SPEC=""
@@ -34,6 +35,7 @@ change scope into it, runs the test invocation there, copies the artifacts back
 locally, and removes the remote worktree unless told otherwise.
 
 Options:
+  --platform macos|ios                   Project graph to test (default: macos)
   --scope working-tree|head|ref         Local change scope to test (default: working-tree)
   --ref <git-ref>                       Git ref to export when --scope ref is used
   --run-label <label>                   Stable label used for local and remote artifacts
@@ -60,11 +62,18 @@ Examples:
     -destination "platform=macOS,arch=arm64" \
     -only-testing:ToasttyAppTests/CommandPaletteControllerTests
 
-  # With no xcodebuild options, the wrapper defaults to:
+  ./scripts/remote/test.sh \
+    --platform ios \
+    --scope working-tree
+
+  # With no xcodebuild options, the macOS wrapper defaults to:
   #   -workspace toastty.xcworkspace
   #   -scheme ToasttyApp
   #   -configuration Debug
   #   -destination "platform=macOS,arch=$(uname -m)"
+  # The iOS wrapper generates the separate ios/ Tuist graph and defaults to
+  # ios/ToasttyMobile.xcworkspace, ToasttyMobileApp, and a compatible iPhone
+  # Simulator destination reported by xcodebuild.
 
 Required local environment:
   TOASTTY_REMOTE_GUI_HOST               SSH host for the dedicated remote validation machine
@@ -136,6 +145,18 @@ join_shell_words() {
 }
 
 set_default_xcodebuild_args() {
+  if [[ "$TEST_PLATFORM" == "ios" ]]; then
+    DEFAULT_XCODEBUILD_ARGS=(
+      -workspace
+      ios/ToasttyMobile.xcworkspace
+      -scheme
+      ToasttyMobileApp
+      -configuration
+      Debug
+    )
+    return
+  fi
+
   local arch="${ARCH:-$(uname -m)}"
   DEFAULT_XCODEBUILD_ARGS=(
     -workspace
@@ -164,6 +185,7 @@ write_request_env() {
   {
     printf 'run_label=%q\n' "$RUN_LABEL"
     printf 'scope=%q\n' "$VALIDATION_SCOPE"
+    printf 'platform=%q\n' "$TEST_PLATFORM"
     printf 'requested_target=%q\n' "remote"
     printf 'remote_host=%q\n' "$REMOTE_HOST"
     printf 'remote_repo_root=%q\n' "$REMOTE_REPO_ROOT"
@@ -202,6 +224,7 @@ write_result_json() {
   "schemaVersion": 1,
   "requestedTarget": "remote",
   "executionTarget": "remote",
+  "platform": "$(json_escape "$TEST_PLATFORM")",
   "status": "$(json_escape "$status")",
   "startedAt": "$(json_escape "$started_at")",
   "endedAt": "$(json_escape "$ended_at")",
@@ -358,6 +381,7 @@ wait_for_remote_completion() {
       "$xcodebuild_args_b64" \
       "$remote_timeout_seconds" \
       "$allow_remote_x86_64_tests" \
+      "$TEST_PLATFORM" \
       > >(tee "$remote_stdout") \
       2> >(tee "$remote_stderr" >&2) <<'EOF'; then
 set -euo pipefail
@@ -368,12 +392,14 @@ script_path="$4"
 xcodebuild_args_b64="$5"
 remote_timeout_seconds="$6"
 allow_remote_x86_64_tests="$7"
+test_platform="$8"
 export TOASTTY_REMOTE_TEST_RUN_LABEL="$run_label"
 export TOASTTY_REMOTE_TEST_REMOTE_RUN_ROOT="$remote_run_root"
 export TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR="$remote_worktree_dir"
 export TOASTTY_REMOTE_TEST_XCODEBUILD_ARGS_B64="$xcodebuild_args_b64"
 export TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS="$remote_timeout_seconds"
 export TOASTTY_ALLOW_REMOTE_X86_64_TESTS="$allow_remote_x86_64_tests"
+export TOASTTY_REMOTE_TEST_PLATFORM="$test_platform"
 cd "$remote_worktree_dir"
 /bin/bash "$script_path" --remote-exec
 EOF
@@ -546,6 +572,7 @@ rm -rf \"\$REMOTE_RUN_ROOT\"
   if [[ "$remote_test_exit_code" != "0" ]]; then
     return "$remote_test_exit_code"
   fi
+  return 0
 }
 
 run_remote_mode() {
@@ -555,6 +582,7 @@ run_remote_mode() {
   local remote_run_root="${TOASTTY_REMOTE_TEST_REMOTE_RUN_ROOT:?TOASTTY_REMOTE_TEST_REMOTE_RUN_ROOT is required}"
   local remote_worktree_dir="${TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR:?TOASTTY_REMOTE_TEST_REMOTE_WORKTREE_DIR is required}"
   local xcodebuild_args_b64="${TOASTTY_REMOTE_TEST_XCODEBUILD_ARGS_B64:-}"
+  TEST_PLATFORM="${TOASTTY_REMOTE_TEST_PLATFORM:-macos}"
   local decoded_args
   if [[ "$xcodebuild_args_b64" == "$DEFAULT_XCODEBUILD_ARGS_SENTINEL" ]]; then
     decoded_args=""
@@ -583,6 +611,8 @@ EOF
   local result_bundle="$remote_run_root/TestResults.xcresult"
   local xcodebuild_log="$remote_run_root/xcodebuild.log"
   local timeout_marker="$remote_run_root/xcodebuild.timeout"
+  local watchdog_timer_record="$remote_run_root/watchdog-timer.pid"
+  local watchdog_reaped_marker="$remote_run_root/watchdog-timer.reaped"
   local xcodebuild_command
   xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
   local exit_code=0
@@ -597,7 +627,7 @@ EOF
   local watchdog_pid=""
 
   mkdir -p "$remote_run_root" "$runtime_home"
-  rm -rf "$derived_path" "$result_bundle" "$timeout_marker"
+  rm -rf "$derived_path" "$result_bundle" "$timeout_marker" "$watchdog_timer_record" "$watchdog_reaped_marker"
   : >"$xcodebuild_log"
 
   cleanup_remote_xcodebuild() {
@@ -632,10 +662,66 @@ EOF
     status="setup_error"
     failure_summary="TOASTTY_REMOTE_TEST_TIMEOUT_SECONDS must be a non-negative integer: ${timeout_seconds}"
   else
-    ./scripts/dev/bootstrap-worktree.sh >/dev/null
+    if [[ "$TEST_PLATFORM" == "ios" ]]; then
+      if ! command -v node >/dev/null 2>&1; then
+        exit_code=$SETUP_ERROR_EXIT_CODE
+        status="setup_error"
+        failure_summary="Missing required command: node"
+      else
+        log "Generating the iOS Tuist graph"
+        if (
+          unset TOASTTY_IOS_DESTINATION
+          export TOASTTY_IOS_WORKTREE_ID="$run_label"
+          export TOASTTY_IOS_RUN_ID="$run_label"
+          export TOASTTY_IOS_RUN_ROOT="$remote_run_root/ios-dispatcher"
+          export TOASTTY_IOS_DERIVED_DATA_PATH="$derived_path"
+          node ios/scripts/toastty-ios.mjs generate
+        ) >>"$xcodebuild_log" 2>&1; then
+          :
+        else
+          local generate_status=$?
+          exit_code=$SETUP_ERROR_EXIT_CODE
+          status="setup_error"
+          failure_summary="iOS project generation exited with status ${generate_status}; see xcodebuild.log"
+        fi
+      fi
 
-    tail -n +1 -f "$xcodebuild_log" &
-    tail_pid=$!
+      if [[ "$status" != "setup_error" ]]; then
+        local has_destination=0
+        local arg
+        for arg in "${xcodebuild_args[@]}"; do
+          if [[ "$arg" == "-destination" || "$arg" == -destination=* ]]; then
+            has_destination=1
+            break
+          fi
+        done
+        if [[ "$has_destination" == "0" ]]; then
+          local simulator_id
+          simulator_id="$(
+            xcodebuild "${xcodebuild_args[@]}" -showdestinations 2>/dev/null |
+              awk '/platform:iOS Simulator/ && /name:iPhone/ && $0 !~ /unavailable/ { line=$0; sub(/^.*id:[[:space:]]*/, "", line); sub(/,[[:space:]].*$/, "", line); print line; exit }' \
+              || true
+          )"
+          if [[ -z "$simulator_id" ]]; then
+            exit_code=$SETUP_ERROR_EXIT_CODE
+            status="setup_error"
+            failure_summary="No compatible iPhone Simulator destination was reported for ToasttyMobileApp"
+          else
+            xcodebuild_args+=( -destination "platform=iOS Simulator,id=${simulator_id}" )
+            xcodebuild_command="$(join_shell_words xcodebuild "${xcodebuild_args[@]}" -derivedDataPath "$derived_path" -resultBundlePath "$result_bundle" test)"
+          fi
+        fi
+      fi
+    else
+      ./scripts/dev/bootstrap-worktree.sh >/dev/null
+    fi
+
+    if [[ "$status" == "setup_error" ]]; then
+      :
+    else
+
+      tail -n +1 -f "$xcodebuild_log" &
+      tail_pid=$!
 
     (
       cd "$remote_worktree_dir"
@@ -649,9 +735,24 @@ EOF
     ) &
     xcodebuild_pid=$!
 
-    if [[ "$timeout_seconds" != "0" ]]; then
-      (
-        sleep "$timeout_seconds"
+      if [[ "$timeout_seconds" != "0" ]]; then
+        (
+          watchdog_sleep_pid=""
+          cleanup_watchdog_timer() {
+            if [[ -n "${watchdog_sleep_pid:-}" ]]; then
+              kill "$watchdog_sleep_pid" >/dev/null 2>&1 || true
+              wait "$watchdog_sleep_pid" >/dev/null 2>&1 || true
+            fi
+            rm -f "$watchdog_timer_record"
+            : >"$watchdog_reaped_marker"
+          }
+          trap cleanup_watchdog_timer EXIT
+          trap 'exit 0' HUP INT TERM
+          sleep "$timeout_seconds" &
+          watchdog_sleep_pid=$!
+          printf '%s\n' "$watchdog_sleep_pid" >"$watchdog_timer_record"
+          wait "$watchdog_sleep_pid" || exit 0
+          watchdog_sleep_pid=""
         if kill -0 "$xcodebuild_pid" >/dev/null 2>&1; then
           printf 'error: remote xcodebuild test timed out after %s seconds\n' "$timeout_seconds" >>"$xcodebuild_log"
           : >"$timeout_marker"
@@ -661,9 +762,9 @@ EOF
             kill_process_tree "$xcodebuild_pid" KILL
           fi
         fi
-      ) &
-      watchdog_pid=$!
-    fi
+        ) &
+        watchdog_pid=$!
+      fi
 
     if wait "$xcodebuild_pid"; then
       :
@@ -683,11 +784,17 @@ EOF
       kill "$watchdog_pid" >/dev/null 2>&1 || true
       wait "$watchdog_pid" >/dev/null 2>&1 || true
       watchdog_pid=""
+      if [[ ! -f "$watchdog_reaped_marker" ]]; then
+        exit_code=1
+        status="fail"
+        failure_summary="Remote timeout watchdog did not confirm that it reaped its timer child"
+      fi
     fi
     if [[ -n "$tail_pid" ]]; then
       kill "$tail_pid" >/dev/null 2>&1 || true
       wait "$tail_pid" >/dev/null 2>&1 || true
       tail_pid=""
+    fi
     fi
   fi
 
@@ -710,6 +817,14 @@ while [[ $# -gt 0 ]]; do
     --scope)
       [[ $# -ge 2 ]] || fail "--scope requires a value"
       VALIDATION_SCOPE="$2"
+      shift 2
+      ;;
+    --platform)
+      [[ $# -ge 2 ]] || fail "--platform requires a value"
+      case "$2" in
+        macos|ios) TEST_PLATFORM="$2" ;;
+        *) fail "--platform must be macos or ios" ;;
+      esac
       shift 2
       ;;
     --ref)
