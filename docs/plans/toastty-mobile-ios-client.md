@@ -276,10 +276,10 @@ Cut from earlier drafts: early native implementation before web evidence; a clie
   - [x] 1.6 Root Project.swift target/dependencies/tests + dual-graph green
   - [x] 1.7 5k domain performance budget and evidence
 - [ ] Phase 2 — Native pairing + read-only app over Tailscale
-  - [ ] 2.1 Host: native pairing offer (read+send grant), QR/fallback UI, exchange, additive legacy-safe Tailscale-login storage, centralized cookie/Bearer auth matrix, scope/revoke/audit, optional pending-interaction preview
-  - [ ] 2.2 Client in-app QR scan + manual fallback + confirmation + Keychain
-  - [ ] 2.3 Home: needs-you reason/optional-preview queue + workspace cards + classified connection lifecycle
-  - [ ] 2.4 Workspace and Settings screens + unpair
+  - [x] 2.1 Host: native pairing offer (read+send grant), QR/fallback UI, exchange, additive legacy-safe Tailscale-login storage, centralized cookie/Bearer auth matrix, scope/revoke/audit, optional pending-interaction preview
+  - [x] 2.2 Client in-app QR scan + manual fallback + confirmation + Keychain
+  - [x] 2.3 Home: needs-you reason/optional-preview queue + workspace cards + classified connection lifecycle
+  - [x] 2.4 Workspace and Settings screens + unpair
   - [ ] 2.5 Legacy store migration + auth/security/UI tests + real-phone read-only validation
 - [ ] Phase 3 — Transcript chat
   - [ ] 3.1 Conversation sheet: transcript rendering (all event kinds)

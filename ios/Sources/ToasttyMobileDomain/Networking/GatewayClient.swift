@@ -1,11 +1,12 @@
 import Foundation
 import RemoteProtocol
 
-public enum GatewayCredential: Equatable, Sendable, CustomStringConvertible {
+public enum GatewayCredential: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     case cookie(name: String, value: String)
     case bearer(token: String)
 
     public var description: String { "<redacted gateway credential>" }
+    public var debugDescription: String { description }
 }
 
 public protocol GatewayCredentialProvider: Sendable {
@@ -34,7 +35,7 @@ public enum GatewayAPIErrorCode: String, Equatable, Sendable {
     case upgradeRequired = "upgrade_required"
 }
 
-public enum GatewayFailure: Error, Equatable, Sendable {
+public enum GatewayFailure: Error, Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     case network
     case unauthenticated(code: GatewayAPIErrorCode?, message: String?)
     case authorizationDenied(code: GatewayAPIErrorCode?, message: String?)
@@ -44,6 +45,9 @@ public enum GatewayFailure: Error, Equatable, Sendable {
     case protocolMismatch(version: String)
     case operationCompatibility(GatewayCompatibilityError)
     case invalidResponse
+
+    public var description: String { "<redacted gateway failure>" }
+    public var debugDescription: String { description }
 
     public var isRetryable: Bool {
         switch self {

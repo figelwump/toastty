@@ -4,6 +4,40 @@ import XCTest
 @testable import ToasttyMobileDomain
 
 final class GatewayClientTests: XCTestCase {
+    func testGatewayCredentialDescriptionsAndReflectionsAreFullyRedacted() {
+        let credentials: [GatewayCredential] = [
+            .cookie(name: "sentinel_cookie_name", value: "SENTINEL_COOKIE_SECRET"),
+            .bearer(token: "SENTINEL_BEARER_SECRET"),
+        ]
+
+        for credential in credentials {
+            for output in [String(describing: credential), String(reflecting: credential)] {
+                XCTAssertEqual(output, "<redacted gateway credential>")
+                XCTAssertFalse(output.localizedCaseInsensitiveContains("sentinel"))
+                XCTAssertFalse(output.localizedCaseInsensitiveContains("secret"))
+            }
+        }
+    }
+
+    func testGatewayFailureDescriptionsAndReflectionsDoNotExposeHostMessages() {
+        let failures: [GatewayFailure] = [
+            .unauthenticated(code: .unauthorized, message: "SENTINEL private login"),
+            .authorizationDenied(code: .originDenied, message: "SENTINEL private hostname"),
+            .rateLimited(message: "SENTINEL account detail"),
+            .server(statusCode: 503, code: .persistenceFailed, message: "SENTINEL path detail"),
+            .http(statusCode: 418, code: nil, message: "SENTINEL transcript detail"),
+        ]
+
+        for failure in failures {
+            for output in [String(describing: failure), String(reflecting: failure)] {
+                XCTAssertEqual(output, "<redacted gateway failure>")
+                XCTAssertFalse(output.localizedCaseInsensitiveContains("sentinel"))
+                XCTAssertFalse(output.localizedCaseInsensitiveContains("private"))
+                XCTAssertFalse(output.localizedCaseInsensitiveContains("transcript"))
+            }
+        }
+    }
+
     func testExactRoutesMethodsOriginAndCookieCredential() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Self.helloJSON),

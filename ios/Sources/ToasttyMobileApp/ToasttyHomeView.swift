@@ -8,6 +8,7 @@ struct ToasttyHomeView: View {
         ScrollView {
             LazyVStack(spacing: 10) {
                 header
+                connectionNotice
                 needsYouSection
                 workspaceSection
             }
@@ -18,6 +19,28 @@ struct ToasttyHomeView: View {
         .background(ToasttyDesignTokens.background)
         .toolbar(.hidden, for: .navigationBar)
         .accessibilityIdentifier("toastty-mobile-home")
+    }
+
+    @ViewBuilder
+    private var connectionNotice: some View {
+        if let message = controller.freshness.message {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: controller.freshness == .unreachable
+                    ? "wifi.slash"
+                    : "arrow.trianglehead.2.clockwise.rotate.90")
+                Text(message)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .font(.caption)
+            .foregroundStyle(controller.freshness == .unreachable
+                ? ToasttyDesignTokens.red
+                : ToasttyDesignTokens.amberText)
+            .toasttyCard()
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(controller.freshness.accessibilityLabel). \(message)")
+            .accessibilityIdentifier("toastty-mobile-connection-notice")
+        }
     }
 
     private var header: some View {
@@ -55,11 +78,11 @@ struct ToasttyHomeView: View {
 
     private var needsYouSection: some View {
         VStack(spacing: 10) {
-            ToasttySectionTitle(title: "Needs you · \(controller.snapshot.needsYou.count)")
+            ToasttySectionTitle(title: "Needs you · \(needsYouConversations.count)")
                 .padding(.top, 6)
                 .accessibilityIdentifier("toastty-mobile-needs-you-section")
 
-            if controller.snapshot.needsYou.isEmpty {
+            if needsYouConversations.isEmpty {
                 Text("queue clear — all agents running or idle")
                     .font(.caption.monospaced())
                     .foregroundStyle(ToasttyDesignTokens.mutedText)
@@ -67,10 +90,18 @@ struct ToasttyHomeView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 10)
             } else {
-                ForEach(controller.snapshot.needsYou) { conversation in
+                ForEach(needsYouConversations) { conversation in
                     ToasttyNeedsYouCard(conversation: conversation, onOpen: controller.open)
                 }
             }
+        }
+    }
+
+    private var needsYouConversations: [MobileConversation] {
+        controller.snapshot.needsYou.sorted {
+            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return $0.id.uuidString < $1.id.uuidString
         }
     }
 
@@ -112,21 +143,15 @@ private struct ToasttyNeedsYouCard: View {
                 .font(.headline)
                 .foregroundStyle(ToasttyDesignTokens.primaryText)
 
-            Text(conversation.inputAvailability.needsYouReason)
+            Text(readOnlyReason)
                 .font(.subheadline)
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
-                if conversation.inputAvailability.allowsReply {
-                    Button("Reply") { onOpen(conversation) }
-                        .buttonStyle(ToasttyPrimaryButtonStyle())
-                        .accessibilityIdentifier("toastty-mobile-reply-\(conversation.id.uuidString)")
-                }
-
                 Spacer(minLength: 4)
 
-                Button("Open", systemImage: "chevron.right") { onOpen(conversation) }
+                Button("View", systemImage: "chevron.right") { onOpen(conversation) }
                     .labelStyle(.titleAndIcon)
                     .buttonStyle(.plain)
                     .font(.subheadline.weight(.semibold))
@@ -157,6 +182,19 @@ private struct ToasttyNeedsYouCard: View {
             .foregroundStyle(ToasttyDesignTokens.color(for: conversation.agent))
         Text("· \(conversation.age)")
     }
+
+    private var readOnlyReason: String {
+        switch conversation.inputAvailability {
+        case .openPrompt:
+            "Waiting for you on the Mac"
+        case .localDraft:
+            "Draft in progress on the Mac"
+        case .pendingInteraction(let preview):
+            preview ?? "Waiting for a response on the Mac"
+        case .unavailable:
+            "Input is not available from this device"
+        }
+    }
 }
 
 private struct ToasttyWorkspaceCard: View {
@@ -186,7 +224,7 @@ private struct ToasttyWorkspaceCard: View {
                 .overlay(ToasttyDesignTokens.divider)
                 .padding(.top, 10)
 
-            ForEach(workspace.sortedConversations.prefix(3)) { conversation in
+            ForEach(stablySortedConversations.prefix(3)) { conversation in
                 Button { onOpen(conversation) } label: {
                     ToasttyConversationMiniRow(conversation: conversation)
                 }
@@ -194,7 +232,7 @@ private struct ToasttyWorkspaceCard: View {
                 .accessibilityLabel(conversation.accessibilitySummary)
                 .accessibilityIdentifier("toastty-mobile-session-\(conversation.id.uuidString)")
 
-                if conversation.id != workspace.sortedConversations.prefix(3).last?.id {
+                if conversation.id != stablySortedConversations.prefix(3).last?.id {
                     Divider().overlay(ToasttyDesignTokens.divider)
                 }
             }
@@ -211,6 +249,17 @@ private struct ToasttyWorkspaceCard: View {
             }
         }
         .toasttyCard()
+    }
+
+    private var stablySortedConversations: [MobileConversation] {
+        workspace.sortedConversations.sorted {
+            if $0.state.bucket.sortOrder != $1.state.bucket.sortOrder {
+                return $0.state.bucket.sortOrder < $1.state.bucket.sortOrder
+            }
+            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return $0.id.uuidString < $1.id.uuidString
+        }
     }
 
     private var workspaceIdentity: some View {
@@ -270,17 +319,5 @@ private struct ToasttyConversationMiniRow: View {
         Text(conversation.age)
             .font(.caption2.monospaced())
             .foregroundStyle(ToasttyDesignTokens.mutedText)
-    }
-}
-
-private struct ToasttyPrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(ToasttyDesignTokens.amber.opacity(configuration.isPressed ? 0.72 : 1))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

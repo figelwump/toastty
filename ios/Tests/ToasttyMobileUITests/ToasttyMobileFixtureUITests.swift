@@ -16,6 +16,7 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["NEEDS YOU · 3"].exists)
         XCTAssertTrue(app.staticTexts["WORKSPACES"].exists)
         XCTAssertTrue(app.staticTexts["toastty"].exists)
+        XCTAssertFalse(app.buttons["Reply"].exists)
         attachScreenshot(named: "fixture-home", of: app)
 
         let workspaceLink = app.buttons["toastty-mobile-workspace-\(toasttyWorkspaceID)"]
@@ -36,6 +37,8 @@ final class ToasttyMobileFixtureUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Respond on the desktop"].exists)
         XCTAssertFalse(app.buttons["Approve"].exists)
         XCTAssertFalse(app.buttons["Deny"].exists)
+        XCTAssertFalse(app.buttons["Reply"].exists)
+        XCTAssertFalse(app.staticTexts["Reply shortcut preview — sending arrives in the gated-send milestone"].exists)
         attachScreenshot(named: "fixture-conversation-sheet", of: app)
 
         app.buttons["toastty-mobile-conversation-close"].tap()

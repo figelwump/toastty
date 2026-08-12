@@ -104,6 +104,14 @@ public struct GatewayCompatibilityDecoder: Sendable {
             workspaceTitle: try placementObject.optionalString("workspaceTitle"),
             panelID: try placementObject.optionalUUID("panelID")
         )
+        let inputAvailability = try decodeInputAvailability(try object.requiredObject("inputAvailability"))
+        let pendingInteractionPreview: RemotePendingInteractionPreview?
+        if case .pendingInteraction = inputAvailability,
+           let previewObject = object.lossyObject("pendingInteractionPreview") {
+            pendingInteractionPreview = try? decode(RemotePendingInteractionPreview.self, from: previewObject)
+        } else {
+            pendingInteractionPreview = nil
+        }
         return CompatibleConversationSummary(
             conversationID: try decodeConversationID(object.requiredString("conversationID")),
             provider: provider,
@@ -111,7 +119,8 @@ public struct GatewayCompatibilityDecoder: Sendable {
             placement: placement,
             cwd: try object.optionalString("cwd"),
             state: decodeDisplayState(try object.requiredString("state")),
-            inputAvailability: try decodeInputAvailability(try object.requiredObject("inputAvailability")),
+            inputAvailability: inputAvailability,
+            pendingInteractionPreview: pendingInteractionPreview,
             projectionGeneration: try object.requiredUInt64("projectionGeneration"),
             latestSequence: try object.requiredUInt64("latestSequence"),
             updatedAt: try object.requiredDate("updatedAt")
@@ -333,6 +342,13 @@ private struct JSONObject {
         guard let object = storage[key] as? [String: Any] else {
             throw GatewayCompatibilityError.invalidEnvelope("Missing object \(key)")
         }
+        return JSONObject(object)
+    }
+
+    /// Optional additive fields must not make a known snapshot unusable when a
+    /// future host changes their nested representation.
+    func lossyObject(_ key: String) -> JSONObject? {
+        guard let object = storage[key] as? [String: Any] else { return nil }
         return JSONObject(object)
     }
 

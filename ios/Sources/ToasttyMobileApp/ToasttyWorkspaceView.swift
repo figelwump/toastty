@@ -2,13 +2,33 @@ import SwiftUI
 import ToasttyMobileDomain
 
 struct ToasttyWorkspaceView: View {
-    let workspace: MobileWorkspace
-    let onOpen: (MobileConversation) -> Void
+    let workspaceID: UUID
+    let controller: HomeScreenController
 
     var body: some View {
+        Group {
+            if let workspace = controller.workspace(id: workspaceID) {
+                workspaceList(workspace)
+            } else {
+                ContentUnavailableView(
+                    "Workspace no longer available",
+                    systemImage: "rectangle.stack.badge.minus",
+                    description: Text("It was removed from Toastty on your Mac.")
+                )
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                .accessibilityIdentifier("toastty-mobile-workspace-removed")
+            }
+        }
+        .background(ToasttyDesignTokens.background)
+        .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("toastty-mobile-workspace-detail")
+    }
+
+    private func workspaceList(_ workspace: MobileWorkspace) -> some View {
         List {
             Section {
-                ForEach(workspace.sortedConversations) { conversation in
+                ForEach(stablySortedConversations(in: workspace)) { conversation in
                     Button { onOpen(conversation) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             ViewThatFits(in: .horizontal) {
@@ -56,9 +76,21 @@ struct ToasttyWorkspaceView: View {
         }
         .scrollContentBackground(.hidden)
         .background(ToasttyDesignTokens.background)
-        .navigationTitle(workspace.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .accessibilityIdentifier("toastty-mobile-workspace-detail")
+    }
+
+    private func onOpen(_ conversation: MobileConversation) {
+        controller.open(conversation)
+    }
+
+    private func stablySortedConversations(in workspace: MobileWorkspace) -> [MobileConversation] {
+        workspace.sortedConversations.sorted {
+            if $0.state.bucket.sortOrder != $1.state.bucket.sortOrder {
+                return $0.state.bucket.sortOrder < $1.state.bucket.sortOrder
+            }
+            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return $0.id.uuidString < $1.id.uuidString
+        }
     }
 
     @ViewBuilder

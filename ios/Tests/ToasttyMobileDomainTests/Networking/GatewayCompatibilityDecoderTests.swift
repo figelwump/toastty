@@ -126,6 +126,74 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         XCTAssertTrue(summary.inputAvailability.allowsRemoteSend)
     }
 
+    func testPendingInteractionPreviewFlowsIntoPresentationOnlyForPendingInteraction() throws {
+        let preview = try JSONSerialization.jsonObject(
+            with: fixtureData(named: "pending-interaction-preview")
+        ) as! [String: Any]
+        let data = try sessionSnapshotData(
+            inputAvailability: ["kind": "pending_interaction", "interactionIDs": ["approval-1"]],
+            preview: preview
+        )
+
+        let snapshot = try decoder.decodeSessionListResponse(data)
+        let summary = try XCTUnwrap(snapshot.conversations.first)
+        XCTAssertEqual(summary.pendingInteractionPreview?.prompt, "Approve the gateway command on the Mac")
+        let mobile = try XCTUnwrap(snapshot.presentation().workspaces.first?.conversations.first)
+        XCTAssertEqual(mobile.inputAvailability, .pendingInteraction(preview: "Approve the gateway command on the Mac"))
+
+        let openPromptData = try sessionSnapshotData(
+            inputAvailability: [
+                "kind": "open_prompt",
+                "epoch": ["bindingID": "33333333-3333-3333-3333-333333333333", "counter": 1],
+            ],
+            preview: preview
+        )
+        let openPrompt = try XCTUnwrap(decoder.decodeSessionListResponse(openPromptData).conversations.first)
+        XCTAssertNil(openPrompt.pendingInteractionPreview)
+        XCTAssertEqual(openPrompt.inputAvailability.presentation(), .openPrompt)
+    }
+
+    func testMalformedOptionalPendingPreviewDoesNotDestroySnapshot() throws {
+        for malformed: Any in [
+            ["prompt": String(repeating: "x", count: 241)],
+            ["prompt": "misleading\u{202E}text"],
+            ["future": true],
+            "future-shape",
+        ] {
+            let data = try sessionSnapshotData(
+                inputAvailability: ["kind": "pending_interaction", "interactionIDs": ["approval-1"]],
+                preview: malformed
+            )
+            let snapshot = try decoder.decodeSessionListResponse(data)
+            let summary = try XCTUnwrap(snapshot.conversations.first)
+            XCTAssertNil(summary.pendingInteractionPreview)
+            XCTAssertEqual(summary.inputAvailability.presentation(), .pendingInteraction(preview: nil))
+        }
+    }
+
+    func testPresentationUsesIdentifiersAsDuplicateTitleTiebreaks() {
+        let timestamp = Date(timeIntervalSince1970: 1_786_200_000)
+        let summaries = [
+            compatibleSummary(conversation: "00000000-0000-0000-0000-000000000004", workspace: "00000000-0000-0000-0000-000000000002"),
+            compatibleSummary(conversation: "00000000-0000-0000-0000-000000000003", workspace: "00000000-0000-0000-0000-000000000001"),
+            compatibleSummary(conversation: "00000000-0000-0000-0000-000000000002", workspace: "00000000-0000-0000-0000-000000000001"),
+        ]
+        let snapshot = CompatibleSessionListSnapshot(
+            projectionRunID: RemoteProjectionRunID(rawValue: UUID()),
+            conversations: summaries,
+            generatedAt: timestamp
+        ).presentation()
+
+        XCTAssertEqual(snapshot.workspaces.map(\.id.uuidString), [
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+        ])
+        XCTAssertEqual(snapshot.workspaces[0].conversations.map(\.id.uuidString), [
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000003",
+        ])
+    }
+
     func testUnknownSendStatusAndRejectionReasonFailOnlySendDecode() throws {
         XCTAssertThrowsError(try decoder.decodeSendResult(CompatibilityFixture.data("send-unknown-status"))) { error in
             XCTAssertEqual(error as? GatewayCompatibilityError, .unsupportedSendStatus("scheduled_for_future"))
@@ -133,5 +201,55 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         XCTAssertThrowsError(try decoder.decodeSendResult(CompatibilityFixture.data("send-unknown-reason"))) { error in
             XCTAssertEqual(error as? GatewayCompatibilityError, .unsupportedSendRejectionReason("future_policy"))
         }
+    }
+
+    private func fixtureData(named name: String) throws -> Data {
+        let url = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: name, withExtension: "json", subdirectory: "v1")
+        )
+        return try Data(contentsOf: url)
+    }
+
+    private func sessionSnapshotData(
+        inputAvailability: [String: Any],
+        preview: Any
+    ) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "protocolVersion": "1.0",
+            "snapshot": [
+                "projectionRunID": "22222222-2222-2222-2222-222222222222",
+                "generatedAt": "2026-08-08T14:41:00.125Z",
+                "conversations": [[
+                    "conversationID": "11111111-1111-1111-1111-111111111111",
+                    "provider": "codex",
+                    "title": "Needs review",
+                    "placement": [:],
+                    "state": "awaiting_input",
+                    "inputAvailability": inputAvailability,
+                    "pendingInteractionPreview": preview,
+                    "projectionGeneration": 1,
+                    "latestSequence": 1,
+                    "updatedAt": "2026-08-08T14:40:00.125Z",
+                ]],
+            ],
+        ], options: [.sortedKeys])
+    }
+
+    private func compatibleSummary(conversation: String, workspace: String) -> CompatibleConversationSummary {
+        CompatibleConversationSummary(
+            conversationID: RemoteConversationID(rawValue: UUID(uuidString: conversation)!),
+            provider: .codex,
+            title: "Duplicate",
+            placement: RemoteConversationPlacement(
+                workspaceID: UUID(uuidString: workspace)!,
+                workspaceTitle: "Duplicate"
+            ),
+            cwd: nil,
+            state: .ready,
+            inputAvailability: .unavailable(reason: .known(.ended)),
+            projectionGeneration: 1,
+            latestSequence: 1,
+            updatedAt: Date(timeIntervalSince1970: 1_786_200_000)
+        )
     }
 }

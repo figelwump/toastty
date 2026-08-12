@@ -118,7 +118,19 @@ public actor EventStreamSubscription: EventStreamSubscriptionProtocol {
 public struct URLSessionWebSocketTransport: WebSocketTransport, @unchecked Sendable {
     private let configuration: URLSessionConfiguration
 
-    public init(configuration: URLSessionConfiguration = .default) {
+    public init() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        self.configuration = configuration
+    }
+
+    /// Explicit injection seam. The caller owns the configuration's cookie,
+    /// cache, and persistence policy; redirects are still rejected by the task
+    /// delegate below.
+    public init(configuration: URLSessionConfiguration) {
         self.configuration = configuration
     }
 
@@ -287,7 +299,7 @@ final class WebSocketOpenGate: @unchecked Sendable {
     }
 }
 
-private final class URLSessionWebSocketOpenDelegate: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+final class URLSessionWebSocketOpenDelegate: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     private let openGate: WebSocketOpenGate
 
     init(openGate: WebSocketOpenGate) {
@@ -308,5 +320,15 @@ private final class URLSessionWebSocketOpenDelegate: NSObject, URLSessionWebSock
         didCompleteWithError error: (any Error)?
     ) {
         openGate.didFail(error ?? URLError(.cannotConnectToHost))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

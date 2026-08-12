@@ -2,36 +2,48 @@ import SwiftUI
 import ToasttyMobileDomain
 
 struct ToasttyConversationSheet: View {
-    let conversation: MobileConversation
+    let conversationID: UUID
+    let controller: HomeScreenController
     let onDismiss: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(conversation.lastActivity)
-                        .font(.body)
-                        .foregroundStyle(ToasttyDesignTokens.primaryText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+        Group {
+            if let conversation = controller.conversation(id: conversationID) {
+                VStack(spacing: 0) {
+                    header(conversation)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(conversation.lastActivity)
+                                .font(.body)
+                                .foregroundStyle(ToasttyDesignTokens.primaryText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if case .pendingInteraction(let preview) = conversation.inputAvailability {
-                        pendingInteraction(preview: preview)
+                            if case .pendingInteraction(let preview) = conversation.inputAvailability {
+                                pendingInteraction(preview: preview)
+                            }
+
+                            Text("Full transcript arrives in the transcript milestone. This view keeps interaction requests read-only.")
+                                .font(.footnote)
+                                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(18)
                     }
-
-                    Text("Full transcript arrives in the transcript milestone. This fixture shell keeps interaction requests read-only.")
-                        .font(.footnote)
-                        .foregroundStyle(ToasttyDesignTokens.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
+                    composerState(conversation)
                 }
-                .padding(18)
+            } else {
+                ContentUnavailableView(
+                    "Conversation no longer available",
+                    systemImage: "bubble.left.and.exclamationmark.bubble.right",
+                    description: Text("It was removed from Toastty on your Mac.")
+                )
+                .foregroundStyle(ToasttyDesignTokens.secondaryText)
             }
-            composerState
         }
         .background(ToasttyDesignTokens.elevatedSurface)
     }
 
-    private var header: some View {
+    private func header(_ conversation: MobileConversation) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -89,37 +101,37 @@ struct ToasttyConversationSheet: View {
         .accessibilityIdentifier("toastty-mobile-readonly-interaction")
     }
 
-    private var composerState: some View {
+    private func composerState(_ conversation: MobileConversation) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: composerIcon)
-            Text(composerMessage)
+            Image(systemName: composerIcon(conversation))
+            Text(composerMessage(conversation))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .font(.caption.monospaced())
-        .foregroundStyle(composerColor)
+        .foregroundStyle(composerColor(conversation))
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .top) { Divider().overlay(ToasttyDesignTokens.divider) }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(composerMessage)
+        .accessibilityLabel(composerMessage(conversation))
         .accessibilityIdentifier("toastty-mobile-composer-status")
     }
 
-    private var composerIcon: String {
+    private func composerIcon(_ conversation: MobileConversation) -> String {
         switch conversation.inputAvailability {
-        case .openPrompt: "bubble.left.and.text.bubble.right"
+        case .openPrompt: "desktopcomputer"
         case .localDraft: "pencil.line"
         case .pendingInteraction: "desktopcomputer"
         case .unavailable: "lock"
         }
     }
 
-    private var composerMessage: String {
+    private func composerMessage(_ conversation: MobileConversation) -> String {
         switch conversation.inputAvailability {
         case .openPrompt:
-            "Reply shortcut preview — sending arrives in the gated-send milestone"
+            "Read-only on iPhone — respond on your Mac"
         case .localDraft:
             "Paused — a draft is in progress on the desktop"
         case .pendingInteraction:
@@ -129,7 +141,7 @@ struct ToasttyConversationSheet: View {
         }
     }
 
-    private var composerColor: Color {
+    private func composerColor(_ conversation: MobileConversation) -> Color {
         conversation.inputAvailability == .localDraft
             ? ToasttyDesignTokens.amberText
             : ToasttyDesignTokens.mutedText

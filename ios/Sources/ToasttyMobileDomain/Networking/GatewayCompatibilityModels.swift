@@ -25,14 +25,16 @@ public enum CompatibleInputAvailability: Equatable, Sendable {
         return false
     }
 
-    public var presentation: MobileInputAvailability {
+    public func presentation(
+        pendingInteractionPreview: RemotePendingInteractionPreview? = nil
+    ) -> MobileInputAvailability {
         switch self {
         case .unavailable(let reason):
             return .unavailable(reason: reason.rawValue)
         case .openPrompt:
             return .openPrompt
         case .pendingInteraction:
-            return .pendingInteraction(preview: nil)
+            return .pendingInteraction(preview: pendingInteractionPreview?.prompt)
         case .localDraft:
             return .localDraft
         case .unsupported(let rawKind):
@@ -49,6 +51,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
     public var cwd: String?
     public var state: MobileSessionDisplayState
     public var inputAvailability: CompatibleInputAvailability
+    public var pendingInteractionPreview: RemotePendingInteractionPreview?
     public var projectionGeneration: UInt64
     public var latestSequence: UInt64
     public var updatedAt: Date
@@ -61,6 +64,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         cwd: String?,
         state: MobileSessionDisplayState,
         inputAvailability: CompatibleInputAvailability,
+        pendingInteractionPreview: RemotePendingInteractionPreview? = nil,
         projectionGeneration: UInt64,
         latestSequence: UInt64,
         updatedAt: Date
@@ -72,6 +76,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         self.cwd = cwd
         self.state = state
         self.inputAvailability = inputAvailability
+        self.pendingInteractionPreview = pendingInteractionPreview
         self.projectionGeneration = projectionGeneration
         self.latestSequence = latestSequence
         self.updatedAt = updatedAt
@@ -98,7 +103,9 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
             let workspaceID = summary.placement.workspaceID ?? Self.ungroupedWorkspaceID
             let workspaceTitle = summary.placement.workspaceTitle ?? "Ungrouped"
             let path = summary.cwd.flatMap { $0.isEmpty ? nil : $0 } ?? "Unknown path"
-            let availability = summary.inputAvailability.presentation
+            let availability = summary.inputAvailability.presentation(
+                pendingInteractionPreview: summary.pendingInteractionPreview
+            )
             return MobileConversation(
                 id: summary.conversationID.rawValue,
                 workspaceID: workspaceID,
@@ -122,11 +129,15 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 title: first.workspaceTitle,
                 path: first.workspacePath,
                 conversations: conversations.sorted {
-                    $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                    let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+                    if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+                    return $0.id.uuidString < $1.id.uuidString
                 }
             )
         }.sorted {
-            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return $0.id.uuidString < $1.id.uuidString
         }
         return MobileHomeSnapshot(hostName: hostName, workspaces: workspaces)
     }

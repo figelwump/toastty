@@ -37,6 +37,18 @@ enum ToasttyDesignTokens {
     }
 }
 
+struct ToasttyPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color(red: 22 / 255, green: 16 / 255, blue: 6 / 255))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(ToasttyDesignTokens.amber.opacity(configuration.isPressed ? 0.72 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 extension View {
     func toasttyCard() -> some View {
         padding(14)

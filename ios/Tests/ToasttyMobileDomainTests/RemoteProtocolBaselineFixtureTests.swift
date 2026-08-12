@@ -17,7 +17,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
 
         XCTAssertEqual(
             fixtureURLs.count,
-            25,
+            33,
             "Adding or removing canonical v1 fixtures requires an intentional iOS harness update."
         )
 
@@ -52,8 +52,16 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
             "events-response-page": decode(RemoteGatewayEventsResponse.self),
             "events-response-resnapshot-required": decode(RemoteGatewayEventsResponse.self),
             "hello-response": decode(RemoteGatewayHelloResponse.self),
+            "current-device-response": decode(RemoteGatewayCurrentDeviceResponse.self),
+            "native-pairing-exchange-fallback-request": decode(RemoteGatewayNativePairingExchangeRequest.self),
+            "native-pairing-exchange-qr-request": decode(RemoteGatewayNativePairingExchangeRequest.self),
+            "native-pairing-exchange-response": decode(RemoteGatewayNativePairingExchangeResponse.self),
+            "native-pairing-qr-payload": decode(RemoteNativePairingQRPayload.self),
             "pair-request": decode(RemoteGatewayPairRequest.self),
             "pair-response": decode(RemoteGatewayPairResponse.self),
+            "pending-interaction-preview": decode(RemotePendingInteractionPreview.self),
+            "revoke-current-device-request": decode(RemoteGatewayRevokeCurrentDeviceRequest.self),
+            "revoke-current-device-response": decode(RemoteGatewayRevokeCurrentDeviceResponse.self),
             "send-request": decode(RemoteMessageSendRequest.self),
             "send-result-accepted": decode(RemoteMessageSendResult.self),
             "send-result-duplicate": decode(RemoteMessageSendResult.self),
@@ -73,7 +81,7 @@ final class RemoteProtocolBaselineFixtureTests: XCTestCase {
             "stream-session-list": decode(RemoteGatewayStreamMessage.self),
         ]
 
-        XCTAssertEqual(decoders.count, 25)
+        XCTAssertEqual(decoders.count, 33)
         for (name, decoder) in decoders {
             try decoder(fixtureData(named: name))
         }

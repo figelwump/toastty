@@ -22,9 +22,33 @@ public protocol HTTPTransport: Sendable {
 
 public final class URLSessionHTTPTransport: HTTPTransport, @unchecked Sendable {
     private let session: URLSession
+    private let ownsSession: Bool
 
-    public init(session: URLSession = .shared) {
+    public init() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        session = URLSession(
+            configuration: configuration,
+            delegate: RedirectBlockingURLSessionDelegate(),
+            delegateQueue: nil
+        )
+        ownsSession = true
+    }
+
+    /// Explicit injection seam for tests or a caller-owned URLSession. The
+    /// caller owns that session's redirect and persistence policy.
+    public init(session: URLSession) {
         self.session = session
+        ownsSession = false
+    }
+
+    deinit {
+        if ownsSession {
+            session.invalidateAndCancel()
+        }
     }
 
     public func send(_ request: URLRequest) async throws -> HTTPTransportResponse {
@@ -37,6 +61,18 @@ public final class URLSessionHTTPTransport: HTTPTransport, @unchecked Sendable {
             result[name.lowercased()] = String(describing: entry.value)
         }
         return HTTPTransportResponse(statusCode: httpResponse.statusCode, headers: headers, body: body)
+    }
+}
+
+final class RedirectBlockingURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }
 
