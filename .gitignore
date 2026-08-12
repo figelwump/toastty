@@ -6,6 +6,9 @@ Tuist/Derived
 DerivedData
 /Derived/
 /Derived-*/
+/ios/.build-runs/
+/ios/Derived/
+/ios/DerivedData/
 /artifacts/
 /WORKTREE_HANDOFF.md
 /node_modules/
