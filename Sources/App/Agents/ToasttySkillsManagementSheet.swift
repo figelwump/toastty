@@ -585,11 +585,6 @@ struct ToasttySkillsManagementSheet: View {
                     .foregroundStyle(claudeStatusColor)
                 Text("Claude Code · Pi · OpenCode · MiMo Code")
                     .font(.system(size: 12, weight: .medium))
-                Image(systemName: "info.circle")
-                    .font(.system(size: 10))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .help(Self.launchMechanismHelpText)
-                    .accessibilityLabel(Self.launchMechanismHelpText)
                 Spacer()
                 statusPill(claudeStatusTitle, color: claudeStatusColor)
             }
@@ -608,97 +603,158 @@ struct ToasttySkillsManagementSheet: View {
     }
 
     private var skillsList: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Built-in Skills")
-                .font(.system(size: 13, weight: .semibold))
-            ForEach(ToasttyAgentPluginBundle.skills, id: \.name) { skill in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("toastty:\(skill.name)")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    Text(skill.summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ToastyTheme.mutedText)
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Built-in Skills")
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+
+                ForEach(ToasttyAgentPluginBundle.skills, id: \.name) { skill in
+                    rowDivider
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        (Text("toastty:").foregroundStyle(ToastyTheme.subtleText)
+                            + Text(skill.name))
+                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                            .frame(width: 210, alignment: .leading)
+                        Text(skill.summary)
+                            .font(.system(size: 12))
+                            .foregroundStyle(ToastyTheme.inactiveText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("sheet.toastty-skills.skill.\(skill.name)")
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("sheet.toastty-skills.skill.\(skill.name)")
+            }
+            .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(ToastyTheme.hairline, lineWidth: 1)
             }
 
             Text(Self.duplicateSkillsGuidanceText)
                 .font(.system(size: 11))
-                .foregroundStyle(ToastyTheme.inactiveText)
+                .foregroundStyle(ToastyTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 2)
+                .padding(.horizontal, 2)
         }
     }
 
     private var userSkillsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text(userSkillsModel.sectionTitle)
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                if userSkillsModel.isWorking {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                Button("Rescan") {
-                    userSkillsModel.rescan()
-                }
-                .disabled(userSkillsModel.isWorking)
-                .accessibilityIdentifier("sheet.toastty-skills.user.rescan")
-                if userSkillsModel.showsCreateFolderAffordance {
-                    Button("Create Skills Folder") {
-                        userSkillsModel.createUserSkillsFolder()
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(userSkillsModel.sectionTitle)
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        if userSkillsModel.isWorking {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Button {
+                                userSkillsModel.rescan()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(ToastyTheme.inactiveText)
+                            .help("Rescan user skills")
+                            .accessibilityLabel("Rescan user skills")
+                            .accessibilityIdentifier("sheet.toastty-skills.user.rescan")
+                        }
+                        if userSkillsModel.showsCreateFolderAffordance {
+                            Button("Create Skills Folder") {
+                                userSkillsModel.createUserSkillsFolder()
+                            }
+                            .controlSize(.small)
+                            .accessibilityIdentifier("sheet.toastty-skills.user.create-folder")
+                        } else {
+                            Button {
+                                userSkillsModel.openUserSkillsFolder()
+                            } label: {
+                                Image(systemName: "folder")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(ToastyTheme.inactiveText)
+                            .help("Open \(userSkillsModel.userSkillsDirectoryDisplayPath) in Finder")
+                            .accessibilityLabel("Open User Skills Folder")
+                            .accessibilityIdentifier("sheet.toastty-skills.user.open-folder")
+                        }
                     }
-                    .accessibilityIdentifier("sheet.toastty-skills.user.create-folder")
+                    Text("Put custom Toastty skills in \(userSkillsModel.userSkillsDirectoryDisplayPath) and they load automatically into new agent sessions.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ToastyTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+
+                if let catalogState = userSkillsModel.catalogState, catalogState.packages.isEmpty == false {
+                    ForEach(catalogState.packages, id: \.name) { package in
+                        rowDivider
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(package.name)
+                                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                                .frame(width: 210, alignment: .leading)
+                            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                                Image(systemName: package.isAccepted
+                                    ? "checkmark.circle.fill"
+                                    : "exclamationmark.triangle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(package.isAccepted
+                                        ? ToastyTheme.sessionReadyText
+                                        : ToastyTheme.sessionNeedsApprovalText)
+                                Text(UserSkillsManagementModel.statusDescription(for: package))
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(
+                                        package.isAccepted
+                                            ? ToastyTheme.inactiveText
+                                            : ToastyTheme.sessionNeedsApprovalText
+                                    )
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("sheet.toastty-skills.user.\(package.name)")
+                    }
                 } else {
-                    Button("Open User Skills Folder") {
-                        userSkillsModel.openUserSkillsFolder()
-                    }
-                    .accessibilityIdentifier("sheet.toastty-skills.user.open-folder")
+                    rowDivider
+                    Text("No user skills found. Add a skill as <name>/SKILL.md with name and description frontmatter.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+
+                if let errorMessage = userSkillsModel.errorMessage {
+                    rowDivider
+                    Text(errorMessage)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ToastyTheme.sessionErrorText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
                 }
             }
+            .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(ToastyTheme.hairline, lineWidth: 1)
+            }
 
-            Text("Put custom Toastty skills in \(userSkillsModel.userSkillsDirectoryDisplayPath) and they load automatically into new agent sessions.")
-                .font(.system(size: 12))
+            Text("Running sessions keep the skills they launched with; new launches use the current set.")
+                .font(.system(size: 11))
                 .foregroundStyle(ToastyTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
-
-            if let catalogState = userSkillsModel.catalogState, catalogState.packages.isEmpty == false {
-                ForEach(catalogState.packages, id: \.name) { package in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(package.name)
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        Text(UserSkillsManagementModel.statusDescription(for: package))
-                            .font(.system(size: 12))
-                            .foregroundStyle(
-                                package.isAccepted
-                                    ? ToastyTheme.mutedText
-                                    : ToastyTheme.sessionNeedsApprovalText
-                            )
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("sheet.toastty-skills.user.\(package.name)")
-                }
-            } else {
-                Text("No user skills found. Add a skill as <name>/SKILL.md with name and description frontmatter.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(ToastyTheme.mutedText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                if let errorMessage = userSkillsModel.errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(ToastyTheme.sessionErrorText)
-                }
-                Text("Running sessions keep the skills they launched with; new launches use the current set.")
-            }
-            .font(.system(size: 11))
-            .foregroundStyle(ToastyTheme.inactiveText)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 2)
+                .padding(.horizontal, 2)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sheet.toastty-skills.user")
@@ -846,8 +902,6 @@ struct ToasttySkillsManagementSheet: View {
             return codexStatus?.bundledVersion
         }
     }
-
-    static let launchMechanismHelpText = "Claude Code loads Toastty skills as a launch plugin; Pi adds them per launch with --skill; OpenCode and MiMo Code add them through per-launch config content."
 
     static let duplicateSkillsGuidanceText = "Toastty never changes global skill folders. If duplicate Toastty skills appear, remove the separately installed copies from ~/.codex/skills, ~/.claude/skills, or ~/.agents/skills."
 }
