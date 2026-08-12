@@ -30,6 +30,17 @@ Toastty is designed to run locally on your machine. The app itself does not send
     document paths, and Scratchpad document IDs/titles. The list contains up to
     20 items and may contain URLs or local paths that identify the supporting
     material you opened.
+- `~/.toastty/remote-access/devices.json`
+  - Paired-device IDs, names, scopes, timestamps, revocation state, and hashes
+    of device credentials. Toastty never persists the credential tokens handed
+    to paired browsers. The file and its parent directory use owner-only
+    permissions.
+- `~/.toastty/remote-access/audit.json`
+  - Up to 500 recent remote-access security and lifecycle events, including
+    timestamps, action names, device IDs, device names where relevant, and
+    rejection reasons. It does not contain message text, prompts, transcript
+    content, or credential values. The file and its parent directory use
+    owner-only permissions.
 - `~/.toastty/managed-agent-resume/`
   - Toastty-owned marker files for OpenCode and MiMo Code native resume records.
     Marker filenames are derived from hashed resume metadata. Marker contents
@@ -76,6 +87,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
   - `<runtime-home>/recent-right-panel-items.json`
+  - `<runtime-home>/remote-access/devices.json`
+  - `<runtime-home>/remote-access/audit.json`
   - `<runtime-home>/managed-agent-resume/`
   - `<runtime-home>/agent-plugins/` (user-skill snapshots, staging, and receipts stay isolated here; the user-skill SOURCE is not isolated — isolated instances read the real `~/.toastty/skills/` unless `TOASTTY_USER_SKILLS_ROOT` redirects it, the override automated harnesses use)
   - `<runtime-home>/scratchpad-documents/`
@@ -127,6 +140,22 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - Sparkle checks `https://updates.toastty.dev/appcast.xml` for available updates. No usage data or telemetry is sent with the request.
 - Agent-authored Scratchpad content can load HTTPS font files when the document declares them. Other Scratchpad-generated network access remains blocked by content security policy.
 - Toastty does not request contacts, calendars, photos, or location access.
+
+## Remote Access networking
+
+When enabled, Toastty listens for Remote Access only on IPv4 loopback. The
+intended remote path is a private Tailscale Serve HTTPS origin that proxies to
+that local listener; Toastty does not configure Tailscale, publish a LAN
+listener, or enable Tailscale Funnel. The configured browser origin is an exact
+allowlist, and a presented non-matching Origin is rejected on every route.
+
+A paired browser can receive normalized agent conversation content, status,
+workspace/panel placement, and working-directory metadata. New pairings have
+read and send scope by default; device send scope can be disabled or the device
+can be revoked from the Mac. Remote Access activity is not sent to a Toastty
+cloud service. Network transport and tailnet access remain subject to the
+user's Tailscale account, ACLs, DNS, and Serve configuration. See
+[Remote Access](remote-access.md) for setup and revocation guidance.
 
 ## Diagnostics upload
 
