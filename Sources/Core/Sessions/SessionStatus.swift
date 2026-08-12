@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 public enum SessionStatusKind: String, Codable, Equatable, Sendable {

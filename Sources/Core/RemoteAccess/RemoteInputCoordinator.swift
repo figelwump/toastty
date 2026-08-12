@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 /// Single source of truth for whether a remote free-form send may be delivered

@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 public struct TerminalPanelState: Codable, Equatable, Sendable {

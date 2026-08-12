@@ -1,3 +1,4 @@
+import RemoteProtocol
 @testable import ToasttyApp
 import AppKit
 import CoreState

@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 public struct ManagedAgentLaunchRequest: Codable, Equatable, Sendable {

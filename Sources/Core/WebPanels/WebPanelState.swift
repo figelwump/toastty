@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 public enum WebPanelCapabilityProfile: String, Hashable, Sendable {

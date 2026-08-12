@@ -1,4 +1,5 @@
 import Foundation
+import RemoteProtocol
 import Testing
 @testable import CoreState
 

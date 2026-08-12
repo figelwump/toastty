@@ -1,3 +1,4 @@
+import RemoteProtocol
 import CoreState
 import Foundation
 import Testing

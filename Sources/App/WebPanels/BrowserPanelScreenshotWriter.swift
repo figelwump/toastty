@@ -1,3 +1,4 @@
+import RemoteProtocol
 import AppKit
 import CoreState
 import Foundation

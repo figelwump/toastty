@@ -1,3 +1,4 @@
+import RemoteProtocol
 import Foundation
 
 /// A static resource the gateway can serve (the minimal phone web client).
