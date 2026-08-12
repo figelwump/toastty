@@ -1,0 +1,92 @@
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload the validated IPA to App Store Connect
+        required: true
+        type: boolean
+        default: false
+      run_tests:
+        description: Run native Swift tests before archive
+        required: true
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ios-testflight.yml"
+      - "ios/**"
+      - "Sources/RemoteProtocol/**"
+      - "scripts/ci/ios-testflight.sh"
+      - ".secrets"
+
+concurrency:
+  group: ios-testflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    name: Validate or Upload
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.TOASTTY_IOS_TESTFLIGHT_ON_PUSH == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Tuist
+        run: brew install tuist
+
+      - name: Test release script
+        run: node --test ios/Tests/ReleaseScriptTests/*.test.mjs
+
+      - name: Test native client
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests || inputs.upload }}
+        run: node ios/scripts/toastty-ios.mjs test
+
+      - name: Require main for upload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "TestFlight uploads are allowed only from main." >&2
+          exit 1
+
+      - name: Archive and validate TestFlight build
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+          APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64 }}
+          TOASTTY_IOS_DEVELOPMENT_TEAM: ${{ secrets.TOASTTY_IOS_DEVELOPMENT_TEAM }}
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_APPSTORE_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROVISIONING_PROFILE_BASE64 }}
+          TOASTTY_IOS_UPLOAD: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.upload == true && '1' || '0' }}
+        run: bash scripts/ci/ios-testflight.sh
+
+      - name: Upload sanitized release evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/ios-release/**/export/*.ipa
+            artifacts/ios-release/**/ExportOptions.plist
+            artifacts/ios-release/**/release-metadata.txt
+            artifacts/ios-release/**/generate.log
+            artifacts/ios-release/**/archive.log
+            artifacts/ios-release/**/export.log
+            artifacts/ios-release/**/validation.log
+            artifacts/ios-release/**/upload.log
+          if-no-files-found: warn
+          retention-days: 14

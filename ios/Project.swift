@@ -96,6 +96,9 @@ let releaseCodeSignIdentity = optionalManifestValue([
 let releaseProvisioningProfile = optionalManifestValue([
     "TUIST_TOASTTY_MOBILE_RELEASE_PROVISIONING_PROFILE_SPECIFIER",
 ])
+let releaseOtherCodeSignFlags = optionalManifestValue([
+    "TUIST_TOASTTY_MOBILE_RELEASE_OTHER_CODE_SIGN_FLAGS",
+])
 
 let productionBundleID = "com.giantthings.toastty.mobile"
 let prodTestBundleID = "com.giantthings.toastty.mobile.prodtest"
@@ -118,6 +121,7 @@ let debugDisplayName = bundleSuffix == ".dev.local"
 let deploymentTarget: DeploymentTargets = .iOS("18.0")
 
 var appSettings: SettingsDictionary = [
+    "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
     "ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS": "NO",
     "CURRENT_PROJECT_VERSION": SettingValue(stringLiteral: buildNumber),
     "MARKETING_VERSION": SettingValue(stringLiteral: marketingVersion),
@@ -140,6 +144,9 @@ if let developmentTeam {
     if let releaseCodeSignIdentity {
         appSettings["CODE_SIGN_IDENTITY[config=Release]"] = SettingValue(stringLiteral: releaseCodeSignIdentity)
     }
+    if let releaseOtherCodeSignFlags {
+        appSettings["OTHER_CODE_SIGN_FLAGS[config=Release]"] = SettingValue(stringLiteral: releaseOtherCodeSignFlags)
+    }
 } else {
     appSettings["CODE_SIGN_IDENTITY"] = "-"
     appSettings["CODE_SIGN_STYLE"] = "Manual"
@@ -148,6 +155,7 @@ if let developmentTeam {
 
 var appInfoPlist: [String: Plist.Value] = [
     "CFBundleDisplayName": .string("$(TOASTTY_MOBILE_APP_DISPLAY_NAME)"),
+    "CFBundleIconName": .string("AppIcon"),
     "CFBundleName": .string("$(TOASTTY_MOBILE_APP_DISPLAY_NAME)"),
     "CFBundleShortVersionString": .string("$(MARKETING_VERSION)"),
     "CFBundleURLTypes": .array([
