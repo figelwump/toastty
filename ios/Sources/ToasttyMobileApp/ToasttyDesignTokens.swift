@@ -19,14 +19,18 @@ enum ToasttyDesignTokens {
     static let offline = Color(red: 107 / 255, green: 112 / 255, blue: 118 / 255)
     static let codex = Color(red: 45 / 255, green: 187 / 255, blue: 160 / 255)
     static let claude = Color(red: 217 / 255, green: 119 / 255, blue: 87 / 255)
+    private static let sessionWorking = Color(red: 139 / 255, green: 94 / 255, blue: 52 / 255)
+    private static let sessionNeedsApproval = Color(red: 232 / 255, green: 166 / 255, blue: 53 / 255)
+    private static let sessionReady = Color(red: 91 / 255, green: 160 / 255, blue: 138 / 255)
+    private static let sessionError = Color(red: 229 / 255, green: 92 / 255, blue: 92 / 255)
 
     static func color(for bucket: MobileSessionBucket) -> Color {
         switch bucket {
-        case .needsYou: amber
-        case .working: green
-        case .ready: blue
-        case .attention: red
-        case .offline: offline
+        case .ready: sessionReady
+        case .working: sessionWorking
+        case .needsApproval: sessionNeedsApproval
+        case .error: sessionError
+        case .idle: offline
         }
     }
 

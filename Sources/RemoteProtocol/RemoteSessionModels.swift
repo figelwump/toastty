@@ -77,6 +77,18 @@ public struct RemoteConversationPlacement: Codable, Equatable, Sendable {
     }
 }
 
+/// Toastty's exact desktop presentation state for a session row. This is
+/// intentionally independent of `RemoteSessionState`, which describes the
+/// provider lifecycle and remote-input contract rather than the state shown in
+/// Toastty's workspace UI.
+public enum RemoteSessionPresentationStatus: String, Codable, Equatable, Hashable, Sendable {
+    case idle
+    case working
+    case needsApproval = "needs_approval"
+    case ready
+    case error
+}
+
 /// One conversation row in the session list.
 public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     public var conversationID: RemoteConversationID
@@ -85,6 +97,11 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
     public var placement: RemoteConversationPlacement
     public var cwd: String?
     public var state: RemoteSessionState
+    /// Exact desktop status when the host can associate this conversation with
+    /// a panel. Optional so older encoded snapshots and status-less panels keep
+    /// their existing wire representation and clients can fall back to the
+    /// provider lifecycle.
+    public var presentationStatus: RemoteSessionPresentationStatus?
     public var inputAvailability: RemoteInputAvailability
     public var pendingInteractionPreview: RemotePendingInteractionPreview?
     /// Generation of this conversation's sequence space within the current
@@ -104,6 +121,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         placement: RemoteConversationPlacement = RemoteConversationPlacement(),
         cwd: String? = nil,
         state: RemoteSessionState,
+        presentationStatus: RemoteSessionPresentationStatus? = nil,
         inputAvailability: RemoteInputAvailability,
         pendingInteractionPreview: RemotePendingInteractionPreview? = nil,
         projectionGeneration: UInt64 = 0,
@@ -116,6 +134,7 @@ public struct RemoteConversationSummary: Codable, Equatable, Sendable {
         self.placement = placement
         self.cwd = cwd
         self.state = state
+        self.presentationStatus = presentationStatus
         self.inputAvailability = inputAvailability
         self.pendingInteractionPreview = pendingInteractionPreview
         self.projectionGeneration = projectionGeneration

@@ -282,12 +282,22 @@ let project = Project(
             ]),
             runAction: .runAction(
                 configuration: .debug,
+                executable: .project(path: .relativeToRoot("."), target: "ToasttyMobileApp")
+            ),
+            archiveAction: .archiveAction(configuration: .release)
+        ),
+        .scheme(
+            name: "ToasttyMobileApp-Fixture",
+            buildAction: .buildAction(targets: [
+                .project(path: .relativeToRoot("."), target: "ToasttyMobileApp"),
+            ]),
+            runAction: .runAction(
+                configuration: .debug,
                 executable: .project(path: .relativeToRoot("."), target: "ToasttyMobileApp"),
                 arguments: .arguments(environmentVariables: [
                     "TOASTTY_MOBILE_USE_FIXTURE": .environmentVariable(value: "1", isEnabled: true),
                 ])
-            ),
-            archiveAction: .archiveAction(configuration: .release)
+            )
         ),
         .scheme(
             name: "ToasttyMobileApp-Release",

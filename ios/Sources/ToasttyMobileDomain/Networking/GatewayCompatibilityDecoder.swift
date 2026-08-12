@@ -130,6 +130,9 @@ public struct GatewayCompatibilityDecoder: Sendable {
             placement: placement,
             cwd: try object.optionalString("cwd"),
             state: decodeDisplayState(try object.requiredString("state")),
+            presentationStatus: decodePresentationStatus(
+                try object.optionalString("presentationStatus")
+            ),
             inputAvailability: inputAvailability,
             pendingInteractionPreview: pendingInteractionPreview,
             projectionGeneration: try object.requiredUInt64("projectionGeneration"),
@@ -140,6 +143,15 @@ public struct GatewayCompatibilityDecoder: Sendable {
 
     private func decodeDisplayState(_ rawValue: String) -> MobileSessionDisplayState {
         RemoteSessionState(rawValue: rawValue).map(MobileSessionDisplayState.known)
+            ?? .unsupported(rawValue: rawValue)
+    }
+
+    private func decodePresentationStatus(
+        _ rawValue: String?
+    ) -> CompatibleSessionPresentationStatus? {
+        guard let rawValue else { return nil }
+        return RemoteSessionPresentationStatus(rawValue: rawValue)
+            .map(CompatibleSessionPresentationStatus.known)
             ?? .unsupported(rawValue: rawValue)
     }
 

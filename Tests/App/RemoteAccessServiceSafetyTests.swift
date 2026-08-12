@@ -5,6 +5,20 @@ import Testing
 @testable import ToasttyApp
 
 struct RemoteAccessServiceSafetyTests {
+    @Test func desktopSessionStatusMapsExactlyToRemotePresentationStatus() {
+        let cases: [(SessionStatusKind, RemoteSessionPresentationStatus)] = [
+            (.idle, .idle),
+            (.working, .working),
+            (.needsApproval, .needsApproval),
+            (.ready, .ready),
+            (.error, .error),
+        ]
+
+        for (desktop, remote) in cases {
+            #expect(RemoteAccessService.remotePresentationStatus(for: desktop) == remote)
+        }
+    }
+
     @Test func transcriptReplacementExpiresPendingSendBeforeIdenticalHistoryReplay() throws {
         let conversationID = RemoteConversationID()
         let unaffectedConversationID = RemoteConversationID()

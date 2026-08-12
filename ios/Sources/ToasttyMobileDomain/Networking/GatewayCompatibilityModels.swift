@@ -43,6 +43,20 @@ public enum CompatibleInputAvailability: Equatable, Sendable {
     }
 }
 
+public enum CompatibleSessionPresentationStatus: Equatable, Sendable {
+    case known(RemoteSessionPresentationStatus)
+    case unsupported(rawValue: String)
+
+    public var presentation: MobileSessionStatus {
+        switch self {
+        case .known(let status):
+            .known(status)
+        case .unsupported(let rawValue):
+            .unsupported(rawValue: rawValue)
+        }
+    }
+}
+
 public struct CompatibleConversationSummary: Equatable, Sendable {
     public var conversationID: RemoteConversationID
     public var provider: AgentKind
@@ -50,6 +64,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
     public var placement: RemoteConversationPlacement
     public var cwd: String?
     public var state: MobileSessionDisplayState
+    public var presentationStatus: CompatibleSessionPresentationStatus?
     public var inputAvailability: CompatibleInputAvailability
     public var pendingInteractionPreview: RemotePendingInteractionPreview?
     public var projectionGeneration: UInt64
@@ -63,6 +78,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         placement: RemoteConversationPlacement,
         cwd: String?,
         state: MobileSessionDisplayState,
+        presentationStatus: CompatibleSessionPresentationStatus? = nil,
         inputAvailability: CompatibleInputAvailability,
         pendingInteractionPreview: RemotePendingInteractionPreview? = nil,
         projectionGeneration: UInt64,
@@ -75,6 +91,7 @@ public struct CompatibleConversationSummary: Equatable, Sendable {
         self.placement = placement
         self.cwd = cwd
         self.state = state
+        self.presentationStatus = presentationStatus
         self.inputAvailability = inputAvailability
         self.pendingInteractionPreview = pendingInteractionPreview
         self.projectionGeneration = projectionGeneration
@@ -109,6 +126,11 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
             let availability = summary.inputAvailability.presentation(
                 pendingInteractionPreview: summary.pendingInteractionPreview
             )
+            let status = summary.presentationStatus?.presentation
+                ?? Self.legacyPresentationStatus(
+                    for: summary.state,
+                    inputAvailability: summary.inputAvailability
+                )
             return MobileConversation(
                 id: summary.conversationID.rawValue,
                 workspaceID: workspaceID,
@@ -116,7 +138,7 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 workspacePath: path,
                 agent: summary.provider,
                 title: summary.title,
-                state: summary.state,
+                state: status,
                 inputAvailability: availability,
                 age: Self.relativeAge(from: summary.updatedAt, receivedAt: generatedAt),
                 activityAge: MobileActivityAge(
@@ -126,9 +148,9 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                     ),
                     receivedAtMonotonicTime: receivedAtMonotonicTime
                 ),
-                lastActivity: summary.state.bucket == .offline
+                lastActivity: status.bucket == .idle
                     ? "Conversation readable"
-                    : availability.needsYouReason
+                    : availability.inputReason
             )
         }
         let grouped = Dictionary(grouping: mobileConversations, by: \.workspaceID)
@@ -153,6 +175,26 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
     }
 
     private static let ungroupedWorkspaceID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
+    private static func legacyPresentationStatus(
+        for state: MobileSessionDisplayState,
+        inputAvailability: CompatibleInputAvailability
+    ) -> MobileSessionStatus {
+        switch state {
+        case .known(let state):
+            // Older hosts exposed only lifecycle plus input availability. A
+            // pending interaction is the one authoritative legacy fact that
+            // distinguishes desktop needs-approval from a completed turn
+            // whose prompt is ready again.
+            if state == .awaitingInput,
+               case .pendingInteraction = inputAvailability {
+                return .needsApproval
+            }
+            return .known(state.presentationStatusFallback)
+        case .unsupported(let rawValue):
+            return .unsupported(rawValue: rawValue)
+        }
+    }
 
     private static func relativeAge(from date: Date, receivedAt: Date) -> String {
         relativeAgeLabel(seconds: relativeAgeSeconds(from: date, receivedAt: receivedAt))

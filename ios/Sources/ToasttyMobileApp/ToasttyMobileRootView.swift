@@ -100,17 +100,9 @@ struct ToasttyMobileRootView: View {
         NavigationStack(path: $navigationPath) {
             ToasttyHomeView(
                 controller: sessionController.homeController,
-                refresh: sessionController.refreshLiveSessions
+                refresh: sessionController.refreshLiveSessions,
+                onSettings: { showsSettings = true }
             )
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Settings", systemImage: "gearshape") {
-                            showsSettings = true
-                        }
-                        .accessibilityIdentifier("toastty-mobile-settings-button")
-                    }
-                }
-                .toolbar(.visible, for: .navigationBar)
                 .navigationDestination(for: UUID.self) { workspaceID in
                     ToasttyWorkspaceView(
                         workspaceID: workspaceID,
@@ -137,8 +129,7 @@ struct ToasttyMobileRootView: View {
                 dismissSendReceipt: conversationReceiptDismissAction(for: selection.id),
                 onDismiss: sessionController.homeController.dismissConversation
             )
-            .presentationDetents([.fraction(0.92)])
-            .presentationDragIndicator(.visible)
+            .presentationDragIndicator(.hidden)
             .presentationBackground(ToasttyDesignTokens.elevatedSurface)
         }
         .sheet(isPresented: $showsSettings) {
@@ -245,6 +236,8 @@ struct ToasttyMobileRootView: View {
     ) -> ToasttyConversationPresentationState? {
 #if DEBUG
         switch fixtureScenario {
+        case .home:
+            return ToasttyConversationFixture.presentation(for: conversationID)
         case .transcriptPerformance:
             return ToasttyConversationFixture.performancePresentation(for: conversationID)
         case .transcriptResyncing:
@@ -265,7 +258,7 @@ struct ToasttyMobileRootView: View {
                     ? fixtureSendItems
                     : []
             )
-        case .home, .unpaired, .cameraDenied, .scannerUnsupported,
+        case .unpaired, .cameraDenied, .scannerUnsupported,
              .pairingFailure, .pairingPrivacy, nil:
             break
         }

@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class HomeScreenControllerTests: XCTestCase {
     func testOpenAndDismissOwnConversationPresentationState() throws {
-        let conversation = try XCTUnwrap(ToasttyMobileFixture.home.needsYou.first)
+        let conversation = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
         let controller = HomeScreenController(
             runtimeMode: .fixture,
             snapshot: ToasttyMobileFixture.home,
@@ -20,9 +20,9 @@ final class HomeScreenControllerTests: XCTestCase {
         XCTAssertNil(controller.selectedConversation)
     }
 
-    func testReplyRequestsFocusOnlyForOpenPromptWithoutReopeningConversation() throws {
+    func testUserOpenRequestsFocusForOpenPromptWithoutReopeningConversation() throws {
         let conversation = try XCTUnwrap(
-            ToasttyMobileFixture.home.needsYou.first {
+            ToasttyMobileFixture.home.ready.first {
                 $0.inputAvailability.allowsReply
             }
         )
@@ -41,13 +41,6 @@ final class HomeScreenControllerTests: XCTestCase {
         controller.open(conversation)
         XCTAssertEqual(
             controller.selectedConversationPresentation,
-            SelectedConversationPresentation(id: conversation.id)
-        )
-
-        controller.reply(conversation)
-
-        XCTAssertEqual(
-            controller.selectedConversationPresentation,
             SelectedConversationPresentation(
                 id: conversation.id,
                 requestsComposerFocus: true
@@ -55,11 +48,15 @@ final class HomeScreenControllerTests: XCTestCase {
         )
         XCTAssertEqual(opened, [conversation.id])
         XCTAssertTrue(closed.isEmpty)
+
+        controller.open(conversation)
+        XCTAssertEqual(opened, [conversation.id])
+        XCTAssertTrue(closed.isEmpty)
     }
 
-    func testReplySafelyIgnoresConversationWithoutOpenPrompt() throws {
+    func testUserOpenDoesNotRequestFocusWithoutOpenPrompt() throws {
         let conversation = try XCTUnwrap(
-            ToasttyMobileFixture.home.needsYou.first {
+            ToasttyMobileFixture.home.ready.first {
                 $0.inputAvailability.allowsReply == false
             }
         )
@@ -69,13 +66,16 @@ final class HomeScreenControllerTests: XCTestCase {
             connectionState: .live
         )
 
-        controller.reply(conversation)
+        controller.open(conversation)
 
-        XCTAssertNil(controller.selectedConversationPresentation)
+        XCTAssertEqual(
+            controller.selectedConversationPresentation,
+            SelectedConversationPresentation(id: conversation.id)
+        )
     }
 
     func testStableIdentifierRouteOpensOnlyConversationInCurrentSnapshot() throws {
-        let conversation = try XCTUnwrap(ToasttyMobileFixture.home.needsYou.first)
+        let conversation = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
         let controller = HomeScreenController(
             runtimeMode: .fixture,
             snapshot: ToasttyMobileFixture.home,
@@ -84,10 +84,38 @@ final class HomeScreenControllerTests: XCTestCase {
 
         XCTAssertTrue(controller.openConversation(id: conversation.id))
         XCTAssertEqual(controller.selectedConversationID, conversation.id)
+        XCTAssertEqual(
+            controller.selectedConversationPresentation,
+            SelectedConversationPresentation(id: conversation.id)
+        )
 
         controller.dismissConversation()
         XCTAssertFalse(controller.openConversation(id: UUID()))
         XCTAssertNil(controller.selectedConversationID)
+    }
+
+    func testStableIdentifierRouteOpensLockedConversationWithoutFocus() throws {
+        let conversation = try XCTUnwrap(
+            ToasttyMobileFixture.home.needsApproval.first {
+                $0.inputAvailability.allowsReply == false
+            }
+        )
+        let controller = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .live
+        )
+
+        XCTAssertTrue(
+            controller.openConversation(
+                id: conversation.id,
+                requestsComposerFocus: true
+            )
+        )
+        XCTAssertEqual(
+            controller.selectedConversationPresentation,
+            SelectedConversationPresentation(id: conversation.id)
+        )
     }
 
     func testConnectionNoticeClassifiesTransportFailures() {
@@ -122,19 +150,19 @@ final class HomeScreenControllerTests: XCTestCase {
         }
     }
 
-    func testNeedsYouReasonUsesExactOpenPromptAndPendingFallbackCopy() {
+    func testInputReasonUsesExactOpenPromptAndPendingFallbackCopy() {
         XCTAssertEqual(
-            MobileInputAvailability.openPrompt.needsYouReason,
+            MobileInputAvailability.openPrompt.inputReason,
             "Ready for your reply"
         )
         XCTAssertEqual(
-            MobileInputAvailability.pendingInteraction(preview: nil).needsYouReason,
+            MobileInputAvailability.pendingInteraction(preview: nil).inputReason,
             "Waiting for a response on the Mac"
         )
     }
 
     func testSelectedConversationResolvesLatestSnapshotValueByStableIdentifier() throws {
-        let original = try XCTUnwrap(ToasttyMobileFixture.home.needsYou.first)
+        let original = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
         let controller = HomeScreenController(
             runtimeMode: .fixture,
             snapshot: ToasttyMobileFixture.home,
@@ -149,7 +177,7 @@ final class HomeScreenControllerTests: XCTestCase {
             workspacePath: original.workspacePath,
             agent: original.agent,
             title: "Updated live title",
-            state: MobileSessionDisplayState.working,
+            state: MobileSessionStatus.working,
             inputAvailability: .unavailable(reason: "working"),
             age: "now",
             lastActivity: "Updated from stream"
@@ -168,12 +196,12 @@ final class HomeScreenControllerTests: XCTestCase {
         )
 
         XCTAssertEqual(controller.selectedConversation?.title, "Updated live title")
-        XCTAssertEqual(controller.selectedConversation?.state, MobileSessionDisplayState.working)
+        XCTAssertEqual(controller.selectedConversation?.state, MobileSessionStatus.working)
         XCTAssertNil(controller.removedSelectionMessage)
     }
 
     func testRemovingSelectedConversationDismissesAndExplains() throws {
-        let original = try XCTUnwrap(ToasttyMobileFixture.home.needsYou.first)
+        let original = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
         let controller = HomeScreenController(
             runtimeMode: .fixture,
             snapshot: ToasttyMobileFixture.home,

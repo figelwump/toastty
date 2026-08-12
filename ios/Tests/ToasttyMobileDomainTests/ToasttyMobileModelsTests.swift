@@ -3,42 +3,68 @@ import XCTest
 @testable import ToasttyMobileDomain
 
 final class ToasttyMobileModelsTests: XCTestCase {
-    func testEightProtocolStatesMapIntoFivePresentationBuckets() {
-        XCTAssertEqual(RemoteSessionState.awaitingInput.bucket, .needsYou)
+    func testLegacyProtocolStatesFallBackToDesktopPresentationBuckets() {
+        XCTAssertEqual(RemoteSessionState.awaitingInput.bucket, .ready)
         XCTAssertEqual(RemoteSessionState.starting.bucket, .working)
         XCTAssertEqual(RemoteSessionState.working.bucket, .working)
         XCTAssertEqual(RemoteSessionState.ready.bucket, .ready)
-        XCTAssertEqual(RemoteSessionState.interrupted.bucket, .attention)
-        XCTAssertEqual(RemoteSessionState.error.bucket, .attention)
-        XCTAssertEqual(RemoteSessionState.ended.bucket, .offline)
-        XCTAssertEqual(RemoteSessionState.offline.bucket, .offline)
+        XCTAssertEqual(RemoteSessionState.interrupted.bucket, .error)
+        XCTAssertEqual(RemoteSessionState.error.bucket, .error)
+        XCTAssertEqual(RemoteSessionState.ended.bucket, .idle)
+        XCTAssertEqual(RemoteSessionState.offline.bucket, .idle)
     }
 
-    func testNeedsYouQueueUsesStateWhileReasonUsesInputAvailability() {
+    func testReadyQueueUsesExactStatusWhileReplyAuthorityRemainsIndependent() throws {
         let snapshot = ToasttyMobileFixture.home
 
-        XCTAssertEqual(snapshot.needsYou.count, 3)
-        XCTAssertTrue(snapshot.needsYou.contains {
-            $0.inputAvailability.needsYouReason == "Draft in progress on the Mac"
+        XCTAssertEqual(snapshot.ready.count, 3)
+        XCTAssertTrue(snapshot.ready.contains {
+            $0.inputAvailability.inputReason == "Draft in progress on the Mac"
         })
-        XCTAssertTrue(snapshot.needsYou.contains {
+        XCTAssertTrue(snapshot.ready.contains {
             $0.inputAvailability.allowsReply
         })
+        XCTAssertEqual(snapshot.needsApproval.count, 1)
+        XCTAssertFalse(try XCTUnwrap(snapshot.needsApproval.first).inputAvailability.allowsReply)
     }
 
-    func testWorkspaceRollupPrioritizesNeedsYouOverWorking() throws {
+    func testWorkspaceRollupPrioritizesReadyOverApprovalAndWorking() throws {
         let toastty = try XCTUnwrap(ToasttyMobileFixture.home.workspaces.first)
 
-        XCTAssertEqual(toastty.rollupLabel, "1 need you")
-        XCTAssertEqual(toastty.sortedConversations.first?.state.bucket, .needsYou)
+        XCTAssertEqual(toastty.rollupLabel, "1 ready")
+        XCTAssertEqual(toastty.sortedConversations.first?.state.bucket, .ready)
+    }
+
+    func testFixtureCoversEveryDesktopPresentationStatus() {
+        let statuses = Set(
+            ToasttyMobileFixture.home.workspaces
+                .flatMap(\.conversations)
+                .compactMap { conversation -> RemoteSessionPresentationStatus? in
+                    guard case .known(let status) = conversation.state else { return nil }
+                    return status
+                }
+        )
+
+        XCTAssertEqual(statuses, Set([
+            .idle, .working, .needsApproval, .ready, .error,
+        ]))
     }
 
     func testStatusAccessibilitySummaryIncludesNonColorFacts() throws {
-        let conversation = try XCTUnwrap(ToasttyMobileFixture.home.needsYou.first)
+        let conversation = try XCTUnwrap(ToasttyMobileFixture.home.ready.first)
 
-        XCTAssertTrue(conversation.accessibilitySummary.contains("needs you"))
+        XCTAssertTrue(conversation.accessibilitySummary.contains("ready"))
         XCTAssertTrue(conversation.accessibilitySummary.contains(conversation.workspaceTitle))
         XCTAssertTrue(conversation.accessibilitySummary.contains(conversation.age))
+    }
+
+    func testIdleAndUnsupportedStatusesHaveNoVisibleBucket() {
+        XCTAssertFalse(MobileSessionStatus.idle.bucket.isVisible)
+        XCTAssertFalse(MobileSessionStatus.unsupported(rawValue: "future").bucket.isVisible)
+        XCTAssertEqual(
+            MobileSessionStatus.unsupported(rawValue: "future").accessibilityLabel,
+            "status unavailable"
+        )
     }
 
     func testActivityAgeAdvancesOnlyFromMonotonicReceiptAnchor() {

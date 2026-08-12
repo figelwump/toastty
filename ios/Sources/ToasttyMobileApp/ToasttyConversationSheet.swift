@@ -70,9 +70,9 @@ struct ToasttyConversationSheet: View {
         .background(ToasttyDesignTokens.elevatedSurface)
         .task(id: composerFocusIsReady) {
             guard composerFocusIsReady, !hasHandledComposerFocusRequest else { return }
-            hasHandledComposerFocusRequest = true
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
+            hasHandledComposerFocusRequest = true
             isComposerFocused = true
         }
     }
@@ -88,55 +88,52 @@ struct ToasttyConversationSheet: View {
 
     private var resolvedPresentation: ToasttyConversationPresentationState {
         if let presentation { return presentation }
-#if DEBUG
-        if controller.runtimeMode == .fixture {
-            return ToasttyConversationFixture.presentation(for: conversationID)
-        }
-#endif
         return .loading
     }
 
     private func header(_ conversation: MobileConversation) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(conversation.title)
-                        .font(.headline)
-                        .foregroundStyle(ToasttyDesignTokens.primaryText)
-                        .accessibilityAddTraits(.isHeader)
-                        .accessibilityIdentifier("toastty-mobile-conversation-title")
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 6) {
-                            conversationMetadata(conversation)
-                        }
-                        VStack(alignment: .leading, spacing: 3) {
-                            conversationMetadata(conversation)
-                        }
-                    }
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(ToasttyDesignTokens.mutedText)
-                }
+                Text(conversation.title)
+                    .font(.headline)
+                    .foregroundStyle(ToasttyDesignTokens.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("toastty-mobile-conversation-title")
                 Spacer(minLength: 12)
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
-                        .frame(width: 48, height: 48)
-                        .background(ToasttyDesignTokens.border, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .frame(minWidth: 48, minHeight: 48)
-                .fixedSize(horizontal: true, vertical: true)
-                .contentShape(Rectangle())
-                .foregroundStyle(ToasttyDesignTokens.secondaryText)
-                .accessibilityLabel("Close conversation")
-                .accessibilityIdentifier("toastty-mobile-conversation-close")
+                closeButton
             }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    conversationMetadata(conversation)
+                }
+                compactConversationMetadata(conversation)
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(ToasttyDesignTokens.mutedText)
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .padding(.top, dynamicTypeSize.isAccessibilitySize ? 32 : 0)
         .overlay(alignment: .bottom) { Divider().overlay(ToasttyDesignTokens.divider) }
+    }
+
+    private var closeButton: some View {
+        Button(action: onDismiss) {
+            Image(systemName: "xmark")
+                .font(.caption.weight(.bold))
+                .frame(width: 48, height: 48)
+                .background(ToasttyDesignTokens.border, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .frame(minWidth: 48, minHeight: 48)
+        .fixedSize(horizontal: true, vertical: true)
+        .contentShape(Rectangle())
+        .foregroundStyle(ToasttyDesignTokens.secondaryText)
+        .accessibilityLabel("Close conversation")
+        .accessibilityIdentifier("toastty-mobile-conversation-close")
     }
 
     @ViewBuilder
@@ -146,6 +143,14 @@ struct ToasttyConversationSheet: View {
         Text(conversation.agent.displayName)
         Text("·")
         ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
+    }
+
+    private func compactConversationMetadata(_ conversation: MobileConversation) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(conversation.workspaceTitle) · \(conversation.agent.displayName)")
+                .fixedSize(horizontal: false, vertical: true)
+            ToasttyStatusLabel(bucket: conversation.state.bucket, compact: true)
+        }
     }
 
     private func composerBar(_ conversation: MobileConversation) -> some View {

@@ -55,6 +55,16 @@ For the runtime-home model, `instance.json`, and cleanup conventions, see [Runti
 
 These flags are read by the app itself when Toastty launches normally.
 
+### Native iOS runtime
+
+The `ToasttyMobileApp` scheme starts the real pairing flow with an empty home snapshot. Use the `ToasttyMobileApp-Fixture` scheme for deterministic simulator data; fixture mode is compiled out of Release builds.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `TOASTTY_MOBILE_USE_FIXTURE` | unset | In Debug builds only, the literal value `1` enables the offline fixture harness. Other values do not. The fixture run scheme sets this automatically. |
+| `TOASTTY_MOBILE_FIXTURE_SCENARIO` | `home` | Selects a fixture scenario after the fixture harness is explicitly enabled. It has no effect by itself. |
+| `TOASTTY_MOBILE_GATEWAY_URL` | bundled value or unset | Overrides the configured gateway URL when nonblank. A blank value uses the bundled URL. Supported values are HTTP or HTTPS URLs with a host; other nonblank values leave the app unconfigured. With neither an environment nor bundled URL, the app remains unconfigured and presents pairing rather than fixture data. |
+
 ### Ghostty runtime and config
 
 | Flag | Default | Effect |

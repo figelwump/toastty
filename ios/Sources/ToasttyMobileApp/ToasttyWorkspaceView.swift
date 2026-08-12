@@ -22,6 +22,7 @@ struct ToasttyWorkspaceView: View {
         .background(ToasttyDesignTokens.background)
         .navigationTitle(controller.workspace(id: workspaceID)?.title ?? "Workspace")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .accessibilityIdentifier("toastty-mobile-workspace-detail")
     }
 

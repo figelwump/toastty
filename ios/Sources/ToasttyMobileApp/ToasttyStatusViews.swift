@@ -34,28 +34,20 @@ struct ToasttyStatusLabel: View {
     let bucket: MobileSessionBucket
     var compact = false
 
-    var body: some View {
-        HStack(spacing: 5) {
-            statusDot
-            Text(bucket.rawValue)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .font(compact ? .caption2.monospaced() : .caption.monospaced())
-        .foregroundStyle(bucket == .offline ? ToasttyDesignTokens.mutedText : statusColor)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(bucket.rawValue)
-    }
-
     @ViewBuilder
-    private var statusDot: some View {
-        if bucket == .offline {
-            Circle()
-                .stroke(statusColor, lineWidth: 1.5)
-                .frame(width: 8, height: 8)
-        } else {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
+    var body: some View {
+        if bucket.isVisible {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+                Text(bucket.rawValue)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(compact ? .caption2.monospaced() : .caption.monospaced())
+            .foregroundStyle(statusColor)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(bucket.rawValue)
         }
     }
 

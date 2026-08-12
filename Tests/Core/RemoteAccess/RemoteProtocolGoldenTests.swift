@@ -41,6 +41,34 @@ struct RemoteProtocolGoldenTests {
             #expect(fixture.data == expected, "Wire bytes changed for \(fixture.name); regenerate explicitly and review the diff")
         }
     }
+
+    @Test func optionalPresentationStatusIsAdditiveToBaselineGoldenSnapshot() throws {
+        let encoder = ConversationEventCoding.makeEncoder()
+        let baseline = Self.makeSessionSnapshot()
+        let baselineData = try encoder.encode(RemoteGatewaySessionListResponse(snapshot: baseline))
+        let expectedBaseline = try Data(contentsOf: Self.fixtureDirectory.appendingPathComponent(
+            "session-list-response.json"
+        ))
+        #expect(baselineData == expectedBaseline)
+
+        var enriched = baseline
+        enriched.conversations[0].presentationStatus = .working
+        enriched.conversations[1].presentationStatus = .needsApproval
+        enriched.conversations[2].presentationStatus = .ready
+        enriched.conversations[3].presentationStatus = .error
+        enriched.conversations[4].presentationStatus = .idle
+        let object = try #require(
+            JSONSerialization.jsonObject(with: try encoder.encode(
+                RemoteGatewaySessionListResponse(snapshot: enriched)
+            )) as? [String: Any]
+        )
+        let snapshot = try #require(object["snapshot"] as? [String: Any])
+        let conversations = try #require(snapshot["conversations"] as? [[String: Any]])
+        #expect(conversations.prefix(5).compactMap { $0["presentationStatus"] as? String } == [
+            "working", "needs_approval", "ready", "error", "idle",
+        ])
+        #expect(conversations.dropFirst(5).allSatisfy { $0["presentationStatus"] == nil })
+    }
 }
 
 private extension RemoteProtocolGoldenTests {

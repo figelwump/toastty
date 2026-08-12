@@ -1,19 +1,39 @@
 import Foundation
 
 public enum ToasttyMobileRuntimeMode: Equatable, Sendable {
+    case unconfigured
     case fixture
     case local(gatewayURL: URL)
     case live(gatewayURL: URL)
 
     public init(environment: [String: String], bundledGatewayURL: URL? = nil) {
+#if DEBUG
         if environment["TOASTTY_MOBILE_USE_FIXTURE"] == "1" {
             self = .fixture
             return
         }
+#endif
 
-        let environmentURL = environment["TOASTTY_MOBILE_GATEWAY_URL"].flatMap(URL.init(string:))
-        guard let gatewayURL = environmentURL ?? bundledGatewayURL else {
-            self = .fixture
+        let gatewayURL: URL
+        if let environmentValue = environment["TOASTTY_MOBILE_GATEWAY_URL"] {
+            let normalizedEnvironmentValue = environmentValue
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalizedEnvironmentValue.isEmpty {
+                guard let bundledGatewayURL, Self.isSupportedGatewayURL(bundledGatewayURL) else {
+                    self = .unconfigured
+                    return
+                }
+                gatewayURL = bundledGatewayURL
+            } else if let environmentURL = Self.gatewayURL(from: normalizedEnvironmentValue) {
+                gatewayURL = environmentURL
+            } else {
+                self = .unconfigured
+                return
+            }
+        } else if let bundledGatewayURL, Self.isSupportedGatewayURL(bundledGatewayURL) {
+            gatewayURL = bundledGatewayURL
+        } else {
+            self = .unconfigured
             return
         }
 
@@ -26,10 +46,30 @@ public enum ToasttyMobileRuntimeMode: Equatable, Sendable {
 
     public var displayName: String {
         switch self {
+        case .unconfigured: "unconfigured"
         case .fixture: "fixture"
         case .local: "local"
         case .live: "live"
         }
+    }
+
+    private static func gatewayURL(from value: String) -> URL? {
+        guard let url = URL(string: value),
+              isSupportedGatewayURL(url)
+        else {
+            return nil
+        }
+        return url
+    }
+
+    private static func isSupportedGatewayURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host?.isEmpty == false
+        else {
+            return false
+        }
+        return true
     }
 }
 

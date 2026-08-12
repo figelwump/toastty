@@ -35,7 +35,7 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             bundledGatewayURL: bundledURL
         )
         urlScheme = Self.routingURLScheme(in: infoDictionary)
-        if environment["TOASTTY_MOBILE_USE_FIXTURE"] == "1" {
+        if runtimeMode == .fixture {
             fixtureScenario = environment["TOASTTY_MOBILE_FIXTURE_SCENARIO"]
                 .flatMap(ToasttyMobileFixtureScenario.init(rawValue:)) ?? .home
         } else {
@@ -59,6 +59,8 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
         switch runtimeMode {
         case .fixture:
             ToasttyMobileFixture.home
+        case .unconfigured:
+            MobileHomeSnapshot(hostName: "Toastty Mac", workspaces: [])
         case .local(let url), .live(let url):
             MobileHomeSnapshot(hostName: url.host ?? "Toastty Mac", workspaces: [])
         }

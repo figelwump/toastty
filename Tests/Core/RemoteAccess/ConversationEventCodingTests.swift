@@ -144,11 +144,25 @@ struct ConversationEventCodingTests {
             placement: RemoteConversationPlacement(workspaceID: UUID(), panelID: UUID()),
             cwd: "/tmp/demo",
             state: .awaitingInput,
+            presentationStatus: .needsApproval,
             inputAvailability: .openPrompt(epoch: RemoteInputEpoch(bindingID: Self.bindingID, counter: 1)),
             projectionGeneration: 2,
             latestSequence: 41,
             updatedAt: Self.timestamp
         )
+        let encodedSummary = try encoder.encode(summary)
+        let encodedSummaryJSON = try #require(String(data: encodedSummary, encoding: .utf8))
+        #expect(encodedSummaryJSON.contains(#""presentationStatus":"needs_approval""#))
+        #expect(try decoder.decode(RemoteConversationSummary.self, from: encodedSummary) == summary)
+
+        var legacySummary = summary
+        legacySummary.presentationStatus = nil
+        let legacySummaryJSON = try #require(String(
+            data: try encoder.encode(legacySummary),
+            encoding: .utf8
+        ))
+        #expect(legacySummaryJSON.contains("presentationStatus") == false)
+
         let snapshot = RemoteSessionListSnapshot(
             projectionRunID: RemoteProjectionRunID(),
             conversations: [summary],

@@ -583,6 +583,7 @@ final class RemoteAccessService: ObservableObject {
         var cwd: String?
         var activeSessionID: String?
         var registryState: RemoteSessionState
+        var presentationStatus: RemoteSessionPresentationStatus?
         var updatedAt: Date
         var transcriptPath: String?
     }
@@ -726,6 +727,11 @@ final class RemoteAccessService: ObservableObject {
 
                 let activeSessionID = registry.activeSessionIDByPanelID[panelID]
                 let activeRecord = activeSessionID.flatMap { registry.sessionsByID[$0] }
+                // Use the same projected panel status as Toastty's desktop UI.
+                // Looking at the raw active record here would miss projection
+                // such as child activity, stopped ready/error sessions, and
+                // focus-driven idle transitions.
+                let panelStatus = sessionRuntimeStore.panelStatus(for: panelID)
                 let hasLiveAgent = activeRecord.map { $0.isActive && $0.agent != .processWatch } ?? false
                 let restorableProvider = terminalState.resumeRecord?.agent
                 let hasRestorableTranscript = terminalState.remoteConversationID != nil
@@ -776,6 +782,9 @@ final class RemoteAccessService: ObservableObject {
                     registryState: activeRecord.flatMap { record in
                         record.status.map { Self.remoteState(for: $0.kind) }
                     } ?? (hasLiveAgent ? .starting : .offline),
+                    presentationStatus: panelStatus.map {
+                        Self.remotePresentationStatus(for: $0.status.kind)
+                    },
                     updatedAt: activeRecord?.updatedAt ?? terminalState.resumeRecord?.capturedAt ?? Date(),
                     transcriptPath: transcriptPath
                 ))
@@ -829,6 +838,7 @@ final class RemoteAccessService: ObservableObject {
                     ),
                     cwd: candidate.cwd,
                     state: projector.state,
+                    presentationStatus: candidate.presentationStatus,
                     inputAvailability: availability,
                     pendingInteractionPreview: RemotePendingInteractionPreviewFormatter.make(
                         from: projectionStore.pendingInteractions(for: candidate.conversationID)
@@ -849,6 +859,7 @@ final class RemoteAccessService: ObservableObject {
                 ),
                 cwd: candidate.cwd,
                 state: candidate.registryState,
+                presentationStatus: candidate.presentationStatus,
                 inputAvailability: .unavailable(reason: .unknownProviderState),
                 latestSequence: 0,
                 updatedAt: candidate.updatedAt
@@ -864,6 +875,23 @@ final class RemoteAccessService: ObservableObject {
             return .working
         case .needsApproval:
             return .awaitingInput
+        case .error:
+            return .error
+        }
+    }
+
+    nonisolated static func remotePresentationStatus(
+        for kind: SessionStatusKind
+    ) -> RemoteSessionPresentationStatus {
+        switch kind {
+        case .idle:
+            return .idle
+        case .working:
+            return .working
+        case .needsApproval:
+            return .needsApproval
+        case .ready:
+            return .ready
         case .error:
             return .error
         }

@@ -21,50 +21,106 @@ public enum MobileSessionDisplayState: Equatable, Sendable {
     public var bucket: MobileSessionBucket {
         switch self {
         case .known(let state):
-            state.bucket
+            state.presentationStatusFallback.bucket
         case .unsupported:
-            .attention
+            .idle
         }
     }
 
     public var accessibilityLabel: String {
         switch self {
         case .known(let state):
-            state.bucket.rawValue
+            state.presentationStatusFallback.rawValue
         case .unsupported(let rawValue):
             "unsupported state \(rawValue)"
         }
     }
 }
 
+/// The exact state Toastty presents for a session on the desktop. Unknown
+/// additive values remain represented but intentionally do not acquire a
+/// misleading mobile label or color.
+public enum MobileSessionStatus: Equatable, Sendable {
+    case known(RemoteSessionPresentationStatus)
+    case unsupported(rawValue: String)
+
+    public static let idle = Self.known(.idle)
+    public static let working = Self.known(.working)
+    public static let needsApproval = Self.known(.needsApproval)
+    public static let ready = Self.known(.ready)
+    public static let error = Self.known(.error)
+
+    public var bucket: MobileSessionBucket {
+        switch self {
+        case .known(let status):
+            status.bucket
+        case .unsupported:
+            .idle
+        }
+    }
+
+    public var accessibilityLabel: String {
+        switch self {
+        case .known(let status):
+            status.rawValue.replacingOccurrences(of: "_", with: " ")
+        case .unsupported:
+            "status unavailable"
+        }
+    }
+}
+
 public extension RemoteSessionState {
+    /// Conservative presentation fallback for hosts that predate the exact
+    /// `presentationStatus` summary field. At the state-only boundary,
+    /// awaiting input maps to ready; the compatibility snapshot additionally
+    /// uses authoritative pending-interaction availability when it exists.
+    var presentationStatusFallback: RemoteSessionPresentationStatus {
+        switch self {
+        case .starting, .working:
+            .working
+        case .awaitingInput, .ready:
+            .ready
+        case .interrupted, .error:
+            .error
+        case .ended, .offline:
+            .idle
+        }
+    }
+
+    var bucket: MobileSessionBucket { presentationStatusFallback.bucket }
+}
+
+public extension RemoteSessionPresentationStatus {
     var bucket: MobileSessionBucket {
         switch self {
-        case .awaitingInput: .needsYou
-        case .starting, .working: .working
         case .ready: .ready
-        case .interrupted, .error: .attention
-        case .ended, .offline: .offline
+        case .working: .working
+        case .needsApproval: .needsApproval
+        case .error: .error
+        case .idle: .idle
         }
     }
 }
 
 public enum MobileSessionBucket: String, CaseIterable, Equatable, Sendable {
-    case needsYou = "needs you"
-    case working
     case ready
-    case attention
-    case offline
+    case working
+    case needsApproval = "needs approval"
+    case error
+    case idle
 
     public var sortOrder: Int {
         switch self {
-        case .needsYou: 0
+        case .ready: 0
         case .working: 1
-        case .attention: 2
-        case .ready: 3
-        case .offline: 4
+        case .needsApproval: 2
+        case .error: 3
+        case .idle: 4
         }
     }
+
+    public var isVisible: Bool { self != .idle }
+
 }
 
 public enum MobileInputAvailability: Equatable, Sendable {
@@ -78,7 +134,7 @@ public enum MobileInputAvailability: Equatable, Sendable {
         return false
     }
 
-    public var needsYouReason: String {
+    public var inputReason: String {
         switch self {
         case .openPrompt:
             "Ready for your reply"
@@ -90,6 +146,7 @@ public enum MobileInputAvailability: Equatable, Sendable {
             "Input is not available from this device"
         }
     }
+
 }
 
 /// Server-relative activity age anchored to a local monotonic receipt time.
@@ -123,7 +180,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let workspacePath: String
     public let agent: AgentKind
     public let title: String
-    public let state: MobileSessionDisplayState
+    public let state: MobileSessionStatus
     public let inputAvailability: MobileInputAvailability
     private let fixedAge: String
     public let activityAge: MobileActivityAge?
@@ -140,7 +197,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         workspacePath: String,
         agent: AgentKind,
         title: String,
-        state: MobileSessionDisplayState,
+        state: MobileSessionStatus,
         inputAvailability: MobileInputAvailability,
         age: String,
         activityAge: MobileActivityAge? = nil,
@@ -179,7 +236,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             workspacePath: workspacePath,
             agent: agent,
             title: title,
-            state: .known(state),
+            state: .known(state.presentationStatusFallback),
             inputAvailability: inputAvailability,
             age: age,
             activityAge: activityAge,
@@ -214,8 +271,12 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
         }
     }
 
-    public var needsYouCount: Int {
-        conversations.count { $0.state == .known(.awaitingInput) }
+    public var readyCount: Int {
+        conversations.count { $0.state == .ready }
+    }
+
+    public var needsApprovalCount: Int {
+        conversations.count { $0.state == .needsApproval }
     }
 
     public var workingCount: Int {
@@ -223,7 +284,8 @@ public struct MobileWorkspace: Identifiable, Equatable, Sendable {
     }
 
     public var rollupLabel: String {
-        if needsYouCount > 0 { return "\(needsYouCount) need you" }
+        if readyCount > 0 { return "\(readyCount) ready" }
+        if needsApprovalCount > 0 { return "\(needsApprovalCount) need approval" }
         if workingCount > 0 { return "\(workingCount) working" }
         return "quiet"
     }
@@ -238,12 +300,20 @@ public struct MobileHomeSnapshot: Equatable, Sendable {
         self.workspaces = workspaces
     }
 
-    public var needsYou: [MobileConversation] {
+    public var ready: [MobileConversation] {
         workspaces
             .flatMap(\.conversations)
-            .filter { $0.state == .known(.awaitingInput) }
+            .filter { $0.state == .ready }
             .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
+
+    public var needsApproval: [MobileConversation] {
+        workspaces
+            .flatMap(\.conversations)
+            .filter { $0.state == .needsApproval }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
 }
 
 public enum MobileConnectionState: String, Equatable, Sendable {

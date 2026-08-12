@@ -185,6 +185,72 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         XCTAssertFalse(mobile.inputAvailability.allowsReply)
     }
 
+    func testPresentationStatusDecodesKnownMissingAndUnknownValuesIndependentlyOfInput() throws {
+        let knownData = try sessionSnapshotData(
+            inputAvailability: ["kind": "unavailable", "reason": "working"],
+            preview: NSNull(),
+            presentationStatus: "needs_approval"
+        )
+        let knownSnapshot = try decoder.decodeSessionListResponse(knownData)
+        let known = try XCTUnwrap(knownSnapshot.conversations.first)
+        XCTAssertEqual(known.presentationStatus, .known(.needsApproval))
+        XCTAssertEqual(
+            knownSnapshot.presentation().workspaces.first?.conversations.first?.state,
+            .needsApproval
+        )
+        XCTAssertFalse(known.inputAvailability.allowsRemoteSend)
+
+        let missingData = try sessionSnapshotData(
+            inputAvailability: ["kind": "unavailable", "reason": "unknown_provider_state"],
+            preview: NSNull()
+        )
+        let missingSnapshot = try decoder.decodeSessionListResponse(missingData)
+        let missing = try XCTUnwrap(missingSnapshot.conversations.first)
+        XCTAssertNil(missing.presentationStatus)
+        XCTAssertEqual(
+            missingSnapshot.presentation().workspaces.first?.conversations.first?.state,
+            .ready,
+            "Legacy awaiting-input lifecycle falls back to desktop-ready terminology."
+        )
+
+        let legacyPendingData = try sessionSnapshotData(
+            inputAvailability: [
+                "kind": "pending_interaction",
+                "interactionIDs": ["approval-1"],
+            ],
+            preview: NSNull()
+        )
+        let legacyPendingSnapshot = try decoder.decodeSessionListResponse(legacyPendingData)
+        let legacyPending = try XCTUnwrap(legacyPendingSnapshot.conversations.first)
+        XCTAssertNil(legacyPending.presentationStatus)
+        XCTAssertEqual(
+            legacyPendingSnapshot.presentation().workspaces.first?.conversations.first?.state,
+            .needsApproval,
+            "Legacy pending interactions preserve needs-approval semantics."
+        )
+
+        let unknownData = try sessionSnapshotData(
+            inputAvailability: [
+                "kind": "open_prompt",
+                "epoch": [
+                    "bindingID": "33333333-3333-3333-3333-333333333333",
+                    "counter": 1,
+                ],
+            ],
+            preview: NSNull(),
+            presentationStatus: "future_status"
+        )
+        let unknownSnapshot = try decoder.decodeSessionListResponse(unknownData)
+        let unknown = try XCTUnwrap(unknownSnapshot.conversations.first)
+        XCTAssertEqual(unknown.presentationStatus, .unsupported(rawValue: "future_status"))
+        XCTAssertTrue(unknown.inputAvailability.allowsRemoteSend)
+        let unknownMobile = try XCTUnwrap(
+            unknownSnapshot.presentation().workspaces.first?.conversations.first
+        )
+        XCTAssertEqual(unknownMobile.state, .unsupported(rawValue: "future_status"))
+        XCTAssertEqual(unknownMobile.state.bucket, .idle)
+    }
+
     func testUnavailableReasonRecognizesSessionPolicyAndKeepsFutureReasonsReadOnly() throws {
         let disabledData = try sessionSnapshotData(
             inputAvailability: [
@@ -351,25 +417,30 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
 
     private func sessionSnapshotData(
         inputAvailability: [String: Any],
-        preview: Any
+        preview: Any,
+        presentationStatus: String? = nil
     ) throws -> Data {
-        try JSONSerialization.data(withJSONObject: [
+        var conversation: [String: Any] = [
+            "conversationID": "11111111-1111-1111-1111-111111111111",
+            "provider": "codex",
+            "title": "Needs review",
+            "placement": [:],
+            "state": "awaiting_input",
+            "inputAvailability": inputAvailability,
+            "pendingInteractionPreview": preview,
+            "projectionGeneration": 1,
+            "latestSequence": 1,
+            "updatedAt": "2026-08-08T14:40:00.125Z",
+        ]
+        if let presentationStatus {
+            conversation["presentationStatus"] = presentationStatus
+        }
+        return try JSONSerialization.data(withJSONObject: [
             "protocolVersion": "1.0",
             "snapshot": [
                 "projectionRunID": "22222222-2222-2222-2222-222222222222",
                 "generatedAt": "2026-08-08T14:41:00.125Z",
-                "conversations": [[
-                    "conversationID": "11111111-1111-1111-1111-111111111111",
-                    "provider": "codex",
-                    "title": "Needs review",
-                    "placement": [:],
-                    "state": "awaiting_input",
-                    "inputAvailability": inputAvailability,
-                    "pendingInteractionPreview": preview,
-                    "projectionGeneration": 1,
-                    "latestSequence": 1,
-                    "updatedAt": "2026-08-08T14:40:00.125Z",
-                ]],
+                "conversations": [conversation],
             ],
         ], options: [.sortedKeys])
     }

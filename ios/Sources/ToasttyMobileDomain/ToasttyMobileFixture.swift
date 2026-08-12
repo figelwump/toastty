@@ -15,30 +15,30 @@ public enum ToasttyMobileFixture {
                 conversation(
                     1, workspaceID: toasttyID, workspaceTitle: "toastty",
                     path: "~/GiantThings/repos/toastty", agent: .claude,
-                    title: "Mobile gateway design", state: .awaitingInput,
+                    title: "Mobile gateway design", status: .needsApproval,
                     availability: .pendingInteraction(preview: "Review the gateway command on the Mac"),
                     age: "2m", last: "Ready for review — respond on the desktop"
                 ),
                 conversation(
                     2, workspaceID: toasttyID, workspaceTitle: "toastty",
                     path: "~/GiantThings/repos/toastty", agent: .codex,
-                    title: "Sparkle updater fix", state: .working,
+                    title: "Sparkle updater fix", status: .working,
                     availability: .unavailable(reason: "working"),
                     age: "now", last: "Running xcodebuild tests…"
                 ),
                 conversation(
                     3, workspaceID: toasttyID, workspaceTitle: "toastty",
                     path: "~/GiantThings/repos/toastty", agent: .claude,
-                    title: "Panel focus bug", state: .ready,
+                    title: "Panel focus bug", status: .ready,
                     availability: .unavailable(reason: "prompt not open"),
                     age: "18m", last: "Fixed and committed"
                 ),
                 conversation(
                     4, workspaceID: toasttyID, workspaceTitle: "toastty",
                     path: "~/GiantThings/repos/toastty", agent: .codex,
-                    title: "Release notes draft", state: .ready,
+                    title: "Release notes draft", status: .error,
                     availability: .unavailable(reason: "prompt not open"),
-                    age: "1h", last: "Draft ready for review"
+                    age: "1h", last: "Release note generation failed"
                 ),
             ]
         )
@@ -51,14 +51,14 @@ public enum ToasttyMobileFixture {
                 conversation(
                     5, workspaceID: researchID, workspaceTitle: "herdr research",
                     path: "~/GiantThings/playground/herdr", agent: .claude,
-                    title: "Architecture review", state: .working,
+                    title: "Architecture review", status: .working,
                     availability: .unavailable(reason: "working"),
                     age: "now", last: "Reading the handoff path"
                 ),
                 conversation(
                     6, workspaceID: researchID, workspaceTitle: "herdr research",
                     path: "~/GiantThings/playground/herdr", agent: .claude,
-                    title: "Log spelunking", state: .offline,
+                    title: "Log spelunking", status: .idle,
                     availability: .unavailable(reason: "offline"),
                     age: "2d", last: "Conversation readable — resume on desktop"
                 ),
@@ -73,14 +73,14 @@ public enum ToasttyMobileFixture {
                 conversation(
                     7, workspaceID: releaseID, workspaceTitle: "release 0.9.0",
                     path: "~/…/toastty-worktrees/release", agent: .codex,
-                    title: "Changelog + tag", state: .awaitingInput,
+                    title: "Changelog + tag", status: .ready,
                     availability: .openPrompt,
                     age: "9m", last: "Which build number should I use?"
                 ),
                 conversation(
                     8, workspaceID: releaseID, workspaceTitle: "release 0.9.0",
                     path: "~/…/toastty-worktrees/release", agent: .claude,
-                    title: "Smoke test triage", state: .awaitingInput,
+                    title: "Smoke test triage", status: .ready,
                     availability: .localDraft,
                     age: "3h", last: "A desktop draft is in progress"
                 ),
@@ -97,7 +97,7 @@ public enum ToasttyMobileFixture {
         path: String,
         agent: AgentKind,
         title: String,
-        state: RemoteSessionState,
+        status: RemoteSessionPresentationStatus,
         availability: MobileInputAvailability,
         age: String,
         last: String
@@ -109,7 +109,7 @@ public enum ToasttyMobileFixture {
             workspacePath: path,
             agent: agent,
             title: title,
-            state: state,
+            state: .known(status),
             inputAvailability: availability,
             age: age,
             lastActivity: last

@@ -41,22 +41,20 @@ final class HomeScreenController {
     }
 
     func open(_ conversation: MobileConversation) {
-        selectConversation(conversation.id, requestsComposerFocus: false)
-    }
-
-    func reply(_ conversation: MobileConversation) {
-        guard conversation.inputAvailability.allowsReply else { return }
-        selectConversation(conversation.id, requestsComposerFocus: true)
+        selectConversation(
+            conversation.id,
+            requestsComposerFocus: conversation.inputAvailability.allowsReply
+        )
     }
 
     @discardableResult
     func openConversation(id: UUID, requestsComposerFocus: Bool = false) -> Bool {
-        guard let conversation = conversation(id: id),
-              requestsComposerFocus == false || conversation.inputAvailability.allowsReply
-        else {
-            return false
-        }
-        selectConversation(id, requestsComposerFocus: requestsComposerFocus)
+        guard let conversation = conversation(id: id) else { return false }
+        selectConversation(
+            id,
+            requestsComposerFocus: requestsComposerFocus
+                && conversation.inputAvailability.allowsReply
+        )
         return true
     }
 
