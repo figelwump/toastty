@@ -40,4 +40,15 @@ final class ToasttyMobileModelsTests: XCTestCase {
         XCTAssertTrue(conversation.accessibilitySummary.contains(conversation.workspaceTitle))
         XCTAssertTrue(conversation.accessibilitySummary.contains(conversation.age))
     }
+
+    func testActivityAgeAdvancesOnlyFromMonotonicReceiptAnchor() {
+        let age = MobileActivityAge(
+            secondsAtReceipt: 59,
+            receivedAtMonotonicTime: 1_000
+        )
+
+        XCTAssertEqual(age.label(atMonotonicTime: 999), "now")
+        XCTAssertEqual(age.label(atMonotonicTime: 1_001), "1m")
+        XCTAssertEqual(age.label(atMonotonicTime: 4_541), "1h")
+    }
 }

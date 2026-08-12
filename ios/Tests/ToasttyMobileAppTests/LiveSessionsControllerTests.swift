@@ -73,6 +73,29 @@ final class LiveSessionsControllerTests: XCTestCase {
         XCTAssertEqual(home.snapshot.workspaces.first?.conversations.first?.title, "Readable")
     }
 
+    func testTransportFailureClassificationReachesHomePresentation() {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+
+        subject.consumeCoordinatorState(ConnectionCoordinator.State(
+            phase: .reconnecting(failureCount: 2, showsBanner: true),
+            consecutiveFailureCount: 2,
+            latestTransportFailure: .dns
+        ))
+
+        XCTAssertEqual(home.latestTransportFailure, .dns)
+        XCTAssertTrue(home.connectionNoticeMessage?.contains("couldn't find your Mac") == true)
+    }
+
     func testAuthRevocationTransitionsWhileAuthorizationDenialRetainsPairedCallback() {
         let runtime = LiveRuntimeSpy()
         let home = HomeScreenController(
@@ -124,6 +147,26 @@ final class LiveSessionsControllerTests: XCTestCase {
         await subject.foreground()
         let connectCount = await runtime.connectCount()
         XCTAssertEqual(connectCount, 1)
+        subject.stopObserving()
+    }
+
+    func testRefreshRestartsLiveRuntime() async {
+        let runtime = LiveRuntimeSpy()
+        let home = HomeScreenController(
+            runtimeMode: .fixture,
+            snapshot: ToasttyMobileFixture.home,
+            connectionState: .live
+        )
+        let subject = LiveSessionsController(
+            runtime: runtime,
+            hostName: "toastty.test.ts.net",
+            homeController: home
+        )
+
+        await subject.refresh()
+
+        let restartCount = await runtime.restartCount()
+        XCTAssertEqual(restartCount, 1)
         subject.stopObserving()
     }
 
@@ -358,6 +401,7 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
     }
 
     private var connectionRequests = 0
+    private var restartRequests = 0
     private var suspended = false
     private var conversationRuntimes: [RemoteConversationID: ConversationRuntime] = [:]
     private var shouldHoldConversationOpens = false
@@ -392,11 +436,14 @@ private actor LiveRuntimeSpy: LiveConnectionRuntime {
 
     func restart() {
         connectionRequests += 1
+        restartRequests += 1
     }
 
     func suspend() {
         suspended = true
     }
+
+    func restartCount() -> Int { restartRequests }
 
     func openConversation(_ conversationID: RemoteConversationID) async -> ConversationRuntime {
         conversationOpenRequests += 1

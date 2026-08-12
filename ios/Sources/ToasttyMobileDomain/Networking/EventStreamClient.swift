@@ -50,7 +50,9 @@ public struct EventStreamClient: EventStreamClientProtocol, Sendable {
         } catch let failure as GatewayFailure {
             throw failure
         } catch {
-            throw GatewayFailure.network
+            throw GatewayFailure.network(
+                reason: NativeGatewayResponseClassifier.transportFailure(error)
+            )
         }
     }
 
@@ -104,7 +106,9 @@ public actor EventStreamSubscription: EventStreamSubscriptionProtocol {
         } catch let failure as GatewayFailure {
             throw failure
         } catch {
-            throw GatewayFailure.network
+            throw GatewayFailure.network(
+                reason: NativeGatewayResponseClassifier.transportFailure(error)
+            )
         }
     }
 

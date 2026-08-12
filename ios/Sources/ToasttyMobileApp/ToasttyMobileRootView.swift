@@ -5,13 +5,18 @@ import ToasttyMobileDomain
 struct ToasttyMobileRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var sessionController: AppSessionController
+    @State private var navigationPath: [UUID] = []
+    @State private var pendingDeepLinkDestination: ToasttyMobileDeepLinkDestination?
     @State private var showsSettings = false
     @State private var fixtureHasLoadedOlderTranscript = false
     @State private var composerDraftState = ToasttyComposerDraftState()
     @State private var fixtureSendItems: [ToasttySendPresentationItem]
     @State private var fixtureComposerIsReserved = false
+    @State private var diagnostics = ToasttyDiagnosticsState()
+    @State private var diagnosedSessionState: AppSessionState?
     private let forcesPairingPrivacyShield: Bool
     private let fixtureScenario: ToasttyMobileFixtureScenario?
+    private let deepLinkParser: DeepLinkParser?
 
     init(configuration: ToasttyMobileAppConfiguration) {
         _sessionController = State(initialValue: configuration.makeSessionController())
@@ -20,6 +25,7 @@ struct ToasttyMobileRootView: View {
         ))
         forcesPairingPrivacyShield = configuration.fixtureScenario == .pairingPrivacy
         fixtureScenario = configuration.fixtureScenario
+        deepLinkParser = configuration.urlScheme.flatMap(DeepLinkParser.init(scheme:))
     }
 
     var body: some View {
@@ -42,15 +48,30 @@ struct ToasttyMobileRootView: View {
             }
         }
         .task {
+            sessionController.installDiagnosticEventHandler(recordDiagnostic)
+            recordDiagnostic(.authStarted)
+            observeSessionState(sessionController.state)
             await sessionController.restoreIfNeeded()
+            observeSessionState(sessionController.state)
         }
         .onChange(of: sessionController.state) { _, newState in
+            observeSessionState(newState)
             if newState.isPaired == false {
                 resetComposerPresentation()
+                if newState != .restoring, newState != .keychainLocked {
+                    pendingDeepLinkDestination = nil
+                    navigationPath.removeAll(keepingCapacity: false)
+                }
+            } else {
+                routePendingDeepLinkIfAvailable()
             }
         }
         .onChange(of: sessionController.homeController.snapshot) { _, newSnapshot in
             pruneComposerState(to: newSnapshot)
+            routePendingDeepLinkIfAvailable()
+        }
+        .onChange(of: sessionController.homeController.freshness) {
+            routePendingDeepLinkIfAvailable()
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -62,6 +83,7 @@ struct ToasttyMobileRootView: View {
                 sessionController.sceneBecameInactive()
             }
         }
+        .onOpenURL(perform: handleDeepLink)
     }
 
     private var sessionGate: some View {
@@ -75,8 +97,11 @@ struct ToasttyMobileRootView: View {
     }
 
     private func pairedApp(presentation: PairedConnectionPresentation) -> some View {
-        NavigationStack {
-            ToasttyHomeView(controller: sessionController.homeController)
+        NavigationStack(path: $navigationPath) {
+            ToasttyHomeView(
+                controller: sessionController.homeController,
+                refresh: sessionController.refreshLiveSessions
+            )
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Settings", systemImage: "gearshape") {
@@ -101,6 +126,7 @@ struct ToasttyMobileRootView: View {
         .sheet(item: selectedConversationPresentation) { selection in
             ToasttyConversationSheet(
                 conversationID: selection.id,
+                requestsComposerFocus: selection.requestsComposerFocus,
                 controller: sessionController.homeController,
                 presentation: conversationPresentation(for: selection.id),
                 composer: conversationComposer(for: selection.id),
@@ -119,18 +145,67 @@ struct ToasttyMobileRootView: View {
             if let settingsPresentation {
                 ToasttySettingsView(
                     presentation: settingsPresentation,
+                    diagnostics: $diagnostics,
                     onUnpair: unpair
                 )
             }
         }
         .onChange(of: showsSettings) { _, isPresented in
             guard isPresented else { return }
-            Task { await sessionController.refreshCurrentDevice() }
+            Task {
+                await sessionController.refreshCurrentDevice()
+            }
         }
         .alert("Conversation unavailable", isPresented: removedSelectionIsPresented) {
             Button("OK", action: sessionController.homeController.dismissRemovalMessage)
         } message: {
             Text(sessionController.homeController.removedSelectionMessage ?? "This conversation is no longer available on your Mac.")
+        }
+    }
+
+    private func handleDeepLink(_ url: URL) {
+        guard let destination = deepLinkParser?.parse(url) else { return }
+        switch sessionController.state {
+        case .restoring, .keychainLocked:
+            pendingDeepLinkDestination = destination
+        case .paired:
+            pendingDeepLinkDestination = destination
+            routePendingDeepLinkIfAvailable()
+        case .pairing, .unpaired, .repairNeeded, .incompatible:
+            break
+        }
+    }
+
+    private func routePendingDeepLinkIfAvailable() {
+        guard sessionController.state.isPaired,
+              let destination = pendingDeepLinkDestination
+        else {
+            return
+        }
+
+        switch destination {
+        case .conversation(let conversationID):
+            guard sessionController.homeController.openConversation(id: conversationID) else {
+                discardPendingDeepLinkAfterLiveSnapshot()
+                return
+            }
+            pendingDeepLinkDestination = nil
+            showsSettings = false
+        case .workspace(let workspaceID):
+            guard sessionController.homeController.workspace(id: workspaceID) != nil else {
+                discardPendingDeepLinkAfterLiveSnapshot()
+                return
+            }
+            pendingDeepLinkDestination = nil
+            sessionController.homeController.dismissConversation()
+            navigationPath = [workspaceID]
+            showsSettings = false
+        }
+    }
+
+    private func discardPendingDeepLinkAfterLiveSnapshot() {
+        if sessionController.homeController.freshness == .live {
+            pendingDeepLinkDestination = nil
         }
     }
 
@@ -253,6 +328,7 @@ struct ToasttyMobileRootView: View {
             ) else {
                 return
             }
+            recordDiagnostic(.sendStarted)
             guard let controller = sessionController.liveController?.activeConversationController,
                   controller.conversationID == conversationID else {
                 fixtureSubmit(submission)
@@ -260,7 +336,7 @@ struct ToasttyMobileRootView: View {
             }
             Task { @MainActor in
                 let outcome = await controller.send(submission.text)
-                composerDraftState.finishSubmission(submission, outcome: outcome)
+                finishSubmission(submission, outcome: outcome)
             }
         }
     }
@@ -320,7 +396,7 @@ struct ToasttyMobileRootView: View {
 #if DEBUG
         guard fixtureScenario == .gatedSend || fixtureScenario == .gatedSendReceipt,
               submission.conversationID == Self.fixtureOpenPromptConversationID else {
-            composerDraftState.finishSubmission(
+            finishSubmission(
                 submission,
                 outcome: .notEnqueued(.conversationNotOpen)
             )
@@ -333,12 +409,12 @@ struct ToasttyMobileRootView: View {
             content: .optimistic(response: .accepted)
         ))
         fixtureComposerIsReserved = true
-        composerDraftState.finishSubmission(
+        finishSubmission(
             submission,
             outcome: .enqueued(clientRequestID: clientRequestID)
         )
 #else
-        composerDraftState.finishSubmission(
+        finishSubmission(
             submission,
             outcome: .notEnqueued(.conversationNotOpen)
         )
@@ -368,6 +444,29 @@ struct ToasttyMobileRootView: View {
         composerDraftState.reset()
         fixtureSendItems.removeAll(keepingCapacity: false)
         fixtureComposerIsReserved = false
+    }
+
+    private func observeSessionState(_ state: AppSessionState) {
+        let events = ToasttyAppDiagnosticProjection.events(
+            from: diagnosedSessionState,
+            to: state
+        )
+        diagnosedSessionState = state
+        for event in events {
+            recordDiagnostic(event)
+        }
+    }
+
+    private func finishSubmission(
+        _ submission: ToasttyComposerSubmission,
+        outcome: ConversationSendOutcome
+    ) {
+        composerDraftState.finishSubmission(submission, outcome: outcome)
+        recordDiagnostic(ToasttyAppDiagnosticProjection.event(for: outcome))
+    }
+
+    private func recordDiagnostic(_ event: ToasttyConnectionDiagnosticEvent) {
+        ToasttyDiagnosticLogger.record(event, in: &diagnostics)
     }
 
     private func pruneComposerState(to snapshot: MobileHomeSnapshot) {

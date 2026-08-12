@@ -22,6 +22,7 @@ enum ToasttyMobileFixtureScenario: String, Equatable, Sendable {
 struct ToasttyMobileAppConfiguration: Equatable, Sendable {
     let runtimeMode: ToasttyMobileRuntimeMode
     let fixtureScenario: ToasttyMobileFixtureScenario?
+    let urlScheme: String?
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -33,12 +34,25 @@ struct ToasttyMobileAppConfiguration: Equatable, Sendable {
             environment: environment,
             bundledGatewayURL: bundledURL
         )
+        urlScheme = Self.routingURLScheme(in: infoDictionary)
         if environment["TOASTTY_MOBILE_USE_FIXTURE"] == "1" {
             fixtureScenario = environment["TOASTTY_MOBILE_FIXTURE_SCENARIO"]
                 .flatMap(ToasttyMobileFixtureScenario.init(rawValue:)) ?? .home
         } else {
             fixtureScenario = nil
         }
+    }
+
+    private static func routingURLScheme(in infoDictionary: [String: Any]) -> String? {
+        guard let urlTypes = infoDictionary["CFBundleURLTypes"] as? [[String: Any]],
+              let routingType = urlTypes.first(where: {
+                  $0["CFBundleURLName"] as? String == "com.giantthings.toastty.mobile.routing"
+              }),
+              let schemes = routingType["CFBundleURLSchemes"] as? [String]
+        else {
+            return nil
+        }
+        return schemes.first
     }
 
     var initialSnapshot: MobileHomeSnapshot {

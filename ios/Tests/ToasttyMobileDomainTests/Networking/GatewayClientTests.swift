@@ -38,6 +38,21 @@ final class GatewayClientTests: XCTestCase {
         }
     }
 
+    func testTransportFailureKeepsSpecificNetworkClassification() async throws {
+        let client = GatewayClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: FailingHTTPTransport(error: URLError(.secureConnectionFailed))
+        )
+
+        do {
+            _ = try await client.hello()
+            XCTFail("Expected a classified transport failure")
+        } catch let failure as GatewayFailure {
+            XCTAssertEqual(failure, .network(reason: .tls))
+            XCTAssertEqual(failure.transportFailure, .tls)
+        }
+    }
+
     func testExactRoutesMethodsOriginAndCookieCredential() async throws {
         let transport = RecordingHTTPTransport(responses: [
             .json(Self.helloJSON),
@@ -429,6 +444,14 @@ private actor RecordingHTTPTransport: HTTPTransport {
     }
 
     func recordedRequests() -> [URLRequest] { requests }
+}
+
+private struct FailingHTTPTransport: HTTPTransport {
+    let error: URLError
+
+    func send(_ request: URLRequest) async throws -> HTTPTransportResponse {
+        throw error
+    }
 }
 
 private extension HTTPTransportResponse {

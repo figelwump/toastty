@@ -46,6 +46,20 @@ final class EventStreamClientTests: XCTestCase {
         await subscription.close()
     }
 
+    func testConnectKeepsSpecificNetworkClassification() async throws {
+        let client = EventStreamClient(
+            baseURL: try XCTUnwrap(URL(string: "https://toastty.example")),
+            transport: FailingWebSocketTransport(error: URLError(.dnsLookupFailed))
+        )
+
+        do {
+            _ = try await client.connect()
+            XCTFail("Expected a classified transport failure")
+        } catch let failure as GatewayFailure {
+            XCTAssertEqual(failure, .network(reason: .dns))
+        }
+    }
+
     func testCloseCancelsAnInFlightReceiveWithoutPolling() async throws {
         let connection = MockWebSocketConnection(messages: [])
         let subscription = EventStreamSubscription(connection: connection, decoder: GatewayCompatibilityDecoder())
@@ -123,6 +137,14 @@ private actor RecordingWebSocketTransport: WebSocketTransport {
     }
 
     func recordedRequests() -> [URLRequest] { requests }
+}
+
+private struct FailingWebSocketTransport: WebSocketTransport {
+    let error: URLError
+
+    func connect(request: URLRequest) async throws -> any WebSocketConnection {
+        throw error
+    }
 }
 
 private actor MockWebSocketConnection: WebSocketConnection {

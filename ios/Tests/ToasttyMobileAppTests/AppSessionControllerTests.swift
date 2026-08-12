@@ -112,6 +112,54 @@ final class AppSessionControllerTests: XCTestCase {
         XCTAssertEqual(controller.state, .paired(.reconnecting))
     }
 
+    func testRefreshLiveSessionsForwardsToLiveControllerOutsideFixtureHarness() async throws {
+        let credential = try Self.credential(deviceName: "Refresh iPhone")
+        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        var liveSpy: AppLiveSessionsSpy?
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            credentialVault: vault,
+            pairingClient: FixturePairingClient(behavior: .success),
+            scanner: FixturePairingScanner(),
+            deviceName: { "Test iPhone" },
+            initialSnapshot: ToasttyMobileFixture.home,
+            initialConnectionState: .offline,
+            liveSessionsFactory: { _, _, _, _, _ in
+                let spy = AppLiveSessionsSpy()
+                liveSpy = spy
+                return spy
+            }
+        )
+        await controller.restoreIfNeeded()
+
+        await controller.refreshLiveSessions()
+
+        XCTAssertEqual(try XCTUnwrap(liveSpy).refreshCount, 1)
+    }
+
+    func testRefreshLiveSessionsIsHarmlessInFixtureHarness() async throws {
+        let credential = try Self.credential(deviceName: "Fixture iPhone")
+        let vault = FixtureAppCredentialVault(initialCredential: credential)
+        let liveSpy = AppLiveSessionsSpy()
+        let controller = AppSessionController(
+            runtimeMode: .fixture,
+            usesFixtureHarness: true,
+            credentialVault: vault,
+            pairingClient: FixturePairingClient(behavior: .success),
+            scanner: FixturePairingScanner(),
+            deviceName: { "Test iPhone" },
+            initialState: .paired(.live),
+            initialPairedDevice: PairedDevicePresentation(credential: credential),
+            initialSnapshot: ToasttyMobileFixture.home,
+            initialConnectionState: .live,
+            liveSessionsFactory: { _, _, _, _, _ in liveSpy }
+        )
+
+        await controller.refreshLiveSessions()
+
+        XCTAssertEqual(liveSpy.refreshCount, 0)
+    }
+
     func testOuterCancelKeepsInFlightPairingControllerAliveUntilCredentialPersists() async throws {
         let gate = SessionPairingResponseGate()
         let vault = FixtureAppCredentialVault()
@@ -219,9 +267,11 @@ private final class AppLiveSessionsSpy: AppLiveSessionsControlling {
     var activeConversationController: LiveConversationController?
     private(set) var scopeUpdates: [[RemoteDeviceScope]] = []
     private(set) var startCount = 0
+    private(set) var refreshCount = 0
 
     func start() async { startCount += 1 }
     func foreground() async {}
+    func refresh() async { refreshCount += 1 }
     func background() async {}
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async {
         scopeUpdates.append(scopes)

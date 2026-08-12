@@ -7,6 +7,7 @@ public enum GatewayCredential: Equatable, Sendable, CustomStringConvertible, Cus
 
     public var description: String { "<redacted gateway credential>" }
     public var debugDescription: String { description }
+
 }
 
 public protocol GatewayCredentialProvider: Sendable {
@@ -36,7 +37,7 @@ public enum GatewayAPIErrorCode: String, Equatable, Sendable {
 }
 
 public enum GatewayFailure: Error, Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
-    case network
+    case network(reason: NativeTransportFailure)
     case unauthenticated(code: GatewayAPIErrorCode?, message: String?)
     case authorizationDenied(code: GatewayAPIErrorCode?, message: String?)
     case rateLimited(message: String?)
@@ -48,6 +49,11 @@ public enum GatewayFailure: Error, Equatable, Sendable, CustomStringConvertible,
 
     public var description: String { "<redacted gateway failure>" }
     public var debugDescription: String { description }
+
+    public var transportFailure: NativeTransportFailure? {
+        guard case .network(let reason) = self else { return nil }
+        return reason
+    }
 
     public var isRetryable: Bool {
         switch self {
@@ -279,7 +285,9 @@ public struct GatewayClient: GatewayClientProtocol, Sendable {
         } catch let failure as GatewayFailure {
             throw failure
         } catch {
-            throw GatewayFailure.network
+            throw GatewayFailure.network(
+                reason: NativeGatewayResponseClassifier.transportFailure(error)
+            )
         }
     }
 

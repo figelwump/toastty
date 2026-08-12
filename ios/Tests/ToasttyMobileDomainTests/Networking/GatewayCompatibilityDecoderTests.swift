@@ -118,6 +118,24 @@ final class GatewayCompatibilityDecoderTests: XCTestCase {
         XCTAssertEqual(conversationID.rawValue.uuidString, "11111111-1111-1111-1111-111111111111")
     }
 
+    func testUnknownEventBetweenStatusAndInteractionKeepsBothSemanticNeighbors() throws {
+        let response = try decoder.decodeEventsResponse(
+            CompatibilityFixture.data("events-unknown-between-status-interaction")
+        )
+        guard case .page(let page) = response else {
+            return XCTFail("Expected a compatible page")
+        }
+
+        XCTAssertEqual(page.events.map(\.sequence), [1, 2, 3])
+        guard case .statusChanged = page.events[0],
+              case .unknown(_, 2, "future_optional_event") = page.events[1],
+              case .known(let interaction) = page.events[2] else {
+            return XCTFail("Expected status, unknown, and known interaction neighbors")
+        }
+        XCTAssertEqual(interaction.kind, .interactionPresented)
+        XCTAssertEqual(page.continuationCursor?.afterSequence, 3)
+    }
+
     func testStreamUsesSameTolerantPageDecoder() throws {
         let message = try decoder.decodeStreamMessage(CompatibilityFixture.data("stream-unknown-middle"))
         guard case .conversationEvents(let page) = message else { return XCTFail("Expected event page") }

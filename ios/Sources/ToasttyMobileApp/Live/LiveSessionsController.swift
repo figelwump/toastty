@@ -387,7 +387,8 @@ final class LiveSessionsController {
         homeController.update(
             snapshot: snapshot,
             connectionState: connectionState,
-            freshness: freshness
+            freshness: freshness,
+            latestTransportFailure: coordinatorState.latestTransportFailure
         )
         onFreshness(freshness)
     }

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ToasttySettingsView: View {
     let presentation: ToasttySettingsPresentation
+    @Binding var diagnostics: ToasttyDiagnosticsState
     let onUnpair: @MainActor () async -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -113,13 +114,54 @@ struct ToasttySettingsView: View {
 
     private var diagnosticsSection: some View {
         Section("Diagnostics") {
-            Label("Connection diagnostics are redacted", systemImage: "hand.raised")
+            Label("Categorical connection diagnostics", systemImage: "hand.raised")
                 .font(.subheadline)
-            Text("Toastty never includes credentials, pairing secrets, transcript content, workspace paths, or conversation titles in connection diagnostics.")
+
+            Text("Only fixed event names and times are recorded in memory for this app run. Addresses, credentials, paths, titles, and transcript content are never included.")
                 .font(.footnote)
                 .foregroundStyle(ToasttyDesignTokens.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
+
+            ForEach(ToasttyDiagnosticCategory.allCases) { category in
+                Toggle(
+                    category.displayName,
+                    isOn: systemLoggingBinding(for: category)
+                )
+                .accessibilityIdentifier(
+                    "toastty-mobile-diagnostic-logging-\(category.rawValue)"
+                )
+            }
+
+            Text("System logging is off by default. Enabled categories may appear in device diagnostic reports. Transcript logging is never available.")
+                .font(.footnote)
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if diagnostics.connectionLog.isEmpty {
+                Text("No connection events recorded this run.")
+                    .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    .accessibilityIdentifier("toastty-mobile-diagnostics-empty")
+            } else {
+                ForEach(diagnostics.connectionLog.entries.reversed()) { entry in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.event.displayName)
+                        Text("\(entry.event.category.displayName) · \(entry.recordedAt.formatted(date: .omitted, time: .standard))")
+                            .font(.caption)
+                            .foregroundStyle(ToasttyDesignTokens.secondaryText)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
         }
+    }
+
+    private func systemLoggingBinding(
+        for category: ToasttyDiagnosticCategory
+    ) -> Binding<Bool> {
+        Binding(
+            get: { diagnostics.isSystemLoggingEnabled(category) },
+            set: { diagnostics.setSystemLoggingEnabled($0, for: category) }
+        )
     }
 
     private var aboutSection: some View {

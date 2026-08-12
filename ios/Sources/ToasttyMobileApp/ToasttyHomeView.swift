@@ -3,6 +3,15 @@ import ToasttyMobileDomain
 
 struct ToasttyHomeView: View {
     let controller: HomeScreenController
+    let refresh: () async -> Void
+
+    init(
+        controller: HomeScreenController,
+        refresh: @escaping () async -> Void = {}
+    ) {
+        self.controller = controller
+        self.refresh = refresh
+    }
 
     var body: some View {
         ScrollView {
@@ -15,6 +24,9 @@ struct ToasttyHomeView: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 40)
         }
+        .refreshable {
+            await refresh()
+        }
         .scrollIndicators(.hidden)
         .background(ToasttyDesignTokens.background)
         .toolbar(.hidden, for: .navigationBar)
@@ -23,7 +35,7 @@ struct ToasttyHomeView: View {
 
     @ViewBuilder
     private var connectionNotice: some View {
-        if let message = controller.freshness.message {
+        if let message = controller.connectionNoticeMessage {
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: controller.freshness == .unreachable
                     ? "wifi.slash"
@@ -91,7 +103,11 @@ struct ToasttyHomeView: View {
                     .padding(.vertical, 10)
             } else {
                 ForEach(needsYouConversations) { conversation in
-                    ToasttyNeedsYouCard(conversation: conversation, onOpen: controller.open)
+                    ToasttyNeedsYouCard(
+                        conversation: conversation,
+                        onOpen: controller.open,
+                        onReply: controller.reply
+                    )
                 }
             }
         }
@@ -131,6 +147,7 @@ struct ToasttyHomeView: View {
 private struct ToasttyNeedsYouCard: View {
     let conversation: MobileConversation
     let onOpen: (MobileConversation) -> Void
+    let onReply: (MobileConversation) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -145,7 +162,7 @@ private struct ToasttyNeedsYouCard: View {
                 .font(.headline)
                 .foregroundStyle(ToasttyDesignTokens.primaryText)
 
-            Text(readOnlyReason)
+            Text(conversation.inputAvailability.needsYouReason)
                 .font(.subheadline)
                 .foregroundStyle(ToasttyDesignTokens.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -153,12 +170,23 @@ private struct ToasttyNeedsYouCard: View {
             HStack(spacing: 8) {
                 Spacer(minLength: 4)
 
-                Button("View", systemImage: "chevron.right") { onOpen(conversation) }
+                Button("Open", systemImage: "chevron.right") { onOpen(conversation) }
                     .labelStyle(.titleAndIcon)
                     .buttonStyle(.plain)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(ToasttyDesignTokens.secondaryText)
                     .accessibilityIdentifier("toastty-mobile-open-\(conversation.id.uuidString)")
+
+                if conversation.inputAvailability.allowsReply {
+                    Button("Reply", systemImage: "arrowshape.turn.up.left.fill") {
+                        onReply(conversation)
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .buttonStyle(.plain)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(ToasttyDesignTokens.amberText)
+                    .accessibilityIdentifier("toastty-mobile-reply-\(conversation.id.uuidString)")
+                }
             }
             .padding(.top, 3)
         }
@@ -182,21 +210,11 @@ private struct ToasttyNeedsYouCard: View {
         Text(conversation.agent.displayName)
             .fontWeight(.bold)
             .foregroundStyle(ToasttyDesignTokens.color(for: conversation.agent))
-        Text("· \(conversation.age)")
-    }
-
-    private var readOnlyReason: String {
-        switch conversation.inputAvailability {
-        case .openPrompt:
-            "Waiting for you on the Mac"
-        case .localDraft:
-            "Draft in progress on the Mac"
-        case .pendingInteraction(let preview):
-            preview ?? "Waiting for a response on the Mac"
-        case .unavailable:
-            "Input is not available from this device"
+        TimelineView(.periodic(from: .now, by: 60)) { _ in
+            Text("· \(conversation.age)")
         }
     }
+
 }
 
 private struct ToasttyWorkspaceCard: View {
@@ -318,8 +336,10 @@ private struct ToasttyConversationMiniRow: View {
                 .foregroundStyle(ToasttyDesignTokens.amberText)
         }
         Spacer(minLength: 2)
-        Text(conversation.age)
-            .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.mutedText)
+        TimelineView(.periodic(from: .now, by: 60)) { _ in
+            Text(conversation.age)
+                .font(.caption2.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+        }
     }
 }

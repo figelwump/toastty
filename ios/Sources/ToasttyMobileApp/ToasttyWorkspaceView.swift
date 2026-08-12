@@ -108,8 +108,10 @@ struct ToasttyWorkspaceView: View {
     }
 
     private func age(for conversation: MobileConversation) -> some View {
-        Text(conversation.age)
-            .font(.caption2.monospaced())
-            .foregroundStyle(ToasttyDesignTokens.mutedText)
+        TimelineView(.periodic(from: .now, by: 60)) { _ in
+            Text(conversation.age)
+                .font(.caption2.monospaced())
+                .foregroundStyle(ToasttyDesignTokens.mutedText)
+        }
     }
 }

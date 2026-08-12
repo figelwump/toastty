@@ -22,6 +22,7 @@ protocol AppLiveSessionsControlling: AnyObject {
     var activeConversationController: LiveConversationController? { get }
     func start() async
     func foreground() async
+    func refresh() async
     func background() async
     func updateDeviceScopes(_ scopes: [RemoteDeviceScope]) async
     func stopObserving()
@@ -57,8 +58,10 @@ final class AppSessionController {
     private let scanner: any PairingCodeScanning
     private let deviceName: @MainActor @Sendable () -> String
     private let liveSessionsFactory: AppLiveSessionsFactory
+    private var onDiagnosticEvent: @MainActor (ToasttyConnectionDiagnosticEvent) -> Void
     private var hasRestored = false
     private var liveSessionID: UUID?
+    private var deviceRefreshRequestID: UUID?
 
     var credentialProvider: any GatewayCredentialProvider { credentialVault }
 
@@ -77,6 +80,7 @@ final class AppSessionController {
         initialPairedDevice: PairedDevicePresentation? = nil,
         initialSnapshot: MobileHomeSnapshot,
         initialConnectionState: MobileConnectionState,
+        onDiagnosticEvent: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void = { _ in },
         liveSessionsFactory: @escaping AppLiveSessionsFactory = AppSessionController.makeLiveSessionsController
     ) {
         self.runtimeMode = runtimeMode
@@ -86,6 +90,7 @@ final class AppSessionController {
         self.scanner = scanner
         self.deviceName = deviceName
         self.liveSessionsFactory = liveSessionsFactory
+        self.onDiagnosticEvent = onDiagnosticEvent
         state = initialState
         pairedDevice = initialPairedDevice
         homeController = HomeScreenController(
@@ -240,8 +245,18 @@ final class AppSessionController {
         }
     }
 
+    func installDiagnosticEventHandler(
+        _ handler: @escaping @MainActor (ToasttyConnectionDiagnosticEvent) -> Void
+    ) {
+        onDiagnosticEvent = handler
+    }
+
     func refreshCurrentDevice() async {
         guard !usesFixtureHarness, let pairedDevice else { return }
+        let requestID = UUID()
+        deviceRefreshRequestID = requestID
+        let emit = onDiagnosticEvent
+        emit(.gatewayRequestStarted)
         let generation = await credentialVault.currentGeneration()
         let client = NativeDeviceClient(
             baseURL: pairedDevice.gatewayURL,
@@ -249,15 +264,25 @@ final class AppSessionController {
         )
         do {
             let response = try await client.currentDevice()
-            guard await credentialVault.currentGeneration() == generation else { return }
+            let credentialIsCurrent = await credentialVault.currentGeneration() == generation
+            guard deviceRefreshRequestID == requestID, credentialIsCurrent else {
+                emit(.gatewayRequestSucceeded)
+                return
+            }
             self.pairedDevice = PairedDevicePresentation(
                 gatewayURL: pairedDevice.gatewayURL,
                 device: response.device,
                 credentialCreatedAt: response.credentialCreatedAt
             )
             await liveController?.updateDeviceScopes(response.device.scopes)
+            emit(.gatewayRequestSucceeded)
         } catch let failure as NativeGatewayFailure {
-            guard await credentialVault.currentGeneration() == generation else { return }
+            let credentialIsCurrent = await credentialVault.currentGeneration() == generation
+            guard deviceRefreshRequestID == requestID, credentialIsCurrent else {
+                emit(.gatewayRequestFailed)
+                return
+            }
+            emit(.gatewayRequestFailed)
             switch failure {
             case .unauthenticated:
                 await handleUnauthorized(credentialGeneration: generation)
@@ -270,9 +295,15 @@ final class AppSessionController {
                 break
             }
         } catch {
+            emit(.gatewayRequestFailed)
             // Settings retains the last securely stored device summary when a
             // refresh cannot complete. Connection state owns reachability UI.
         }
+    }
+
+    func refreshLiveSessions() async {
+        guard !usesFixtureHarness else { return }
+        await liveController?.refresh()
     }
 
     func sceneBecameInactive() {

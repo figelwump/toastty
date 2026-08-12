@@ -27,4 +27,24 @@ final class ToasttyMobileAppConfigurationTests: XCTestCase {
         XCTAssertEqual(configuration.initialSnapshot.hostName, "toastty-mac.example.ts.net")
         XCTAssertTrue(configuration.initialSnapshot.workspaces.isEmpty)
     }
+
+    func testConfigurationReadsOnlyNamedRoutingScheme() {
+        let configuration = ToasttyMobileAppConfiguration(
+            environment: ["TOASTTY_MOBILE_USE_FIXTURE": "1"],
+            infoDictionary: [
+                "CFBundleURLTypes": [
+                    [
+                        "CFBundleURLName": "attacker.invalid",
+                        "CFBundleURLSchemes": ["hostile-scheme"],
+                    ],
+                    [
+                        "CFBundleURLName": "com.giantthings.toastty.mobile.routing",
+                        "CFBundleURLSchemes": ["toastty-mobile-dev"],
+                    ],
+                ],
+            ]
+        )
+
+        XCTAssertEqual(configuration.urlScheme, "toastty-mobile-dev")
+    }
 }

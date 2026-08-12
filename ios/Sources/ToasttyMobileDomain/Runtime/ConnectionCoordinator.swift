@@ -19,19 +19,27 @@ public enum ConnectionCoordinatorPhase: Equatable, Sendable {
 /// Session and conversation actors remain pure projection owners: they never
 /// authenticate, sleep, reconnect, or create transport tasks independently.
 public actor ConnectionCoordinator {
+    private enum LifecycleIntent {
+        case active
+        case suspended
+    }
+
     public struct State: Equatable, Sendable {
         public var connectionGeneration: UInt64
         public var phase: ConnectionCoordinatorPhase
         public var consecutiveFailureCount: Int
+        public var latestTransportFailure: NativeTransportFailure?
 
         public init(
             connectionGeneration: UInt64 = 0,
             phase: ConnectionCoordinatorPhase = .idle,
-            consecutiveFailureCount: Int = 0
+            consecutiveFailureCount: Int = 0,
+            latestTransportFailure: NativeTransportFailure? = nil
         ) {
             self.connectionGeneration = connectionGeneration
             self.phase = phase
             self.consecutiveFailureCount = consecutiveFailureCount
+            self.latestTransportFailure = latestTransportFailure
         }
     }
 
@@ -48,7 +56,11 @@ public actor ConnectionCoordinator {
 
     private var state = State()
     private var connectionTask: Task<Void, Never>?
+    private var connectionRetirementTask: Task<Void, Never>?
     private var connectionLoopID: UUID?
+    private var connectionLifecycleRequestID: UUID?
+    private var lifecycleIntent = LifecycleIntent.active
+    private var lifecycleTransitionsInFlight = 0
     private var activeSubscription: (any EventStreamSubscriptionProtocol)?
     private var attemptFailure: GatewayFailure?
     private var activeCapabilities: Set<RemoteGatewayCapability> = []
@@ -143,7 +155,9 @@ public actor ConnectionCoordinator {
 
     /// Starts the coordinator unless it already owns a connection loop.
     public func connectIfNeeded() async {
-        guard connectionTask == nil else { return }
+        guard lifecycleTransitionsInFlight == 0,
+              connectionTask == nil,
+              connectionRetirementTask == nil else { return }
         switch state.phase {
         case .requiresAuthentication, .authorizationDenied,
              .incompatibleProtocol, .failed:
@@ -154,13 +168,20 @@ public actor ConnectionCoordinator {
              .reconnecting, .suspended:
             break
         }
+        lifecycleIntent = .active
         startConnectionLoop()
     }
 
     /// Cancels all network work while retaining the last readable projection.
     public func suspend() async {
+        let requestID = UUID()
+        connectionLifecycleRequestID = requestID
+        lifecycleIntent = .suspended
+        lifecycleTransitionsInFlight += 1
+        defer { lifecycleTransitionsInFlight -= 1 }
         await cancelSendsForSuspension()
-        let previousTask = connectionTask
+        let previousTask = connectionTask ?? connectionRetirementTask
+        connectionRetirementTask = previousTask
         previousTask?.cancel()
         connectionTask = nil
         connectionLoopID = nil
@@ -175,7 +196,9 @@ public actor ConnectionCoordinator {
         // can install resources until the old task has then fully unwound.
         await closeAttemptResources()
         await previousTask?.value
-
+        guard connectionLifecycleRequestID == requestID,
+              lifecycleIntent == .suspended else { return }
+        connectionRetirementTask = nil
         state.phase = .suspended
         state.consecutiveFailureCount = 0
         _ = await sessionsRuntime.suspend(generation: suspendedGeneration)
@@ -192,11 +215,22 @@ public actor ConnectionCoordinator {
     /// Foregrounding reconnects suspended/nonterminal state, but never revives
     /// a terminal admission or authorization failure.
     public func resume() async {
-        await connectIfNeeded()
+        lifecycleIntent = .active
+        if lifecycleTransitionsInFlight > 0 || connectionRetirementTask != nil {
+            await restart()
+        } else {
+            await connectIfNeeded()
+        }
     }
 
     public func restart() async {
-        let previousTask = connectionTask
+        let requestID = UUID()
+        connectionLifecycleRequestID = requestID
+        lifecycleIntent = .active
+        lifecycleTransitionsInFlight += 1
+        defer { lifecycleTransitionsInFlight -= 1 }
+        let previousTask = connectionTask ?? connectionRetirementTask
+        connectionRetirementTask = previousTask
         previousTask?.cancel()
         connectionTask = nil
         connectionLoopID = nil
@@ -206,6 +240,9 @@ public actor ConnectionCoordinator {
         authoritativeSessionSnapshot = nil
         await closeAttemptResources()
         await previousTask?.value
+        guard connectionLifecycleRequestID == requestID,
+              lifecycleIntent == .active else { return }
+        connectionRetirementTask = nil
         state.consecutiveFailureCount = 0
         startConnectionLoop()
     }
@@ -494,7 +531,8 @@ public actor ConnectionCoordinator {
             } catch {
                 await closeAttemptResources()
                 guard generation == state.connectionGeneration else { continue }
-                let failure = (error as? GatewayFailure) ?? .network
+                let failure = (error as? GatewayFailure) ?? .network(reason: .other)
+                state.latestTransportFailure = failure.transportFailure
                 guard failure.isRetryable else {
                     await applyTerminalFailure(failure, generation: generation)
                     break
@@ -582,7 +620,7 @@ public actor ConnectionCoordinator {
                 self.attemptFailure = nil
                 throw attemptFailure
             }
-            throw GatewayFailure.network
+            throw GatewayFailure.network(reason: .connectionLost)
         } catch {
             // Closing a real URLSession web socket wakes receive with a
             // transport error, not necessarily CancellationError. Preserve a
@@ -608,6 +646,7 @@ public actor ConnectionCoordinator {
             invalidatedComposerOrdinals.removeAll(keepingCapacity: true)
             authoritativeSessionSnapshot = snapshot
             state.consecutiveFailureCount = 0
+            state.latestTransportFailure = nil
             state.phase = .live
             await reconcileAuthoritativeSnapshot(snapshot)
             await publishComposerAuthorities()
@@ -798,7 +837,7 @@ public actor ConnectionCoordinator {
         } catch is CancellationError {
             return
         } catch {
-            let failure = (error as? GatewayFailure) ?? .network
+            let failure = (error as? GatewayFailure) ?? .network(reason: .other)
             await failCurrentAttempt(failure, generation: generation)
         }
     }
@@ -876,7 +915,7 @@ public actor ConnectionCoordinator {
         } catch is CancellationError {
             return
         } catch {
-            let failure = (error as? GatewayFailure) ?? .network
+            let failure = (error as? GatewayFailure) ?? .network(reason: .other)
             await failCurrentAttempt(failure, generation: generation)
         }
     }
@@ -949,7 +988,7 @@ public actor ConnectionCoordinator {
             _ = await runtime.finishLoadingOlder(request: request)
         } catch {
             _ = await runtime.finishLoadingOlder(request: request)
-            let failure = (error as? GatewayFailure) ?? .network
+            let failure = (error as? GatewayFailure) ?? .network(reason: .other)
             await failCurrentAttempt(failure, generation: request.connectionGeneration)
         }
     }
@@ -1294,7 +1333,7 @@ public actor ConnectionCoordinator {
               current.runtime === operation.runtime,
               current.request == operation.request else { return }
 
-        let failure = (error as? GatewayFailure) ?? .network
+        let failure = (error as? GatewayFailure) ?? .network(reason: .other)
         invalidateComposerAuthority(for: operation)
         await publishComposerAuthority(
             for: operation.request.conversationID,
@@ -1582,6 +1621,7 @@ public actor ConnectionCoordinator {
     ) async {
         authoritativeSessionSnapshot = nil
         state.consecutiveFailureCount = 0
+        state.latestTransportFailure = failure.transportFailure
         switch failure {
         case .unauthenticated:
             state.phase = .requiresAuthentication

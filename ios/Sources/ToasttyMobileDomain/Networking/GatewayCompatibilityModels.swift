@@ -98,7 +98,10 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
         self.generatedAt = generatedAt
     }
 
-    public func presentation(hostName: String = "Toastty Mac") -> MobileHomeSnapshot {
+    public func presentation(
+        hostName: String = "Toastty Mac",
+        receivedAtMonotonicTime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> MobileHomeSnapshot {
         let mobileConversations = conversations.map { summary in
             let workspaceID = summary.placement.workspaceID ?? Self.ungroupedWorkspaceID
             let workspaceTitle = summary.placement.workspaceTitle ?? "Ungrouped"
@@ -116,6 +119,13 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
                 state: summary.state,
                 inputAvailability: availability,
                 age: Self.relativeAge(from: summary.updatedAt, receivedAt: generatedAt),
+                activityAge: MobileActivityAge(
+                    secondsAtReceipt: Self.relativeAgeSeconds(
+                        from: summary.updatedAt,
+                        receivedAt: generatedAt
+                    ),
+                    receivedAtMonotonicTime: receivedAtMonotonicTime
+                ),
                 lastActivity: summary.state.bucket == .offline
                     ? "Conversation readable"
                     : availability.needsYouReason
@@ -145,7 +155,14 @@ public struct CompatibleSessionListSnapshot: Equatable, Sendable {
     private static let ungroupedWorkspaceID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
 
     private static func relativeAge(from date: Date, receivedAt: Date) -> String {
-        let seconds = max(0, Int(receivedAt.timeIntervalSince(date)))
+        relativeAgeLabel(seconds: relativeAgeSeconds(from: date, receivedAt: receivedAt))
+    }
+
+    private static func relativeAgeSeconds(from date: Date, receivedAt: Date) -> Int {
+        max(0, Int(receivedAt.timeIntervalSince(date)))
+    }
+
+    private static func relativeAgeLabel(seconds: Int) -> String {
         if seconds < 60 { return "now" }
         let minutes = seconds / 60
         if minutes < 60 { return "\(minutes)m" }

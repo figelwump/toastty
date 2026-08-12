@@ -92,6 +92,30 @@ public enum MobileInputAvailability: Equatable, Sendable {
     }
 }
 
+/// Server-relative activity age anchored to a local monotonic receipt time.
+/// Device wall-clock changes therefore cannot make a conversation younger or
+/// older after its snapshot has been accepted.
+public struct MobileActivityAge: Equatable, Sendable {
+    public let secondsAtReceipt: Int
+    public let receivedAtMonotonicTime: TimeInterval
+
+    public init(secondsAtReceipt: Int, receivedAtMonotonicTime: TimeInterval) {
+        self.secondsAtReceipt = max(0, secondsAtReceipt)
+        self.receivedAtMonotonicTime = receivedAtMonotonicTime
+    }
+
+    public func label(atMonotonicTime now: TimeInterval) -> String {
+        let elapsed = max(0, Int(now - receivedAtMonotonicTime))
+        let seconds = secondsAtReceipt + elapsed
+        if seconds < 60 { return "now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h" }
+        return "\(hours / 24)d"
+    }
+}
+
 public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let workspaceID: UUID
@@ -101,8 +125,13 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
     public let title: String
     public let state: MobileSessionDisplayState
     public let inputAvailability: MobileInputAvailability
-    public let age: String
+    private let fixedAge: String
+    public let activityAge: MobileActivityAge?
     public let lastActivity: String
+
+    public var age: String {
+        activityAge?.label(atMonotonicTime: ProcessInfo.processInfo.systemUptime) ?? fixedAge
+    }
 
     public init(
         id: UUID,
@@ -114,6 +143,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         state: MobileSessionDisplayState,
         inputAvailability: MobileInputAvailability,
         age: String,
+        activityAge: MobileActivityAge? = nil,
         lastActivity: String
     ) {
         self.id = id
@@ -124,7 +154,8 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         self.title = title
         self.state = state
         self.inputAvailability = inputAvailability
-        self.age = age
+        fixedAge = age
+        self.activityAge = activityAge
         self.lastActivity = lastActivity
     }
 
@@ -138,6 +169,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
         state: RemoteSessionState,
         inputAvailability: MobileInputAvailability,
         age: String,
+        activityAge: MobileActivityAge? = nil,
         lastActivity: String
     ) {
         self.init(
@@ -150,6 +182,7 @@ public struct MobileConversation: Identifiable, Equatable, Sendable {
             state: .known(state),
             inputAvailability: inputAvailability,
             age: age,
+            activityAge: activityAge,
             lastActivity: lastActivity
         )
     }

@@ -48,7 +48,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
         let gateway = ScriptedGateway(
             operations: operations,
             hello: [
-                .failure(.network),
+                .failure(.network(reason: .offline)),
                 .failure(.server(statusCode: 503, code: nil, message: nil)),
                 .success(RemoteGatewayHelloResponse()),
             ],
@@ -70,11 +70,13 @@ final class ConnectionCoordinatorTests: XCTestCase {
         try await withTimeout { try await sleeper.waitForRequestCount(1) }
         var state = await coordinator.currentState()
         XCTAssertEqual(state.phase, .reconnecting(failureCount: 1, showsBanner: false))
+        XCTAssertEqual(state.latestTransportFailure, .offline)
         await sleeper.advance()
 
         try await withTimeout { try await sleeper.waitForRequestCount(2) }
         state = await coordinator.currentState()
         XCTAssertEqual(state.phase, .reconnecting(failureCount: 2, showsBanner: true))
+        XCTAssertNil(state.latestTransportFailure)
         await sleeper.advance()
 
         try await withTimeout { try await subscription.waitForReceiveCount(1) }
@@ -84,6 +86,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
         state = try await coordinatorState(matching: { $0.phase == .live }, coordinator)
         XCTAssertEqual(state.connectionGeneration, 3)
         XCTAssertEqual(state.consecutiveFailureCount, 0)
+        XCTAssertNil(state.latestTransportFailure)
 
         await coordinator.suspend()
     }
@@ -137,7 +140,7 @@ final class ConnectionCoordinatorTests: XCTestCase {
             sessions: [.success(snapshot(runID: runID(1), title: "Seed"))],
             events: [ScriptedCall(result: .failure(failure))]
         )
-        let subscription = ScriptedSubscription(closeFailure: .network)
+        let subscription = ScriptedSubscription(closeFailure: .network(reason: .connectionLost))
         let stream = ScriptedEventStream(
             operations: operations,
             connections: [.success(subscription)]
@@ -290,6 +293,119 @@ final class ConnectionCoordinatorTests: XCTestCase {
         let sessionState = await sessions.currentState()
         XCTAssertEqual(sessionState.phase, .suspended)
         XCTAssertEqual(sessionState.snapshot, fresh)
+    }
+
+    func testOverlappingRestartsOnlyStartTheNewestReplacementConnection() async throws {
+        let operations = OperationLog()
+        let closeGate = CancellationAwareGate()
+        let firstSubscription = ScriptedSubscription(closeGate: closeGate)
+        let replacementSubscription = ScriptedSubscription()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [
+                .success(RemoteGatewayHelloResponse()),
+                .success(RemoteGatewayHelloResponse()),
+            ],
+            sessions: [
+                .success(snapshot(runID: runID(1), title: "Seed")),
+                .success(snapshot(runID: runID(2), title: "Replacement seed")),
+            ]
+        )
+        let stream = ScriptedEventStream(
+            operations: operations,
+            connections: [.success(firstSubscription), .success(replacementSubscription)]
+        )
+        let coordinator = ConnectionCoordinator(gateway: gateway, eventStream: stream)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await firstSubscription.waitForReceiveCount(1) }
+
+        let olderRestart = Task { await coordinator.restart() }
+        try await withTimeout { try await firstSubscription.waitForCloseCount(1) }
+        let newerRestart = Task { await coordinator.restart() }
+        await closeGate.open()
+        await olderRestart.value
+        await newerRestart.value
+
+        try await withTimeout { try await replacementSubscription.waitForReceiveCount(1) }
+        let operationValues = await operations.values()
+        XCTAssertEqual(operationValues.filter { $0 == "connect" }.count, 2)
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state.connectionGeneration, 4)
+
+        await coordinator.suspend()
+    }
+
+    func testSuspendWinsOverAnInFlightRestartAndDoesNotLaunchAReplacement() async throws {
+        let operations = OperationLog()
+        let closeGate = CancellationAwareGate()
+        let firstSubscription = ScriptedSubscription(closeGate: closeGate)
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [.success(RemoteGatewayHelloResponse())],
+            sessions: [.success(snapshot(runID: runID(1), title: "Seed"))]
+        )
+        let stream = ScriptedEventStream(
+            operations: operations,
+            connections: [.success(firstSubscription)]
+        )
+        let coordinator = ConnectionCoordinator(gateway: gateway, eventStream: stream)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await firstSubscription.waitForReceiveCount(1) }
+
+        let restart = Task { await coordinator.restart() }
+        try await withTimeout { try await firstSubscription.waitForCloseCount(1) }
+        let suspend = Task { await coordinator.suspend() }
+        await closeGate.open()
+        await restart.value
+        await suspend.value
+
+        let operationValues = await operations.values()
+        XCTAssertEqual(operationValues.filter { $0 == "connect" }.count, 1)
+        let state = await coordinator.currentState()
+        XCTAssertEqual(state.phase, .suspended)
+    }
+
+    func testResumeWinsOverAnInFlightSuspendAndLaunchesOneReplacement() async throws {
+        let operations = OperationLog()
+        let closeGate = CancellationAwareGate()
+        let firstSubscription = ScriptedSubscription(closeGate: closeGate)
+        let replacementSubscription = ScriptedSubscription()
+        let gateway = ScriptedGateway(
+            operations: operations,
+            hello: [
+                .success(RemoteGatewayHelloResponse()),
+                .success(RemoteGatewayHelloResponse()),
+            ],
+            sessions: [
+                .success(snapshot(runID: runID(1), title: "Seed")),
+                .success(snapshot(runID: runID(2), title: "Replacement seed")),
+            ]
+        )
+        let stream = ScriptedEventStream(
+            operations: operations,
+            connections: [.success(firstSubscription), .success(replacementSubscription)]
+        )
+        let coordinator = ConnectionCoordinator(gateway: gateway, eventStream: stream)
+
+        await coordinator.connectIfNeeded()
+        try await withTimeout { try await firstSubscription.waitForReceiveCount(1) }
+
+        let suspend = Task { await coordinator.suspend() }
+        try await withTimeout { try await firstSubscription.waitForCloseCount(1) }
+        let resume = Task { await coordinator.resume() }
+        await closeGate.open()
+        await suspend.value
+        await resume.value
+
+        try await withTimeout { try await replacementSubscription.waitForReceiveCount(1) }
+        let operationValues = await operations.values()
+        XCTAssertEqual(operationValues.filter { $0 == "connect" }.count, 2)
+        let state = await coordinator.currentState()
+        XCTAssertNotEqual(state.phase, .suspended)
+
+        await coordinator.suspend()
     }
 
     func testClosingConversationWhileRESTIsInFlightDetachesItsRuntime() async throws {
@@ -1404,10 +1520,16 @@ private actor ScriptedSubscription: EventStreamSubscriptionProtocol {
     private var waiters: [CheckedContinuation<CompatibleGatewayStreamMessage, any Error>] = []
     private var closed = false
     private let receiveCalls = CallCounter()
+    private let closeCalls = CallCounter()
     private let closeFailure: GatewayFailure?
+    private let closeGate: CancellationAwareGate?
 
-    init(closeFailure: GatewayFailure? = nil) {
+    init(
+        closeFailure: GatewayFailure? = nil,
+        closeGate: CancellationAwareGate? = nil
+    ) {
         self.closeFailure = closeFailure
+        self.closeGate = closeGate
     }
 
     func nextMessage() async throws -> CompatibleGatewayStreamMessage {
@@ -1422,7 +1544,11 @@ private actor ScriptedSubscription: EventStreamSubscriptionProtocol {
         }
     }
 
-    func close() {
+    func close() async {
+        await closeCalls.increment()
+        if let closeGate {
+            try? await closeGate.wait()
+        }
         guard closed == false else { return }
         closed = true
         let activeWaiters = waiters
@@ -1444,6 +1570,7 @@ private actor ScriptedSubscription: EventStreamSubscriptionProtocol {
     }
 
     func waitForReceiveCount(_ count: Int) async throws { try await receiveCalls.wait(for: count) }
+    func waitForCloseCount(_ count: Int) async throws { try await closeCalls.wait(for: count) }
     func isClosed() -> Bool { closed }
 }
 

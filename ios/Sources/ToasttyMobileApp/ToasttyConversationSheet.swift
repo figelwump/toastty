@@ -4,8 +4,10 @@ import ToasttyMobileDomain
 struct ToasttyConversationSheet: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @FocusState private var isComposerFocused: Bool
+    @State private var hasHandledComposerFocusRequest = false
 
     let conversationID: UUID
+    let requestsComposerFocus: Bool
     let controller: HomeScreenController
     let presentation: ToasttyConversationPresentationState?
     let composer: ToasttyComposerPresentation?
@@ -18,6 +20,7 @@ struct ToasttyConversationSheet: View {
 
     init(
         conversationID: UUID,
+        requestsComposerFocus: Bool = false,
         controller: HomeScreenController,
         presentation: ToasttyConversationPresentationState? = nil,
         composer: ToasttyComposerPresentation? = nil,
@@ -29,6 +32,7 @@ struct ToasttyConversationSheet: View {
         onDismiss: @escaping () -> Void
     ) {
         self.conversationID = conversationID
+        self.requestsComposerFocus = requestsComposerFocus
         self.controller = controller
         self.presentation = presentation
         self.composer = composer
@@ -64,6 +68,22 @@ struct ToasttyConversationSheet: View {
             }
         }
         .background(ToasttyDesignTokens.elevatedSurface)
+        .task(id: composerFocusIsReady) {
+            guard composerFocusIsReady, !hasHandledComposerFocusRequest else { return }
+            hasHandledComposerFocusRequest = true
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            isComposerFocused = true
+        }
+    }
+
+    private var composerFocusIsReady: Bool {
+        guard requestsComposerFocus,
+              let conversation = controller.conversation(id: conversationID)
+        else {
+            return false
+        }
+        return (composer ?? lockedComposerFallback(conversation)).gate.allowsInput
     }
 
     private var resolvedPresentation: ToasttyConversationPresentationState {
@@ -112,8 +132,10 @@ struct ToasttyConversationSheet: View {
                 .accessibilityIdentifier("toastty-mobile-conversation-close")
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
+        .padding(.top, dynamicTypeSize.isAccessibilitySize ? 32 : 0)
         .overlay(alignment: .bottom) { Divider().overlay(ToasttyDesignTokens.divider) }
     }
 

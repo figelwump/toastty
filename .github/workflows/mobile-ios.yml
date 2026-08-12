@@ -41,7 +41,9 @@ jobs:
               - 'Sources/RemoteProtocol/**'
               - 'Tests/RemoteProtocol/**'
               - 'Sources/Core/RemoteAccess/**'
-              - 'Tests/CoreTests/RemoteAccess/**'
+              - 'Tests/Core/RemoteAccess/**'
+              - 'Sources/App/RemoteAccess/**'
+              - 'Tests/App/RemoteAccess*'
               - 'scripts/dev/**'
               - 'scripts/remote/test.sh'
 
