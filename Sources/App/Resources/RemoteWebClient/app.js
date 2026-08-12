@@ -25,7 +25,7 @@ let socket = null;
 let reconnectDelayMs = 1000;
 let latestSnapshot = null;
 // Non-null while the chat view is open:
-// { conversationID, run, generation, lastSequence, loading }
+// { conversationID, run, generation, lastSequence, loading, catchUpRequested }
 let openConversation = null;
 
 function setConnectionState(state) {
@@ -341,9 +341,7 @@ function applyEvents(events) {
   for (const event of events) {
     if (event.sequence <= openConversation.lastSequence) continue;
     if (event.sequence > openConversation.lastSequence + 1) {
-      // Gap: re-page from the confirmed cursor rather than guessing.
-      void loadMoreEvents();
-      return;
+      return "gap";
     }
     openConversation.lastSequence = event.sequence;
     appendEventNode(event);
@@ -352,6 +350,15 @@ function applyEvents(events) {
   if (appended) {
     chatEmpty.hidden = chatMessages.children.length > 0;
     chatMessages.lastElementChild?.scrollIntoView({ block: "end" });
+  }
+  return null;
+}
+
+function queuePendingEventPage(page) {
+  openConversation.pendingEventPages.push(page);
+  if (openConversation.pendingEventPages.length > 32) {
+    openConversation.pendingEventPages.shift();
+    openConversation.pendingEventPagesOverflowed = true;
   }
 }
 
@@ -362,7 +369,7 @@ function drainPendingEventPages() {
     return "gap";
   }
   while (openConversation.pendingEventPages.length > 0) {
-    const page = openConversation.pendingEventPages.shift();
+    const page = openConversation.pendingEventPages[0];
     if (page.projectionRunID !== openConversation.run
         || page.projectionGeneration !== openConversation.generation) {
       resetChatTranscript();
@@ -372,17 +379,18 @@ function drainPendingEventPages() {
       (event) => event.sequence > openConversation.lastSequence
     );
     if (firstNewEvent && firstNewEvent.sequence > openConversation.lastSequence + 1) {
-      openConversation.pendingEventPages.unshift(page);
       return "gap";
     }
-    applyEvents(page.events);
+    const result = applyEvents(page.events);
+    if (result) return result;
+    openConversation.pendingEventPages.shift();
   }
   return null;
 }
 
-async function fetchEventsPage(cursor) {
+async function fetchEventsPage(conversation, cursor) {
   const body = {
-    conversationID: openConversation.conversationID,
+    conversationID: conversation.conversationID,
     limit: 200,
   };
   if (cursor) body.cursor = cursor;
@@ -396,21 +404,33 @@ async function fetchEventsPage(cursor) {
   return response.json();
 }
 
+function requestEventCatchUp() {
+  if (!openConversation) return;
+  openConversation.catchUpRequested = true;
+  if (!openConversation.loading) void loadMoreEvents();
+}
+
 async function loadMoreEvents() {
-  if (!openConversation || openConversation.loading) return;
-  openConversation.loading = true;
+  const conversation = openConversation;
+  if (!conversation) return;
+  if (conversation.loading) {
+    conversation.catchUpRequested = true;
+    return;
+  }
+  conversation.loading = true;
   try {
-    while (openConversation) {
-      const lastSequenceBeforePage = openConversation.lastSequence;
-      const cursor = openConversation.run
+    while (openConversation === conversation) {
+      conversation.catchUpRequested = false;
+      const lastSequenceBeforePage = conversation.lastSequence;
+      const cursor = conversation.run
         ? {
-            projectionRunID: openConversation.run,
-            projectionGeneration: openConversation.generation,
-            afterSequence: openConversation.lastSequence,
+            projectionRunID: conversation.run,
+            projectionGeneration: conversation.generation,
+            afterSequence: conversation.lastSequence,
           }
         : null;
-      const result = await fetchEventsPage(cursor);
-      if (!result || !openConversation) return;
+      const result = await fetchEventsPage(conversation, cursor);
+      if (!result || openConversation !== conversation) return;
       if (result.outcome === "resnapshot_required") {
         resetChatTranscript();
         continue;
@@ -420,11 +440,11 @@ async function loadMoreEvents() {
         return;
       }
       const page = result.page;
-      openConversation.run = page.projectionRunID;
-      openConversation.generation = page.projectionGeneration;
+      conversation.run = page.projectionRunID;
+      conversation.generation = page.projectionGeneration;
       for (const event of page.events) {
-        if (event.sequence > openConversation.lastSequence) {
-          openConversation.lastSequence = event.sequence;
+        if (event.sequence > conversation.lastSequence) {
+          conversation.lastSequence = event.sequence;
           appendEventNode(event);
         }
       }
@@ -434,19 +454,21 @@ async function loadMoreEvents() {
         // gap. If REST made no progress, discard the handoff queue and restart
         // from a fresh snapshot instead of spinning forever on the same gap.
         if (pendingPageResult === "gap"
-            && openConversation.lastSequence === lastSequenceBeforePage) {
+            && conversation.lastSequence === lastSequenceBeforePage) {
           resetChatTranscript();
         }
         continue;
       }
       chatEmpty.hidden = chatMessages.children.length > 0;
-      if (page.events.length === 0 || openConversation.lastSequence >= page.latestSequence) {
+      const reachedLatestSequence = page.events.length === 0
+        || conversation.lastSequence >= page.latestSequence;
+      if (reachedLatestSequence && !conversation.catchUpRequested) {
         chatMessages.lastElementChild?.scrollIntoView({ block: "end" });
         return;
       }
     }
   } finally {
-    if (openConversation) openConversation.loading = false;
+    conversation.loading = false;
   }
 }
 
@@ -468,6 +490,7 @@ function openChat(conversation) {
     generation: 0,
     lastSequence: 0,
     loading: false,
+    catchUpRequested: false,
     sending: false,
     availability: null,
     pendingSend: null,
@@ -481,7 +504,7 @@ function openChat(conversation) {
   renderChatHeader(conversation);
   sessionsView.hidden = true;
   chatView.hidden = false;
-  void loadMoreEvents();
+  requestEventCatchUp();
 }
 
 function closeChat() {
@@ -529,6 +552,10 @@ function connectSocket() {
   socket.onopen = () => {
     reconnectDelayMs = 1000;
     setConnectionState("live");
+    // A reconnect can span events that will never be replayed by the new
+    // subscription. Re-page from the last confirmed cursor before relying on
+    // live delivery again.
+    requestEventCatchUp();
   };
   socket.onmessage = (event) => {
     let message;
@@ -546,23 +573,25 @@ function connectSocket() {
           && (page.projectionRunID !== openConversation.run
               || page.projectionGeneration !== openConversation.generation)) {
         resetChatTranscript();
-        void loadMoreEvents();
-      } else if (openConversation.run) {
-        applyEvents(page.events);
+        queuePendingEventPage(page);
+        requestEventCatchUp();
+      } else if (!openConversation.run || openConversation.loading) {
+        // Buffer both the initial REST/subscription handoff and every REST
+        // catch-up boundary. Applying a newer live page while REST is in
+        // flight can otherwise advance the cursor past events in that page.
+        queuePendingEventPage(page);
       } else {
-        // The socket is connected before the initial REST page establishes
-        // its run/generation. Buffer that handoff window instead of dropping
-        // the only copy of a live event that may postdate the REST snapshot.
-        openConversation.pendingEventPages.push(page);
-        if (openConversation.pendingEventPages.length > 32) {
-          openConversation.pendingEventPages.shift();
-          openConversation.pendingEventPagesOverflowed = true;
+        const result = applyEvents(page.events);
+        if (result === "gap") {
+          // Keep the triggering page until REST fills the missing range.
+          queuePendingEventPage(page);
+          requestEventCatchUp();
         }
       }
     } else if (message.type === "resnapshot_required" && openConversation
                && message.conversationID === openConversation.conversationID) {
       resetChatTranscript();
-      void loadMoreEvents();
+      requestEventCatchUp();
     }
     // Unknown message types are ignored by design.
   };
